@@ -3,7 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { archiveRunLogs, deleteRunLogArchive, readRunLogSlice, readRunLogsPage } from "../../src/lib/run-logs";
+import { archiveRunLogs, deleteRunLogArchive, readRunLogSlice, readRunLogsPage, runLogArchivePath } from "../../src/lib/run-logs";
 import {
   apiTokens,
   logs,
@@ -135,7 +135,7 @@ describe("run log slices", () => {
     const archived = await readRunLogSlice(bigRunId, "apply", 0, Number.POSITIVE_INFINITY);
     expect(archived.truncated).toBe(true);
     expect(archived.totalCount).toBe(total);
-    expect(Buffer.from(archived.bytes).toString("utf8")).toBe(Array.from({ length: 10000 }, (_, i) => `line-${i}`).join("\n"));
+    expect(Buffer.from(archived.bytes).toString("utf8")).toBe(Array.from({ length: 10000 }, (_, i) => `line-${total - 10000 + i}`).join("\n"));
 
     const archivedPage = await readRunLogsPage(bigRunId, { number: 1, size: 20 });
     expect(archivedPage.totalCount).toBe(total);
@@ -162,4 +162,22 @@ describe("run log slices", () => {
     expect(document.meta.truncated).toBe(false);
     expect(document.meta.pagination["total-count"]).toBe(120);
   });
+
+  it("reports corrupt archives as errors instead of empty logs", async () => {
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(runLogArchivePath(bigRunId), "not gzip");
+    await expect(readRunLogsPage(bigRunId, { number: 1, size: 20 })).rejects.toThrow();
+    const { gzipSync } = await import("node:zlib");
+    for (const invalid of [
+      { version: 1, logs: [] },
+      { version: 1, logs: [], truncated: "false", totalCount: 0 },
+      ...[-1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((totalCount) => ({ version: 1, logs: [], truncated: false, totalCount })),
+    ]) {
+      await writeFile(runLogArchivePath(bigRunId), gzipSync(JSON.stringify(invalid)));
+      await expect(readRunLogsPage(bigRunId, { number: 1, size: 20 })).rejects.toThrow("Invalid run log archive format");
+    }
+    await deleteRunLogArchive(bigRunId);
+    expect((await readRunLogsPage(bigRunId, { number: 1, size: 20 })).logs).toEqual([]);
+  });
+
 });

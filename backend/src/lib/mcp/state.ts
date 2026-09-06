@@ -1,8 +1,8 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "../../db";
 import { assessmentResults, stateVersions } from "../../db/schema";
 import { findAuthorizedWorkspace } from "../utils";
-import { decodeStatePayload } from "../validation";
+import { CLIENT_ENCRYPTED_STATE_ERROR, decodeStatePayload, isClientEncryptedState } from "../validation";
 import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
 
 /**
@@ -27,8 +27,8 @@ export const stateTools: readonly McpTool[] = [
       const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "state-read");
       if (ws === undefined) return toolError("Workspace not found or not authorized");
       const sv = await db.query.stateVersions.findFirst({
-        where: eq(stateVersions.workspaceId, wsId),
-        orderBy: [desc(stateVersions.createdAt)],
+        where: and(eq(stateVersions.workspaceId, wsId), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
+        orderBy: [desc(stateVersions.serial)],
       });
       if (sv === undefined) return toolBadRequest(`No state versions found for workspace "${wsId}"`);
       const result: Record<string, unknown> = {
@@ -37,9 +37,11 @@ export const stateTools: readonly McpTool[] = [
         createdAt: sv.createdAt,
         terraformVersion: sv.terraformVersion,
       };
-      if (sv.jsonState !== null) {
+      const payload = sv.statePayload ?? sv.jsonState;
+      if (isClientEncryptedState(payload)) return toolBadRequest(CLIENT_ENCRYPTED_STATE_ERROR);
+      if (payload !== null) {
         try {
-          const parsed = JSON.parse(decodeStatePayload(sv.jsonState)) as Record<string, unknown>;
+          const parsed = JSON.parse(decodeStatePayload(payload)) as Record<string, unknown>;
           result["resources"] = parsed["resources"] ?? [];
           result["outputs"] = parsed["outputs"] ?? {};
         } catch {

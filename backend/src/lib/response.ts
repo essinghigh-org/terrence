@@ -6,11 +6,11 @@ import type {
   projects, runs, taskStages
 } from "../db/schema";
 import { organizations, workspaceTags, variableSetWorkspaces,
-  variableSetProjects, variableSetVariables, stackVariableSets
+  variableSetProjects, variableSetVariables, stackVariableSets, organizationDataRetentionPolicies, dataRetentionPolicies
 } from "../db/schema";
 import { eq, asc } from "drizzle-orm";
-import { apiURL, signedApiURL , type DeepReadonly } from "./utils";
-import { decodeStatePayload, parseStatePayload } from "./validation";
+import { runLogURL, signedApiURL , type DeepReadonly } from "./utils";
+import { CLIENT_ENCRYPTED_STATE_ERROR, decodeStatePayload, isClientEncryptedState, parseStatePayload } from "./validation";
 import { cachedOrganizationName, cacheOrganizationName } from "./metadata-cache";
 import { vcsRepoResource } from "./vcs-repo";
 import { moduleTestTokenTtlBounds } from "./workload-identity";
@@ -115,7 +115,7 @@ export async function orgMembershipResource(
   };
 }
 
-type ApiTokenWithRaw = DeepReadonly<typeof apiTokens.$inferSelect & Partial<Record<"_rawToken", string>>>;
+type ApiTokenWithRaw = DeepReadonly<Omit<typeof apiTokens.$inferSelect, "refreshFamilyId"> & Partial<Record<"_rawToken", string>>>;
 
 export function tokenResource(token: ApiTokenWithRaw, includeSecret = false): Record<string, unknown> {
   const iso = (value: number | null): string | null => value === null ? null : new Date(value).toISOString();
@@ -153,7 +153,8 @@ export function tokenResource(token: ApiTokenWithRaw, includeSecret = false): Re
 
 type OrganizationParam = DeepReadonly<typeof organizations.$inferSelect>;
 
-export function organizationResource(org: OrganizationParam): Record<string, unknown> {
+export async function organizationResource(org: OrganizationParam): Promise<Record<string, unknown>> {
+  const retention = await db.query.organizationDataRetentionPolicies.findFirst({ where: eq(organizationDataRetentionPolicies.organizationId, org.id) });
   const name = encodeURIComponent(org.name);
   return {
     id: org.name,
@@ -182,6 +183,10 @@ export function organizationResource(org: OrganizationParam): Record<string, unk
       "owners-team-saml-role-id": org.ownersTeamSamlRoleId,
     },
     relationships: {
+      "data-retention-policy": {
+        data: retention === undefined ? null : { id: retention.id, type: retention.deleteOlderThanNDays === null ? "data-retention-policy-dont-deletes" : "data-retention-policy-delete-olders" },
+        links: { related: `/api/v2/organizations/${name}/relationships/data-retention-policy` },
+      },
       "oauth-tokens": { links: { related: `/api/v2/organizations/${name}/oauth-tokens` } },
       "authentication-token": { links: { related: `/api/v2/organizations/${name}/authentication-token` } },
       "entitlement-set": { links: { related: `/api/v2/organizations/${name}/entitlement-set` } },
@@ -354,12 +359,18 @@ export async function workspaceResource(
   options?: WorkspaceResourceOptions,
 ): Promise<Record<string, unknown>> {
   const [tags, orgName] = await fetchWorkspaceTagsAndOrg(workspace, options);
+  const retention = await db.query.dataRetentionPolicies.findFirst({ where: eq(dataRetentionPolicies.workspaceId, workspace.id) });
+  const relationships = buildWorkspaceRelationships(workspace, orgName, options);
+  relationships["data-retention-policy"] = {
+    data: retention === undefined ? null : { id: retention.id, type: retention.deleteOlderThanNDays === null ? "data-retention-policy-dont-deletes" : "data-retention-policy-delete-olders" },
+    links: { related: `/api/v2/workspaces/${workspace.id}/relationships/data-retention-policy` },
+  };
   const iacBinary = workspace.iacBinary ?? defaultIacBinary ?? "terraform";
   return {
     id: workspace.id,
     type: "workspaces",
     attributes: buildWorkspaceAttributes(workspace, permissions, tags, iacBinary),
-    relationships: buildWorkspaceRelationships(workspace, orgName, options),
+    relationships,
     links: { self: `/api/v2/workspaces/${workspace.id}` },
   };
 }
@@ -730,7 +741,9 @@ function buildRunTriggerAttributes(origin?: RunOrigin): Record<string, unknown> 
 function getRunVariablesForResponse(run: RunParam): unknown[] {
   if (!Array.isArray(run.variables)) return [];
   return (run.variables as Record<string, unknown>[]).map((v) => ({
-    ...v,
+    key: v["key"],
+    ...(v["category"] === undefined ? {} : { category: v["category"] }),
+    ...(v["sensitive"] === undefined ? {} : { sensitive: v["sensitive"] }),
     value: v["sensitive"] === true ? "******" : v["value"],
   }));
 }
@@ -952,7 +965,7 @@ export function planResource(run: RunParam, request: RequestParam): Record<strin
       "resource-imports": run.planResourceImports ?? null,
       "generated-configuration": run.generatedConfiguration === true,
       "execution-details": { mode: run.executionMode ?? "remote" },
-      "log-read-url": typeof run.logToken === "string" && run.logToken !== "" ? apiURL(request, `/api/v2/runs/${run.id}/plan/log/${run.logToken}`) : null,
+      "log-read-url": runLogURL(run, "plan", request),
       "status-timestamps": run.statusTimestamps ?? null,
     },
     relationships: {
@@ -978,7 +991,7 @@ export function applyResource(run: RunParam, request: RequestParam): Record<stri
       "resource-changes": run.applyResourceChanges ?? null,
       "resource-destructions": run.applyResourceDestructions ?? null,
       "resource-imports": run.applyResourceImports ?? null,
-      "log-read-url": typeof run.logToken === "string" && run.logToken !== "" ? apiURL(request, `/api/v2/runs/${run.id}/apply/log/${run.logToken}`) : null,
+      "log-read-url": runLogURL(run, "apply", request),
       "status-timestamps": run.statusTimestamps ?? null,
     },
     relationships: {
@@ -1188,12 +1201,24 @@ export function stateVersionResource(
   const resources = extractStateResources(parsed);
   const aggregates = buildStateAggregates(resources);
   const payload = state.statePayload === null ? "" : decodeStatePayload(state.statePayload);
+  const encrypted = isClientEncryptedState(payload);
   const flags = getStateAvailability(state, payload);
+  if (encrypted) flags.jsonStateAvailable = false;
   return {
     id: state.id,
     type: "state-versions",
-    attributes: buildStateVersionAttributes(state, parsed, resources, aggregates, payload, flags, request, includeState, run),
-    relationships: buildStateVersionRelationships(state),
+    attributes: {
+      ...buildStateVersionAttributes(state, parsed, resources, aggregates, payload, flags, request, includeState, run),
+      ...(encrypted ? {
+        "state-representation": "opentofu-encrypted",
+        "structured-state-unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR,
+        "resources-processed": false, resources: null, modules: null, providers: null,
+      } : {}),
+    },
+    relationships: {
+      ...buildStateVersionRelationships(state),
+      ...(encrypted ? { outputs: { data: null, meta: { "unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR } } } : {}),
+    },
     links: { self: `/api/v2/state-versions/${state.id}` },
   };
 }

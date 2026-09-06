@@ -1,6 +1,9 @@
 name: CI
 
 on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 2"
   push:
     branches: ["master"]
   pull_request:
@@ -132,6 +135,8 @@ jobs:
           if (renovate.minimumReleaseAge !== "3 days" || renovate.lockFileMaintenance?.enabled !== false || ageAssignments.length !== 1 || activeAge !== "259200") process.exit(1);
           console.log("Dependency release-age policy is enforced; Renovate lock maintenance is disabled because Bun enforces the same guard.");
           NODE
+      - name: Check canonical brand assets
+        run: bun run --cwd frontend scripts/brand-assets.tsx --check
       - name: Typecheck
         run: bun run typecheck
       - name: Lint (baseline report)
@@ -245,10 +250,20 @@ jobs:
         run: cd frontend && bun run test:browser
 
   provider-compatibility:
-    name: Provider and CLI compatibility
+    name: Provider and CLI (${{ matrix.engine }}, ${{ matrix.tier }})
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [terraform, tofu]
+        tier: ${{ github.event_name == 'schedule' && fromJSON('["canary"]') || fromJSON('["floor", "current"]') }}
+    env:
+      TERRENCE_E2E_CLI: ${{ matrix.engine }}
+      TERRENCE_E2E_TIER: ${{ matrix.tier }}
+      TERRENCE_E2E_RESULTS_DIR: ${{ github.workspace }}/provider-lifecycle-results
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      issues: write
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -284,13 +299,82 @@ jobs:
           cd ../frontend
           bun test --bail=5 --max-concurrency=1 --no-orphans \
             tests/terraform-cli-route-compat.test.tsx
-      - name: Run provider E2E with Terraform
+      - name: Cache verified CLI binaries and provider packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            backend/storage/binaries
+            backend/storage/e2e-plugin-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-cli-${{ matrix.engine }}-${{ matrix.tier }}-${{ hashFiles('backend/tests/e2e/cli_matrix.json', 'backend/tests/e2e/provider_surface.json') }}
+      - name: Run pinned provider and remote CLI journeys
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun test --bail=5 --max-concurrency=1 --no-orphans backend/tests/e2e/provider_e2e.test.ts
+      - name: Build the production Landlock helper
+        if: matrix.engine == 'terraform' && matrix.tier == 'current'
+        run: backend/bin/build-landlock-runner.sh
+      - name: Run provider E2E with required production sandboxing
+        if: matrix.engine == 'terraform' && matrix.tier == 'current'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TERRENCE_E2E_CLI: terraform
+          TERRENCE_E2E_SECURITY_PROFILE: required
         run: bun test --bail=5 --max-concurrency=1 --no-orphans backend/tests/e2e/provider_e2e.test.ts
-      - name: Run provider E2E with OpenTofu
+
+      - name: Upload successful provider lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-lifecycle-results-${{ matrix.engine }}-${{ matrix.tier }}
+          path: provider-lifecycle-results/*.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Open a review item for a failed canary
+        if: failure() && matrix.tier == 'canary'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TERRENCE_E2E_CLI: tofu
-        run: bun test --bail=5 --max-concurrency=1 --no-orphans backend/tests/e2e/provider_e2e.test.ts
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          title="[CLI canary] ${TERRENCE_E2E_CLI} compatibility failure"
+          existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')"
+          if [ -z "$existing" ]; then
+            cat > /tmp/canary-issue.md <<EOF
+          The scheduled ${TERRENCE_E2E_CLI} canary failed. Review the [CI run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) and its redacted CLI diagnostic artifacts.
+
+          The supported floor and current pins have not changed. Promote a new version only after the complete compatibility matrix passes.
+          EOF
+            gh issue create --title "$title" --body-file /tmp/canary-issue.md
+          fi
+
+  cli-compatibility-report:
+    name: Publish tested CLI matrix artifact
+    needs: provider-compatibility
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - name: Download successful matrix evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: provider-lifecycle-results-*
+          merge-multiple: true
+          path: provider-lifecycle-results
+      - name: Generate the tested compatibility page
+        run: bun backend/scripts/report-cli-compatibility.ts provider-lifecycle-results backend/docs/cli-compatibility-results.md
+      - name: Upload the tested compatibility page and evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cli-compatibility-report
+          path: |
+            backend/docs/cli-compatibility-results.md
+            provider-lifecycle-results/*-lifecycle.json
+          retention-days: 90

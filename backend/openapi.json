@@ -7817,6 +7817,9 @@
           "406": {
             "description": "Not Acceptable"
           },
+          "409": {
+            "description": "Conflict"
+          },
           "413": {
             "description": "Payload Too Large"
           },
@@ -8228,6 +8231,57 @@
           },
           "304": {
             "description": "Not Modified"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "406": {
+            "description": "Not Acceptable"
+          },
+          "413": {
+            "description": "Payload Too Large"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
+    "/api/v2/runs/{run_id}/actions/revoke-log-links": {
+      "post": {
+        "operationId": "post-api-v2-runs-run-id-actions-revoke-log-links",
+        "tags": [
+          "runs"
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "POST /api/v2/runs/{run_id}/actions/revoke-log-links",
+        "responses": {
+          "204": {
+            "description": "No Content"
           },
           "400": {
             "description": "Bad Request"
@@ -10132,6 +10186,9 @@
           },
           "406": {
             "description": "Not Acceptable"
+          },
+          "409": {
+            "description": "Conflict"
           },
           "413": {
             "description": "Payload Too Large"
@@ -12159,6 +12216,65 @@
       }
     },
     "/api/v2/teams/{team_id}/relationships/organization-memberships": {
+      "get": {
+        "operationId": "get-api-v2-teams-team-id-relationships-organization-memberships",
+        "tags": [
+          "teams"
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "GET /api/v2/teams/{team_id}/relationships/organization-memberships",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not Modified"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "406": {
+            "description": "Not Acceptable"
+          },
+          "413": {
+            "description": "Payload Too Large"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        }
+      },
       "post": {
         "operationId": "post-api-v2-teams-team-id-relationships-organization-memberships",
         "tags": [

@@ -38,7 +38,8 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `CORS_ORIGIN` | dev default | Allowed CORS origin for the web interface. |
 | `ENCRYPTION_PASSWORD` | generated | Password for encryption-at-rest features. |
 | `SIGNED_URL_SECRET` | generated | Secret for signed URL tokens (state downloads). |
-| `SIGNED_URL_TTL_SECONDS` | `300` | Lifetime of signed download URLs. |
+| `SIGNED_URL_TTL_SECONDS` | `300` | Lifetime of signed download URLs, excluding run-log capabilities. |
+| `LOG_CAPABILITY_TTL_SECONDS` | `172800` | Run-log URL lifetime in seconds (48h); positive integer, maximum 7 days. Shorter lifetimes can interrupt legacy CLI polling; see operations guidance. |
 | `LOG_LEVEL` | `info` | Log verbosity. Site Admin logging settings can override it at runtime. |
 | `BUILD_SHA` / `BUILD_VERSION` | none | Build identifiers shown in diagnostics. |
 
@@ -91,7 +92,7 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `TERRENCE_ALLOW_PRIVATE_URLS` | off | Allow outbound requests to private network addresses. |
 | `ALLOW_UNVERIFIED_CHECKSUMS` | off | Skip binary checksum verification. For restricted networks only. |
 | `ALLOW_TOOL_FALLBACK` | off | Allow fallback binary sources when the primary mirror is unreachable. |
-| `TERRENCE_RUN_NET_POLICY` | `allow` | Run network policy. `deny` isolates untrusted provider code from the instance network (needs Landlock ABI >= 4). |
+| `TERRENCE_RUN_NET_POLICY` | `allow` | Run TCP policy. `deny` blocks TCP bind/connect via Landlock ABI >= 4; it does not block UDP, DNS, or other socket families. Use host/container network isolation for complete network denial. Invalid values fail startup. |
 | `TERRENCE_EXECUTOR_BACKEND` | `landlock` | Executor backend: `landlock`, `container`, `kubernetes`, `agent`, or `microvm`. Unknown values fall back to `landlock`. |
 | `TERRENCE_SANDBOX_MIN_ABI` | runner minimum | Minimum Landlock ABI the readiness gate requires. Unset means no floor beyond the sandbox-required check; invalid values are ignored. |
 | `TERRENCE_AGENT_UPDATE_URL` / `TERRENCE_AGENT_UPDATE_SHA256` / `TERRENCE_AGENT_UPDATE_VERSION` | none | Agent binary self-update source: URL plus expected SHA256 plus version pin. |
@@ -160,7 +161,7 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `TERRENCE_NODE_ID` | `terrence-node-1` | Node identity reported in readiness responses. |
 | `TERRENCE_NODE_ADDRESS` | none | Node address reported in readiness responses. |
 | `TERRENCE_NODE_STATUS` | active | Override the readiness status. `draining` or `maintenance` marks the node as draining. |
-| `TERRENCE_TOKEN_HASH_SECRET` | generated | Stable secret for token hashing. Single-node installs persist a 256-bit secret in storage; multi-replica deployments must set the same value on every replica. Must be at least 32 bytes. |
+| `TERRENCE_TOKEN_HASH_SECRET` | generated | Stable secret for token hashing. Installs persist a 256-bit secret in storage; preserve it when restoring or moving the single control-plane instance. Multiple active replicas are unsupported. Must be at least 32 bytes. |
 
 ## Outbound access and proxies
 

@@ -161,6 +161,18 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+export const CLIENT_ENCRYPTED_STATE_ERROR = "Client-encrypted OpenTofu state is unsupported. Keep the encrypted state and its keys in an encryption-capable backend; Terrence requires plaintext v4 state for indexing and serial-safe recovery. See /app/docs/state.";
+
+/** The OpenTofu envelope is JSON, but its contents cannot be inspected without client keys. */
+export function isClientEncryptedState(payload: string | null): boolean {
+  const state = parseStatePayload(payload);
+  return state !== null && ("encryption_version" in state || "encrypted_data" in state);
+}
+
+export function statePayloadError(payload: string | null): string {
+  return isClientEncryptedState(payload) ? CLIENT_ENCRYPTED_STATE_ERROR : "State content must be a valid plaintext Terraform/OpenTofu v4 state file";
+}
+
 function isTerraformStateInstance(value: unknown): boolean {
   if (!isObjectRecord(value) || !isObjectRecord(value["attributes"])) return false;
   return (value["schema_version"] === undefined || Number.isSafeInteger(value["schema_version"]))
@@ -186,6 +198,8 @@ export function parseTerraformStatePayload(payload: string | null): Record<strin
   const state = parseStatePayload(payload);
   if (
     state === null
+    || "encryption_version" in state
+    || "encrypted_data" in state
     || state["version"] !== 4
     || !Number.isSafeInteger(state["serial"])
     || (state["serial"] as number) < 0
@@ -198,4 +212,15 @@ export function parseTerraformStatePayload(payload: string | null): Record<strin
   if (state["terraform_version"] !== undefined && typeof state["terraform_version"] !== "string") return null;
   if (state["outputs"] !== undefined && !isObjectRecord(state["outputs"])) return null;
   return state;
+}
+
+
+/** Change state metadata without rounding arbitrary resource numbers through JS floats. */
+export function statePayloadWithSerial(payload: string, serial: number): string {
+  if (!Number.isSafeInteger(serial) || serial < 0) throw new Error("Invalid state serial");
+  // Bun exposes the native JSON source-text proposal; TypeScript's JSON type lags it.
+  const rawJson = JSON as typeof JSON & { rawJSON: (source: string) => unknown };
+  const state = JSON.parse(payload, (_key: string, value: unknown, context?: Readonly<{ source?: string }>): unknown =>
+    typeof value === "number" && context?.source !== undefined ? rawJson.rawJSON(context.source) : value) as Record<string, unknown>;
+  return JSON.stringify({ ...state, serial });
 }

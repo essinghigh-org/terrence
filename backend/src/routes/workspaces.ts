@@ -12,7 +12,7 @@ import {
   tagBindingResource,
   type WorkspaceResourcePermissions,
 } from "../lib/response";
-import { decodeStatePayload, isUniqueConstraintError, validVariableAttributes } from "../lib/validation";
+import { CLIENT_ENCRYPTED_STATE_ERROR, decodeStatePayload, isClientEncryptedState, isUniqueConstraintError, validVariableAttributes } from "../lib/validation";
 import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
 import { validateVersion, caseInsensitiveLike, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, parseStatePayload, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspace, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly } from "../lib/utils";
 
@@ -320,6 +320,12 @@ async function maybeAttachOutputs(
     orderBy: [desc(stateVersions.serial)],
   });
   if (sv === undefined) return { data };
+  if (isClientEncryptedState(sv.statePayload)) {
+    return { data: { ...data, relationships: {
+      ...(data["relationships"] as Record<string, unknown>),
+      outputs: { data: null, meta: { "unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR } },
+    } } };
+  }
   const outputs = workspaceOutputResources(sv);
   const dataWithRels = data as { relationships?: Record<string, unknown> };
   dataWithRels.relationships = {
@@ -612,7 +618,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (globalRemoteState && projectRemoteState) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "global-remote-state and project-remote-state cannot both be true" }] };
     }
-    const rawAgentPoolId = attributes["agent-pool-id"];
+    const rawAgentPoolId = attributes["agent-pool-id"] === "" ? null : attributes["agent-pool-id"];
     const rawAutoDestroyActivityDuration = attributes["auto-destroy-activity-duration"];
     const rawSettingOverwrites = attributes["setting-overwrites"];
     const rawVcsRepo = attributes["vcs-repo"];
@@ -904,6 +910,10 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     // statePayload so older versions (recorded before jsonState existed) still
     // render their resources.
     if (latestState !== undefined) {
+      if (isClientEncryptedState(latestState.statePayload)) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR }] };
+      }
       const jsonStateSource = latestState.jsonState ?? latestState.statePayload ?? null;
       if (jsonStateSource !== null) {
         try {
@@ -971,6 +981,10 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       orderBy: [desc(stateVersions.serial)],
     });
     if (state === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (isClientEncryptedState(state.statePayload)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR }] };
+    }
     const nodes = dependencyGraphFromState(state.jsonState ?? state.statePayload);
     const addresses = new Set(nodes.map((node): string => node.address));
     const edges = nodes.flatMap((node): readonly { from: string; to: string }[] => node.dependencies
@@ -1516,9 +1530,9 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Workspace lock is held by a live run (${ws.lockOwnerId ?? "unknown"}); cancel or discard the run first, or retry with force to override` }] };
       }
     }
-    await promoteIntermediateStateVersion(workspaceId);
     const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true))).returning({ id: workspaces.id });
     if (unlocked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock changed while unlocking" }] }; }
+    await promoteIntermediateStateVersion(workspaceId);
     const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(
@@ -1747,7 +1761,7 @@ async function updateWorkspaceResponse(
   if (executionMode === undefined && typeof attributes["operations"] === "boolean") {
     executionMode = attributes["operations"] ? "remote" : "local";
   }
-  const rawAgentPoolId = attributes["agent-pool-id"];
+  const rawAgentPoolId = attributes["agent-pool-id"] === "" ? null : attributes["agent-pool-id"];
   const rawAutoDestroyActivityDuration = attributes["auto-destroy-activity-duration"];
   const rawInheritsProjectAutoDestroy = attributes["inherits-project-auto-destroy"];
   const rawSettingOverwrites = attributes["setting-overwrites"];

@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import type { configurationVersions, runs, workspaces } from "../db/schema";
 import { availableVersions, resolveLatestVersion, validateVersion } from "../binaryManager";
 import { mintRunToken } from "./run-token";
-import { executionVariables } from "../worker";
+import { executionVariables, normalizeRunVariables } from "../worker";
 import { signedApiURL, type DeepReadonly } from "../lib/utils";
 import type { AgentJob } from "./agent-jobs";
 
@@ -296,10 +296,11 @@ export async function agentEnvironment(
   workspaceId: string,
   orgId: string,
   projectId: string | null,
+  runVariables?: unknown,
 ): Promise<Record<string, string>> {
   const variables = await executionVariables(workspaceId, orgId, projectId);
   const out: Record<string, string> = {};
-  for (const variable of variables) {
+  for (const variable of [...variables, ...normalizeRunVariables(runVariables), ...variables.filter((entry) => entry.priority)]) {
     if (variable.category === "env") {
       out[variable.key] = variable.value;
     } else if (variable.category === "terraform") {

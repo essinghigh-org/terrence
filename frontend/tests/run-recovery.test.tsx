@@ -133,6 +133,23 @@ test("recover posts the recover-state action and refreshes", async () => {
   });
 });
 
+test("client-encrypted recovery remains downloadable but cannot be promoted", async () => {
+  const seen: string[] = [];
+  installFetch("run-encrypted", runFixture("run-encrypted", {
+    "has-recovery-state": true,
+    "recovery-state-format-supported": false,
+    "recovery-state-unavailable-reason": "Client-encrypted state requires its original keys and cannot be promoted.",
+  }), () => null, seen);
+  const view = renderDetail("run-encrypted");
+  await view.findByText("Recovery state available");
+  const recover = view.getByRole("button", { name: "Recover into new state version" }) as HTMLButtonElement;
+  expect(recover.disabled).toBe(true);
+  expect((view.getByRole("button", { name: "Download recovery state" }) as HTMLButtonElement).disabled).toBe(false);
+  expect(view.getByText(/Client-encrypted state requires its original keys/)).toBeTruthy();
+  fireEvent.click(recover);
+  expect(seen.some((entry) => entry.startsWith("POST"))).toBe(false);
+});
+
 test("recover explains the workspace lock requirement on conflict", async () => {
   const seen: string[] = [];
   installFetch("run-rec", runFixture("run-rec", { "has-recovery-state": true }), (url) => {
@@ -149,13 +166,15 @@ test("recover explains the workspace lock requirement on conflict", async () => 
 
 test("download fetches the recovery copy", async () => {
   const seen: string[] = [];
-  URL.createObjectURL = mock((): string => "blob:recovery") as unknown as typeof URL.createObjectURL;
+  let downloaded: Blob | undefined;
+  const rawState = '{ "version": 4, "serial": 7, "large": 123456789012345678901234567890 }\n';
+  URL.createObjectURL = mock((blob: Blob): string => { downloaded = blob; return "blob:recovery"; }) as unknown as typeof URL.createObjectURL;
   URL.revokeObjectURL = mock((): boolean => true) as unknown as typeof URL.revokeObjectURL;
   // jsdom cannot navigate: swallow the programmatic download click.
   HTMLAnchorElement.prototype.click = mock((): boolean => true) as unknown as typeof HTMLAnchorElement.prototype.click;
   installFetch("run-rec", runFixture("run-rec", { "has-recovery-state": true }), (url) => {
     if (url === "/api/v2/runs/run-rec/recovery-state") {
-      return new Response(JSON.stringify({ version: 4, serial: 7 }), {
+      return new Response(rawState, {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -168,5 +187,7 @@ test("download fetches the recovery copy", async () => {
   await waitFor((): void => {
     expect(seen).toContain("GET /api/v2/runs/run-rec/recovery-state");
   });
+  await waitFor((): void => { expect(downloaded).toBeDefined(); });
+  expect(await downloaded!.text()).toBe(rawState);
   expect(view.queryByRole("alert")).toBeNull();
 });

@@ -145,7 +145,7 @@ function parseMarkdown(markdown: string): MarkdownBlock[] {
         || /^(#{1,6})\s+/.test(current)
         || /^\s*(?:[-*+]|\d+\.)\s+/.test(current)
         || current.startsWith("> ")
-        || current.trim().startsWith("|")) break;
+        || (current.trim().startsWith("|") && isTableSeparator(lines[index + 1] ?? ""))) break;
       paragraph.push(current);
       index += 1;
     }

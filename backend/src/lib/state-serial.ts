@@ -1,7 +1,7 @@
 import { desc, eq } from "drizzle-orm";
 import { db } from "../db";
 import { stateVersions } from "../db/schema";
-import { decodeStatePayload, isUniqueConstraintError } from "./validation";
+import { CLIENT_ENCRYPTED_STATE_ERROR, decodeStatePayload, isClientEncryptedState, isUniqueConstraintError } from "./validation";
 import { insertStateOutputIndex } from "./state-output-index";
 
 type StateInsert = Omit<typeof stateVersions.$inferInsert, "serial">;
@@ -12,6 +12,8 @@ export async function insertStateVersionWithSerialTx(
   values: Readonly<StateInsert>,
 ): Promise<number> {
   const tx = transaction as typeof db;
+  const statePayload = values.statePayload === null || values.statePayload === undefined ? null : decodeStatePayload(values.statePayload);
+  if (isClientEncryptedState(statePayload)) throw new Error(CLIENT_ENCRYPTED_STATE_ERROR);
   const latest = await tx.query.stateVersions.findFirst({
     where: eq(stateVersions.workspaceId, values.workspaceId),
     orderBy: [desc(stateVersions.serial)],
@@ -20,7 +22,6 @@ export async function insertStateVersionWithSerialTx(
   const serial = (latest?.serial ?? 0) + 1;
   await tx.insert(stateVersions).values({ ...values, serial });
   const jsonState = values.jsonState === null || values.jsonState === undefined ? null : decodeStatePayload(values.jsonState);
-  const statePayload = values.statePayload === null || values.statePayload === undefined ? null : decodeStatePayload(values.statePayload);
   await insertStateOutputIndex(transaction, values.id, values.workspaceId, jsonState, statePayload);
   return serial;
 }

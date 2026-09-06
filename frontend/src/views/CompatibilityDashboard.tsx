@@ -130,7 +130,7 @@ export function CompatibilityDashboard(): React.JSX.Element {
       <PageHeader
         eyebrow="Site administration"
         title="Provider compatibility"
-        description={`${data?.provider ?? "hashicorp/tfe"} provider surface: resources and data sources covered by the provider E2E suite.`}
+        description={`${data?.provider ?? "hashicorp/tfe"} provider fixture inventory. Coverage indicates fixture inclusion; import, update and permission behavior require separate lifecycle evidence.`}
       />
 
       {loading ? (

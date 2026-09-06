@@ -29,10 +29,10 @@ export type ResourceChange = {
   change: Change;
 };
 
-export type Operation = "create" | "update" | "delete" | "replace" | "read" | "import" | "move" | "remove" | "no-op";
+export type Operation = "create" | "update" | "delete" | "replace" | "read" | "import" | "move" | "remove" | "unsupported" | "no-op";
 
-export const OPERATION_OPTIONS: readonly Operation[] = ["create", "update", "delete", "replace", "move", "import", "remove", "read"];
-export const APPLY_OPERATION_OPTIONS: readonly Operation[] = ["create", "update", "delete", "replace", "move", "import", "remove"];
+export const OPERATION_OPTIONS: readonly Operation[] = ["create", "update", "delete", "replace", "move", "import", "remove", "read", "unsupported"];
+export const APPLY_OPERATION_OPTIONS: readonly Operation[] = ["create", "update", "delete", "replace", "move", "import", "remove", "unsupported"];
 
 // Reads are data-source refreshes, not real changes; everything else is
 // selected by default.
@@ -50,25 +50,25 @@ export const operationConfig = {
   import: { symbol: "&", className: "text-foreground" },
   move: { symbol: "→", className: "text-foreground/85" },
   remove: { icon: Trash2, className: "text-muted-foreground/70" },
+  unsupported: { symbol: "?", className: "text-warning" },
   "no-op": { symbol: "·", className: "text-muted-foreground/70" },
 } satisfies Record<Operation, Readonly<{ symbol?: string; icon?: typeof Trash2; className: string }>>;
 
-export function operationFor(actions: readonly string[], actionReason?: string): Operation {
-  if (actions.includes("create") && actions.includes("delete")) return "replace";
-  if (actions.includes("create")) return "create";
-  if (actions.includes("delete")) {
-    if (actionReason === "delete_because_no_resource_config" || actionReason === "removed_from_state") {
-      return "remove";
-    }
-    return "delete";
-  }
-  if (actions.includes("update")) return "update";
-  if (actions.includes("read")) return "read";
+export function operationFor(actions: readonly string[]): Operation {
+  // Action reasons explain why; only the action says whether an object is destroyed.
+  if (actions.length === 0 || actions.some((action): boolean => !["no-op", "create", "read", "update", "delete", "forget"].includes(action))) return "unsupported";
+  if (actions.length === 2 && actions.includes("create") && actions.includes("delete")) return "replace";
+  if (actions.length !== 1) return "unsupported";
+  if (actions[0] === "forget") return "remove";
+  if (actions[0] === "create") return "create";
+  if (actions[0] === "delete") return "delete";
+  if (actions[0] === "update") return "update";
+  if (actions[0] === "read") return "read";
   return "no-op";
 }
 
 export function operationForResource(resource: DeepReadonly<ResourceChange>): Operation {
-  const operation = operationFor(resource.change.actions, resource.action_reason);
+  const operation = operationFor(resource.change.actions);
   if (operation !== "no-op") return operation;
   if (resource.change.importing !== undefined) return "import";
   if (resource.previous_address !== undefined) return "move";

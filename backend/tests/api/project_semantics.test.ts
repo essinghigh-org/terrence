@@ -241,6 +241,19 @@ describe("workspace agent-pool validation gates (RUN-021)", () => {
     expect(body.errors[0].detail).toBe("An agent pool is required for agent execution mode");
   });
 
+  it("accepts the provider's empty agent pool when using remote execution", async () => {
+    const created = await request("POST", `/api/v2/organizations/${orgName}/workspaces`, {
+      data: { attributes: { name: `empty-pool-${suffix}`, "execution-mode": "remote", "agent-pool-id": "" } },
+    });
+    expect(created.status).toBe(201);
+    const workspace = (await created.json()).data;
+    const updated = await request("PATCH", `/api/v2/workspaces/${workspace.id}`, {
+      data: { attributes: { "execution-mode": "remote", "agent-pool-id": "" } },
+    });
+    expect(updated.status).toBe(200);
+    expect((await updated.json()).data.attributes["agent-pool-id"]).toBeNull();
+  });
+
   it("rejects an agent-pool-id when execution mode is not agent (422)", async () => {
     const res = await request("PATCH", `/api/v2/workspaces/${workspaceId}`, {
       data: {

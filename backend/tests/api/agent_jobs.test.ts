@@ -284,6 +284,11 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
         },
       },
     });
+    const encryptedCompletion = await request(loserAgentId, "/jobs/" + applyData.id + "/complete", {
+      fencingToken: applyFencingToken,
+      body: { data: { type: "agent-jobs", attributes: { status: "completed", state: JSON.stringify({ encryption_version: "v0", encrypted_data: "synthetic" }) } } },
+    });
+    const jobAfterEncrypted = await db.query.agentJobs.findFirst({ where: eq(agentJobs.id, applyData.id) });
     const applyCompletion = await request(loserAgentId, "/jobs/" + applyData.id + "/complete", {
       fencingToken: applyFencingToken,
       body: {
@@ -362,7 +367,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
     });
     const erroredRun = await db.query.runs.findFirst({ where: eq(runs.id, "errored-run") });
     const errorLogResponse = await app.handle(new Request(
-      "http://terrence.test/api/v2/runs/errored-run/plan/log/errored-log-token",
+      (await import("./src/lib/utils")).runLogURL(erroredRun, "plan", { url: "http://terrence.test" }),
     ));
     const errorLogText = await errorLogResponse.text();
 
@@ -430,6 +435,8 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       applyPlanResult: applyData.attributes["plan-result"],
       applyLogStatus: applyLog.status,
       invalidApplyPlanJsonCompletion: invalidApplyPlanJsonCompletion.status,
+      encryptedCompletion: encryptedCompletion.status,
+      jobAfterEncrypted: jobAfterEncrypted?.status,
       applyCompletion: applyCompletion.status,
       replayedCompletion: replayedCompletion.status,
       emptyPoll: emptyPoll.status,
@@ -495,6 +502,8 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
     applyPlanResult: { "plan-handle": "saved-plan" },
     applyLogStatus: 201,
     invalidApplyPlanJsonCompletion: 422,
+    encryptedCompletion: 422,
+    jobAfterEncrypted: "claimed",
     applyCompletion: 200,
     replayedCompletion: 409,
     emptyPoll: 204,

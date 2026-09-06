@@ -344,6 +344,9 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
     if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
+    if (attributes["allow-member-token-management"] !== undefined && typeof attributes["allow-member-token-management"] !== "boolean") {
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
     const id = newResourceId("team");
     const rawOrgAccess = attributes["organization-access"] !== undefined && typeof attributes["organization-access"] === "object" && attributes["organization-access"] !== null
       ? attributes["organization-access"] as Record<string, unknown>
@@ -351,11 +354,11 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
     const visibility = typeof attributes["visibility"] === "string" ? attributes["visibility"] : (typeof rawOrgAccess["visibility"] === "string" ? rawOrgAccess["visibility"] : "organization");
     const ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : (typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null);
-    const allowMemberTokenManagement = typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
+    const allowMemberTokenManagement = typeof attributes["allow-member-token-management"] === "boolean" ? attributes["allow-member-token-management"] : typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
     const organizationAccess = parseOrganizationAccess(rawOrgAccess);
     if ("error" in organizationAccess) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: organizationAccess.error }] }; }
     if (
-      attributes["organization-access"] !== undefined
+      (attributes["organization-access"] !== undefined || attributes["allow-member-token-management"] !== undefined)
       && !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"))
     ) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -443,21 +446,28 @@ export const teamRoutes = new Elysia({ name: "teams" })
     if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
     if (typeof attributes["visibility"] === "string") updates.visibility = attributes["visibility"];
     if (!linked && attributes["sso-team-id"] !== undefined) updates.ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : null;
-    if (attributes["organization-access"] !== undefined) {
-      if (!(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"))) {
-        (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    if ((attributes["organization-access"] !== undefined || attributes["allow-member-token-management"] !== undefined)
+      && !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (attributes["allow-member-token-management"] !== undefined) {
+      if (typeof attributes["allow-member-token-management"] !== "boolean") {
+        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
       }
+      updates.allowMemberTokenManagement = attributes["allow-member-token-management"];
+    }
+    if (attributes["organization-access"] !== undefined) {
       const rawOrgAccess = attributes["organization-access"] as Record<string, unknown> | null;
       const organizationAccess = parseOrganizationAccess(rawOrgAccess);
       if ("error" in organizationAccess) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: organizationAccess.error }] }; }
       updates.organizationAccess = { ...team.organizationAccess, ...organizationAccess.value };
-      // The provider carries visibility / sso-team-id / allow-member-token-management
-      // inside organization-access, but the top-level attribute takes precedence
+      // Legacy clients may carry visibility / sso-team-id / allow-member-token-management
+      // inside organization-access; the top-level attribute takes precedence
       // when present (matching the create handler), and sso-team-id is gated by
       // the linked-team guard. Column-backed keys are persisted to their columns.
       if (attributes["visibility"] === undefined && typeof rawOrgAccess?.["visibility"] === "string") updates.visibility = rawOrgAccess["visibility"];
       if (!linked && attributes["sso-team-id"] === undefined && rawOrgAccess?.["sso-team-id"] !== undefined) updates.ssoTeamId = typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null;
-      if (rawOrgAccess?.["allow-member-token-management"] !== undefined) updates.allowMemberTokenManagement = typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
+      if (attributes["allow-member-token-management"] === undefined && rawOrgAccess?.["allow-member-token-management"] !== undefined) updates.allowMemberTokenManagement = typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
     }
     // Time-bounded policy-override delegation (kanban 18.7): epoch-millis
     // expiry (or null/0 to clear and return to a permanent grant). Requires
@@ -545,6 +555,23 @@ export const teamRoutes = new Elysia({ name: "teams" })
     }
     (set as { status: number }).status = 204;
     return {};
+  })
+  .get("/api/v2/teams/:team_id/relationships/organization-memberships", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, params["team_id"] ?? "") });
+    if (team === undefined || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null, "members:read"))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const { number, size } = pageRequest(request);
+    const match = and(eq(teamMemberships.teamId, team.id), eq(organizationMemberships.orgId, team.orgId));
+    const [rows, totals] = await Promise.all([
+      db.select({ membership: organizationMemberships, user: users }).from(organizationMemberships)
+        .innerJoin(teamMemberships, eq(teamMemberships.userId, organizationMemberships.userId))
+        .innerJoin(users, eq(users.id, organizationMemberships.userId))
+        .where(match).orderBy(asc(organizationMemberships.id)).limit(size).offset((number - 1) * size),
+      db.select({ total: count() }).from(organizationMemberships)
+        .innerJoin(teamMemberships, eq(teamMemberships.userId, organizationMemberships.userId)).where(match),
+    ]);
+    return { data: await Promise.all(rows.map(async (row): Promise<Record<string, unknown>> => orgMembershipResource(row.membership, row.user))), ...pagination(request, number, size, totals[0]?.total ?? 0) };
   })
   .post("/api/v2/teams/:team_id/relationships/organization-memberships", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const teamId = params["team_id"] ?? "";

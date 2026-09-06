@@ -1,4 +1,3 @@
-import { app, systemApiApp } from "./src/app";
 import { assertStorageWritable, bootstrapInitialAdmin, resetAdminPassword } from "./src/lib/bootstrap";
 import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 import { applyPgMigrations, isPostgres } from "./src/db";
@@ -50,15 +49,17 @@ if (systemTls !== undefined && (!(await systemTls.cert.exists()) || !(await syst
 // add a second startWorkerQueue() call here — the worker must have exactly
 // one startup location.
 assertStorageWritable();
-await resetAdminPassword();
-await bootstrapInitialAdmin();
-await refreshTrustedClientIpHeaders();
 // PostgreSQL schema migrations are async (the sqlite migrator runs
 // synchronously at module load inside src/db). Fresh postgres databases
 // must be migrated before the server accepts traffic.
 if (isPostgres) {
   await applyPgMigrations();
 }
+await resetAdminPassword();
+await bootstrapInitialAdmin();
+await refreshTrustedClientIpHeaders();
+// Route initialization starts background work, so load it only after schema and bootstrap.
+const { app, systemApiApp } = await import("./src/app");
 startControlPlaneHeartbeat();
 
 // Startup reconciliation: local runs interrupted by a previous crash or

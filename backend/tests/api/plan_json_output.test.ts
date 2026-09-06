@@ -95,7 +95,7 @@ describe("plan JSON output availability semantics", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toMatch(/^application\/json(?:;|$)/);
     const body = await response.json() as { values?: { secret?: unknown } };
-    expect(body.values?.secret).toBeNull();
+    expect(body.values).toBeUndefined();
   });
 
   it("serves the redacted artifact even while the run status is still incomplete", async () => {
@@ -103,7 +103,7 @@ describe("plan JSON output availability semantics", () => {
     const response = await getRedactedJsonOutput(seed.token, "application/json");
     expect(response.status).toBe(200);
     const body = await response.json() as { values?: { secret?: unknown } };
-    expect(body.values?.secret).toBeNull();
+    expect(body.values).toBeUndefined();
   });
 
   it("hides the artifact from users outside the organization", async () => {
@@ -192,7 +192,7 @@ describe("plan JSON output availability semantics", () => {
       const response = await teamGet(noStateToken, true);
       expect(response.status).toBe(200);
       const body = await response.json() as { values?: { secret?: unknown } };
-      expect(body.values?.secret).toBeNull();
+      expect(body.values).toBeUndefined();
     });
   });
 });

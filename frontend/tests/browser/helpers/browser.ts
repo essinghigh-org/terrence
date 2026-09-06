@@ -324,7 +324,8 @@ export class BrowserPage {
     const timeout = options.timeout ?? 10000;
     const start = Date.now();
     while (Date.now() - start < timeout) {
-      const current = this.webview.url;
+      // WebView.url can lag same-document history traversal; read the actual page.
+      const current = await this.evaluate<string>("window.location.href");
       const match = typeof pattern === "string" ? current.includes(pattern) : pattern.test(current);
       if (match) return;
       await Bun.sleep(50);

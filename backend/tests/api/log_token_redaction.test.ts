@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
+import { runLogURL } from "../../src/lib/utils";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { organizations, runs, workspaces } from "../../src/db/schema";
@@ -14,7 +15,7 @@ const runId = `run-logredact-${suffix}`;
 const logToken = `log-token-${suffix}`;
 
 function request(path: string): Promise<Response> {
-  return app.handle(new Request(`http://terrence.test${path}`, { method: "GET" }));
+  return app.handle(new Request(new URL(path, "http://terrence.test"), { method: "GET" }));
 }
 
 function loggedPaths(calls: unknown[][]): string[] {
@@ -50,7 +51,7 @@ afterAll(async () => {
 test("request log redacts the run log capability token (#609)", async () => {
   const logSpy = spyOn(console, "log").mockImplementation(() => {});
   try {
-    const ok = await request(`/api/v2/runs/${runId}/plan/log/${logToken}`);
+    const ok = await request(runLogURL({ id: runId, logToken }, "plan", { url: "http://terrence.test" })!);
     expect(ok.status).toBe(200);
     const denied = await request(`/api/v2/runs/${runId}/apply/log/wrong-token`);
     expect(denied.status).toBe(404);

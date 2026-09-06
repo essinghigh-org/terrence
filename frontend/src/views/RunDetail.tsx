@@ -51,7 +51,7 @@ import {
   TableRow,
 } from "../components/ui/table";
 import { toast } from "../components/ui/toast";
-import { ApiError, fetchApi, streamExplain, type ExplainKind, type ReasoningEffort } from "../lib/api";
+import { ApiError, fetchApi, fetchApiBlob, streamExplain, type ExplainKind, type ReasoningEffort } from "../lib/api";
 import { CAPABILITY_PLAN_EXPLAINER, useCapability } from "../lib/capabilities";
 import { useUnsavedChangesWarning } from "../lib/use-unsaved-changes";
 import { isBigInt, isBoolean, isNumber, isObjectLike, isString } from "../lib/type-guards";
@@ -661,8 +661,7 @@ export function RunDetail({
     setRecoveryPending(true);
     setRecoveryError("");
     try {
-      const payload = await fetchApi(`/api/v2/runs/${runId}/recovery-state`);
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const blob = await fetchApiBlob(`/api/v2/runs/${runId}/recovery-state`);
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -1325,7 +1324,7 @@ export function RunDetail({
               <Button
                 type="button"
                 size="sm"
-                disabled={recoveryPending}
+                disabled={recoveryPending || attributes["recovery-state-format-supported"] === false}
                 onClick={(): void => { void recoverState(); }}
               >
                 {recoveryPending ? "Working…" : "Recover into new state version"}
@@ -1341,6 +1340,9 @@ export function RunDetail({
           <p className="mt-2 text-xs">
             Recovering requires state-write permission and the workspace lock held by you.
           </p>
+          {attributes["recovery-state-format-supported"] === false && (
+            <p className="mt-2 text-xs">{String(attributes["recovery-state-unavailable-reason"] ?? "This recovery format cannot be promoted. Download it for manual recovery.")}</p>
+          )}
           {recoveryError !== "" && (
             <p role="alert" className="mt-2 text-xs font-medium text-destructive">{recoveryError}</p>
           )}

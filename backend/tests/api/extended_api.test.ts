@@ -280,7 +280,7 @@ describe("the reference format API v2 - Extended APIs", () => {
       headers: { Authorization: `Bearer ${userToken}` },
     }));
     expect(lock.status).toBe(200);
-    const rawState = JSON.stringify({ version: 4, serial: 1, resources: [] });
+    const rawState = JSON.stringify({ version: 4, serial: 1, lineage: "test-lineage", resources: [] });
     const createState = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
         method: "POST",

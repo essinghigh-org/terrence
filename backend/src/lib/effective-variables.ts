@@ -1,3 +1,4 @@
+import { compareVariableSets } from "./variable-set-precedence";
 import { asc, eq, inArray } from "drizzle-orm";
 
 import { db } from "../db";
@@ -47,13 +48,7 @@ export async function effectiveWorkspaceVariables(
   );
   const activeSets = orgVariableSets
     .filter((vs): boolean => vs.global === true || attached.has(vs.id) || ownedProjectSetIds.has(vs.id))
-    .sort((left, right): number => {
-      const rank = (set: { readonly id: string; readonly priority: boolean | null }): number =>
-        (set.priority === true ? 10 : 0) + (workspaceSetIds.has(set.id) ? 2 : projectSetIds.has(set.id) ? 1 : 0);
-      return rank(left) - rank(right)
-        || right.name.localeCompare(left.name)
-        || right.id.localeCompare(left.id);
-    });
+    .sort((left, right): number => compareVariableSets(left, right, workspaceSetIds, projectSetIds));
   const activeSetIds = activeSets.map((vs): string => vs.id);
   const prioritySetIds = new Set(
     activeSets.filter((vs): boolean => vs.priority === true).map((vs): string => vs.id),

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
@@ -84,6 +84,11 @@ describe("sweepUploadTemps", (): void => {
     await writeFile(keptCvArchive, "referenced archive");
     await writeFile(keptModuleArchive, "referenced archive");
 
+    // Model files stranded before startup, independent of filesystem clock precision.
+    const old = new Date(Date.now() - 60_000);
+    for (const path of [stateTemp, cvTmp, moduleUpload, orphanCvArchive, orphanModuleArchive, partialExport, garbageExport]) {
+      await utimes(path, old, old);
+    }
     const result = await sweepUploadTemps(root);
 
     expect(result).toEqual({

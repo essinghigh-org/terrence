@@ -29,24 +29,19 @@ function sseFrame(event: string, data: unknown): Uint8Array {
   return new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-/**
- * Union of readable workspace ids across orgs for an SSE snapshot. Returns
- * null when any org grants org-wide read (callers then skip workspace
- * filtering for the whole stream).
- */
+/** Keep each organization's unrestricted access scoped to that organization. */
 async function readableWorkspaceIdsForOrgs(
   orgIds: readonly string[],
   userId: string,
   tokenOrgId: string | null,
   tokenTeamId: string | null,
-): Promise<Set<string> | null> {
-  const union = new Set<string>();
+): Promise<Map<string, Set<string> | null>> {
+  const visibility = new Map<string, Set<string> | null>();
   for (const id of orgIds) {
     const ids = await workspaceIdsForPermission(id, userId, tokenOrgId, tokenTeamId, "read");
-    if (ids === null) return null;
-    for (const workspaceId of ids) union.add(workspaceId);
+    visibility.set(id, ids === null ? null : new Set(ids));
   }
-  return union;
+  return visibility;
 }
 
 /**
@@ -98,10 +93,8 @@ export const eventsRoutes = new Elysia({ name: "events" })
     // Allowed orgs resolved once: site admins see everything; org tokens see
     // their org; users see their memberships.
     let allowedOrgIds: Set<string> | null = null;
-    // Readable workspaces resolved once alongside the orgs (issue #645): a
-    // null set means org-wide read access, otherwise events for other
-    // workspaces are dropped even inside an allowed org.
-    let readableWorkspaceIds: Set<string> | null = null;
+    // Only site admins have a null map; null entries grant access within one org.
+    let readableWorkspaceIds: Map<string, Set<string> | null> | null = null;
     try {
       if (user.isSiteAdmin === true) {
         allowedOrgIds = null; // null = all orgs
@@ -189,13 +182,11 @@ export const eventsRoutes = new Elysia({ name: "events" })
           disposers.push(subscribe(topic, (payload: Readonly<Record<string, unknown>>): void => {
             const eventOrgId = typeof payload["org-id"] === "string" ? payload["org-id"] : "";
             if (allowedOrgIds !== null && (eventOrgId === "" || !allowedOrgIds.has(eventOrgId))) return;
-            // Issue #645: org membership alone must not leak run metadata
-            // for workspaces the principal cannot read. The snapshot is
-            // connect-time (re-resolved on reconnect); events without a
-            // workspace id keep the org-only behavior.
+            const eventWorkspaceId = typeof payload["workspace-id"] === "string" ? payload["workspace-id"] : "";
+            if (eventOrgId === "" || eventWorkspaceId === "") return;
             if (readableWorkspaceIds !== null) {
-              const eventWorkspaceId = typeof payload["workspace-id"] === "string" ? payload["workspace-id"] : "";
-              if (eventWorkspaceId !== "" && !readableWorkspaceIds.has(eventWorkspaceId)) return;
+              const ids = readableWorkspaceIds.get(eventOrgId);
+              if (ids === undefined || (ids !== null && !ids.has(eventWorkspaceId))) return;
             }
             enqueue(topic, payload);
           }));

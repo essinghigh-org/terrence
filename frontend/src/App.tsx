@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, type ComponentType, type JSX, type ReactNode } from "react";
+import { UnsavedChangesProvider } from "./lib/use-unsaved-changes";
 import { isFunction } from "./lib/type-guards";
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, useParams, useLocation } from "react-router-dom";
+import { Routes, Route, Navigate, useNavigate, useParams, useLocation } from "react-router-dom";
 import { Login } from "./views/Login";
 import { Register } from "./views/Register";
 import { Spinner } from "./components/ui/spinner";
@@ -368,13 +369,13 @@ function App(): JSX.Element {
   return (
     <ErrorBoundary>
       <RunSandboxGate>
-        <BrowserRouter>
+        <UnsavedChangesProvider>
           <AuthSessionManager />
           <Suspense fallback={<RouteFallback />}>
             <AppRoutes />
             <Toaster />
           </Suspense>
-        </BrowserRouter>
+        </UnsavedChangesProvider>
       </RunSandboxGate>
     </ErrorBoundary>
   );

@@ -28,6 +28,9 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 
 const STATE_PAYLOAD = JSON.stringify({
   version: 4,
+  serial: 1,
+  lineage: "test-lineage",
+  resources: [],
   terraform_version: "1.7.0",
   outputs: {
     secret_output: { value: "super-secret", sensitive: true, type: "string" },

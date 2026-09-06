@@ -128,6 +128,8 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
 
     expect(drpRes.status).toBe(201);
     const drpBody = await drpRes.json();
+    const workspaceResponse = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}`, { headers: { Authorization: `Bearer ${userToken}` } }));
+    expect((await workspaceResponse.json()).data.relationships["data-retention-policy"].data).toEqual({ id: drpBody.data.id, type: "data-retention-policy-dont-deletes" });
     expect(drpBody.data.meta.gc.softDeleted).toBe(1);
     expect(drpBody.data.meta.gc.permanentlyDeleted).toBe(0);
 

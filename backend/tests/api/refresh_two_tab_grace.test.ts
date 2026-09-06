@@ -117,4 +117,23 @@ describe("refresh token two-tab concurrency grace", () => {
     await db.delete(refreshSessions).where(eq(refreshSessions.userId, replayUserId));
     await db.delete(users).where(eq(users.username, replayUserId));
   });
+
+  it("logout revokes both concurrent access tokens and preserves unrelated API tokens", async () => {
+    const personal = await app.handle(new Request("http://terrence.test/api/v2/users/login", {
+      method: "POST", headers: { "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({ data: { attributes: { username: userId, password } } }),
+    }));
+    const personalToken = (await personal.json()).data.attributes.token;
+    const initial = await login();
+    const cookie = cookieFrom(initial);
+    const tabs = await Promise.all([refresh(cookie), refresh(cookie)]);
+    const tokens = await Promise.all(tabs.map(async (response) => (await response.json()).data.attributes.token as string));
+    const account = (token: string) => app.handle(new Request("http://terrence.test/api/v2/account/details", { headers: { Authorization: `Bearer ${token}` } }));
+    for (const token of tokens) expect((await account(token)).status).toBe(200);
+    const logout = await app.handle(new Request("http://terrence.test/api/v2/users/logout", { method: "POST", headers: { Cookie: cookie } }));
+    expect(logout.status).toBe(204);
+    for (const token of tokens) expect((await account(token)).status).toBe(401);
+    expect((await account(personalToken)).status).toBe(200);
+  });
+
 });

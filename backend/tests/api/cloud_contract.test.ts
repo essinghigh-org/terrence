@@ -233,6 +233,7 @@ describe("Terraform cloud protocol contract", () => {
     expect(historyResponse.status).toBe(200);
     const historyIds = (await historyResponse.json()).data.map((run: any) => run.id);
     expect(historyIds).toContain(speculativeRun.id);
+    await db.update(runs).set({ status: "planned_and_finished" }).where(eq(runs.id, speculativeRun.id));
     expect((await request(
       `/api/v2/runs/${speculativeRun.id}`,
       { method: "DELETE", headers: authHeaders },
@@ -382,10 +383,10 @@ describe("Terraform cloud protocol contract", () => {
     expect(plan.attributes.status).toBe("finished");
     expect(plan.attributes["generated-configuration"]).toBe(false);
     expect(plan.attributes["execution-details"]).toEqual({ mode: "remote" });
-    expect(plan.attributes["log-read-url"]).toBe(
-      `http://terrence.test/api/v2/runs/${runId}/plan/log/${runId}`,
+    expect(new URL(plan.attributes["log-read-url"]).pathname).toMatch(
+      new RegExp(`/runs/${runId}/plan/log/[0-9]+[.][a-f0-9]{64}$`),
     );
-    const planLogDownload = await request(`/api/v2/runs/${runId}/plan/log/${runId}?offset=2&limit=3`);
+    const planLogDownload = await request(`${plan.attributes["log-read-url"]}?offset=2&limit=3`);
     expect(await planLogDownload.text()).toBe("cde");
     expect(planLogDownload.headers.get("content-type")).toBe("text/plain; charset=utf-8");
     expect(planLogDownload.headers.get("content-disposition")).toBe(`attachment; filename="${runId}-plan.txt"`);
@@ -395,10 +396,10 @@ describe("Terraform cloud protocol contract", () => {
     expect(applyResponse.status).toBe(200);
     const apply = (await applyResponse.json()).data;
     expect(apply.attributes.status).toBe("pending");
-    expect(apply.attributes["log-read-url"]).toBe(
-      `http://terrence.test/api/v2/runs/${runId}/apply/log/${runId}`,
+    expect(new URL(apply.attributes["log-read-url"]).pathname).toMatch(
+      new RegExp(`/runs/${runId}/apply/log/[0-9]+[.][a-f0-9]{64}$`),
     );
-    const applyLogDownload = await request(`/api/v2/runs/${runId}/apply/log/${runId}?offset=6&limit=3`);
+    const applyLogDownload = await request(`${apply.attributes["log-read-url"]}?offset=6&limit=3`);
     expect(await applyLogDownload.text()).toBe("");
     expect(applyLogDownload.headers.get("content-disposition")).toBe(`attachment; filename="${runId}-apply.txt"`);
 

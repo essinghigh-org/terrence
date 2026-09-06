@@ -226,7 +226,7 @@ async function refreshAccessToken(force = false): Promise<string | null> {
   return refreshRequest;
 }
 
-export async function fetchApi<T = unknown>(endpoint: string, options: ReadonlyRequestInit = {}): Promise<T> {
+async function requestApi(endpoint: string, options: ReadonlyRequestInit = {}): Promise<Response> {
   // Absolute /api/* paths (v1 compatibility endpoints like /api/v1/metadata)
   // are used verbatim; everything else is relative to the v2 API base.
   const url = endpoint.startsWith("/api/")
@@ -281,6 +281,7 @@ export async function fetchApi<T = unknown>(endpoint: string, options: ReadonlyR
   // refresh cookie when in a refreshable session so the correct principal
   // is picked up without surfacing "Run history may be out of date".
   const canRefreshOnWorkspace404 = response.status === 404
+    && ["GET", "HEAD"].includes((options.method ?? "GET").toUpperCase())
     && token !== null
     && token !== ""
     && isRefreshableSession()
@@ -312,9 +313,17 @@ export async function fetchApi<T = unknown>(endpoint: string, options: ReadonlyR
     );
   }
 
-  // SAFETY: callers declare the expected response contract via the type
-  // argument; the raw body is decoded by the caller's boundary checks.
-  return readResponseBody(response) as Promise<T>;
+  return response;
+}
+
+export async function fetchApi<T = unknown>(endpoint: string, options: ReadonlyRequestInit = {}): Promise<T> {
+  // SAFETY: callers declare the expected response contract and validate its fields.
+  return readResponseBody(await requestApi(endpoint, options)) as Promise<T>;
+}
+
+/** Preserve download bytes; parsing JSON can round numbers and changes its checksum. */
+export async function fetchApiBlob(endpoint: string, options: ReadonlyRequestInit = {}): Promise<Blob> {
+  return (await requestApi(endpoint, options)).blob();
 }
 
 export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<AbortSignal>): Promise<T[]> {

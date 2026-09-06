@@ -1,7 +1,7 @@
 import { chmod, mkdir, open, readdir, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { decodeStatePayload, decryptStatePayload, encryptStatePayload, parseTerraformStatePayload } from "./validation";
+import { decodeStatePayload, decryptStatePayload, encryptStatePayload, isClientEncryptedState, parseTerraformStatePayload } from "./validation";
 import { log } from "./log";
 
 // ---------------------------------------------------------------------------
@@ -270,7 +270,11 @@ export async function sweepIncompleteRecoveryCopies(storageDir: string): Promise
     let adoptable = false;
     try {
       const stored = await readFile(join(dir, RECOVERY_STATE_FILENAME), "utf8");
-      adoptable = parseTerraformStatePayload(decodeStatePayload(stored)) !== null;
+      const payload = decodeStatePayload(stored);
+      // Without the client key, a markerless encrypted copy cannot be verified.
+      // Retain it for manual recovery instead of treating it as disposable corruption.
+      if (isClientEncryptedState(payload)) continue;
+      adoptable = parseTerraformStatePayload(payload) !== null;
     } catch {
       adoptable = false;
     }

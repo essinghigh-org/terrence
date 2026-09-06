@@ -1,137 +1,122 @@
-import { afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
-import { BrowserRouter, Link, Route, Routes } from "react-router-dom";
+import { afterEach, expect, test } from "bun:test";
+import { StrictMode, useState } from "react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { createBrowserRouter, createMemoryRouter, Link, Route, RouterProvider, Routes, useNavigate } from "react-router-dom";
+import { UnsavedChangesProvider, useUnsavedChangesWarning } from "../src/lib/use-unsaved-changes";
 
-import { useUnsavedChangesWarning } from "../src/lib/use-unsaved-changes";
-
-afterEach((): void => {
+const routers: ReturnType<typeof createMemoryRouter>[] = [];
+afterEach(() => {
   cleanup();
-// SAFETY: the test stubs the global with a mock before exercising the component.
-  (window as { confirm?: unknown }).confirm = undefined;
+  routers.splice(0).forEach((router) => { router.dispose(); });
   window.history.replaceState(null, "", "/");
 });
 
-/**
- * The hook guards window.history pushState/replaceState, so these tests must
- * navigate through the real BrowserRouter (MemoryRouter keeps its own history
- * and would bypass the guard entirely).
- */
-function renderWithBrowserRouter(routes: {
-  form: React.JSX.Element;
-  elsewhere: React.JSX.Element;
-}): ReturnType<typeof render> {
-  return render(
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={routes.form} />
-        <Route path="/elsewhere" element={routes.elsewhere} />
-      </Routes>
-    </BrowserRouter>,
-  );
+function Form({ initiallyDirty = true, secondSection = false }: Readonly<{ initiallyDirty?: boolean; secondSection?: boolean }>): React.JSX.Element {
+  const [dirty, setDirty] = useState(initiallyDirty);
+  const [otherDirty, setOtherDirty] = useState(secondSection);
+  const [error, setError] = useState("");
+  const navigate = useNavigate();
+  useUnsavedChangesWarning(dirty, "Unsaved settings will be lost.");
+  useUnsavedChangesWarning(otherDirty, "Unsaved comment will be lost.");
+  return <div>
+    <p>Form</p>
+    <Link to="/elsewhere">Breadcrumb</Link>
+    <Link to="?tab=other">Change tab</Link>
+    <button onClick={() => { void navigate("/elsewhere"); }}>Switch organization</button>
+    <button onClick={() => { void navigate("/elsewhere", { replace: true }); }}>Replace route</button>
+    <button onClick={() => { setDirty(false); }}>Save settings</button>
+    <button onClick={() => { setOtherDirty(false); }}>Save comment</button>
+    <button onClick={() => { setError("Save failed"); }}>Fail save</button>
+    <p>{error}</p>
+  </div>;
 }
 
-test("route navigation away from a dirty form asks for confirmation (kanban 26.18)", async () => {
-  const confirmMock = mock((): boolean => false);
-// SAFETY: the test stubs the global with a mock before exercising the component.
-  (window as { confirm?: unknown }).confirm = confirmMock;
+function setup(options: { browser?: boolean; initiallyDirty?: boolean; secondSection?: boolean } = {}) {
+  const routes = [{ path: "*", element: <UnsavedChangesProvider><Routes>
+    <Route path="/" element={<Form initiallyDirty={options.initiallyDirty ?? true} secondSection={options.secondSection ?? false} />} />
+    <Route path="/elsewhere" element={<p>Destination</p>} />
+  </Routes></UnsavedChangesProvider> }];
+  const router = options.browser ? createBrowserRouter(routes) : createMemoryRouter(routes);
+  routers.push(router);
+  const view = render(<StrictMode><RouterProvider router={router} /></StrictMode>);
+  return { ...view, router };
+}
 
-  function DirtyForm(): React.JSX.Element {
-    useUnsavedChangesWarning(true, "You have unsaved changes.");
-    return (
-      <div>
-        <Link to="/elsewhere">Leave</Link>
-      </div>
-    );
-  }
-
-  const view = renderWithBrowserRouter({
-    form: <DirtyForm />,
-    elsewhere: <p>Destination</p>,
+for (const control of ["Breadcrumb", "Change tab", "Switch organization", "Replace route"]) {
+  test(`${control} stays put when declined and retries the intended transition when confirmed`, async () => {
+    const view = setup();
+    const leave = () => fireEvent.click(view.getByRole(control === "Breadcrumb" || control === "Change tab" ? "link" : "button", { name: control }));
+    leave();
+    await waitFor(() => { expect(view.getByRole("dialog")).toBeTruthy(); });
+    expect(view.router.state.location.pathname).toBe("/");
+    fireEvent.click(view.getByRole("button", { name: "Stay" }));
+    await waitFor(() => { expect(view.queryByRole("dialog")).toBeNull(); });
+    expect(view.router.state.location.search).toBe("");
+    leave();
+    await waitFor(() => { expect(view.getByRole("dialog")).toBeTruthy(); });
+    fireEvent.click(view.getByRole("button", { name: "Discard and leave" }));
+    await waitFor(() => { expect(control === "Change tab" ? view.router.state.location.search : view.router.state.location.pathname).toBe(control === "Change tab" ? "?tab=other" : "/elsewhere"); });
   });
+}
 
-  fireEvent.click(view.getByRole("link", { name: "Leave" }));
-  await waitFor((): void => {
-    expect(confirmMock).toHaveBeenCalledWith("You have unsaved changes.");
-  });
-  // Declined: still on the form, destination never rendered.
-  expect(view.getByRole("link", { name: "Leave" })).toBeTruthy();
-  expect(view.queryByText("Destination")).toBeNull();
-  expect(window.location.pathname).toBe("/");
+test("browser Back is blocked, restored on Stay and retried on Discard", async () => {
+  window.history.replaceState(null, "", "/elsewhere");
+  const view = setup({ browser: true });
+  await act(async () => { await view.router.navigate("/"); });
+  act(() => { window.history.back(); });
+  await waitFor(() => { expect(view.getByRole("dialog")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "Stay" }));
+  await waitFor(() => { expect(window.location.pathname).toBe("/"); });
+  expect(view.getByText("Form")).toBeTruthy();
+  act(() => { window.history.back(); });
+  await waitFor(() => { expect(view.getByRole("dialog")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "Discard and leave" }));
+  await waitFor(() => { expect(window.location.pathname).toBe("/elsewhere"); });
+  await waitFor(() => { expect(view.getByText("Destination")).toBeTruthy(); });
 });
 
-test("clean form navigates without confirmation (kanban 26.18)", async () => {
-  const confirmMock = mock((): boolean => true);
-// SAFETY: the test stubs the global with a mock before exercising the component.
-  (window as { confirm?: unknown }).confirm = confirmMock;
-
-  function CleanForm(): React.JSX.Element {
-    useUnsavedChangesWarning(false);
-    return (
-      <div>
-        <Link to="/elsewhere">Leave</Link>
-      </div>
-    );
-  }
-
-  const view = renderWithBrowserRouter({
-    form: <CleanForm />,
-    elsewhere: <p>Destination</p>,
-  });
-
-  fireEvent.click(view.getByRole("link", { name: "Leave" }));
-  await waitFor((): void => {
-    expect(view.getByText("Destination")).toBeTruthy();
-  });
-  expect(confirmMock).not.toHaveBeenCalled();
+test("browser Forward is blocked too", async () => {
+  const view = setup({ browser: true });
+  fireEvent.click(view.getByRole("link", { name: "Breadcrumb" }));
+  await waitFor(() => { expect(view.getByRole("dialog")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "Discard and leave" }));
+  await waitFor(() => { expect(window.location.pathname).toBe("/elsewhere"); });
+  act(() => { window.history.back(); });
+  await waitFor(() => { expect(view.getByText("Form")).toBeTruthy(); });
+  act(() => { window.history.forward(); });
+  await waitFor(() => { expect(view.getByRole("dialog")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "Stay" }));
+  await waitFor(() => { expect(window.location.pathname).toBe("/"); });
+  act(() => { window.history.forward(); });
+  await waitFor(() => { expect(view.getByRole("dialog")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "Discard and leave" }));
+  await waitFor(() => { expect(window.location.pathname).toBe("/elsewhere"); });
 });
 
-test("browser unload with unsaved changes registers a beforeunload guard (kanban 26.18)", async () => {
-// SAFETY: the test stubs the global with a mock before exercising the component.
-  (window as { confirm?: unknown }).confirm = mock((): boolean => true);
+test("all dirty sections must save; failed saves keep one shared dialog and unload protection", async () => {
+  const view = setup({ secondSection: true });
+  fireEvent.click(view.getByRole("button", { name: "Save settings" }));
+  fireEvent.click(view.getByRole("button", { name: "Fail save" }));
+  expect(view.getByText("Save failed")).toBeTruthy();
+  expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(false);
+  fireEvent.click(view.getByRole("link", { name: "Breadcrumb" }));
+  await waitFor(() => { expect(view.getAllByRole("dialog")).toHaveLength(1); });
+  fireEvent.click(view.getByRole("button", { name: "Stay" }));
+  fireEvent.click(view.getByRole("button", { name: "Save comment" }));
+  expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
+  fireEvent.click(view.getByRole("link", { name: "Breadcrumb" }));
+  await waitFor(() => { expect(view.getByText("Destination")).toBeTruthy(); });
+  expect(view.queryByRole("dialog")).toBeNull();
+});
 
-  function WithGuard(): React.JSX.Element {
-    useUnsavedChangesWarning(true);
-    return <p>Form</p>;
-  }
-
-  const view = renderWithBrowserRouter({
-    form: <WithGuard />,
-    elsewhere: <p>X</p>,
-  });
-
-  // A cancelable beforeunload event must be prevented while the form is dirty.
-  const blocked = new Event("beforeunload", { cancelable: true });
-  expect(window.dispatchEvent(blocked)).toBe(false);
-  expect(blocked.defaultPrevented).toBeTrue();
-
+test("clean forms and unmounted guards never patch history or block navigation", async () => {
+  const push = Object.getOwnPropertyDescriptor(window.history, "pushState");
+  const replace = Object.getOwnPropertyDescriptor(window.history, "replaceState");
+  const view = setup({ initiallyDirty: false });
+  expect(Object.getOwnPropertyDescriptor(window.history, "pushState")).toEqual(push);
+  expect(Object.getOwnPropertyDescriptor(window.history, "replaceState")).toEqual(replace);
+  fireEvent.click(view.getByRole("link", { name: "Breadcrumb" }));
+  await waitFor(() => { expect(view.getByText("Destination")).toBeTruthy(); });
   view.unmount();
-  // After unmount the guard is removed: the same event is no longer cancelled.
-  const unblocked = new Event("beforeunload", { cancelable: true });
-  expect(window.dispatchEvent(unblocked)).toBe(true);
-});
-
-test("confirmed navigation proceeds to the destination (kanban 26.18)", async () => {
-  const confirmMock = mock((): boolean => true);
-// SAFETY: the test stubs the global with a mock before exercising the component.
-  (window as { confirm?: unknown }).confirm = confirmMock;
-
-  function DirtyForm(): React.JSX.Element {
-    useUnsavedChangesWarning(true, "You have unsaved changes.");
-    return (
-      <div>
-        <Link to="/elsewhere">Leave</Link>
-      </div>
-    );
-  }
-
-  const view = renderWithBrowserRouter({
-    form: <DirtyForm />,
-    elsewhere: <p>Destination</p>,
-  });
-
-  fireEvent.click(view.getByRole("link", { name: "Leave" }));
-  await waitFor((): void => {
-    expect(view.getByText("Destination")).toBeTruthy();
-  });
-  expect(confirmMock).toHaveBeenCalledWith("You have unsaved changes.");
+  expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
 });

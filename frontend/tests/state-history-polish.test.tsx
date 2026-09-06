@@ -24,6 +24,16 @@ afterEach((): void => {
   globalThis.fetch = originalFetch;
 });
 
+test("encrypted state keeps raw download available and explains unavailable inspection", async () => {
+  globalThis.fetch = mock(async (): Promise<Response> => json({ data: [{ id: "sv-encrypted", attributes: { serial: 7, "state-representation": "opentofu-encrypted" } }] })) as unknown as typeof fetch;
+  const view = render(<MemoryRouter><StateHistory workspaceId="ws-1" /></MemoryRouter>);
+  await view.findByText("sv-encrypted");
+  expect((view.getByRole("button", { name: "View JSON" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((view.getByRole("button", { name: "Download raw state" }) as HTMLButtonElement).disabled).toBe(false);
+  expect(view.getByText(/Client-encrypted state: structured inspection is unavailable/)).toBeTruthy();
+  expect(view.getByText(/Raw downloads may contain secrets/)).toBeTruthy();
+});
+
 test("loads every state-version page without showing a false empty state", async () => {
   let resolveFirstPage: ((response: Response) => void) | undefined;
   const firstPage = new Promise<Response>((resolve): void => {
@@ -60,7 +70,7 @@ test("loads every state-version page without showing a false empty state", async
     expect(view.getByText("sv-1")).toBeTruthy();
   });
   expect(fetchMock).toHaveBeenCalledTimes(2);
-  expect(view.getAllByRole("button", { name: "Download state" })).toHaveLength(2);
+  expect(view.getAllByRole("button", { name: "Download raw state" })).toHaveLength(2);
 
   fireEvent.click(view.getAllByRole("button", { name: "View JSON" })[0]!);
   expect(view.getByRole("dialog").textContent).toContain("\"name\": \"primary\"");

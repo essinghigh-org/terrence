@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "./db";
-import { apiTokens, runTokens, users, teams, systemApiTokens } from "./db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { apiTokens, refreshSessions, runTokens, users, teams, systemApiTokens } from "./db/schema";
+import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 import { tokenHashCandidates } from "./lib/token-service";
 import { setRequestSiteAdmin } from "./lib/request-scope";
 
@@ -14,6 +14,7 @@ type AuthToken = {
   expiresAt: number | null;
   lastUsedAt: number | null;
   scopes?: string | null;
+  refreshFamilyId?: string | null;
 };
 
 export type SystemAuthToken = Readonly<{
@@ -176,6 +177,14 @@ export const authPlugin = new Elysia({ name: "auth" })
     const now = Date.now();
     if (token.expiresAt !== null && token.expiresAt <= now) {
       return { user: null, token: null, orgId: null, teamId: null, tokenError: "expired" , run: null };
+    }
+
+    if (token.refreshFamilyId != null) {
+      const session = await db.query.refreshSessions.findFirst({
+        where: and(eq(refreshSessions.familyId, token.refreshFamilyId), eq(refreshSessions.userId, token.userId ?? ""), isNull(refreshSessions.revokedAt), gt(refreshSessions.expiresAt, now)),
+        columns: { id: true },
+      });
+      if (session === undefined) return { user: null, token: null, orgId: null, teamId: null, tokenError: "invalid", run: null };
     }
 
     if (token.lastUsedAt === null || now - token.lastUsedAt > 60000) {

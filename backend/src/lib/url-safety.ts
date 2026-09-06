@@ -59,19 +59,15 @@ function isPrivateV4(n: number): boolean {
 /** True when an IPv4 host is inside a CIDR (e.g. "10.0.0.0/24"). */
 /** @lintignore Intentional surface: outbound allowlist CIDR policy. */
 export function isIPv4InCidr(host: string, cidr: string): boolean {
-  try {
-    const slash = cidr.indexOf("/");
-    if (slash === -1) return host === cidr;
-    const base = cidr.slice(0, slash);
-    const bits = parseInt(cidr.slice(slash + 1), 10);
-    if (!Number.isFinite(bits) || bits < 0 || bits > 32) return false;
-    const baseParts = base.split(".");
-    const hostParts = host.split(".");
-    if (baseParts.length !== 4 || hostParts.length !== 4) return false;
-    const toNum = (p: string[]): number => p.reduce((a, v) => (a << 8) | parseInt(v, 10), 0) >>> 0;
-    const mask = bits === 0 ? 0 : (~0 >>> (32 - bits)) << (32 - bits) >>> 0;
-    return (toNum(hostParts) & mask) === (toNum(baseParts) & mask);
-  } catch { return false; }
+  const [base, prefix, ...extra] = cidr.split("/");
+  const bits = prefix === undefined ? 32 : /^(?:[0-9]|[12][0-9]|3[0-2])$/.test(prefix) ? Number(prefix) : -1;
+  if (extra.length > 0 || bits < 0) return false;
+  // Dual-stack listeners report IPv4 peers in IPv4-mapped IPv6 form.
+  const hostNumber = v4ToNumber(host.replace(/^::ffff:/i, "").split("."));
+  const baseNumber = v4ToNumber((base ?? "").split("."));
+  if (hostNumber === null || baseNumber === null) return false;
+  const mask = bits === 0 ? 0 : (~0 >>> (32 - bits)) << (32 - bits) >>> 0;
+  return (hostNumber & mask) === (baseNumber & mask);
 }
 
 type OutboundAllowlist = Readonly<{ hosts: readonly string[]; cidrs: readonly string[] }>;

@@ -1,3 +1,4 @@
+import { normalizeRunVariables } from "../lib/run-variables";
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
@@ -41,7 +42,7 @@ import { isStackStoragePath } from "../lib/stack-worker";
 import { refetchConfigurationVersion } from "../lib/webhooks";
 import type { PlanJson } from "../lib/plan-json";
 import { cachedOrgByName } from "../lib/cached-lookups";
-import { decodeStatePayload, tokenExpiry } from "../lib/validation";
+import { CLIENT_ENCRYPTED_STATE_ERROR, decodeStatePayload, isClientEncryptedState, tokenExpiry } from "../lib/validation";
 import { assertSafeTarArchive } from "../lib/archive";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
 import { AGENT_POOL_TOKEN_DEFAULT_TTL_MS, agentPoolTokenExpiresAt, isAgentPoolTokenActive } from "../lib/agent-token";
@@ -200,7 +201,7 @@ function agentJobResource(details: DeepReadonly<ClaimedAgentJob>): Record<string
         "refresh-only": run.refreshOnly,
         "target-addrs": run.targetAddrs ?? [],
         "replace-addrs": run.replaceAddrs ?? [],
-        variables: run.variables ?? [],
+        variables: normalizeRunVariables(run.variables),
       },
       workspace: {
         id: workspace.id,
@@ -929,6 +930,10 @@ export const agentRoutes = new Elysia({ name: "agents" })
     if (completion === undefined) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid agent job result" }] };
+    }
+    if (isClientEncryptedState(completion.statePayload)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR }] };
     }
     if (completion.planJson !== null) {
       const claimed = await findClaimedAgentJob(agent.id, jobId, fencingToken);

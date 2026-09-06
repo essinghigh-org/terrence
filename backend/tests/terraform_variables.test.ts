@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
 import {
   parseTerraformVariables,
   parseTerraformVariablesJson,
@@ -81,4 +81,33 @@ variable "service" {
       },
     ]);
   });
+});
+
+
+test("ignores fake declarations and nested metadata in comments, strings and heredocs", () => {
+  const source = `
+# variable "ghost" {}
+/* variable "ghost2" {} */
+locals {
+  example = <<-END
+variable "ghost3" {}
+END
+  text = "variable \\"ghost4\\" {}"
+}
+variable "real" {
+  default = {
+    sensitive = true
+    nullable = false
+    description = "nested"
+  }
+  validation {
+    condition = true
+    error_message = "not metadata"
+  }
+  description = "日本語"
+}
+`;
+  expect(parseTerraformVariables(source)).toEqual([expect.objectContaining({
+    name: "real", sensitive: false, nullable: true, description: "日本語", hasDefault: true,
+  })]);
 });

@@ -233,6 +233,7 @@ function handleMockApi(req: Request): Response | null {
                 "is-force-cancelable": false,
               },
               permissions: {
+                "can-comment": true,
                 "can-apply": true,
                 "can-cancel": true,
                 "can-discard": true,
@@ -273,6 +274,7 @@ function handleMockApi(req: Request): Response | null {
               "is-force-cancelable": false,
             },
             permissions: {
+              "can-comment": true,
               "can-apply": true,
               "can-cancel": true,
               "can-discard": true,

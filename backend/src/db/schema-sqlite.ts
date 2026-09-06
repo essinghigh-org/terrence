@@ -639,6 +639,7 @@ export const apiTokens = sqliteTable("api_tokens", {
   userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
   orgId: text("org_id").references(() => organizations.id, { onDelete: "cascade" }),
   teamId: text("team_id").references(() => teams.id, { onDelete: "cascade" }),
+  refreshFamilyId: text("refresh_family_id"),
   description: text("description"),
   scopes: text("scopes"), // JSON-encoded fine-grained scope definition (null = legacy full-permission token)
   tokenType: text("token_type").notNull().default(""), // org token slot: "" | "audit-trails" | "organization"
@@ -706,6 +707,10 @@ export const stateVersions = sqliteTable("state_versions", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull(),
   serial: integer("serial").notNull(),
+  expectedMd5: text("expected_md5"),
+  expectedLineage: text("expected_lineage"),
+  uploadExpiresAt: integer("upload_expires_at"),
+  uploadLock: text("upload_lock"),
   statePayload: text("state_payload"),
   status: text("status").default("finalized"),
   jsonState: text("json_state"),

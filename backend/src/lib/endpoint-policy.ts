@@ -110,6 +110,13 @@ function isInvitationPath(pathname: string): boolean {
 
 export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
   {
+    id: "revoke-run-log-links",
+    description: "Workspace administrator revocation of all run log capabilities.",
+    rateLimit: "global", bodyLimit: "api", auth: "authenticated", audit: "admin", secretResponse: false,
+    match: (request): string | undefined => request.method === "POST" && /^\/api\/v2\/runs\/[^/]+\/actions\/revoke-log-links$/.test(pathnameOf(request))
+      ? "/api/v2/runs/*/actions/revoke-log-links" : undefined,
+  },
+  {
     id: "sensitive",
     description: "Credential-bearing or secret-issuing endpoints (OAuth authorization, login, tokens, MFA, invitations).",
     rateLimit: "sensitive",

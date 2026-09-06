@@ -304,13 +304,12 @@ test("plans uploaded cloud configuration against the latest local state and reco
   // -var flags, so undeclared keys and secrets never reach process args.
   expect(result.planArgs).not.toContain("-var=plain=");
   expect(result.planArgs).not.toContain('-var=priority_only="run-priority"');
-  expect(result.planArgs).toContain('-var=priority_only="set-priority"');
-  expect(result.planArgs).toContain("-var=priority_hcl={ enabled = true }");
+  expect(result.planArgs).not.toContain("-var=");
   expect(result.planArgs.indexOf("-var-file=terrence.workspace.tfvars")).toBeLessThan(
     result.planArgs.indexOf("-var-file=terrence.run.tfvars"),
   );
   expect(result.runTfvars).toContain('plain = "\\"run\\""');
-  expect(result.runTfvars).toContain('priority_only = "\\"run-priority\\""');
+  expect(result.runTfvars).not.toContain("priority_only");
   expect(result.backendOverride).toContain('backend "local"');
   expect(result.tfvars).toContain('plain = "hello"');
   expect(result.tfvars).toContain('global_only = "global"');

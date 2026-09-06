@@ -26,7 +26,7 @@ export function Terrence({ pose = "welcome", className, animated = false }: Read
           {pose === "healthy" ? <path d="M123 143q8-12 16 0m45 0q8-12 16 0" /> : <><ellipse cx="132" cy="142" rx="5" ry="8" fill="#233654" stroke="none" /><ellipse cx="190" cy="142" rx="5" ry="8" fill="#233654" stroke="none" /></>}
           <ellipse cx="115" cy="157" rx="10" ry="5" fill="#739BE8" stroke="none" /><ellipse cx="207" cy="157" rx="10" ry="5" fill="#739BE8" stroke="none" />
           {["failed", "lost"].includes(pose) ? <path d="M151 174q10-9 20 0" /> : <path d="M151 166q10 12 20 0" />}
-          {pose === "failed" && <path d="m124 122 14 5m45 0 14-5" />}
+          {pose === "failed" && <path d="m124 126 14-3m45 0 14 3" />}
         </g>
         {pose === "empty" && <g><path d="m109 197 51-17 51 17v39l-51 20-51-20Z" fill="#FAE4B5" /><path d="m109 197 51 20 51-20m-51 20v39m-51-59-17 15 50 21 18-16 18 16 50-21-17-15" fill="#FFF1D5" /><path d="m143 186 51 19" /></g>}
         {pose === "healthy" && <g><circle cx="222" cy="213" r="28" fill="#D7F0E6" /><path d="m209 213 9 9 17-19" stroke="#27715B" strokeWidth="5" /></g>}

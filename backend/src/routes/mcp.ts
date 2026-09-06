@@ -1,9 +1,9 @@
 import { Elysia } from "elysia";
 import { randomUUID } from "node:crypto";
-import { tokenHashCandidates } from "../lib/token-service";
+import { authPlugin } from "../auth";
 import { db } from "../db";
-import { apiTokens, teams } from "../db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { teams } from "../db/schema";
+import { eq } from "drizzle-orm";
 import { parseTokenScopes, scopeGrants, type TokenScopes, type WorkspacePermissionGrant } from "../lib/token-scopes";
 import { setRequestTokenScopes } from "../lib/request-scope";
 import { allMcpTools } from "../lib/mcp";
@@ -14,28 +14,18 @@ import type { McpSession, McpTool } from "../lib/mcp/types";
 // ---------------------------------------------------------------------------
 class McpAuthError extends Error {}
 
-async function resolveToken(raw: string): Promise<McpSession | null> {
-  const [tokenHash, legacyTokenHash] = tokenHashCandidates(raw);
-  const rows = await db.query.apiTokens.findMany({
-    where: inArray(apiTokens.token, [tokenHash, legacyTokenHash]),
-    limit: 2,
-  });
-  const tok = rows.find((candidate) => candidate.token === tokenHash) ?? rows[0];
-  if (tok === undefined) return null;
-  if (tok.token === legacyTokenHash) {
-    await db.update(apiTokens).set({ token: tokenHash }).where(eq(apiTokens.id, tok.id));
-  }
-  if (tok.expiresAt !== null && tok.expiresAt < Date.now()) return null;
-  const team = tok.teamId === null
+async function authenticatedSession(token: Readonly<{ id: string; userId: string | null; orgId: string | null; teamId: string | null; scopes?: string | null }> | null, tokenError: string | null): Promise<McpSession | null> {
+  if (token === null || tokenError !== null) return null;
+  const team = token.teamId === null
     ? undefined
-    : await db.query.teams.findFirst({ where: eq(teams.id, tok.teamId), columns: { id: true, orgId: true } });
-  if (tok.teamId !== null && team === undefined) return null;
+    : await db.query.teams.findFirst({ where: eq(teams.id, token.teamId), columns: { id: true, orgId: true } });
+  if (token.teamId !== null && team === undefined) return null;
   return {
-    userId: tok.userId,
-    orgId: tok.orgId ?? team?.orgId ?? null,
+    userId: token.userId,
+    orgId: token.orgId ?? team?.orgId ?? null,
     teamId: team?.id ?? null,
-    tokenId: tok.id,
-    scopes: safeParseScopes(tok.scopes),
+    tokenId: token.id,
+    scopes: safeParseScopes(token.scopes ?? null),
   };
 }
 
@@ -49,13 +39,6 @@ function safeParseScopes(raw: string | null): TokenScopes | null {
   } catch {
     throw new McpAuthError("Token scopes are malformed");
   }
-}
-
-async function bearerSession(request: { headers: Headers }): Promise<McpSession | null> {
-  const authHeader = request.headers.get("authorization") ?? "";
-  if (!authHeader.startsWith("Bearer ")) return null;
-  const token = authHeader.slice(7).trim();
-  return token !== "" ? resolveToken(token) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,10 +75,11 @@ function toolPermittedTo(session: McpSession, tool: McpTool): boolean {
 // MCP route (POST authenticates each request)
 // ---------------------------------------------------------------------------
 export const mcpRoutes = new Elysia()
-  .get("/mcp", async ({ request, set }): Promise<Response> => {
+  .use(authPlugin)
+  .get("/mcp", async ({ token, tokenError, set }): Promise<Response> => {
     let session: McpSession | null = null;
     try {
-      session = await bearerSession({ headers: request.headers });
+      session = await authenticatedSession(token, tokenError);
     } catch (error: unknown) {
       if (error instanceof McpAuthError) {
         (set as Record<string, unknown>)["status"] = 401;
@@ -130,10 +114,10 @@ export const mcpRoutes = new Elysia()
     });
   })
 
-  .post("/mcp", async ({ request, body, set }): Promise<unknown> => {
+  .post("/mcp", async ({ token, tokenError, body, set }): Promise<unknown> => {
     let session: McpSession | null = null;
     try {
-      session = await bearerSession({ headers: request.headers });
+      session = await authenticatedSession(token, tokenError);
     } catch (error: unknown) {
       if (error instanceof McpAuthError) {
         (set as Record<string, unknown>)["status"] = 401;

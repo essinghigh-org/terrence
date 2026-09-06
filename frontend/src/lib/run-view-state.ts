@@ -34,6 +34,8 @@ export type RunAttributes = Readonly<{
   }> | null;
   "has-changes"?: boolean;
   "has-recovery-state"?: boolean;
+  "recovery-state-format-supported"?: boolean;
+  "recovery-state-unavailable-reason"?: string | null;
   "is-destroy"?: boolean;
   message?: string | null;
   operation?: string;

@@ -772,6 +772,8 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
 
         </div>
       </summary>
+      {operation === "unsupported" && <p role="alert" className="px-4 py-2 text-sm text-warning">Unsupported operation: review the CLI plan before approval. Actions: {resource.change.actions.join(" → ") || "missing"}.</p>}
+      {operation === "remove" && <p className="px-4 py-2 text-sm text-muted-foreground">Remove from state without destroying the object.</p>}
       {expanded && <AttributeDiff change={resource.change} address={resource.address} type={resource.type} name={fallbackName} />}
     </details>
   );
@@ -857,6 +859,9 @@ export function planSummaryMarkdown(counts: Readonly<{
   destroy: number;
   replace: number;
   importCount: number;
+  removeCount?: number;
+  unsupportedCount?: number;
+  moveCount?: number;
 }>): string {
   return [
     "## Plan summary",
@@ -866,6 +871,9 @@ export function planSummaryMarkdown(counts: Readonly<{
       { count: counts.add, label: "to create" },
       { count: counts.change, label: "to change" },
       { count: counts.destroy, label: "to destroy" },
+      { count: counts.removeCount ?? 0, label: "to remove from state" },
+      { count: counts.unsupportedCount ?? 0, label: "unsupported operations — review the CLI plan before approval" },
+      { count: counts.moveCount ?? 0, label: "to move" },
     ] as const)
       .filter((item): boolean => item.count > 0)
       .map((item): string => `- ${item.count} ${item.label}`),
@@ -1072,7 +1080,12 @@ export function PlanOutput({
       .filter((resource): boolean => resource.previous_address !== undefined).length;
     const outputs = Object.entries(planJson.output_changes ?? {});
     const actionInvocations = planJson.action_invocations ?? [];
+    const removeCount = changedResources.filter((resource): boolean => operationForResource(resource) === "remove").length;
+    const unsupportedCount = changedResources.filter((resource): boolean => operationForResource(resource) === "unsupported").length;
     const operationSummary = [
+      { count: removeCount, label: "to remove from state", symbol: "−", className: "text-muted-foreground" },
+      { count: unsupportedCount, label: "unsupported operations", symbol: "?", className: "text-warning" },
+      { count: moveCount, label: "to move", symbol: "→", className: "text-foreground" },
       {
         count: importCount,
         label: "to import",
@@ -1106,7 +1119,8 @@ export function PlanOutput({
       read: changedResources.filter((resource): boolean => operationForResource(resource) === "read").length,
       import: importCount,
       move: moveCount,
-      remove: changedResources.filter((resource): boolean => operationForResource(resource) === "remove").length,
+      remove: removeCount,
+      unsupported: unsupportedCount,
     };
     return {
       planJson,
@@ -1201,7 +1215,7 @@ export function PlanOutput({
             title={summaryCopied ? "Copied!" : "Copy plan summary as markdown"}
             className="rounded border border-border bg-background p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             onClick={(): void => {
-              void copyTextToClipboard(planSummaryMarkdown({ ...counts, importCount })).then((didCopy): void => {
+              void copyTextToClipboard(planSummaryMarkdown({ ...counts, importCount, moveCount, removeCount: opCounts.remove, unsupportedCount: opCounts.unsupported })).then((didCopy): void => {
                 if (!didCopy || !mountedRef.current) return;
                 setSummaryCopied(true);
                 if (summaryCopiedResetTimerRef.current !== undefined) window.clearTimeout(summaryCopiedResetTimerRef.current);

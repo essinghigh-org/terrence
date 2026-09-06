@@ -1,3 +1,4 @@
+import { fenceStateWorkspace, pruneStateReservations } from "./state-reservations";
 import { db } from "../db";
 import { isPostgres } from "../db/driver";
 import {
@@ -1303,12 +1304,23 @@ export async function findAuthorizedRun(
   return workspace !== undefined ? { run, workspace } : undefined;
 }
 
-export async function findLogCapability(runId: string, token: string): Promise<typeof runs.$inferSelect | undefined> {
-  const run = (await db.query.runs.findFirst({ where: eq(runs.id, runId) })) as typeof runs.$inferSelect | undefined;
-  if (run === undefined || typeof run.logToken !== "string") return undefined;
-  const expected = Buffer.from(run.logToken);
-  const actual = Buffer.from(token);
-  return expected.length === actual.length && timingSafeEqual(expected, actual) ? run : undefined;
+/** The signature lives in the path: go-tfe replaces the query with offset/limit. */
+export function runLogURL(run: Readonly<{ id: string; logToken: string | null; softDeletedAt?: number | null }>, phase: "plan" | "apply", request: RequestWithUrl): string | null {
+  if (!run.logToken || run.softDeletedAt != null) return null;
+  const configured = Number(process.env["LOG_CAPABILITY_TTL_SECONDS"] ?? 172800);
+  const ttl = Number.isSafeInteger(configured) && configured > 0 && configured <= 604800 ? configured : 172800;
+  const expires = Math.floor(Date.now() / 1000) + ttl;
+  const signature = createHmac("sha256", SIGNED_URL_SECRET).update(`${run.id}\n${phase}\n${run.logToken}\n${expires}`).digest("hex");
+  return apiURL(request, `/api/v2/runs/${run.id}/${phase}/log/${expires}.${signature}`);
+}
+
+export async function findLogCapability(runId: string, token: string, phase: "plan" | "apply"): Promise<typeof runs.$inferSelect | undefined> {
+  const match = /^(\d{1,12})\.([a-f0-9]{64})$/.exec(token);
+  if (!match || match[2] === undefined || Number(match[1]) <= Math.floor(Date.now() / 1000)) return undefined;
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+  if (run === undefined || !run.logToken || run.softDeletedAt !== null) return undefined;
+  const expected = Buffer.from(createHmac("sha256", SIGNED_URL_SECRET).update(`${runId}\n${phase}\n${run.logToken}\n${match[1]}`).digest("hex"));
+  return timingSafeEqual(expected, Buffer.from(match[2])) ? run : undefined;
 }
 
 export type RequestWithUrl = Readonly<{ readonly url: string }>;
@@ -2040,6 +2052,12 @@ export async function safeDeleteWorkspace(workspaceId: string): Promise<boolean>
 }
 
 export async function promoteIntermediateStateVersion(workspaceId: string): Promise<string | null> {
+  await db.transaction(async (tx) => {
+    const workspace = await tx.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
+    if (workspace !== undefined && await fenceStateWorkspace(tx as unknown as typeof db, workspace)) {
+      await pruneStateReservations(tx as unknown as typeof db, workspace);
+    }
+  });
   const snapshot = await db.query.stateVersions.findFirst({
     where: and(
       eq(stateVersions.workspaceId, workspaceId),
@@ -2236,7 +2254,7 @@ async function archiveAndDeleteExpiredRuns(expiredRunIds: readonly string[], now
   const expiredLogs = await db.query.logs.findMany({ where: inArray(logs.runId, expiredRunIds), columns: { id: true } });
   const logsArchived = (await Promise.all(expiredRunIds.map(archiveRunLogs))).filter(Boolean).length;
   await db.delete(logs).where(inArray(logs.runId, expiredRunIds));
-  await db.update(runs).set({ softDeletedAt: now }).where(inArray(runs.id, expiredRunIds));
+  await db.update(runs).set({ softDeletedAt: now, logToken: null }).where(inArray(runs.id, expiredRunIds));
   return { logsDeletedCount: expiredLogs.length, logsArchived };
 }
 

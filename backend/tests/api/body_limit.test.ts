@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { app } from "../../src/app";
-import { API_BODY_LIMIT_BYTES } from "../../src/lib/body-limit";
+import { app, handleAppError } from "../../src/app";
+import { API_BODY_LIMIT_BYTES, BodyTooLargeError } from "../../src/lib/body-limit";
 
 // The 100 MiB server-level limit exists for configuration/state/module
 // archives. Every other endpoint must reject oversized bodies cheaply:
@@ -126,4 +126,18 @@ describe("request body size guard", () => {
     }));
     expect(response.status).not.toBe(413);
   });
+});
+
+
+test("body-size errors retain the actual limit through parser wrapping", () => {
+  for (const limit of [API_BODY_LIMIT_BYTES, 100 * 1024 * 1024]) {
+    const error = new BodyTooLargeError(limit);
+    for (const reported of [error, new Error("Parse failed", { cause: error })]) {
+      const set = { status: 200, headers: {} };
+      expect(handleAppError({ code: "PARSE", error: reported, set, request: { url: "http://localhost/api/v2/state-versions/sv/upload" } })).toEqual({
+        errors: [{ status: "413", title: "Payload Too Large", detail: `Request body exceeds the ${limit} byte limit for this endpoint` }],
+      });
+      expect(set.status).toBe(413);
+    }
+  }
 });
