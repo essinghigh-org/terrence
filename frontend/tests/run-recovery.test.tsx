@@ -155,7 +155,9 @@ test("recover posts the recover-state action and refreshes", async () => {
   }, seen);
   const view = renderDetail("run-rec");
   await view.findByText("Recovery state available");
-  fireEvent.click(view.getByRole("button", { name: "Recover into new state version" }));
+  const recover = view.getByRole("button", { name: "Recover into new state version" });
+  await waitFor((): void => { expect((recover as HTMLButtonElement).disabled).toBe(false); });
+  fireEvent.click(recover);
   await waitFor((): void => {
     expect(seen).toContain("POST /api/v2/runs/run-rec/actions/recover-state");
   });
@@ -188,7 +190,9 @@ test("recover explains the workspace lock requirement on conflict", async () => 
   }, seen);
   const view = renderDetail("run-rec");
   await view.findByText("Recovery state available");
-  fireEvent.click(view.getByRole("button", { name: "Recover into new state version" }));
+  const recover = view.getByRole("button", { name: "Recover into new state version" });
+  await waitFor((): void => { expect((recover as HTMLButtonElement).disabled).toBe(false); });
+  fireEvent.click(recover);
   await view.findByText("The workspace must be locked by you before recovering state. Lock it on the workspace page, then try again.");
 });
 
