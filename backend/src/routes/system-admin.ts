@@ -60,10 +60,27 @@ type BundleNode = Readonly<{
   error?: string | null;
   completedAt?: string;
 }>;
+type BundleManifestEntry = Readonly<{
+  path: string;
+  purpose: string;
+  redaction: "allowlist";
+}>;
+type BundleManifest = Readonly<{
+  schemaVersion: 1;
+  projectionVersion: string;
+  createdAt: string;
+  maxBytes: number;
+  expiresAt: string;
+  entries: readonly BundleManifestEntry[];
+  excluded: readonly string[];
+  archiveSizeBytes?: number;
+}>;
 type BundleRecord = Readonly<{
   id: string;
   status: BundleStatus;
   createdAt: string;
+  expiresAt?: string;
+  manifest?: BundleManifest;
   completedAt?: string;
   sizeBytes?: number;
   error?: string | null;
@@ -87,6 +104,9 @@ const ALL_CHECKS = {
 const BUNDLE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SUPPORT_BUNDLE_PATH = "/api/v1/support/bundle-requests";
 const SUPPORT_BUNDLE_COMPATIBILITY_PATH = "/api/v1/support-bundle-requests";
+const SUPPORT_BUNDLE_PROJECTION_VERSION = "support-bundle-v1";
+const DEFAULT_SUPPORT_BUNDLE_MAX_BYTES = 10 * 1024 * 1024;
+const DEFAULT_SUPPORT_BUNDLE_TTL_MS = 24 * 60 * 60 * 1000;
 let diagnosticsRunning = false;
 
 function storageDirectory(): string {
@@ -95,6 +115,96 @@ function storageDirectory(): string {
 
 function supportBundleDirectory(): string {
   return join(storageDirectory(), "support-bundles");
+}
+
+function boundedEnvironmentInteger(name: string, fallback: number, maximum: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || !/^\d+$/.test(raw)) return fallback;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value > 0 && value <= maximum ? value : fallback;
+}
+
+function supportBundleMaxBytes(): number {
+  return boundedEnvironmentInteger("TERRENCE_SUPPORT_BUNDLE_MAX_BYTES", DEFAULT_SUPPORT_BUNDLE_MAX_BYTES, 100 * 1024 * 1024);
+}
+
+function supportBundleTtlMs(): number {
+  return boundedEnvironmentInteger("TERRENCE_SUPPORT_BUNDLE_TTL_MS", DEFAULT_SUPPORT_BUNDLE_TTL_MS, 30 * 24 * 60 * 60 * 1000);
+}
+
+function supportBundleExpiry(createdAt: string): string {
+  return new Date(Date.parse(createdAt) + supportBundleTtlMs()).toISOString();
+}
+
+const SUPPORT_BUNDLE_EXCLUDED = [
+  "database dumps and state files",
+  "raw plans and configuration archives",
+  "credential values, bearer tokens and signed URLs",
+  "unbounded provider or application logs",
+] as const;
+
+function bundleNodePath(node: string): string {
+  const safe = node.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 128);
+  return safe === "" ? "node" : safe;
+}
+
+function bundleManifest(
+  id: string,
+  createdAt: string,
+  expiresAt: string,
+  nodes: readonly string[],
+  archiveSizeBytes?: number,
+): BundleManifest {
+  const entries: BundleManifestEntry[] = [
+    { path: "_manifest.json", purpose: "Bundle projection, retention and redaction metadata", redaction: "allowlist" },
+    { path: "_effective-configuration.json", purpose: "Safe runtime and sandbox configuration", redaction: "allowlist" },
+    { path: "_request-correlation.json", purpose: "Bundle request identity for incident correlation", redaction: "allowlist" },
+  ];
+  for (const node of nodes) {
+    const prefix = `${id}/${bundleNodePath(node)}`;
+    entries.push(
+      { path: `${prefix}/diagnostics.json`, purpose: "Selected health and security check results", redaction: "allowlist" },
+      { path: `${prefix}/usage.json`, purpose: "Privacy-limited usage counters", redaction: "allowlist" },
+      { path: `${prefix}/instance.json`, purpose: "Build and node identity", redaction: "allowlist" },
+    );
+  }
+  return {
+    schemaVersion: 1,
+    projectionVersion: SUPPORT_BUNDLE_PROJECTION_VERSION,
+    createdAt,
+    maxBytes: supportBundleMaxBytes(),
+    expiresAt,
+    entries,
+    excluded: SUPPORT_BUNDLE_EXCLUDED,
+    ...(archiveSizeBytes === undefined ? {} : { archiveSizeBytes }),
+  };
+}
+
+/**
+ * Effective configuration for a support bundle is deliberately an allowlist.
+ * Reading all environment variables or persisted settings here would turn a
+ * diagnostic endpoint into a credential export. Keep this projection boring
+ * and versioned so an operator can tell exactly what was shared.
+ */
+function safeEffectiveConfiguration(node: string): Record<string, unknown> {
+  return {
+    projection_version: SUPPORT_BUNDLE_PROJECTION_VERSION,
+    node,
+    build: {
+      version: process.env["BUILD_VERSION"] ?? "dev",
+      sha: process.env["BUILD_SHA"] ?? "unknown",
+    },
+    execution: {
+      worker_disabled: envFlag("TERRENCE_DISABLE_WORKER"),
+      sandbox_required: runSandboxRequired(),
+      landlock_abi: probeLandlockAbi(),
+      extra_rw_allowed: envFlag("TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"),
+    },
+    redaction: {
+      strategy: "allowlist",
+      caveat: "This projection cannot detect secrets in arbitrary provider output.",
+    },
+  };
 }
 
 function errorResponse(set: SetObject, status: number, title: string, detail?: string): Record<string, unknown> {
@@ -327,7 +437,7 @@ async function collectDiagnostics(
         signal: AbortSignal.timeout(timeoutSeconds * 1000 + 2_000),
       });
       const payload: unknown = await response.json();
-      const result = Array.isArray(payload) ? payload[0] : undefined;
+      const result: unknown = Array.isArray(payload) ? payload[0] : undefined;
       if (result === null || typeof result !== "object") return diagnosticFailure(node.id, "invalid_response");
       const record = result as Record<string, unknown>;
       return {
@@ -421,6 +531,30 @@ async function loadBundle(id: string): Promise<BundleRecord | undefined> {
   }
 }
 
+function bundleIsExpired(record: BundleRecord, now = Date.now()): boolean {
+  const expiresAt = record.expiresAt ?? record.manifest?.expiresAt;
+  return expiresAt !== undefined && Number.isFinite(Date.parse(expiresAt)) && Date.parse(expiresAt) <= now;
+}
+
+async function expireBundle(record: BundleRecord): Promise<BundleRecord> {
+  if (record.status === "deleted" || !bundleIsExpired(record)) return record;
+  await unlink(join(supportBundleDirectory(), `${record.id}.tar.gz`)).catch((): undefined => undefined);
+  const expired: BundleRecord = {
+    ...record,
+    status: "deleted",
+    completedAt: new Date().toISOString(),
+    error: "Support bundle expired and was removed",
+    nodes: record.nodes.map((node): BundleNode => ({
+      ...node,
+      status: "deleted",
+      error: "Support bundle expired and was removed",
+      completedAt: new Date().toISOString(),
+    })),
+  };
+  await saveBundle(expired);
+  return expired;
+}
+
 async function loadBundles(): Promise<readonly BundleRecord[]> {
   try {
     const names = (await readdir(supportBundleDirectory()))
@@ -428,7 +562,7 @@ async function loadBundles(): Promise<readonly BundleRecord[]> {
     const records = await Promise.all(names.map(async (name): Promise<BundleRecord | undefined> => {
       try {
         const parsed: unknown = JSON.parse(await readFile(join(supportBundleDirectory(), name), "utf8"));
-        return isBundleRecord(parsed) ? parsed : undefined;
+        return isBundleRecord(parsed) ? await expireBundle(parsed) : undefined;
       } catch {
         return undefined;
       }
@@ -440,9 +574,27 @@ async function loadBundles(): Promise<readonly BundleRecord[]> {
 }
 
 function bundleResource(record: BundleRecord): Record<string, unknown> {
+  const manifest = record.manifest ?? bundleManifest(
+    record.id,
+    record.createdAt,
+    record.expiresAt ?? supportBundleExpiry(record.createdAt),
+    record.nodes.map((node): string => node.node),
+    record.sizeBytes,
+  );
   const attributes: Record<string, unknown> = {
     status: record.status,
     created_at: record.createdAt,
+    expires_at: record.expiresAt ?? manifest.expiresAt,
+    manifest: {
+      "schema-version": manifest.schemaVersion,
+      "projection-version": manifest.projectionVersion,
+      "created-at": manifest.createdAt,
+      "max-bytes": manifest.maxBytes,
+      "expires-at": manifest.expiresAt,
+      entries: manifest.entries,
+      excluded: manifest.excluded,
+      ...(manifest.archiveSizeBytes === undefined ? {} : { "archive-size-bytes": manifest.archiveSizeBytes }),
+    },
     nodes: record.nodes.map((node): Record<string, unknown> => ({
       node: node.node,
       status: node.status,
@@ -468,16 +620,26 @@ function bundleResource(record: BundleRecord): Record<string, unknown> {
 
 async function generateSupportBundle(record: BundleRecord, authorization: string | null): Promise<void> {
   try {
+    const initial = await loadBundle(record.id);
+    if (initial === undefined || initial.status === "deleted" || bundleIsExpired(initial)) return;
     const selected = requestedChecks(new URL("http://localhost")) ?? new Map<string, Set<string>>();
     const [diagnostics, usage] = await Promise.all([
       collectDiagnostics(selected, 30, record.nodes.map((node): string => node.node), authorization),
       createUsageBundle(),
     ]);
     const entries: Record<string, string> = {};
+    const manifest = record.manifest ?? bundleManifest(
+      record.id,
+      record.createdAt,
+      record.expiresAt ?? supportBundleExpiry(record.createdAt),
+      record.nodes.map((node): string => node.node),
+    );
+    entries["_manifest.json"] = `${JSON.stringify(manifest, null, 2)}\n`;
+    entries["_effective-configuration.json"] = `${JSON.stringify(safeEffectiveConfiguration(readinessNodeId()), null, 2)}\n`;
     // 457: stamp request/correlation identity into the bundle for trace continuity.
     entries["_request-correlation.json"] = JSON.stringify({ bundleId: record.id, createdAt: record.createdAt, generatedAt: new Date().toISOString() }, null, 2) + "\n";
     for (const diagnostic of diagnostics) {
-      const prefix = `${record.id}/${diagnostic.node}`;
+      const prefix = `${record.id}/${bundleNodePath(diagnostic.node)}`;
       entries[`${prefix}/diagnostics.json`] = `${JSON.stringify([diagnosticResource(diagnostic)], null, 2)}\n`;
       entries[`${prefix}/usage.json`] = `${JSON.stringify(usage, null, 2)}\n`;
       entries[`${prefix}/instance.json`] = `${JSON.stringify({
@@ -491,13 +653,36 @@ async function generateSupportBundle(record: BundleRecord, authorization: string
     await Bun.Archive.write(bundlePath, entries, { compress: "gzip" });
     await chmod(bundlePath, 0o600);
     const bundleStat = await stat(bundlePath);
+    const current = await loadBundle(record.id);
+    if (current === undefined || current.status === "deleted" || bundleIsExpired(current)) {
+      await unlink(bundlePath).catch((): undefined => undefined);
+      return;
+    }
+    if (bundleStat.size > manifest.maxBytes) {
+      await unlink(bundlePath).catch((): undefined => undefined);
+      const completedAt = new Date().toISOString();
+      await saveBundle({
+        ...current,
+        status: "errored",
+        completedAt,
+        error: `Bundle exceeds the ${manifest.maxBytes} byte size limit`,
+        nodes: current.nodes.map((bundleNode): BundleNode => ({
+          ...bundleNode,
+          status: "errored",
+          error: "Bundle exceeds the configured size limit",
+          completedAt,
+        })),
+      });
+      return;
+    }
     const completedAt = new Date().toISOString();
     await saveBundle({
-      ...record,
+      ...current,
       status: "finished",
       completedAt,
       sizeBytes: bundleStat.size,
-      nodes: record.nodes.map((bundleNode): BundleNode => ({
+      manifest: { ...manifest, archiveSizeBytes: bundleStat.size },
+      nodes: current.nodes.map((bundleNode): BundleNode => ({
         ...bundleNode,
         status: diagnostics.find((result): boolean => result.node === bundleNode.node)?.status === "ERROR" ? "errored" : "finished",
         sizeBytes: bundleStat.size,
@@ -507,12 +692,14 @@ async function generateSupportBundle(record: BundleRecord, authorization: string
     });
   } catch {
     const completedAt = new Date().toISOString();
+    const current = await loadBundle(record.id);
+    if (current === undefined || current.status === "deleted") return;
     await saveBundle({
-      ...record,
+      ...current,
       status: "errored",
       completedAt,
       error: "Bundle generation failed",
-      nodes: record.nodes.map((node): BundleNode => ({
+      nodes: current.nodes.map((node): BundleNode => ({
         ...node,
         status: "errored",
         error: "Bundle generation failed",
@@ -547,12 +734,20 @@ async function createSupportBundle({ body, request, set }: SystemContext): Promi
     id: crypto.randomUUID(),
     status: "generating",
     createdAt: new Date().toISOString(),
+    expiresAt: supportBundleExpiry(new Date().toISOString()),
     nodes: nodes.map((node): BundleNode => ({ node, status: "generating", error: null })),
   };
-  await saveBundle(record);
-  void generateSupportBundle(record, request.headers.get("authorization")).catch((): undefined => undefined);
+  const createdAt = record.createdAt;
+  const expiresAt = record.expiresAt ?? supportBundleExpiry(createdAt);
+  const withManifest: BundleRecord = {
+    ...record,
+    expiresAt,
+    manifest: bundleManifest(record.id, createdAt, expiresAt, nodes),
+  };
+  await saveBundle(withManifest);
+  void generateSupportBundle(withManifest, request.headers.get("authorization")).catch((): undefined => undefined);
   (set as { status: number }).status = 202;
-  return { data: bundleResource(record) };
+  return { data: bundleResource(withManifest) };
 }
 
 async function listSupportBundles({ request, set }: SystemContext): Promise<unknown> {
@@ -607,7 +802,8 @@ async function listSupportBundles({ request, set }: SystemContext): Promise<unkn
 
 async function downloadSupportBundle({ params, request, set }: SystemContext): Promise<unknown> {
   const id = params["id"] ?? "";
-  const record = await loadBundle(id);
+  const loaded = await loadBundle(id);
+  const record = loaded === undefined ? undefined : await expireBundle(loaded);
   if (record === undefined) return errorResponse(set, 404, "Not Found", "Support bundle request not found");
   if (record.status === "deleted") return errorResponse(set, 410, "Gone", "Support bundle was deleted");
   if (record.status !== "finished") return errorResponse(set, 409, "Conflict", "Support bundle is not ready");
@@ -624,17 +820,35 @@ async function downloadSupportBundle({ params, request, set }: SystemContext): P
 }
 
 async function getSupportBundle({ params, set }: SystemContext): Promise<unknown> {
-  const record = await loadBundle(params["id"] ?? "");
+  const loaded = await loadBundle(params["id"] ?? "");
+  const record = loaded === undefined ? undefined : await expireBundle(loaded);
   if (record === undefined) return errorResponse(set, 404, "Not Found", "Support bundle request not found");
   if (record.status === "deleted") return errorResponse(set, 410, "Gone", "Support bundle was deleted");
   return { data: bundleResource(record) };
 }
 
 async function deleteSupportBundle({ params, set }: SystemContext): Promise<unknown> {
-  const record = await loadBundle(params["id"] ?? "");
+  const loaded = await loadBundle(params["id"] ?? "");
+  const record = loaded === undefined ? undefined : await expireBundle(loaded);
   if (record === undefined) return errorResponse(set, 404, "Not Found", "Support bundle request not found");
   if (record.status === "deleted") return errorResponse(set, 410, "Gone", "Support bundle was deleted");
-  if (record.status === "generating") return errorResponse(set, 409, "Conflict", "Support bundle is still generating");
+  if (record.status === "generating") {
+    const completedAt = new Date().toISOString();
+    await saveBundle({
+      ...record,
+      status: "deleted",
+      completedAt,
+      error: "Support bundle generation canceled",
+      nodes: record.nodes.map((node): BundleNode => ({
+        ...node,
+        status: "deleted",
+        error: "Support bundle generation canceled",
+        completedAt,
+      })),
+    });
+    (set as { status: number }).status = 204;
+    return new Response(null, { status: 204 });
+  }
   try {
     await unlink(join(supportBundleDirectory(), `${record.id}.tar.gz`));
   } catch {
