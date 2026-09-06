@@ -1459,7 +1459,7 @@ export function RunDetail({
 
             {["errored", "failed", "unreachable"].includes(planStatus) && (
               <div className="flex items-center gap-4 border-b border-destructive/20 bg-destructive/5 px-5 py-3">
-                <Terrence pose="failed" className="w-24 shrink-0" />
+                <Terrence pose="failed" detail="small" className="w-24 shrink-0" />
                 <div><p className="font-medium text-destructive">Plan failed</p><p className="mt-1 text-sm text-muted-foreground">Review the diagnostics and logs below before starting another run.</p></div>
               </div>
             )}

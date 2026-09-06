@@ -1297,7 +1297,7 @@ export function PlanOutput({
 
       {filteredResources.length === 0 ? (
         <div className="px-5 py-6 text-center text-sm text-muted-foreground">
-          {changedResources.length === 0 && driftResources.length === 0 && actionInvocations.length === 0 && outputs.length === 0 && planStatus === "finished" && <Terrence pose="healthy" className="mx-auto mb-3 w-32" />}
+          {changedResources.length === 0 && driftResources.length === 0 && actionInvocations.length === 0 && outputs.length === 0 && planStatus === "finished" && <Terrence pose="healthy" detail="small" className="mx-auto mb-3 w-32" />}
           <p>{changedResources.length === 0
             ? actionInvocations.length === 0
               ? "This plan has no resource changes."

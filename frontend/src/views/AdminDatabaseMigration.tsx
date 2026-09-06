@@ -250,7 +250,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {active && wizard?.steps.some((step): boolean => step.key === "maintenance" && step.status === "passed") === true && <div className="flex items-center gap-4 rounded-lg border bg-muted/30 p-4"><Terrence pose="maintenance" className="w-28" /><div><h2 className="font-heading font-semibold">Maintenance mode</h2><p className="mt-1 text-sm text-muted-foreground">New runs are paused while the database migration is in progress.</p></div></div>}
+            {active && wizard?.steps.some((step): boolean => step.key === "maintenance" && step.status === "passed") === true && <div className="flex items-center gap-4 rounded-lg border bg-muted/30 p-4"><Terrence pose="maintenance" detail="small" className="w-28" /><div><h2 className="font-heading font-semibold">Maintenance mode</h2><p className="mt-1 text-sm text-muted-foreground">New runs are paused while the database migration is in progress.</p></div></div>}
             <div className="flex flex-wrap items-center gap-3">
               <span
                 aria-live="polite"

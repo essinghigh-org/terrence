@@ -6,6 +6,8 @@ Use the welcome pose on login, the box for first-use emptiness, the check for a 
 
 Use `Terrence` for inline art and `TerrenceLogo` for the mark or wordmark. Both are decorative; name their containing link when necessary. Motion is opt-in, CSS-only, and respects the global reduced-motion setting. Use 96–176px illustrations in content, up to 352px on login. Keep one illustration per state.
 
+`Terrence` has one deliberate detail breakpoint: pass `detail="small"` for illustrations rendered at 128px or less (the compact `EmptyState` and small documentation/health callouts already do this). The small tier reuses the same viewBox and prop geometry, retaining ears, face, and the essential box/check/card/map/helmet/book shapes while dropping shadows and secondary fold, cheek, and page lines. Use the default `detail="full"` above 128px. The generated gallery exports the full tier; the component is the source of truth for both tiers.
+
 The brand palette is ink #233654, blue #96B9F6, paper #EDF3FF, line #C9D9F2, and caption #536785. Props use soft cream, green, or coral. These fixed illustration colors are separate from semantic theme colors: controls and statuses continue using primary, success, warning, destructive, and muted tokens in every supported theme.
 
 Headings use the local Trebuchet/Avenir/system stack; body text uses Inter/system and technical values use the monospace stack. Shared buttons, cards, and page shells own sizing and spacing. Use the existing 4px spacing scale, 24px between sections, 20px within standard cards (12px in compact cards), and the shared 10px base radius. Default form controls and buttons are 40px tall; compact table actions keep their smaller sizes. Status labels always accompany icons and colors.
