@@ -329,6 +329,7 @@ export async function synchronizeVcsPolicySet(
     source: provider,
     status: "pending",
     statusTimestamps: {},
+    statusMetadataSchemaVersion: 1,
     ingressAttributes: baseIngress,
     createdAt: now,
     updatedAt: now,
@@ -358,6 +359,7 @@ export async function synchronizeVcsPolicySet(
     await db.update(policySetVersions).set({
       archivePath,
       statusTimestamps: { uploadedAt },
+      statusMetadataSchemaVersion: 1,
       updatedAt: Date.now(),
     }).where(eq(policySetVersions.id, versionId));
 
@@ -383,6 +385,7 @@ export async function synchronizeVcsPolicySet(
       await tx.update(policySetVersions).set({
         status: "ready",
         statusTimestamps: { ...(uploadedAt === undefined ? {} : { uploadedAt }), readyAt },
+        statusMetadataSchemaVersion: 1,
         ingressAttributes: { ...baseIngress, manifest: parsed.manifest, policyCount: parsed.policies.length },
         error: null,
         updatedAt: Date.now(),
@@ -395,6 +398,7 @@ export async function synchronizeVcsPolicySet(
     await db.update(policySetVersions).set({
       status: "errored",
       statusTimestamps: { ...(uploadedAt === undefined ? {} : { uploadedAt }), erroredAt },
+      statusMetadataSchemaVersion: 1,
       error: message,
       archivePath: null,
       updatedAt: Date.now(),

@@ -10,6 +10,7 @@ import {
 } from "../db/schema";
 import { checkWorkspacePermission, findAuthorizedRun, findAuthorizedWorkspace , type DeepReadonly } from "../lib/utils";
 import { notFound, forbidden } from "../lib/utils";
+import { parsePersistedArtifact } from "../lib/validation";
 
 type SetObject = Readonly<{
   status?: number | string;
@@ -116,7 +117,8 @@ async function artifactResponse(
   if (kind === "logOutput") {
     return new Response(result.logOutput ?? "", { headers: { "Content-Type": "text/plain; charset=utf-8" } });
   }
-  return new Response(JSON.stringify(result[kind] ?? {}), {
+  const artifact = parsePersistedArtifact(result[kind], result.artifactSchemaVersion, result.id) ?? {};
+  return new Response(JSON.stringify(artifact), {
     headers: { "Content-Type": "application/json" },
   });
 }

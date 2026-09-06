@@ -2,14 +2,17 @@ import { storageDir } from "../db/driver";
 import { decryptSecretSync, encryptSecret, isEncryptedSecret } from "./secrets";
 
 /** Input has already passed the run API validator; never accept client ciphertext. */
-export async function runVariablesForWrite(variables: readonly { readonly key: string; readonly value: string; readonly category?: string; readonly sensitive?: boolean }[]): Promise<{ key: string; value: string; category?: string; sensitive?: boolean; valueEncrypted?: string }[]> {
-  return Promise.all(variables.map(async ({ key, value, category, sensitive }) => ({
+export async function runVariablesForWrite(variables: readonly { readonly key: string; readonly value: string; readonly category?: string; readonly sensitive?: boolean }[]): Promise<{ key: string; value: string; category?: "terraform" | "env"; sensitive?: boolean; valueEncrypted?: string }[]> {
+  return Promise.all(variables.map(async ({ key, value, category, sensitive }) => {
+    if (category !== undefined && category !== "terraform" && category !== "env") throw new Error("Invalid run variable category");
+    return ({
     key,
     value: sensitive === true ? "" : value,
     ...(category === undefined ? {} : { category }),
     ...(sensitive === undefined ? {} : { sensitive }),
     ...(sensitive === true ? { valueEncrypted: await encryptSecret(value, { force: true }) } : {}),
-  })));
+    });
+  }));
 }
 
 export function normalizeRunVariables(variables: unknown): { key: string; value: string; category: string; sensitive: boolean }[] {

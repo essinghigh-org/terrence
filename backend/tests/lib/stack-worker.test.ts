@@ -27,7 +27,7 @@ async function archive(): Promise<{ directory: string; path: string }> {
 }
 
 function job(runId: string, id = crypto.randomUUID()): DurableJob {
-  return { id, kind: "stack-deployment", dedupeKey: null, status: "running", payload: { runId }, attempts: 1, runAfter: Date.now(), lockedBy: "test", lockToken: "test", leaseExpiresAt: Date.now() + 30_000, heartbeatAt: Date.now(), lastError: null, createdAt: Date.now(), updatedAt: Date.now() };
+  return { id, kind: "stack-deployment", dedupeKey: null, status: "running", payload: { runId }, payloadSchemaVersion: 1, attempts: 1, runAfter: Date.now(), lockedBy: "test", lockToken: "test", leaseExpiresAt: Date.now() + 30_000, heartbeatAt: Date.now(), lastError: null, createdAt: Date.now(), updatedAt: Date.now() };
 }
 
 describe("Stack deployment worker", () => {

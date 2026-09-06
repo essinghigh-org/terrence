@@ -88,7 +88,12 @@ import { probeLandlockAbi, RunSandbox, removeSandboxWorkDir, runNetDenyEnabled, 
 import { createRunCgroup, destroyRunCgroup, killRunCgroup } from "./lib/run-cgroup";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "./lib/secrets";
 import { variableValueForRead } from "./lib/variable-crypto";
-import { encryptStatePayload } from "./lib/validation";
+import {
+  encryptStatePayload,
+  parsePersistedArtifact,
+  parsePersistedRunInputs,
+  parsePersistedStatusMetadata,
+} from "./lib/validation";
 import { log, safeJsonStringify } from "./lib/log";
 export type { ExecutionPhase } from "./worker/phases";
 export { executorBackendFromEnv, type ExecutorBackend, EXECUTOR_BACKENDS } from "./worker/executor-policy";
@@ -404,15 +409,16 @@ async function recordPlanInput(
   state: Readonly<{ id: string | null; serial: number }>,
   savedPlan: SavedPlanMetadata | undefined,
 ): Promise<void> {
-  const current = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { status: true, statusTimestamps: true } });
+  const current = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { status: true, statusTimestamps: true, statusMetadataSchemaVersion: true } });
   if (current === undefined) throw new Error(`Run ${runId} disappeared while recording its plan input.`);
+  const currentTimestamps = parsePersistedStatusMetadata(current.statusTimestamps, current.statusMetadataSchemaVersion, runId) ?? {};
   const timestamps = {
-    ...(current.statusTimestamps ?? {}),
+    ...currentTimestamps,
     ...(state.id === null ? {} : { "input-state-version-id": state.id }),
     "input-state-serial": String(state.serial),
     ...(savedPlan === undefined ? {} : { "saved-plan-sha256": savedPlan.sha256 }),
   };
-  const updated = await db.update(runs).set({ statusTimestamps: timestamps }).where(and(eq(runs.id, runId), eq(runs.status, current.status))).returning({ id: runs.id });
+  const updated = await db.update(runs).set({ statusTimestamps: timestamps, statusMetadataSchemaVersion: 1 }).where(and(eq(runs.id, runId), eq(runs.status, current.status))).returning({ id: runs.id });
   if (updated.length === 0) throw new Error(`Run ${runId} changed while recording its plan input.`);
 }
 
@@ -778,7 +784,7 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
   try {
     const existing = await db.query.runs.findFirst({
       where: eq(runs.id, runId),
-      columns: { statusTimestamps: true, status: true, workspaceId: true },
+      columns: { statusTimestamps: true, statusMetadataSchemaVersion: true, status: true, workspaceId: true },
     });
     if (existing === undefined) {
       // The run record was deleted mid-execution (issue #693): there is no
@@ -789,9 +795,11 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
       return;
     }
     workspaceId = existing?.workspaceId ?? null;
-    const existingTimestamps = typeof existing?.statusTimestamps === "object" && existing.statusTimestamps !== null
-      ? existing.statusTimestamps
-      : {};
+    const existingTimestamps = parsePersistedStatusMetadata(
+      existing.statusTimestamps,
+      existing.statusMetadataSchemaVersion,
+      runId,
+    ) ?? {};
     // State machine guard: illegal writes are rejected, not merely logged.
     // Otherwise a canceled worker can overwrite the terminal cancellation with
     // "applied" after the operator action has already returned.
@@ -801,7 +809,7 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
     }
     const timestamps = { ...existingTimestamps, [statusKey]: now };
     const updated = await db.update(runs)
-      .set({ status, statusTimestamps: timestamps, ...(extra ?? {}) })
+      .set({ status, statusTimestamps: timestamps, statusMetadataSchemaVersion: 1, ...(extra ?? {}) })
       .where(and(eq(runs.id, runId), eq(runs.status, currentStatus ?? status)))
       .returning({ id: runs.id });
     if (updated.length === 0) {
@@ -1952,10 +1960,12 @@ export async function executeRun(runId: string): Promise<void> {
       .catch(async (error: unknown): Promise<void> => {
         if (!(await runWasCanceled(runId))) {
           try {
-            const current = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { statusTimestamps: true } });
+            const current = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { statusTimestamps: true, statusMetadataSchemaVersion: true } });
+            const timestamps = parsePersistedStatusMetadata(current?.statusTimestamps, current?.statusMetadataSchemaVersion, runId) ?? {};
             await db.update(runs).set({
               status: "errored",
-              statusTimestamps: { ...(current?.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+              statusTimestamps: { ...timestamps, "errored-at": new Date().toISOString() },
+              statusMetadataSchemaVersion: 1,
             }).where(and(
               eq(runs.id, runId),
               notInArray(runs.status, [
@@ -1978,12 +1988,30 @@ export async function executeRun(runId: string): Promise<void> {
 
 async function executeRunImpl(runId: string): Promise<void> {
   assertRunSandboxAvailable();
-  const run = await db.query.runs.findFirst({
+  const rawRun = await db.query.runs.findFirst({
     where: eq(runs.id, runId),
   });
 
-  if (run === undefined) return;
-  if (FINAL_RUN_STATUSES.includes(run.status)) return;
+  if (rawRun === undefined) return;
+  if (FINAL_RUN_STATUSES.includes(rawRun.status)) return;
+  const runInputs = parsePersistedRunInputs({
+    targetAddrs: rawRun.targetAddrs,
+    replaceAddrs: rawRun.replaceAddrs,
+    invokeActionAddrs: rawRun.invokeActionAddrs,
+    variables: rawRun.variables,
+  }, rawRun.inputSchemaVersion, rawRun.id);
+  const runStatusTimestamps = parsePersistedStatusMetadata(rawRun.statusTimestamps, rawRun.statusMetadataSchemaVersion, rawRun.id);
+  // From this point onward the worker operates on the trusted adapter output.
+  // Unknown persisted extension fields are retained by the adapter but are not
+  // copied into the CLI arguments or environment.
+  const run = {
+    ...rawRun,
+    targetAddrs: runInputs.targetAddrs === null ? null : [...runInputs.targetAddrs],
+    replaceAddrs: runInputs.replaceAddrs === null ? null : [...runInputs.replaceAddrs],
+    invokeActionAddrs: runInputs.invokeActionAddrs === null ? null : [...runInputs.invokeActionAddrs],
+    variables: runInputs.variables === null ? null : [...runInputs.variables],
+    statusTimestamps: runStatusTimestamps,
+  };
 
   const workspace = await db.query.workspaces.findFirst({
     where: eq(workspaces.id, run.workspaceId),
@@ -3867,6 +3895,8 @@ export async function enqueueDueAutoDestroyRuns(now = Date.now()): Promise<strin
           isDestroy: true,
           autoApply: true,
           statusTimestamps: { "pending-at": new Date(now).toISOString() },
+          inputSchemaVersion: 1,
+          statusMetadataSchemaVersion: 1,
           createdAt: now,
         });
         if (scheduled) {
@@ -3970,6 +4000,7 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
       id,
       workspaceId: workspace.id,
       status: "pending" as const,
+      artifactSchemaVersion: 1,
       createdAt: now,
     });
     enqueued.push(id);
@@ -4017,6 +4048,10 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
   };
 
   try {
+    // Existing assessment rows may have null legacy artifacts; malformed
+    // imported artifacts fail this worker with a typed row-aware diagnostic.
+    parsePersistedArtifact(assessment.jsonOutput, assessment.artifactSchemaVersion, assessment.id);
+    parsePersistedArtifact(assessment.jsonSchema, assessment.artifactSchemaVersion, assessment.id);
     const appliedRun = await db.query.runs.findFirst({
       where: and(
         eq(runs.workspaceId, workspace.id),
@@ -4215,6 +4250,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       checksUnknown: checks.unknown,
       jsonOutput: planJson,
       jsonSchema: providerSchema,
+      artifactSchemaVersion: 1,
       logOutput: output.join("\n"),
       completedAt: Date.now(),
     }).where(eq(assessmentResults.id, assessmentResultId));

@@ -487,6 +487,9 @@ export const configurationVersions = sqliteTable("configuration_versions", {
   source: text("source").default("tfe-api"),
   ingressAttributes: text("ingress_attributes", { mode: "json" }).$type<{ commitSha?: string; commitUrl?: string; commitMessage?: string; branch?: string; tag?: string; pullRequestNumber?: number; senderUsername?: string; senderAvatarUrl?: string; senderProviderId?: string; cloneUrl?: string; compareUrl?: string }>(),
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<{ uploadedAt?: string; archivedAt?: string }>(),
+  // 0 is the un-enveloped representation used by the oldest supported
+  // databases. New writes use version 1 and are adapted explicitly on read.
+  statusMetadataSchemaVersion: integer("status_metadata_schema_version").notNull().default(0),
   // Upload-claim lease (todo 278): atomically claims a pending
   // configuration-version before accepting an archive PUT, so two
   // simultaneous signed PUTs cannot race. Claim expires so a crashed
@@ -519,7 +522,17 @@ export const runs = sqliteTable("runs", {
   targetAddrs: text("target_addrs", { mode: "json" }).$type<string[]>(),
   replaceAddrs: text("replace_addrs", { mode: "json" }).$type<string[]>(),
   invokeActionAddrs: text("invoke_action_addrs", { mode: "json" }).$type<string[]>(),
-  variables: text("variables", { mode: "json" }).$type<{ key: string; value: string }[]>(),
+  variables: text("variables", { mode: "json" }).$type<{
+    key: string;
+    value: string;
+    category?: "terraform" | "env";
+    sensitive?: boolean;
+    valueEncrypted?: string;
+    extensions?: Record<string, unknown>;
+  }[]>(),
+  // Run input JSON predates the versioned persisted-data contract. Keep the
+  // raw columns for export compatibility while recording the adapter version.
+  inputSchemaVersion: integer("input_schema_version").notNull().default(0),
   logToken: text("log_token").$defaultFn(() => crypto.randomUUID()),
   terraformVersion: text("terraform_version"),
   debuggingMode: integer("debugging_mode", { mode: "boolean" }).notNull().default(false),
@@ -529,6 +542,7 @@ export const runs = sqliteTable("runs", {
   generatedConfiguration: integer("generated_configuration", { mode: "boolean" }).notNull().default(false),
   executionMode: text("execution_mode").notNull().default("remote"),
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<Record<string, string>>(),
+  statusMetadataSchemaVersion: integer("status_metadata_schema_version").notNull().default(0),
   planResourceAdditions: integer("plan_resource_additions"),
   planResourceChanges: integer("plan_resource_changes"),
   planResourceDestructions: integer("plan_resource_destructions"),
@@ -600,6 +614,7 @@ export const assessmentResults = sqliteTable("assessment_results", {
   checksUnknown: integer("checks_unknown").notNull().default(0),
   jsonOutput: text("json_output", { mode: "json" }).$type<Record<string, unknown>>(),
   jsonSchema: text("json_schema", { mode: "json" }).$type<Record<string, unknown>>(),
+  artifactSchemaVersion: integer("artifact_schema_version").notNull().default(0),
   logOutput: text("log_output"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
   completedAt: integer("completed_at"),
@@ -871,6 +886,7 @@ export const stackRecords = sqliteTable("stack_records", {
   name: text("name"),
   status: text("status").notNull().default("pending"),
   payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
+  payloadSchemaVersion: integer("payload_schema_version").notNull().default(0),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
   updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
@@ -896,6 +912,7 @@ export const stackAgentJobs = sqliteTable("stack_agent_jobs", {
   iacBinary: text("iac_binary").notNull().default("terraform"),
   status: text("status").notNull().default("queued"),
   result: text("result", { mode: "json" }).$type<Record<string, unknown>>(),
+  resultSchemaVersion: integer("result_schema_version").notNull().default(0),
   errorMessage: text("error_message"),
   claimedAt: integer("claimed_at"),
   completedAt: integer("completed_at"),
@@ -932,6 +949,7 @@ export const durableJobs = sqliteTable("durable_jobs", {
   dedupeKey: text("dedupe_key"),
   status: text("status").notNull().default("queued"),
   payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
+  payloadSchemaVersion: integer("payload_schema_version").notNull().default(0),
   attempts: integer("attempts").notNull().default(0),
   runAfter: integer("run_after").notNull().$defaultFn(() => Date.now()),
   lockedBy: text("locked_by"),
@@ -1183,6 +1201,7 @@ export const policySetVersions = sqliteTable("policy_set_versions", {
   source: text("source").notNull().default("tfe-api"),
   status: text("status").notNull().default("pending"),
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<{ uploadedAt?: string; readyAt?: string; erroredAt?: string }>().notNull().default({}),
+  statusMetadataSchemaVersion: integer("status_metadata_schema_version").notNull().default(0),
   ingressAttributes: text("ingress_attributes", { mode: "json" }).$type<{ provider?: string; repository?: string; commitSha?: string; branch?: string; tag?: string; manifest?: string; policyCount?: number }>(),
   error: text("error"),
   archivePath: text("archive_path"),
@@ -1691,6 +1710,7 @@ export const taskStages = sqliteTable("task_stages", {
   stage: text("stage").notNull(), // 'pre_plan', 'post_plan', 'pre_apply', 'post_apply'
   status: text("status").notNull().default("pending"), // 'pending', 'running', 'passed', 'failed', 'awaiting_override', 'errored', 'canceled', 'unreachable'
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<Record<string, string>>(),
+  statusMetadataSchemaVersion: integer("status_metadata_schema_version").notNull().default(0),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   index("task_stages_run_idx").on(table.runId),
@@ -1718,6 +1738,7 @@ export const policyEvaluations = sqliteTable("policy_evaluations", {
   policyToolVersion: text("policy_tool_version").default("0.44.0"),
   resultCount: text("result_count", { mode: "json" }).$type<Record<string, number>>(),
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<Record<string, string>>(),
+  statusMetadataSchemaVersion: integer("status_metadata_schema_version").notNull().default(0),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   index("policy_evaluations_run_idx").on(table.runId),

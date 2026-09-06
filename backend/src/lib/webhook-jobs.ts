@@ -23,6 +23,7 @@ import { DURABLE_MAX_ATTEMPTS, enqueueDurableJob, type DurableJob } from "./dura
 import { handleBitbucketWebhook, handleGithubWebhook, handleGitlabWebhook } from "./webhooks";
 import { log } from "./log";
 import { recordFailure } from "./process-metrics";
+import { parsePersistedJobPayload } from "./validation";
 
 export type VcsWebhookProvider = "github" | "gitlab" | "bitbucket";
 
@@ -195,10 +196,7 @@ export async function processVcsWebhookPayload(body: VcsWebhookJobPayload, attem
 
 /** Durable-job handler registered in worker.ts. */
 export async function handleVcsWebhookJob(job: DurableJob): Promise<void> {
-  const body = job.payload as unknown as VcsWebhookJobPayload;
-  if (body === null || typeof body !== "object" || typeof body.provider !== "string") {
-    throw new Error(`Malformed vcs-webhook job payload on ${job.id}`);
-  }
+  const body = parsePersistedJobPayload("vcs-webhook", job.payload, job.payloadSchemaVersion, job.id) as unknown as VcsWebhookJobPayload;
   await processVcsWebhookPayload(body, job.attempts);
 }
 
@@ -242,10 +240,11 @@ export async function retryFailedVcsWebhookDelivery(deliveryId: string): Promise
   });
   if (existing === undefined) return false;
   await setDeliveryStatus(deliveryId, "queued");
+  const body = parsePersistedJobPayload("vcs-webhook", existing.payload, existing.payloadSchemaVersion, existing.id) as unknown as VcsWebhookJobPayload;
   await enqueueVcsWebhookJob({
-    provider: existing.payload["provider"] as VcsWebhookProvider,
-    eventName: existing.payload["eventName"] as string,
-    payload: existing.payload["payload"] as Record<string, unknown>,
+    provider: body.provider,
+    eventName: body.eventName,
+    payload: body.payload,
     deliveryId,
     rescheduleRunning: true,
   });

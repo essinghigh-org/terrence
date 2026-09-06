@@ -10,6 +10,7 @@ import { authPlugin } from "../auth";
 import { assertArchiveExpandedSize } from "../lib/archive";
 import { persistUploadBody } from "../lib/upload-body";
 import { beginIdempotency, completeIdempotency, idempotencyContext, idempotencyError, idempotencyPrincipal } from "../lib/idempotency";
+import { parsePersistedStatusMetadata } from "../lib/validation";
 
 const rawStorageDir = process.env["STORAGE_DIR"];
 const storageDir = typeof rawStorageDir === "string" && rawStorageDir !== "" ? rawStorageDir : join(import.meta.dir, "../storage");
@@ -44,6 +45,7 @@ export function configurationVersionResource(
   request: Readonly<{ url: string }>,
   includeUploadUrl = true,
 ): Record<string, unknown> {
+  const statusTimestamps = parsePersistedStatusMetadata(cv.statusTimestamps, cv.statusMetadataSchemaVersion, cv.id);
   const downloadUrl = apiURL(request, `/api/v2/configuration-versions/${cv.id}/download`);
   const attributes: Record<string, unknown> = {
     "auto-queue-runs": cv.autoQueueRuns,
@@ -53,8 +55,8 @@ export function configurationVersionResource(
     source: cv.source,
     "ingress-attributes": cv.ingressAttributes,
     "status-timestamps": {
-      "uploaded-at": cv.statusTimestamps?.uploadedAt ?? null,
-      "archived-at": cv.statusTimestamps?.archivedAt ?? null,
+      "uploaded-at": statusTimestamps?.uploadedAt ?? null,
+      "archived-at": statusTimestamps?.archivedAt ?? null,
     },
     error: cv.error,
     "error-message": cv.errorMessage,

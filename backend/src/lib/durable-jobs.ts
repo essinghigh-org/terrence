@@ -18,6 +18,7 @@ import {
   type ResourceJobClass,
   type ResourceBudgetState,
 } from "./resource-budgets";
+import { PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION, parsePersistedJobPayload } from "./validation";
 
 export type DurableJobKind = "module-test" | "stack-configuration" | "stack-deployment" | "explorer-inventory" | "explorer-catalog" | "plan-explanation" | "vcs-webhook";
 export type DurableJob = Readonly<typeof durableJobs.$inferSelect>;
@@ -121,6 +122,7 @@ async function requeueExistingDurableJob(
   runAfter: number,
 ): Promise<DurableJob> {
   const requeuedPayload = preserveBudgetMetadata(existing.payload, payload);
+  parsePersistedJobPayload(existing.kind, requeuedPayload, PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION, existing.id);
   // A requeue changes the row's payload and scheduling state. Check before
   // changing it; otherwise a deduped retry could bypass the same limits
   // enforced for a fresh row (or double-count a running row).
@@ -137,6 +139,7 @@ async function requeueExistingDurableJob(
   const requeued = await db.update(durableJobs).set({
     status: "queued",
     payload: requeuedPayload,
+    payloadSchemaVersion: PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION,
     attempts: 0,
     runAfter,
     lockedBy: null,
@@ -178,6 +181,7 @@ export async function enqueueDurableJob(
   options: EnqueueDurableJobOptions = {},
 ): Promise<DurableJob> {
   const durablePayload = payloadWithBudgetMetadata(payload, options.budget);
+  parsePersistedJobPayload(kind, durablePayload, PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION);
   const existing = await enqueueExistingDurableJob(kind, durablePayload, options);
   if (existing !== NO_EXISTING_DURABLE_JOB) return existing;
   const now = Date.now();
@@ -187,6 +191,7 @@ export async function enqueueDurableJob(
     dedupeKey: options.dedupeKey ?? null,
     status: "queued",
     payload: durablePayload,
+    payloadSchemaVersion: PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION,
     attempts: 0,
     runAfter: options.runAfter ?? now,
     lockedBy: null,

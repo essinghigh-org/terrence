@@ -1667,6 +1667,7 @@ export async function createConfigurationVersionFromVcs(
     source,
     ingressAttributes: { commitSha: sha, branch, manualTrigger: true } as typeof configurationVersions.$inferInsert["ingressAttributes"],
     statusTimestamps: {},
+    statusMetadataSchemaVersion: 1,
   });
 
   if (!(await refetchConfigurationVersion(cvId))) {
@@ -1867,6 +1868,7 @@ async function persistWebhookRun(
     source: provider,
     ingressAttributes: webhookIngressAttributes(provider, details, credentials),
     statusTimestamps: {},
+    statusMetadataSchemaVersion: 1,
   });
   await db.insert(runs).values({
     id: runId,
@@ -1878,6 +1880,8 @@ async function persistWebhookRun(
     autoApply: workspace.autoApply === true && !isSpeculative,
     planOnly: isSpeculative,
     statusTimestamps: { "pending-at": new Date().toISOString() },
+    inputSchemaVersion: 1,
+    statusMetadataSchemaVersion: 1,
     logToken: crypto.randomUUID(),
     createdAt: Date.now(),
   });

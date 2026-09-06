@@ -13,7 +13,14 @@ import { eq, asc } from "drizzle-orm";
 import { issueRunLogCapability, signedApiURL, type RunLogCapability } from "./capabilities";
 import type { AuthorizedRunCapability, AuthorizedStateAccess } from "./authorized-resources";
 import type { DeepReadonly } from "./types";
-import { CLIENT_ENCRYPTED_STATE_ERROR, decodeStatePayload, isClientEncryptedState, parseStatePayload } from "./validation";
+import {
+  CLIENT_ENCRYPTED_STATE_ERROR,
+  decodeStatePayload,
+  isClientEncryptedState,
+  parsePersistedRunInputs,
+  parsePersistedStatusMetadata,
+  parseStatePayload,
+} from "./validation";
 import { cachedOrganizationName, cacheOrganizationName } from "./metadata-cache";
 import { vcsRepoResource } from "./vcs-repo";
 import { moduleTestTokenTtlBounds } from "./workload-identity";
@@ -675,6 +682,7 @@ function buildRunActionAttributes(flags: DeepReadonly<{ isPlanned: boolean; isCo
 }
 
 function buildRunCoreAttributes(run: RunParam, operation: string, normalizedSource: string, hasChanges: boolean): Record<string, unknown> {
+  const statusTimestamps = parsePersistedStatusMetadata(run.statusTimestamps, run.statusMetadataSchemaVersion, run.id);
   return {
     "allow-empty-apply": run.allowEmptyApply,
     "auto-apply": run.autoApply,
@@ -692,7 +700,7 @@ function buildRunCoreAttributes(run: RunParam, operation: string, normalizedSour
     "execution-mode": run.executionMode,
     source: normalizedSource,
     status: run.status,
-    "status-timestamps": run.statusTimestamps ?? null,
+    "status-timestamps": statusTimestamps,
   };
 }
 
@@ -742,8 +750,14 @@ function buildRunTriggerAttributes(origin?: RunOrigin): Record<string, unknown> 
 }
 
 function getRunVariablesForResponse(run: RunParam): unknown[] {
-  if (!Array.isArray(run.variables)) return [];
-  return (run.variables as Record<string, unknown>[]).map((v) => ({
+  const inputs = parsePersistedRunInputs({
+    targetAddrs: run.targetAddrs,
+    replaceAddrs: run.replaceAddrs,
+    invokeActionAddrs: run.invokeActionAddrs,
+    variables: run.variables,
+  }, run.inputSchemaVersion, run.id);
+  if (!Array.isArray(inputs.variables)) return [];
+  return (inputs.variables as Record<string, unknown>[]).map((v) => ({
     key: v["key"],
     ...(v["category"] === undefined ? {} : { category: v["category"] }),
     ...(v["sensitive"] === undefined ? {} : { sensitive: v["sensitive"] }),
@@ -959,7 +973,8 @@ export function planResource(
   request: RequestParam,
   authorized?: AuthorizedRunCapability<RunLogCapability>,
 ): Record<string, unknown> {
-  const status = planStatusForRun(run);
+  const statusTimestamps = parsePersistedStatusMetadata(run.statusTimestamps, run.statusMetadataSchemaVersion, run.id);
+  const status = planStatusForRun({ status: run.status, statusTimestamps });
   return {
     id: `plan-${run.id}`,
     type: "plans",
@@ -973,7 +988,7 @@ export function planResource(
       "generated-configuration": run.generatedConfiguration === true,
       "execution-details": { mode: run.executionMode ?? "remote" },
       "log-read-url": authorized === undefined ? null : issueRunLogCapability(authorized, "plan", request),
-      "status-timestamps": run.statusTimestamps ?? null,
+      "status-timestamps": statusTimestamps,
     },
     relationships: {
       "state-versions": {
@@ -989,7 +1004,7 @@ export function applyResource(
   request: RequestParam,
   authorized?: AuthorizedRunCapability<RunLogCapability>,
 ): Record<string, unknown> {
-  const timestamps = run.statusTimestamps ?? {};
+  const timestamps = parsePersistedStatusMetadata(run.statusTimestamps, run.statusMetadataSchemaVersion, run.id) ?? {};
   const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
     .some((key: string): boolean => typeof timestamps[key] === "string");
   const status = resolveApplyStatus(run, applyStarted);
@@ -1003,7 +1018,7 @@ export function applyResource(
       "resource-destructions": run.applyResourceDestructions ?? null,
       "resource-imports": run.applyResourceImports ?? null,
       "log-read-url": authorized === undefined ? null : issueRunLogCapability(authorized, "apply", request),
-      "status-timestamps": run.statusTimestamps ?? null,
+      "status-timestamps": timestamps,
     },
     relationships: {
       "state-versions": {

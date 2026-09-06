@@ -20,7 +20,7 @@ import { authPlugin } from "../auth";
 import { organizationName } from "../lib/response";
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { encryptSecret } from "../lib/secrets";
-import { isUniqueConstraintError } from "../lib/validation";
+import { isUniqueConstraintError, parsePersistedStatusMetadata } from "../lib/validation";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -495,8 +495,8 @@ const overrideTaskStage = async ({ params, user, orgId: tokenOrgId, teamId: toke
     (set as { status: number }).status = 409;
     return { errors: [{ status: "409", title: "Conflict", detail: "Task stage cannot be overridden in current status" }] };
   }
-  const timestamps = { ...(stage.statusTimestamps ?? {}), "overridden-at": new Date().toISOString() };
-  const updated = await db.update(taskStages).set({ status: "passed", statusTimestamps: timestamps }).where(and(eq(taskStages.id, stage.id), eq(taskStages.status, stage.status))).returning({ id: taskStages.id });
+  const timestamps = { ...(parsePersistedStatusMetadata(stage.statusTimestamps, stage.statusMetadataSchemaVersion, stage.id) ?? {}), "overridden-at": new Date().toISOString() };
+  const updated = await db.update(taskStages).set({ status: "passed", statusTimestamps: timestamps, statusMetadataSchemaVersion: 1 }).where(and(eq(taskStages.id, stage.id), eq(taskStages.status, stage.status))).returning({ id: taskStages.id });
   if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Task stage changed before it could be overridden" }] }; }
   return { data: { id: stage.id, type: "task-stages", attributes: { stage: stage.stage, status: "passed", "status-timestamps": timestamps } } };
 };
@@ -610,7 +610,7 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
         attributes: {
           stage: s.stage,
           status: s.status,
-          "status-timestamps": s.statusTimestamps ?? {},
+          "status-timestamps": parsePersistedStatusMetadata(s.statusTimestamps, s.statusMetadataSchemaVersion, s.id) ?? {},
         },
         relationships: {
           run: { data: { id: s.runId, type: "runs" } },
@@ -633,7 +633,7 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
         attributes: {
           stage: stage.stage,
           status: stage.status,
-          "status-timestamps": stage.statusTimestamps ?? {},
+          "status-timestamps": parsePersistedStatusMetadata(stage.statusTimestamps, stage.statusMetadataSchemaVersion, stage.id) ?? {},
         },
         relationships: {
           run: { data: { id: stage.runId, type: "runs" } },

@@ -387,6 +387,10 @@ function validateRunInputs(
       || Buffer.byteLength(value, "utf8") > MAX_RUN_VARIABLE_VALUE_BYTES
       || RUN_CONTROL_CHARS.test(value)
     ) return invalidRunInput(set, "variables contains an invalid variable value");
+    const category = variable["category"];
+    if (category !== undefined && category !== "terraform" && category !== "env") return invalidRunInput(set, "variables contains an invalid category");
+    const sensitive = variable["sensitive"];
+    if (sensitive !== undefined && typeof sensitive !== "boolean") return invalidRunInput(set, "variables contains an invalid sensitivity flag");
   }
   return null;
 }
@@ -987,7 +991,7 @@ export async function createRun(
       columns: { locked: true, lockedReason: true },
     });
     if (fresh?.locked === true) return { lockedReason: fresh.lockedReason ?? null };
-    await tx.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, createdBy: user?.id ?? null, appliedAt: null, createdAt });
+    await tx.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, inputSchemaVersion: 1, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, statusMetadataSchemaVersion: 1, createdBy: user?.id ?? null, appliedAt: null, createdAt });
     await tx.insert(runProvenanceCapsules).values({
       id: newResourceId("rpc"),
       runId: id,
@@ -1020,7 +1024,7 @@ export async function createRun(
     at: nowIso,
   });
   scheduleExplorerInventory(workspaceId);
-  const createdRun = { id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, scheduledAt: null, softDeletedAt: null, createdAt };
+  const createdRun = { id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, inputSchemaVersion: 1, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, statusMetadataSchemaVersion: 1, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, scheduledAt: null, softDeletedAt: null, createdAt };
   const createdLinkage = await linkageForRuns([createdRun]);
   const createdResource = runResource(createdRun, canApply, false, origin, undefined, undefined, createdLinkage.get(id));
   (createdResource["attributes"] as Record<string, unknown>)["provenance"] = {
