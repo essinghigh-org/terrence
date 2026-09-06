@@ -64,11 +64,32 @@ The directory must persist across container restarts. Mount it as a volume. At b
 
 ## Backups
 
-There is no backup manifest, hashing, encryption, restore test, or RPO alarm feature: anything promising those describes roadmap, not the product. A consistent backup captures the database and the storage directory at one logical point:
+Terrence does not automatically encrypt or retain operator backups, and it does not provide an RPO alarm. The release build manifest is provenance for the software image and migration set; it is not a backup manifest. Create a small checksum manifest beside each operator backup. A consistent backup captures the database and the storage directory at one logical point:
 
 1. Stop the instance (or quiesce writes). The WAL checkpoint at shutdown makes the main database file complete.
 2. Copy the database file and the whole storage directory together. A database-only copy is not restorable: state payloads, outputs, SSH keys, OAuth tokens, and sensitive variables decrypt only with `.encryption-key` (or the stable `ENCRYPTION_PASSWORD`) plus `.encryption-salt` from the same storage directory (SSH keys and tokens are encrypted database columns; the wizard's URL secret is a file under `secrets/`). The salt has no env override, so restoring the database on a new host with the same password but a fresh salt still fails to decrypt.
-3. Verify by starting a scratch instance against the copy and logging in.
+3. Write and verify a checksum manifest. For a stopped SQLite instance, the following is a complete, reproducible example (the directory contains the database and all key material):
+
+   ```sh
+   backup=/var/backups/terrence/$(date -u +%Y%m%dT%H%M%SZ)
+   mkdir -p "$backup"
+   tar --create --file "$backup/storage.tar" --directory "$STORAGE_DIR" .
+   sha256sum "$backup/storage.tar" > "$backup/SHA256SUMS"
+   sha256sum --check "$backup/SHA256SUMS"
+   ```
+
+   PostgreSQL backups use `pg_dump` (or `pg_basebackup`) and the same storage archive. Keep the database dump and storage archive from the same quiesced window.
+4. Restore into an empty disposable directory, verify the checksum, and run the documented diagnostics before replacing the live volume:
+
+   ```sh
+   sha256sum --check "$backup/SHA256SUMS"
+   mkdir -p /tmp/terrence-restore
+   tar --extract --file "$backup/storage.tar" --directory /tmp/terrence-restore
+   STORAGE_DIR=/tmp/terrence-restore DATABASE_URL=file:/tmp/terrence-restore/terrence.db \
+     bun backend/scripts/doctor.ts --json
+   ```
+
+5. Verify by starting a scratch instance against the copy and logging in. The repository check `bun backend/scripts/verify-operations-docs.ts` performs this disposable copy/restore and diagnostics pass; CI also runs the database upgrade fixture.
 
 For PostgreSQL, use the database's own backup tooling; combine a `pg_dump`/`pg_basebackup` window with a storage snapshot taken at the same logical point. Downgrades are not supported: migrations are forward-only, so a backup taken before an upgrade is the only way back.
 
