@@ -214,15 +214,17 @@ export function formatExplainElapsed(totalSeconds: number): string {
   return remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`;
 }
 
-function formatMonthlyCost(value: string | undefined): string {
+function formatMonthlyCost(value: string | undefined, currency = "USD", timeBasis = "monthly"): string {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return "—";
+  const normalizedCurrency = /^[A-Z]{3}$/.test(currency) ? currency : "USD";
+  const normalizedBasis = /^[A-Za-z0-9 _-]{1,32}$/.test(timeBasis) ? timeBasis : "period";
   return `${new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: "USD",
+    currency: normalizedCurrency,
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(amount)} / month`;
+  }).format(amount)} / ${normalizedBasis}`;
 }
 
 function policyResultText(result: unknown): string {
@@ -1028,6 +1030,23 @@ export function RunDetail({
     && costAttributes !== undefined
     && costAttributes["terrence:infracost-enabled"] !== false
     && !["skipped", "skipped_due_to_targeting", "disabled"].includes(costStatus);
+  const costProvenance = costAttributes?.provenance;
+  const costComparison = costAttributes?.comparison;
+  const costCurrency = costProvenance?.currency ?? "USD";
+  const costTimeBasis = costProvenance?.["time-basis"] ?? "monthly";
+  const costBaselineComparable = costComparison?.baseline?.comparable !== false;
+  const costWarnings = costComparison?.warnings?.filter((warning): warning is string => isString(warning)) ?? [];
+  const costChanges = costComparison?.["resource-changes"] ?? [];
+  const largestCostIncreases = costChanges
+    .filter((change): boolean => {
+      const delta = change["delta-monthly-cost"];
+      return (change.action === "added" || change.action === "changed")
+        && delta !== null
+        && delta !== undefined
+        && Number.isFinite(Number(delta))
+        && Number(delta) > 0;
+    })
+    .slice(0, 5);
   const hasSoftFailedPolicy = status === "policy_soft_failed"
     || policyChecks.some((check: PolicyCheck): boolean => check.attributes.status === "soft_failed");
   const hasHardFailedPolicy = policyChecks.some((check: PolicyCheck): boolean =>
@@ -1464,17 +1483,19 @@ export function RunDetail({
                 {!costUnavailable && (
                   <>
                 <div>
-                  <dt className="text-xs text-muted-foreground">Prior monthly</dt>
-                  <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["prior-monthly-cost"])}</dd>
+                  <dt className="text-xs text-muted-foreground">{costBaselineComparable ? `Prior ${costTimeBasis}` : "Baseline"}</dt>
+                  <dd className="mt-1 font-medium">{costBaselineComparable ? formatMonthlyCost(costAttributes["prior-monthly-cost"], costCurrency, costTimeBasis) : "Not comparable"}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-muted-foreground">Proposed monthly</dt>
-                  <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["proposed-monthly-cost"])}</dd>
+                  <dt className="text-xs text-muted-foreground">Proposed {costTimeBasis}</dt>
+                  <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["proposed-monthly-cost"], costCurrency, costTimeBasis)}</dd>
                 </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Monthly delta</dt>
-                  <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["delta-monthly-cost"])}</dd>
-                </div>
+                {costBaselineComparable && (
+                  <div>
+                    <dt className="text-xs text-muted-foreground">{costTimeBasis} delta</dt>
+                    <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["delta-monthly-cost"], costCurrency, costTimeBasis)}</dd>
+                  </div>
+                )}
                 <div>
                   <dt className="text-xs text-muted-foreground">Priced resources</dt>
                   <dd className="mt-1 font-medium">
@@ -1487,6 +1508,36 @@ export function RunDetail({
                   <div className={costUnavailable ? "col-span-full text-muted-foreground" : "col-span-full text-destructive"}>{costAttributes["error-message"] ?? "Cost estimation is not installed in this image."}</div>
                 )}
               </dl>
+            )}
+            {costProvenance !== undefined && (
+              <p className="border-t border-border px-5 py-3 text-xs text-muted-foreground">
+                Pricing provenance: {costProvenance.tool ?? "estimator"}{costProvenance.version === null || costProvenance.version === undefined ? "" : ` ${costProvenance.version}`}
+                {costProvenance.currency === null || costProvenance.currency === undefined ? "" : ` · ${costProvenance.currency}`}
+                {costProvenance["time-basis"] === null || costProvenance["time-basis"] === undefined ? "" : ` · ${costProvenance["time-basis"]}`}
+                {costProvenance["pricing-date"] === null || costProvenance["pricing-date"] === undefined ? "" : ` · pricing ${costProvenance["pricing-date"]}`}
+              </p>
+            )}
+            {costWarnings.length > 0 && (
+              <div role="note" className="border-t border-warning/30 bg-warning/5 px-5 py-3 text-xs text-warning-text">
+                <p className="font-medium">Estimate caveats</p>
+                <ul className="mt-1 list-disc space-y-1 pl-4">{costWarnings.map((warning): React.JSX.Element => <li key={warning}>{warning}</li>)}</ul>
+              </div>
+            )}
+            {costComparison?.baseline?.comparable === false && costComparison.baseline.reason !== null && costComparison.baseline.reason !== undefined && (
+              <p className="border-t border-border px-5 py-3 text-xs text-muted-foreground">Baseline comparison is unavailable: {costComparison.baseline.reason}</p>
+            )}
+            {largestCostIncreases.length > 0 && (
+              <details className="border-t border-border px-5 py-3 text-xs">
+                <summary className="cursor-pointer font-medium text-foreground">Largest planned cost increases</summary>
+                <ul className="mt-2 space-y-1 text-muted-foreground">
+                  {largestCostIncreases.map((change): React.JSX.Element => (
+                    <li key={`${change.module ?? "default"}:${change.address}`}>
+                      <a href="#plan-heading" className="font-mono text-primary underline-offset-2 hover:underline">{change.module ?? "default"}:{change.address ?? "unknown resource"}</a>
+                      <span className="ml-2">+{formatMonthlyCost(change["delta-monthly-cost"] ?? undefined, costCurrency, costTimeBasis)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
             )}
           </section>
           )}
@@ -1750,7 +1801,7 @@ export function RunDetail({
           <dl className="grid gap-3 px-5 py-4 text-xs">
             <div><dt className="text-muted-foreground">Engine</dt><dd className="mt-0.5 font-medium">{provenanceManifest.engine.binary}{provenanceManifest.engine.version === null ? "" : ` ${provenanceManifest.engine.version}`}</dd></div>
             <div><dt className="text-muted-foreground">Configuration</dt><dd className="mt-0.5 break-all font-mono">{provenanceManifest.configuration.digest.slice(0, 16)}…</dd></div>
-            <div><dt className="text-muted-foreground">Input state</dt><dd className="mt-0.5">{provenanceManifest.inputState.id === null ? "None recorded" : provenanceManifest.inputState.id}</dd></div>
+            <div><dt className="text-muted-foreground">Input state</dt><dd className="mt-0.5">{provenanceManifest.inputState.id ?? "None recorded"}</dd></div>
             <div><dt className="text-muted-foreground">Variables</dt><dd className="mt-0.5">{provenanceManifest.variables.length} sources captured; sensitive values redacted</dd></div>
             <div><dt className="text-muted-foreground">Sandbox</dt><dd className="mt-0.5">{provenanceManifest.sandbox.required ? "Required" : "Disabled"} · {provenanceManifest.sandbox.networkPolicy} network</dd></div>
             {provenanceManifest.rerun !== undefined && (

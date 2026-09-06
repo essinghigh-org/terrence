@@ -121,6 +121,33 @@ export type CostEstimate = Readonly<{
     "unmatched-resources-count"?: number;
     "error-message"?: string | null;
     "terrence:infracost-enabled"?: boolean;
+    provenance?: Readonly<{
+      tool?: string | null;
+      version?: string | null;
+      "pricing-date"?: string | null;
+      currency?: string | null;
+      "time-basis"?: string | null;
+      "supported-resources"?: number;
+      assumptions?: readonly string[];
+    }>;
+    comparison?: Readonly<{
+      baseline?: Readonly<{
+        source?: string | null;
+        "monthly-cost"?: string | null;
+        currency?: string | null;
+        comparable?: boolean;
+        reason?: string | null;
+      }>;
+      warnings?: readonly string[];
+      "resource-changes"?: readonly Readonly<{
+        address?: string;
+        module?: string | null;
+        action?: string;
+        "prior-monthly-cost"?: string | null;
+        "proposed-monthly-cost"?: string | null;
+        "delta-monthly-cost"?: string | null;
+      }>[];
+    }>;
   }>;
 }>;
 
