@@ -10,6 +10,7 @@ import { storageDir } from "./src/db/driver";
 import { shutdownLogging } from "./src/lib/log";
 import { markControlPlaneNodeDraining, startControlPlaneHeartbeat } from "./src/routes/health";
 import { validateRunSandboxConfig } from "./src/lib/sandbox";
+import { importLegacyGitHubAppConfiguration } from "./src/lib/github-app-config";
 
 // SEC-10: a misspelled TERRENCE_RUN_NET_POLICY must fail boot, not surface
 // at the first run execution.
@@ -42,6 +43,18 @@ if (isPostgres) {
   await applyPgMigrations();
 }
 await validatePersistedConfiguration();
+try {
+  const githubAppBootstrap = await importLegacyGitHubAppConfiguration();
+  if (githubAppBootstrap.imported) {
+    console.log("[terrence] Imported the legacy GitHub App environment configuration into encrypted site settings");
+  } else if (githubAppBootstrap.reason !== "legacy-environment-incomplete" && githubAppBootstrap.reason !== "bootstrap-consumed") {
+    console.warn(`[terrence] Legacy GitHub App environment import skipped: ${githubAppBootstrap.reason ?? "unknown reason"}`);
+  }
+} catch (error: unknown) {
+  // A bad or unreachable legacy App must never prevent the control plane from
+  // starting. Site admins can retry the import explicitly after correcting it.
+  console.warn("[terrence] Legacy GitHub App environment import failed; no credentials were persisted", error);
+}
 await resetAdminPassword();
 await bootstrapInitialAdmin();
 await refreshTrustedClientIpHeaders();

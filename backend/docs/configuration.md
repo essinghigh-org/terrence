@@ -130,6 +130,15 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `GITLAB_WEBHOOK_SECRET` | none | Secret for GitLab webhook deliveries. |
 | `BITBUCKET_WEBHOOK_SECRET` | none | Secret for Bitbucket webhook deliveries. |
 
+The four `GITHUB_APP_*`/`GITHUB_WEBHOOK_SECRET` values form a legacy bootstrap
+configuration. When all four are present and no site GitHub App row exists,
+startup validates the private key against GitHub's `GET /app` endpoint, then
+encrypts and stores the credentials with source `legacy_environment_import`.
+The bootstrap-consumed marker survives disconnect, so a restart does not
+re-import a disconnected App. Use the site-admin environment recovery action
+to retry an import after correcting credentials. A stored database
+configuration always wins over environment values.
+
 ## Cost estimation
 
 | Variable | Default | Purpose |

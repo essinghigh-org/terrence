@@ -30,7 +30,7 @@ import {
   type VcsProvider,
   type VcsSourceIdentity,
 } from "./vcs-source";
-import { githubAppApiBase } from "./github-api";
+import { getGitHubAppRuntimeConfiguration } from "./github-app-config";
 import { newRunId } from "./run-id";
 import { log } from "./log";
 
@@ -668,21 +668,19 @@ export type GitHubAppAccessTokenDetails = Readonly<{
 }>;
 
 export async function getGitHubAppAccessTokenDetails(installationId: number): Promise<GitHubAppAccessTokenDetails | null> {
-  const appId = process.env["GITHUB_APP_ID"];
-  const privateKey = process.env["GITHUB_APP_PRIVATE_KEY"];
-  if (appId === undefined || privateKey === undefined || appId === "" || privateKey === "") {
+  const configuration = await getGitHubAppRuntimeConfiguration();
+  if (configuration === null) {
     log.error("GitHub App credentials are not configured");
     return null;
   }
 
   try {
-    const key = privateKey.replace(/\\n/g, "\n");
     const token = jwt.sign({
       iat: Math.floor(Date.now() / 1000) - 60,
       exp: Math.floor(Date.now() / 1000) + (10 * 60),
-      iss: appId,
-    }, key, { algorithm: "RS256" });
-    const apiUrl = githubAppApiUrl();
+      iss: configuration.appIdText,
+    }, configuration.privateKey, { algorithm: "RS256" });
+    const apiUrl = configuration.apiUrl;
     if (apiUrl === undefined) return null;
     const response = await fetchVcsUrl(`${apiUrl}/app/installations/${String(installationId)}/access_tokens`, {
       method: "POST",
@@ -761,8 +759,8 @@ function providerApiUrl(value: string | null, fallback: string, requireHttps = f
   }
 }
 
-function githubAppApiUrl(): string | undefined {
-  return githubAppApiBase(true);
+async function githubAppApiUrl(): Promise<string | undefined> {
+  return (await getGitHubAppRuntimeConfiguration())?.apiUrl;
 }
 
 async function oauthProviderCredentials(
@@ -816,7 +814,7 @@ async function githubCredentials(
         token = await getGitHubAppAccessToken(installation.installationId);
         installationTokens?.set(installationKey, token);
       }
-      const apiUrl = githubAppApiUrl();
+      const apiUrl = await githubAppApiUrl();
       if (token !== null && apiUrl !== undefined) return { apiUrl, provider: "github", token };
     }
   }
@@ -1475,7 +1473,7 @@ async function githubAppDefaultBranch(
   if (installation === undefined) return undefined;
   const token = await getGitHubAppAccessToken(installation.installationId);
   if (token === null) return undefined;
-  const apiUrl = githubAppApiBase(true);
+  const apiUrl = (await getGitHubAppRuntimeConfiguration())?.apiUrl;
   if (apiUrl === undefined) return undefined;
   const response = await fetchVcsUrl(`${apiUrl}/repos/${encodedPath}`, {
     headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json" },
@@ -1564,7 +1562,7 @@ async function githubAppLatestCommit(
   if (installation === undefined) return undefined;
   const token = await getGitHubAppAccessToken(installation.installationId);
   if (token === null) return undefined;
-  const apiUrl = githubAppApiBase(true);
+  const apiUrl = (await getGitHubAppRuntimeConfiguration())?.apiUrl;
   if (apiUrl === undefined) return undefined;
   const url = `${apiUrl}/repos/${encodedPath}/commits?sha=${encodeURIComponent(branch)}&per_page=1`;
   const response = await fetchVcsUrl(url, {

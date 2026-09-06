@@ -589,6 +589,7 @@ export function Layout({
             { active: isActivePath(location.pathname, "/app/admin/maintenance"), icon: CalendarClock, label: "Maintenance windows", to: "/app/admin/maintenance" },
             { active: isActivePath(location.pathname, "/app/admin/approval-webhook"), icon: Webhook, label: "Approval webhook", to: "/app/admin/approval-webhook" },
             { active: isActivePath(location.pathname, "/app/admin/plan-explainer"), icon: Sparkles, label: "AI plan explainer", to: "/app/admin/plan-explainer" },
+            { active: isActivePath(location.pathname, "/app/admin/github-app"), icon: GitBranch, label: "GitHub App", to: "/app/admin/github-app" },
             { active: isActivePath(location.pathname, "/app/admin/smtp"), icon: Mail, label: "SMTP settings", to: "/app/admin/smtp" },
             { active: isActivePath(location.pathname, "/app/admin/database"), icon: Database, label: "Database", to: "/app/admin/database" },
           ],

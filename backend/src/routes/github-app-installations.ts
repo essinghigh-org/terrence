@@ -1,17 +1,30 @@
-import { integrationSetting } from "../lib/runtime-config";
 import { newResourceId } from "../lib/resource-id";
+import { integrationSetting } from "../lib/runtime-config";
 import { Elysia } from "elysia";
 import { and, eq, sql } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { authPlugin } from "../auth";
 import { db, isPostgres } from "../db";
-import { apiTokens, githubAppInstallations, oauthClients, oauthTokens, organizations, type users } from "../db/schema";
-import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission } from "../lib/utils";
+import { apiTokens, githubAppInstallations, oauthClients, oauthTokens, organizations, users } from "../db/schema";
+import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission, requestBaseUrl } from "../lib/utils";
 import { decryptSecret } from "../lib/secrets";
 import { fetchVcsUrl, getGitHubAppAccessToken, getGitHubAppAccessTokenDetails } from "../lib/webhooks";
 import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail, type VcsIntegrationUsage } from "../lib/vcs-integration-usage";
 import { AvatarService } from "../lib/avatars";
 import { githubAppApiBase } from "../lib/github-api";
+import {
+  activatePendingGitHubAppConfiguration,
+  disconnectGitHubApp,
+  getGitHubAppConfiguration,
+  getGitHubAppRecord,
+  markGitHubAppInvalid,
+  persistGitHubAppConfiguration,
+  persistPendingGitHubAppConfiguration,
+  recoverLegacyGitHubAppConfiguration,
+  validateGitHubAppConfiguration,
+  type GitHubAppConfiguration,
+  type GitHubAppInstallationSummary,
+} from "../lib/github-app-config";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 type ParamCtx = Readonly<{
@@ -36,13 +49,15 @@ type SetupState = Readonly<{
   userId: string | null;
 }>;
 
-type GitHubAppConfig = Readonly<{
-  apiUrl: string;
-  appId: number;
-  appIdText: string;
-  installUrl: string;
-  privateKey: string;
+type ManifestSetupState = Readonly<{
+  expiresAt: number;
+  tokenId: string;
+  userId: string;
 }>;
+
+type ManifestInstallState = ManifestSetupState & Readonly<{ pendingId: string }>;
+
+type GitHubAppConfig = Readonly<GitHubAppConfiguration & { installUrl: string }>;
 
 type VerifiedInstallation = Readonly<{
   iconUrl: string | null;
@@ -54,49 +69,265 @@ type VerifiedInstallation = Readonly<{
 const SETUP_STATE_TTL_MS = 10 * 60 * 1000;
 const GITHUB_TIMEOUT_MS = 10_000;
 const setupStates = new Map<string, SetupState>();
+const manifestSetupStates = new Map<string, ManifestSetupState>();
+const manifestInstallStates = new Map<string, ManifestInstallState>();
 
 function stringQuery(query: Readonly<Record<string, unknown>> | undefined, key: string): string {
   const value = query?.[key];
   return typeof value === "string" ? value : "";
 }
 
-function positiveInteger(value: string): number | null {
-  if (!/^[1-9]\d*$/.test(value)) return null;
-  const parsed = Number(value);
+function positiveInteger(value: unknown): number | null {
+  const text = typeof value === "string"
+    ? value
+    : typeof value === "number" && Number.isSafeInteger(value)
+      ? String(value)
+      : "";
+  if (!/^[1-9]\d*$/.test(text)) return null;
+  const parsed = Number(text);
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-function configuredUrl(value: string | undefined, fallback: string): URL | null {
+async function githubAppConfig(): Promise<GitHubAppConfig | null> {
+  const configuration = await getGitHubAppConfiguration();
+  if (configuration === null) return null;
+  const installUrl = new URL(`/apps/${encodeURIComponent(configuration.slug)}/installations/new`, configuration.httpUrl);
+  return { ...configuration, installUrl: installUrl.toString() };
+}
+
+function manifestGitHubHttpUrl(): string {
   try {
-    const url = new URL(value === undefined || value.trim() === "" ? fallback : value);
-    return (
-      (url.protocol === "https:" || url.protocol === "http:")
-      && url.username === ""
-      && url.password === ""
-      && url.search === ""
-      && url.hash === ""
-    ) ? url : null;
+    const configured = new URL(integrationSetting("GITHUB_APP_HTTP_URL") ?? "https://github.com");
+    if ((configured.protocol !== "https:" && configured.protocol !== "http:") || configured.username !== "" || configured.password !== "" || configured.search !== "" || configured.hash !== "") return "https://github.com";
+    return configured.toString().replace(/\/$/u, "");
+  } catch {
+    return "https://github.com";
+  }
+}
+
+function manifestGitHubApiUrl(): string {
+  return githubAppApiBase(true) ?? "https://api.github.com";
+}
+
+function manifestPayload(request: Readonly<{ url: string }>): Readonly<Record<string, unknown>> {
+  const publicUrl = new URL(requestBaseUrl(request));
+  publicUrl.pathname = "/";
+  publicUrl.search = "";
+  publicUrl.hash = "";
+  return {
+    name: `terrence-${publicUrl.hostname}`.slice(0, 34),
+    url: publicUrl.toString(),
+    description: "Terrence VCS integration",
+    public: false,
+    redirect_url: apiURL(request, "/api/v2/admin/github-app/manifest/callback"),
+    setup_url: apiURL(request, "/api/v2/admin/github-app/manifest/install-callback"),
+    hook_attributes: {
+      url: apiURL(request, "/api/webhooks/github"),
+      active: true,
+    },
+    default_permissions: {
+      contents: "read",
+      metadata: "read",
+      pull_requests: "read",
+      repository_hooks: "read",
+      statuses: "write",
+    },
+    default_events: ["push", "pull_request", "repository", "installation", "installation_repositories"],
+  };
+}
+
+async function manifestConversion(code: string): Promise<Readonly<{ configuration: GitHubAppConfiguration; htmlUrl: string | null }> | null> {
+  const apiUrl = manifestGitHubApiUrl();
+  const controller = new AbortController();
+  const timer = setTimeout((): void => { controller.abort(); }, GITHUB_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${apiUrl.replace(/\/$/u, "")}/app-manifests/${encodeURIComponent(code)}/conversions`, {
+      method: "POST",
+      headers: {
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "User-Agent": "Terrence",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      signal: controller.signal,
+    });
+    const body: unknown = await response.json().catch((): unknown => ({}));
+    if (!response.ok) return null;
+    const record = recordValue(body);
+    if (record === null) return null;
+    const pem = stringValue(record["pem"]);
+    const webhookSecret = stringValue(record["webhook_secret"]);
+    const clientId = stringValue(record["client_id"]);
+    const clientSecret = stringValue(record["client_secret"]);
+    const appId = positiveInteger(record["id"]);
+    const slug = stringValue(record["slug"]);
+    if (pem === null || webhookSecret === null || clientId === null || clientSecret === null || appId === null || slug === null) return null;
+    const configuration: GitHubAppConfiguration = {
+      appId,
+      appIdText: String(appId),
+      slug,
+      name: stringValue(record["name"]),
+      owner: null,
+      privateKey: pem,
+      webhookSecret,
+      clientId,
+      clientSecret,
+      apiUrl,
+      httpUrl: manifestGitHubHttpUrl(),
+      source: "manifest",
+    };
+    const validation = await validateGitHubAppConfiguration(configuration);
+    if (!validation.ok) return null;
+    return {
+      configuration: {
+        ...configuration,
+        appId: validation.appId ?? configuration.appId,
+        appIdText: String(validation.appId ?? configuration.appId),
+        slug: validation.slug ?? configuration.slug,
+        name: validation.name ?? configuration.name,
+        owner: validation.owner ?? configuration.owner,
+      },
+      htmlUrl: httpUrl(record["html_url"]),
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function siteAdminManifestStateAuthorized(state: ManifestSetupState): Promise<boolean> {
+  const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, state.tokenId) });
+  if (token === undefined || token.userId !== state.userId) return false;
+  const user = await db.query.users.findFirst({ where: eq(users.id, state.userId), columns: { isSiteAdmin: true } });
+  return user?.isSiteAdmin === true;
+}
+
+function jsonApiAttributes(body: unknown, type: string): Record<string, unknown> | null {
+  const root = recordValue(body);
+  const data = recordValue(root?.["data"]);
+  if (data === null || data["type"] !== type) return null;
+  return recordValue(data["attributes"]);
+}
+
+function manualGitHubAppConfiguration(body: unknown): GitHubAppConfiguration | null {
+  const attributes = jsonApiAttributes(body, "github-app");
+  if (attributes === null) return null;
+  const appId = positiveInteger(attributes["app-id"]);
+  const slug = stringValue(attributes["slug"]);
+  const privateKeyValue = stringValue(attributes["private-key"]);
+  const privateKey = privateKeyValue === null ? null : privateKeyValue.replaceAll("\\n", "\n");
+  const webhookSecret = stringValue(attributes["webhook-secret"]);
+  if (appId === null || slug === null || privateKey === null || webhookSecret === null) return null;
+  const apiUrl = safeGithubUrl(attributes["api-url"], manifestGitHubApiUrl());
+  const httpUrl = safeGithubUrl(attributes["http-url"], manifestGitHubHttpUrl());
+  if (apiUrl === null || httpUrl === null || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,98}[A-Za-z0-9])?$/.test(slug)) return null;
+  return {
+    appId,
+    appIdText: String(appId),
+    slug,
+    name: stringValue(attributes["name"]),
+    owner: null,
+    privateKey,
+    webhookSecret,
+    clientId: stringValue(attributes["client-id"]),
+    clientSecret: stringValue(attributes["client-secret"]),
+    apiUrl,
+    httpUrl,
+    source: "manual",
+  };
+}
+
+function safeGithubUrl(value: unknown, fallback: string): string | null {
+  const raw = typeof value === "string" && value.trim() !== "" ? value.trim() : fallback;
+  try {
+    const parsed = new URL(raw);
+    if ((parsed.protocol !== "https:" && parsed.protocol !== "http:") || parsed.username !== "" || parsed.password !== "" || parsed.search !== "" || parsed.hash !== "") return null;
+    return parsed.toString().replace(/\/$/u, "");
   } catch {
     return null;
   }
 }
 
-function githubAppConfig(): GitHubAppConfig | null {
-  const appIdText = process.env["GITHUB_APP_ID"]?.trim() ?? "";
-  const appId = positiveInteger(appIdText);
-  const privateKey = process.env["GITHUB_APP_PRIVATE_KEY"]?.replaceAll("\\n", "\n").trim() ?? "";
-  const slug = process.env["GITHUB_APP_SLUG"]?.trim() ?? "";
-  const httpUrl = configuredUrl(integrationSetting("GITHUB_APP_HTTP_URL") ?? undefined, "https://github.com");
-  const apiUrl = githubAppApiBase(true);
-  if (
-    appId === null
-    || privateKey === ""
-    || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,98}[A-Za-z0-9])?$/.test(slug)
-    || httpUrl === null
-    || apiUrl === undefined
-  ) return null;
-  const installUrl = new URL(`/apps/${encodeURIComponent(slug)}/installations/new`, httpUrl);
-  return { apiUrl, appId, appIdText, installUrl: installUrl.toString(), privateKey };
+async function validatePendingInstallation(config: GitHubAppConfig, installationId: number): Promise<boolean> {
+  let appToken: string;
+  try {
+    appToken = jwt.sign({
+      iat: Math.floor(Date.now() / 1000) - 60,
+      exp: Math.floor(Date.now() / 1000) + (9 * 60),
+      iss: config.appIdText,
+    }, config.privateKey, { algorithm: "RS256" });
+  } catch {
+    return false;
+  }
+  try {
+    const response = await fetchVcsUrl(`${config.apiUrl.replace(/\/$/u, "")}/app/installations/${String(installationId)}/access_tokens`, {
+      method: "POST",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${appToken}`,
+        "User-Agent": "Terrence",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      timeoutMs: GITHUB_TIMEOUT_MS,
+    });
+    if (!response.ok) return false;
+    const tokenBody = recordValue(await response.json());
+    const token = stringValue(tokenBody?.["token"]);
+    if (token === null) return false;
+    const permissions = recordValue(tokenBody?.["permissions"]);
+    if (permissions !== null) {
+      const requiredPermissions: Readonly<Record<string, string>> = {
+        contents: "read",
+        pull_requests: "read",
+        statuses: "write",
+      };
+      if (Object.entries(requiredPermissions).some(([name, required]): boolean => permissions[name] !== required)) return false;
+    }
+    const repositories = await fetchVcsUrl(`${config.apiUrl.replace(/\/$/u, "")}/installation/repositories?per_page=1`, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "User-Agent": "Terrence",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      timeoutMs: GITHUB_TIMEOUT_MS,
+    });
+    if (!repositories.ok) return false;
+    const repositoryBody = recordValue(await repositories.json());
+    return Array.isArray(repositoryBody?.["repositories"]);
+  } catch {
+    return false;
+  }
+}
+
+async function uninstallGitHubInstallation(configuration: GitHubAppConfiguration, installationId: number): Promise<Readonly<{ ok: boolean; status: number | null; detail: string }>> {
+  let appToken: string;
+  try {
+    appToken = jwt.sign({
+      iat: Math.floor(Date.now() / 1000) - 60,
+      exp: Math.floor(Date.now() / 1000) + (9 * 60),
+      iss: configuration.appIdText,
+    }, configuration.privateKey, { algorithm: "RS256" });
+  } catch {
+    return { ok: false, status: null, detail: "The configured GitHub App private key is invalid" };
+  }
+  try {
+    const response = await fetchVcsUrl(`${configuration.apiUrl.replace(/\/$/u, "")}/app/installations/${String(installationId)}`, {
+      method: "DELETE",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${appToken}`,
+        "User-Agent": "Terrence",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      timeoutMs: GITHUB_TIMEOUT_MS,
+    });
+    if (response.status === 204 || response.status === 404) return { ok: true, status: response.status, detail: "GitHub installation is uninstalled" };
+    return { ok: false, status: response.status, detail: `GitHub refused to uninstall the installation (HTTP ${response.status})` };
+  } catch {
+    return { ok: false, status: null, detail: "GitHub installation uninstall could not reach GitHub" };
+  }
 }
 
 function redirect(location: string, status: 302 | 303): Response {
@@ -151,6 +382,12 @@ function pruneSetupStates(): void {
   const now = Date.now();
   for (const [id, state] of setupStates) {
     if (state.expiresAt <= now) setupStates.delete(id);
+  }
+  for (const [id, state] of manifestSetupStates) {
+    if (state.expiresAt <= now) manifestSetupStates.delete(id);
+  }
+  for (const [id, state] of manifestInstallStates) {
+    if (state.expiresAt <= now) manifestInstallStates.delete(id);
   }
 }
 
@@ -603,7 +840,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
 
     if (installation !== undefined) {
       const token = await getGitHubAppAccessToken(installation.installationId);
-      const apiBase = githubAppApiBase(true);
+      const apiBase = (await githubAppConfig())?.apiUrl;
       if (token !== null && apiBase !== undefined) {
         try {
           repos.push(...await discoverGithubInstallationRepositories(apiBase, token));
@@ -758,6 +995,229 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     (set as { status: number }).status = 204;
     return {};
   })
+  .post("/api/v2/organizations/:org_name/github-app/installations/:installation_id/actions/uninstall", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const installation = await db.query.githubAppInstallations.findFirst({
+      where: and(eq(githubAppInstallations.id, params["installation_id"] ?? ""), eq(githubAppInstallations.orgId, org.id)),
+    });
+    if (installation === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const configuration = await getGitHubAppConfiguration();
+    if (configuration === null) return flowError(set, 409, "GitHub App Not Configured", "Disconnecting the App credentials prevents remote uninstall; reconnect the App first");
+    const outcome = await db.transaction(async (tx): Promise<Readonly<{ conflict: VcsIntegrationUsage | null; uninstall: Readonly<{ ok: boolean; status: number | null; detail: string }> }>> => {
+      if (isPostgres) {
+        await (tx as unknown as { execute: (query: unknown) => Promise<unknown> })
+          .execute(sql`SELECT id FROM github_app_installations WHERE id = ${installation.id} FOR UPDATE`);
+      }
+      const usage = await findVcsIntegrationUsage(org.id, { kind: "github-app", id: installation.id }, tx);
+      if (usage.workspaces.length > 0 || usage.policySets.length > 0) return { conflict: usage, uninstall: { ok: false, status: null, detail: "" } };
+      const uninstall = await uninstallGitHubInstallation(configuration, installation.installationId);
+      if (uninstall.ok) await tx.delete(githubAppInstallations).where(eq(githubAppInstallations.id, installation.id));
+      return { conflict: null, uninstall };
+    });
+    if (outcome.conflict !== null) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(outcome.conflict) }] };
+    }
+    if (!outcome.uninstall.ok) return flowError(set, outcome.uninstall.status ?? 502, "GitHub Installation Uninstall Failed", outcome.uninstall.detail);
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  .get("/api/v2/admin/github-app", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const record = await getGitHubAppRecord();
+    const configuration = await getGitHubAppConfiguration();
+    let health: Awaited<ReturnType<typeof validateGitHubAppConfiguration>> | null = null;
+    if (configuration !== null) {
+      health = await validateGitHubAppConfiguration(configuration);
+      if (record !== null && record.status === "active" && !health.ok && health.credentialError) await markGitHubAppInvalid(health.detail);
+    }
+    const effectiveRecord = await getGitHubAppRecord();
+    const pending = effectiveRecord?.pending;
+    const installedOwners = new Set(pending?.installations.map((installation): string => installation.owner) ?? []);
+    const missingOwners = (pending?.requiredOwners ?? []).filter((owner): boolean => !installedOwners.has(owner));
+    const safeConfiguration = configuration ?? effectiveRecord?.configuration ?? null;
+    const registrationUrl = safeConfiguration === null
+      ? `${manifestGitHubHttpUrl()}/settings/apps`
+      : `${safeConfiguration.httpUrl}/settings/apps/${encodeURIComponent(safeConfiguration.slug)}`;
+    const installUrl = safeConfiguration === null
+      ? null
+      : new URL(`/apps/${encodeURIComponent(safeConfiguration.slug)}/installations/new`, safeConfiguration.httpUrl).toString();
+    return {
+      data: {
+        id: "github-app",
+        type: "github-app",
+        attributes: {
+          configured: safeConfiguration !== null,
+          status: effectiveRecord?.status === "invalid" || (health?.ok === false && health.credentialError)
+            ? "invalid"
+            : effectiveRecord?.status ?? (safeConfiguration === null ? "unconfigured" : "active"),
+          source: effectiveRecord?.source ?? (safeConfiguration?.source === "legacy_environment_import" ? "environment" : null),
+          bootstrapConsumed: effectiveRecord?.bootstrapConsumed === true,
+          "app-id": safeConfiguration?.appId ?? null,
+          slug: safeConfiguration?.slug ?? null,
+          name: safeConfiguration?.name ?? null,
+          owner: safeConfiguration?.owner ?? null,
+          "registration-url": registrationUrl,
+          "install-url": installUrl,
+          "invalid-reason": health?.ok === false ? health.detail : effectiveRecord?.invalidReason ?? null,
+          "pending-replacement": pending !== undefined && pending !== null,
+          "required-owners": pending?.requiredOwners ?? [],
+          "installed-owners": [...installedOwners].sort(),
+          "missing-owners": missingOwners,
+          modes: ["manifest", "manual", "environment"],
+          "manifest-flow": request === undefined ? null : apiURL(request, "/api/v2/admin/github-app/manifest/setup"),
+        },
+      },
+    };
+  })
+  .post("/api/v2/admin/github-app", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const configuration = manualGitHubAppConfiguration(body);
+    if (configuration === null) {
+      return flowError(set, 422, "Invalid GitHub App", "app-id, slug, private-key, webhook-secret, and valid HTTP(S) URLs are required");
+    }
+    const validation = await validateGitHubAppConfiguration(configuration);
+    if (!validation.ok) {
+      return flowError(set, 422, "GitHub App Validation Failed", validation.detail);
+    }
+    await persistGitHubAppConfiguration({
+      ...configuration,
+      appId: validation.appId ?? configuration.appId,
+      appIdText: String(validation.appId ?? configuration.appId),
+      slug: validation.slug ?? configuration.slug,
+      name: validation.name ?? configuration.name,
+      owner: validation.owner ?? configuration.owner,
+      source: "manual",
+    });
+    const record = await getGitHubAppRecord();
+    return { data: { id: "github-app", type: "github-app", attributes: { status: "active", source: "manual", "app-id": record?.configuration?.appId ?? configuration.appId, slug: record?.configuration?.slug ?? configuration.slug } } };
+  })
+  .post("/api/v2/admin/github-app/actions/disconnect", async ({ user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await disconnectGitHubApp();
+    return { data: { id: "github-app", type: "github-app", attributes: { status: "disconnected", bootstrapConsumed: true } } };
+  })
+  .post("/api/v2/admin/github-app/actions/import-environment", async ({ user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const result = await recoverLegacyGitHubAppConfiguration();
+    if (!result.imported) return flowError(set, 422, "GitHub App Import Failed", result.reason === "legacy-environment-incomplete" ? "A complete legacy GitHub App environment configuration is required" : result.reason ?? "GitHub App validation failed");
+    return { data: { id: "github-app", type: "github-app", attributes: { status: "active", source: "legacy_environment_import", bootstrapConsumed: true } } };
+  })
+  .post("/api/v2/admin/github-app/actions/validate", async ({ user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const configuration = await getGitHubAppConfiguration();
+    if (configuration === null) return flowError(set, 409, "GitHub App Not Configured", "Configure a GitHub App before validating it");
+    const validation = await validateGitHubAppConfiguration(configuration);
+    if (!validation.ok) {
+      if (validation.credentialError) await markGitHubAppInvalid(validation.detail);
+      return flowError(set, validation.credentialError ? 422 : 503, "GitHub App Validation Failed", validation.detail);
+    }
+    return { data: { id: "github-app", type: "github-app", attributes: { status: "active", appId: validation.appId ?? configuration.appId, slug: validation.slug ?? configuration.slug } } };
+  })
+  .get("/api/v2/admin/github-app/manifest/setup", async ({ request, user, token, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true || token === null || token === undefined || request === undefined) {
+      return flowError(set, 404, "Not Found", "Site administrator access is required");
+    }
+    pruneSetupStates();
+    const stateId = crypto.randomUUID();
+    manifestSetupStates.set(stateId, {
+      expiresAt: Date.now() + SETUP_STATE_TTL_MS,
+      tokenId: token.id,
+      userId: user.id,
+    });
+    const destination = new URL("/settings/apps/new", manifestGitHubHttpUrl());
+    destination.searchParams.set("state", stateId);
+    destination.searchParams.set("manifest", JSON.stringify(manifestPayload(request)));
+    return authorizationResponse(request, stateId, destination.toString());
+  })
+  .get("/api/v2/admin/github-app/manifest/callback", async ({ query, set }: ParamCtx): Promise<unknown> => {
+    pruneSetupStates();
+    const stateId = stringQuery(query, "state");
+    const state = manifestSetupStates.get(stateId);
+    if (state === undefined) return flowError(set, 400, "Invalid GitHub App Manifest Callback", "Setup state is missing, expired, or invalid");
+    manifestSetupStates.delete(stateId);
+    if (!(await siteAdminManifestStateAuthorized(state))) return flowError(set, 403, "Forbidden", "Site administrator authorization is no longer valid");
+    const code = stringQuery(query, "code");
+    if (code === "") return flowError(set, 400, "Invalid GitHub App Manifest Callback", "GitHub did not return an app manifest code");
+    const converted = await manifestConversion(code);
+    if (converted === null) return flowError(set, 502, "GitHub App Provisioning Failed", "GitHub did not return a valid App manifest conversion");
+    const existingInstallations = await db.query.githubAppInstallations.findMany({ columns: { name: true } });
+    const requiredOwners = [...new Set(existingInstallations.map((installation): string => installation.name).filter((name): boolean => name.trim() !== ""))];
+    const pendingId = crypto.randomUUID();
+    await persistPendingGitHubAppConfiguration(converted.configuration, requiredOwners, [], pendingId);
+    const installStateId = crypto.randomUUID();
+    manifestInstallStates.set(installStateId, { ...state, pendingId });
+    const destination = new URL(`/apps/${encodeURIComponent(converted.configuration.slug)}/installations/new`, converted.configuration.httpUrl);
+    destination.searchParams.set("state", installStateId);
+    return redirect(destination.toString(), 302);
+  })
+  .get("/api/v2/admin/github-app/manifest/install-callback", async ({ query, request, set }: ParamCtx): Promise<unknown> => {
+    pruneSetupStates();
+    const stateId = stringQuery(query, "state");
+    const state = manifestInstallStates.get(stateId);
+    if (state === undefined) return flowError(set, 400, "Invalid GitHub App Installation Callback", "Installation state is missing, expired, or invalid");
+    manifestInstallStates.delete(stateId);
+    if (!(await siteAdminManifestStateAuthorized(state))) return flowError(set, 403, "Forbidden", "Site administrator authorization is no longer valid");
+    const record = await getGitHubAppRecord();
+    const pending = record?.pending;
+    const installationId = positiveInteger(stringQuery(query, "installation_id"));
+    const setupAction = stringQuery(query, "setup_action");
+    if (pending === null || pending === undefined || pending.flowId !== state.pendingId || installationId === null || (setupAction !== "install" && setupAction !== "update")) {
+      return flowError(set, 400, "Invalid GitHub App Installation Callback", "GitHub returned an invalid installation or no pending replacement exists");
+    }
+    const config: GitHubAppConfig = { ...pending.configuration, installUrl: new URL(`/apps/${encodeURIComponent(pending.configuration.slug)}/installations/new`, pending.configuration.httpUrl).toString() };
+    const verified = await fetchInstallation(config, installationId);
+    if (verified === null || !(await validatePendingInstallation(config, installationId))) {
+      return flowError(set, 422, "GitHub App Validation Failed", "The replacement installation could not authenticate, enumerate repositories, or match the new App");
+    }
+    const installations: GitHubAppInstallationSummary[] = [
+      ...pending.installations.filter((installation): boolean => installation.owner !== verified.name),
+      { installationId, owner: verified.name, ownerType: verified.installationType },
+    ];
+    const missingOwners = pending.requiredOwners.filter((owner): boolean => !installations.some((installation): boolean => installation.owner === owner));
+    if (missingOwners.length > 0) {
+      await persistPendingGitHubAppConfiguration(pending.configuration, pending.requiredOwners, installations, pending.flowId);
+      const nextStateId = crypto.randomUUID();
+      manifestInstallStates.set(nextStateId, { ...state, pendingId: pending.flowId });
+      const destination = new URL(config.installUrl);
+      destination.searchParams.set("state", nextStateId);
+      return redirect(destination.toString(), 302);
+    }
+    await activatePendingGitHubAppConfiguration();
+    const installedByOwner = new Map(installations.map((installation): [string, GitHubAppInstallationSummary] => [installation.owner, installation]));
+    const existingRows = await db.query.githubAppInstallations.findMany();
+    for (const existing of existingRows) {
+      const replacement = installedByOwner.get(existing.name);
+      if (replacement === undefined) continue;
+      await db.update(githubAppInstallations).set({ installationId: replacement.installationId }).where(eq(githubAppInstallations.id, existing.id));
+    }
+    const destination = request === undefined ? "/app/admin" : apiURL(request, "/app/admin");
+    const redirectUrl = new URL(destination);
+    redirectUrl.searchParams.set("github_app", "connected");
+    return redirect(redirectUrl.toString(), 303);
+  })
   .get("/api/v2/organizations/:org_name/github-app/installations/setup", async ({ params, request, user, token, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
     if (
@@ -769,7 +1229,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     ) {
       return flowError(set, 404, "Not Found", "Organization not found");
     }
-    const config = githubAppConfig();
+    const config = await githubAppConfig();
     if (config === null) {
       return flowError(
         set,
@@ -828,7 +1288,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     if (org?.name !== state.orgName || !stillAuthorized) {
       return flowError(set, 403, "Forbidden", "Organization authorization is no longer valid");
     }
-    const config = githubAppConfig();
+    const config = await githubAppConfig();
     if (config === null) {
       return flowError(set, 422, "GitHub App Not Configured", "GitHub App configuration is unavailable");
     }
@@ -884,7 +1344,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "No GitHub App installation is registered for this organization. Install the app on the target repository first." }] };
     }
-    const config = githubAppConfig();
+    const config = await githubAppConfig();
     const results = await Promise.all(installations.map(async (installation) => {
       const checks: {
         id: string; label: string; ok: boolean; status: number | null; detail: string;
@@ -895,7 +1355,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
         return { installationId: installation.installationId, config: config?.appId ?? null, checks };
       }
       const token = tokenDetails.token;
-      const githubApiBase = githubAppApiBase(true) ?? "https://api.github.com";
+      const githubApiBase = config?.apiUrl ?? "https://api.github.com";
       const repoHeaders = {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,

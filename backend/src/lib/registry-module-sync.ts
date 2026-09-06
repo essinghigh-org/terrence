@@ -13,7 +13,8 @@ import {
 } from "../db/schema";
 import { decryptSecret } from "./secrets";
 import { fetchVcsUrl, fetchVcsUrlStream, getGitHubAppAccessToken } from "./webhooks";
-import { githubAppApiBase, normalizeGithubApiBase } from "./github-api";
+import { normalizeGithubApiBase } from "./github-api";
+import { getGitHubAppRuntimeConfiguration } from "./github-app-config";
 import { ingestModuleArchive } from "./registry-module-archive";
 import { inspectRegistryModule, type RegistryModuleMetadata } from "./registry-module-metadata";
 import { isModuleVersion, sortModuleVersionsDescending } from "./registry-version";
@@ -44,7 +45,7 @@ async function credentialsFor(mod: RegistryModule): Promise<Credentials> {
     if (installation === undefined) throw new Error("The selected VCS connection is unavailable");
     const token = await getGitHubAppAccessToken(installation.installationId);
     if (token === null) throw new Error("The selected VCS connection could not authenticate");
-    const apiUrl = githubAppApiBase(true);
+    const apiUrl = (await getGitHubAppRuntimeConfiguration())?.apiUrl;
     if (apiUrl === undefined) throw new Error("The VCS connection API URL is invalid");
     return { apiUrl, token };
   }

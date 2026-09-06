@@ -25,6 +25,7 @@ import { authPlugin } from "../auth";
 import { log } from "../lib/log";
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { setAuditPrincipal } from "../lib/audit-trail";
+import { getGitHubWebhookSecret } from "../lib/github-app-config";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -330,7 +331,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
     .post("/api/webhooks/github", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
-    const secret = process.env["GITHUB_WEBHOOK_SECRET"];
+    const secret = await getGitHubWebhookSecret();
     const signature = request.headers.get("x-hub-signature-256");
     const rawBody = typeof body === "string" ? body : await request.text().catch((): string => "");
     if (typeof secret !== "string" || secret.length === 0) {

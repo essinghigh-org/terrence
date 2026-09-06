@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "../db";
 import { githubAppInstallations, oauthClients, oauthTokens } from "../db/schema";
-import { githubAppApiBase } from "./github-api";
+import { getGitHubAppApiUrl } from "./github-app-config";
 
 export type VcsProvider = "github" | "gitlab" | "bitbucket";
 
@@ -113,8 +113,8 @@ export async function sourceIdentityForConnection(
       columns: { installationId: true },
     });
     if (installation === undefined) return undefined;
-    const githubApiUrl = githubAppApiBase(true);
-    if (githubApiUrl === undefined) return undefined;
+    const githubApiUrl = await getGitHubAppApiUrl();
+    if (githubApiUrl === null) return undefined;
     return configuredVcsSourceIdentity(
       "github",
       "github",
