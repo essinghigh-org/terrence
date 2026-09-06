@@ -1,7 +1,20 @@
 import { getSettings, resolvePlanExplainerSettings } from "./settings";
-import { buildExplainSource, fetchUpstream, parseCompletionBody, saveExplanation, type ExplainKind } from "./run-explanations";
+import { buildExplainSource, fetchUpstream, parseCompletionBody, persistExplainerOutput, scrubExplanationContent, type ExplainKind } from "./run-explanations";
 import type { DurableJob, DurableJobContext } from "./durable-jobs";
+import { db } from "../db";
+import { eq } from "drizzle-orm";
+import { runs, workspaces } from "../db/schema";
 import { log } from "./log";
+
+/** Organization that owns the explained run, for the egress audit. Null
+ * when the run or workspace is already gone; the audit still records the
+ * endpoint and run. */
+async function explanationRunOrgId(runId: string): Promise<string | null> {
+  const owner = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { workspaceId: true } });
+  if (owner === undefined) return null;
+  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, owner.workspaceId), columns: { orgId: true } });
+  return workspace?.orgId ?? null;
+}
 
 export async function runPlanExplanationJob(job: DurableJob, context: DurableJobContext): Promise<void> {
   const payload = job.payload as { runId?: string; kind?: string };
@@ -55,5 +68,13 @@ export async function runPlanExplanationJob(job: DurableJob, context: DurableJob
   content = parts.content;
 
   if (await context.canceled()) return;
-  await saveExplanation(runId, kind, model, content);
+  const scrubbed = scrubExplanationContent(content, source.secrets);
+  await persistExplainerOutput({
+    runId, kind, model,
+    settings: resolved,
+    userId: null, orgId: await explanationRunOrgId(runId),
+    content: scrubbed.content,
+    redactedInputSecrets: source.redactedInputSecrets,
+    scrubbedOutputSecrets: scrubbed.scrubbed,
+  });
 }

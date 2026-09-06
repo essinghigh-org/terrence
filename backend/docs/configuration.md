@@ -207,6 +207,7 @@ Simulation hooks for the test suite. They bypass real IaC execution and must nev
 | `SIMULATED_ASSESSMENT_SCHEMA` | `{}` | Injected provider schema for simulated health assessments. |
 | `SIMULATED_STACK_PLAN_CHANGES` | off | Simulated stack plans report changes. |
 | `SIMULATED_STACK_DEFERRED` | off | Simulated stack plans report deferred changes. |
+| `TERRENCE_EXPLAIN_TIMEOUT_MS` | `60000` | Idle deadline for one AI explainer upstream exchange. Primarily a test seam for the timeout path; lowering it in production aborts slow models. |
 
 ## Operator scripts
 

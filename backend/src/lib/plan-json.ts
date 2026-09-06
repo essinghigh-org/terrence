@@ -60,6 +60,11 @@ function redact(value: unknown, mask: unknown): unknown {
   return mask === undefined || mask === false ? value : null;
 }
 
+/** Public plan projection version (SEC-01). Bump when the sanitized shape
+ * changes; explanation cache keys derive from it so stale projections
+ * cannot serve cached generations built from an older shape. */
+export const PUBLIC_PLAN_VERSION = 1;
+
 /** Public plan contract: raw variables, configuration and state are never copied. */
 export function sanitizePlanJson(planJson: PlanJson): PlanJson {
   const strings = (object: PlanJson, keys: readonly string[]): Record<string, unknown> =>
@@ -86,7 +91,7 @@ export function sanitizePlanJson(planJson: PlanJson): PlanJson {
       ...(asObject(object["importing"]) === undefined ? {} : { importing: { unknown: true } }),
     };
   };
-  const result: Record<string, unknown> = { public_plan_version: 1, ...strings(planJson, ["format_version", "terraform_version"]) };
+  const result: Record<string, unknown> = { public_plan_version: PUBLIC_PLAN_VERSION, ...strings(planJson, ["format_version", "terraform_version"]) };
   for (const key of ["resource_changes", "resource_drift"]) {
     const resources = planJson[key];
     if (!Array.isArray(resources)) continue;

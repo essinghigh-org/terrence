@@ -15,7 +15,8 @@ import {
   findExplanation,
   forEachUpstreamDelta,
   parseCompletionBody,
-  saveExplanation,
+  persistExplainerOutput,
+  scrubExplanationContent,
   splitInlineThinking,
   type ExplainKind,
   type ReasoningEffort,
@@ -40,6 +41,10 @@ type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<stri
 function notFound(set: SetObj): { errors: { status: string; title: string }[] } {
   (set as { status: number }).status = 404;
   return { errors: [{ status: "404", title: "Not Found" }] };
+}
+
+function explainAuditContext(user: Readonly<{ readonly id: string }> | null | undefined, orgId: string | null | undefined): Readonly<{ userId: string | null; orgId: string | null }> {
+  return { userId: user?.id ?? null, orgId: orgId ?? null };
 }
 
 export const operationsRoutes = new Elysia({ name: "operations" })
@@ -144,7 +149,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
             return sseJobProgressResponse(runId, kind, pendingJob, model, reasoningEffort, request);
           }
         }
-        return streamExplainResponse(resolvedSettings, source, runId, kind, model, reasoningEffort, request, refresh);
+        return streamExplainResponse(resolvedSettings, source, runId, kind, model, reasoningEffort, request, refresh, explainAuditContext(user, orgId));
       }
       // Background the non-streaming generation: enqueue a durable job and
       // return 202 so a tab close does not abort the LLM call. Concurrent
@@ -268,6 +273,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     reasoningEffort: ReasoningEffort | null,
     request: Request,
     forceRefresh: boolean,
+    audit: Readonly<{ userId: string | null; orgId: string | null }>,
   ): Promise<Response> {
     if (request.signal.aborted) {
       return new Response(null, { status: 499 });
@@ -283,6 +289,28 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     const encoder = new TextEncoder();
     const send = (controller: ReadableStreamDefaultController<Uint8Array>, name: string, data: unknown): void => {
       controller.enqueue(encoder.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`));
+    };
+    const finalizeStreamedContent = async (
+      streamer: ReadableStreamDefaultController<Uint8Array>,
+      contentText: string,
+      scrubbedDeltas: number,
+    ): Promise<void> => {
+      const final = scrubExplanationContent(contentText, source.secrets);
+      const scrubbedTotal = scrubbedDeltas + final.scrubbed;
+      if (final.content !== contentText) send(streamer, "content-reset", { text: final.content });
+      try {
+        await persistExplainerOutput({
+          runId, kind, model,
+          settings,
+          userId: audit.userId, orgId: audit.orgId,
+          content: final.content,
+          redactedInputSecrets: source.redactedInputSecrets,
+          scrubbedOutputSecrets: scrubbedTotal,
+        });
+      } catch (error: unknown) {
+        log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
+        throw new Error("Failed to persist the explanation");
+      }
     };
     const stream = new ReadableStream<Uint8Array>({
       async start(controller: ReadableStreamDefaultController<Uint8Array>) {
@@ -309,10 +337,18 @@ export const operationsRoutes = new Elysia({ name: "operations" })
               const parts = parseCompletionBody(parsed);
               if (parts.content === "") throw new Error("Plan explainer returned no explanation");
               if (parts.thinking !== "") send(controller, "thinking", { text: parts.thinking });
-              send(controller, "content", { text: parts.content });
+              const scrubbed = scrubExplanationContent(parts.content, source.secrets);
+              send(controller, "content", { text: scrubbed.content });
               if (clientSignal.aborted) return;
               try {
-                await saveExplanation(runId, kind, model, parts.content);
+                await persistExplainerOutput({
+                  runId, kind, model,
+                  settings,
+                  userId: audit.userId, orgId: audit.orgId,
+                  content: scrubbed.content,
+                  redactedInputSecrets: source.redactedInputSecrets,
+                  scrubbedOutputSecrets: scrubbed.scrubbed,
+                });
               } catch (error: unknown) {
                 log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
                 throw new Error("Failed to persist the explanation");
@@ -321,6 +357,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
               return;
             }
             const content: string[] = [];
+            let scrubbedDeltas = 0;
             await forEachUpstreamDelta(
               upstream,
               (channel, text) => {
@@ -329,8 +366,12 @@ export const operationsRoutes = new Elysia({ name: "operations" })
                   send(controller, channel, { text });
                   return;
                 }
-                content.push(text);
-                send(controller, channel, { text });
+                // Scrub each delta live; a secret split across two deltas is
+                // caught by the joined scrub below with a content-reset.
+                const scrubbedDelta = scrubExplanationContent(text, source.secrets);
+                scrubbedDeltas += scrubbedDelta.scrubbed;
+                content.push(scrubbedDelta.content);
+                send(controller, channel, { text: scrubbedDelta.content });
               },
               // Keep the idle deadline alive while deltas keep arriving.
               // An upstream that answers headers and then stalls is aborted
@@ -347,12 +388,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
               send(controller, "thinking", { text: split.thinking });
             }
             if (!clientSignal.aborted) {
-              try {
-                await saveExplanation(runId, kind, model, contentText);
-              } catch (error: unknown) {
-                log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
-                throw new Error("Failed to persist the explanation");
-              }
+              await finalizeStreamedContent(controller, contentText, scrubbedDeltas);
             }
             if (!clientSignal.aborted) send(controller, "done", { model, "reasoning-effort": reasoningEffort, "generated-at": new Date().toISOString() });
           });
