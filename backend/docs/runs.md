@@ -9,6 +9,11 @@ description: The run lifecycle, every run status, and the operator actions avail
 
 A run is one execution of a workspace configuration. Runs are created by the CLI, by a VCS push, by the API, or by automation such as auto-destroy and health assessments.
 
+The [Product language](product-language) guide defines the reader-facing terms
+for run, plan, apply, and recovery. In particular, a queued run has not
+completed and state recovery promotes a recorded state version; it does not
+roll back infrastructure.
+
 ## Run lifecycle
 
 A normal run moves through these phases:
