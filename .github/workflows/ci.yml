@@ -32,6 +32,10 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Build frontend (security-regression assertions need dist, issue #290)
         run: cd frontend && bun run build
+      - name: Build terraform-config-inspect (registry install e2e needs the same binary prod bakes in, issue #720)
+        run: CGO_ENABLED=0 GOBIN=$GITHUB_WORKSPACE/backend/bin go install github.com/hashicorp/terraform-config-inspect@v0.0.0-20260709150029-2fb54c236733
+      - name: Allow binding loopback 443 for the genuine provider-mirror install (best effort; the suite skips that leg otherwise)
+        run: sudo sysctl -w net.ipv4.ip_unprivileged_port_start=443 || true
       - name: Run backend tests (SQLite)
         env:
           # Raises the tofu release-lookup ceiling from 60/hr (per shared
@@ -71,6 +75,10 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Build frontend (security-regression assertions need dist, issue #290)
         run: cd frontend && bun run build
+      - name: Build terraform-config-inspect (registry install e2e needs the same binary prod bakes in, issue #720)
+        run: CGO_ENABLED=0 GOBIN=$GITHUB_WORKSPACE/backend/bin go install github.com/hashicorp/terraform-config-inspect@v0.0.0-20260709150029-2fb54c236733
+      - name: Allow binding loopback 443 for the genuine provider-mirror install (best effort; the suite skips that leg otherwise)
+        run: sudo sysctl -w net.ipv4.ip_unprivileged_port_start=443 || true
       - name: Run backend tests (Postgres)
         env:
           DATABASE_URL: postgres://terrence:terrence@localhost:5432/terrence_test

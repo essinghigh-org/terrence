@@ -48,5 +48,8 @@ backend/storage/
 # code-index MCP server local index
 .codegraph/
 
-# compiled helper binary (build with backend/bin/build-landlock-runner.sh)
+# compiled helper binaries (landlock: build with backend/bin/build-landlock-runner.sh;
+# terraform-config-inspect: `go install` the pinned revision from the Dockerfile,
+# same revision the prod image bakes in — never commit the binary itself)
 backend/bin/landlock-runner
+backend/bin/terraform-config-inspect
