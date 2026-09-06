@@ -733,9 +733,10 @@ export function Workspaces(): React.JSX.Element {
                       the user may have scrolled past; offer one here. */}
                   <EmptyState
                     compact
+                    illustration="interrupted"
                     headingLevel="h3"
                     title="Workspace data is unavailable"
-                    description="The list could not be loaded. This is usually a connection problem."
+                    description="The list could not be loaded because the connection was interrupted. Try again when the service is reachable."
                     actionLabel="Try again"
                     onAction={(): void => { void loadData(); }}
                   />

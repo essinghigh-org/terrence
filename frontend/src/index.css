@@ -222,10 +222,17 @@
   --radius: 0.625rem;
 }
 .terrence-mascot { display: block; overflow: visible; flex-shrink: 0; }
+.terrence-backplate { vector-effect: non-scaling-stroke; }
 .terrence-mascot--animated .terrence-body { animation: terrence-breathe 6s ease-in-out infinite; transform-origin: 160px 250px; }
 .terrence-mascot--animated .terrence-wave { animation: terrence-wave 6s ease-in-out infinite; transform-origin: 226px 165px; }
 @keyframes terrence-breathe { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
 @keyframes terrence-wave { 0%, 65%, 100% { transform: rotate(0); } 73%, 89% { transform: rotate(9deg); } 81% { transform: rotate(-5deg); } }
+@media (prefers-contrast: more) {
+  .terrence-backplate { fill: #fff; }
+}
+@media (forced-colors: active) {
+  .terrence-mascot { display: none; }
+}
 .login-page { display: grid; grid-template-columns: 1.1fr 1fr; min-height: 100svh; background: hsl(var(--background)); }
 .login-story { display: flex; flex-direction: column; position: relative; overflow: hidden; padding: 2.5rem 3.5rem 2rem; background: var(--brand-paper); color: var(--brand-ink); border-right: 1px solid var(--brand-line); }
 .login-brand { width: fit-content; border-radius: .5rem; }

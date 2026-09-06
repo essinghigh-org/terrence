@@ -11,6 +11,7 @@ import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
 import { CheckCircle, ExternalLink, GitBranch, Plus, Trash2, Unplug } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import { EmptyState } from "../components/EmptyState";
 import { PageHeader, PageShell } from "../components/PageHeader";
 import { isString } from "../lib/type-guards";
 
@@ -439,8 +440,13 @@ export function VcsIntegrations({
 
       {accessStatus === "denied" && (
         <Card>
-          <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            You do not have permission to manage VCS settings for this organization.
+          <CardContent className="py-6">
+            <EmptyState
+              compact
+              illustration="blocked"
+              title="Ask an organization administrator for access"
+              description="You do not have permission to manage VCS settings for this organization."
+            />
           </CardContent>
         </Card>
       )}
