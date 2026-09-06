@@ -182,3 +182,17 @@ A local SQLite comparison against `ad656f99` measured:
 | Maximum event-loop delay | 358 ms | 50 ms |
 
 These are workload observations, not latency guarantees. Peak RSS comes from the operating system rather than an event-loop timer, which misses allocations while synchronous work blocks it. The functional archive check additionally verifies UTF-8 byte windows, legacy formats, bounded admission, selective chunk reads, and a disk-full failure after the first temporary chunk has been written.
+
+### Optional icon discovery
+
+Provider metadata lookups and avatar refreshes share a process-local admission budget: 64 operations total, eight active, no more than 32 admitted or two active per hostname. Every operation has a four-second deadline including queue time. Expired queued work never starts; a canceled active request retains its slot until it stops. A slow host therefore cannot fill the entire admission budget. Existing DNS validation, pinned connections, origin-bound private-network exceptions, response-type checks, and the 2 MiB avatar limit still apply.
+
+Rejected lookups return the existing missing-icon result; avatar requests can serve an existing cached image or report a temporary failure. Provider lookup failures are cached for 30 seconds (admission rejections for five seconds), separately from the 512-entry positive cache so invalid-source floods cannot evict known icons. The negative cache also holds at most 512 entries. Registry JSON responses are limited to 1 MiB. Avatar refresh failures have a five-second, 512-entry negative cache, avatar metadata writes are capped at 128 pending records, and the organization-name cache holds at most 1,024 entries.
+
+Instance process metrics expose `process.snapshot.discovery`: `active`, `queued`, `rejected`, `timedOut`, and `limit`. These are aggregate counters and contain no hostnames or credentials. The discovery checks cover per-host fairness, cancellation, canonical-source deduplication, cache preservation, oversized metadata, and pending-record limits. Reproduce the flood check from `backend`:
+
+```sh
+TERRENCE_BINARY_CACHE_DIR=/tmp/empty-discovery-benchmark-cache DISCOVERY_LOAD=1 bun test tests/unit/provider-icons.test.ts --test-name-pattern 'distinct-source flood'
+```
+
+In the local 5,000-source workload, two lookups were active, 30 were queued, and 4,968 returned a fallback without entering the queue. Kernel peak RSS for the complete test process was 142 MB, including application startup; this is an observation rather than a production memory guarantee.

@@ -13,6 +13,7 @@
  * never go through this cache).
  */
 const TTL_MS = 60_000;
+const MAX_ENTRIES = 1024;
 
 type CacheEntry = Readonly<{ value: string | null; expiresAt: number }>;
 
@@ -29,6 +30,10 @@ function get(key: string): string | null | undefined {
 }
 
 function set(key: string, value: string | null): void {
+  if (!store.has(key) && store.size >= MAX_ENTRIES) {
+    const oldest = store.keys().next().value;
+    if (oldest !== undefined) store.delete(oldest);
+  }
   store.set(key, { value, expiresAt: Date.now() + TTL_MS });
 }
 

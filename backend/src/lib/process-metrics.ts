@@ -11,6 +11,8 @@
  * bytes/hour number instead of a steady-state reading that looks identical
  * at 100 MB and 500 MB.
  */
+import { discoveryStats } from "./discovery-queue";
+
 export type ProcessSample = Readonly<{
   /** Epoch ms at sampling time. */
   at: number;
@@ -38,6 +40,7 @@ export type ProcessSnapshot = ProcessSample & Readonly<{
   systemCpuSeconds: number;
   requests: Readonly<{ total: number; inFlight: number; errors5xx: number }>;
   failures: Readonly<Record<string, number>>;
+  discovery: ReturnType<typeof discoveryStats>;
   worker: Readonly<{
     polls: number;
     lastPollAt: number | null;
@@ -154,6 +157,7 @@ export function processSnapshot(): ProcessSnapshot {
       errors5xx: counters.errors5xx,
     },
     failures: { ...failures },
+    discovery: discoveryStats(),
     worker: {
       polls: counters.workerPolls,
       lastPollAt: counters.workerLastPollAt,

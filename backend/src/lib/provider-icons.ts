@@ -14,6 +14,8 @@
 // API (4s timeout, 24h memo) -> exact provider's absolute logo URL ->
 // AvatarService cache. The provider-icon image handler delegates to that cache
 // without changing the public route identity.
+import { discover } from "./discovery-queue";
+import { readTextWithLimit } from "./body-limit";
 import { AvatarService } from "./avatars";
 import {
   DEFAULT_PROVIDER_REGISTRY_HOST,
@@ -25,46 +27,19 @@ import {
 const REGISTRY = `https://${DEFAULT_PROVIDER_REGISTRY_HOST}`;
 const FETCH_TIMEOUT_MS = 4_000;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const NEGATIVE_TTL_MS = 10 * 60 * 1000; // transient fetch failures: retry soon
+const NEGATIVE_TTL_MS = 30 * 1000; // transient fetch failures: retry soon
 const MAX_CACHE_ENTRIES = 512;
 type CacheEntry = Readonly<{ url: string | null; expiresAt: number }>;
 const cache = new Map<string, CacheEntry>();
+const negativeCache = new Map<string, CacheEntry>();
 const inflightByKey = new Map<string, Promise<string | null>>();
-const MAX_REGISTRY_CONCURRENCY = 8;
-let registryInFlight = 0;
-const registryQueue: (() => void)[] = [];
-
-async function acquireRegistrySlot(): Promise<void> {
-  if (registryInFlight < MAX_REGISTRY_CONCURRENCY) {
-    registryInFlight += 1;
-    return Promise.resolve();
-  }
-  return new Promise<void>((resolve) => { registryQueue.push(resolve); });
-}
-
-function releaseRegistrySlot(): void {
-  registryInFlight -= 1;
-  const next = registryQueue.shift();
-  if (next !== undefined) {
-    registryInFlight += 1;
-    next();
-  }
-}
-
 function setCache(key: string, url: string | null, ttlMs: number): void {
-  if (cache.size >= MAX_CACHE_ENTRIES && !cache.has(key)) {
-    const first = cache.keys().next().value;
-    if (first !== undefined) cache.delete(first);
+  const target = url === null ? negativeCache : cache;
+  if (target.size >= MAX_CACHE_ENTRIES && !target.has(key)) {
+    const first = target.keys().next().value;
+    if (first !== undefined) target.delete(first);
   }
-  cache.set(key, { url, expiresAt: Date.now() + ttlMs });
-  // Remove expired entries opportunistically
-  if (cache.size > MAX_CACHE_ENTRIES) {
-    const now = Date.now();
-    for (const [k, v] of cache) {
-      if (now >= v.expiresAt) cache.delete(k);
-      if (cache.size <= MAX_CACHE_ENTRIES) break;
-    }
-  }
+  target.set(key, { url, expiresAt: Date.now() + ttlMs });
 }
 
 /** Public compatibility name retained for the provider-icons route/tests. */
@@ -162,21 +137,21 @@ function isLegacyGithubSlugAvatar(logoUrl: string): boolean {
     && /^\/[A-Za-z0-9-]+\/?$/.test(parsed.pathname);
 }
 
-async function fetchGithubOwnerAvatarUrl(login: string): Promise<string | null> {
+async function fetchGithubOwnerAvatarUrl(login: string, signal: Readonly<AbortSignal>): Promise<string | null> {
   const url = new URL(`/github/users/${encodeURIComponent(login)}`, `${REGISTRY}/`);
   let res: Response;
   try {
     res = await fetch(url.toString(), {
       headers: { Accept: "application/json", "User-Agent": "terrence/provider-icons" },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]),
     });
   } catch {
     return null;
   }
-  if (!res.ok) return null;
+  if (!res.ok) { await res.body?.cancel().catch((): void => undefined); return null; }
   let body: unknown;
   try {
-    body = await res.json();
+    body = JSON.parse(await readTextWithLimit(res, 1024 * 1024));
   } catch {
     return null;
   }
@@ -184,45 +159,40 @@ async function fetchGithubOwnerAvatarUrl(login: string): Promise<string | null> 
   return typeof avatarUrl === "string" ? absoluteLogoUrl(avatarUrl) : null;
 }
 
-async function resolveRegistryLogoUrl(attributes: Readonly<Record<string, unknown>>, source: ProviderSource): Promise<string | null> {
+async function resolveRegistryLogoUrl(attributes: Readonly<Record<string, unknown>>, source: ProviderSource, signal: Readonly<AbortSignal>): Promise<string | null> {
   const logoUrl = attributes["logo-url"];
   if (typeof logoUrl !== "string") return null;
   // The v2 record can retain the Registry's legacy GitHub slug URL. GitHub
   // serves that form as its default Octocat, while the Registry UI resolves
   // the provider namespace through /github/users/:login first.
-  if (isLegacyGithubSlugAvatar(logoUrl)) return fetchGithubOwnerAvatarUrl(source.namespace);
+  if (isLegacyGithubSlugAvatar(logoUrl)) return fetchGithubOwnerAvatarUrl(source.namespace, signal);
   return absoluteLogoUrl(logoUrl);
 }
 
-async function fetchLogoUrl(source: ProviderSource): Promise<string | null> {
+async function fetchLogoUrl(source: ProviderSource, signal: Readonly<AbortSignal>): Promise<string | null> {
   if (source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
-  await acquireRegistrySlot();
+  const url = new URL("/v2/providers", REGISTRY);
+  url.searchParams.set("filter[namespace]", source.namespace);
+  url.searchParams.set("filter[name]", source.name);
+  let res: Response;
   try {
-    const url = new URL("/v2/providers", REGISTRY);
-    url.searchParams.set("filter[namespace]", source.namespace);
-    url.searchParams.set("filter[name]", source.name);
-    let res: Response;
-    try {
-      res = await fetch(url.toString(), {
-        headers: { Accept: "application/vnd.api+json", "User-Agent": "terrence/provider-icons" },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      });
-    } catch {
-      return null;
-    }
-    if (!res.ok) return null;
-    let body: unknown;
-    try {
-      body = await res.json();
-    } catch {
-      return null;
-    }
-    const attributes = exactRegistryProviderAttributes(body, source);
-    if (attributes === null) return null;
-    return await resolveRegistryLogoUrl(attributes, source);
-  } finally {
-    releaseRegistrySlot();
+    res = await fetch(url.toString(), {
+      headers: { Accept: "application/vnd.api+json", "User-Agent": "terrence/provider-icons" },
+      signal: AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]),
+    });
+  } catch {
+    return null;
   }
+  if (!res.ok) { await res.body?.cancel().catch((): void => undefined); return null; }
+  let body: unknown;
+  try {
+    body = JSON.parse(await readTextWithLimit(res, 1024 * 1024));
+  } catch {
+    return null;
+  }
+  const attributes = exactRegistryProviderAttributes(body, source);
+  if (attributes === null) return null;
+  return await resolveRegistryLogoUrl(attributes, source, signal);
 }
 
 export async function resolveProviderIconUrl(providerName: string | null | undefined): Promise<string | null> {
@@ -230,18 +200,20 @@ export async function resolveProviderIconUrl(providerName: string | null | undef
   if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
   const key = `${source.hostname}/${source.namespace}/${source.name}`;
   const now = Date.now();
-  const hit = cache.get(key);
+  const hit = cache.get(key) ?? negativeCache.get(key);
   if (hit !== undefined && now < hit.expiresAt) {
     return hit.url;
   }
-  if (hit !== undefined && now >= hit.expiresAt) cache.delete(key);
+  if (hit !== undefined && now >= hit.expiresAt) { cache.delete(key); negativeCache.delete(key); }
   const existing = inflightByKey.get(key);
   if (existing !== undefined) return existing;
+  const discovery = discover(source.hostname, async (signal): Promise<string | null> => fetchLogoUrl(source, signal));
+  if (discovery === null) { setCache(key, null, 5_000); return null; }
   const run = (async (): Promise<string | null> => {
-    const logoUrl = await fetchLogoUrl(source);
+    const logoUrl = await discovery;
     const avatarUrl = logoUrl === null ? null : AvatarService.resolveUrl("provider-icon", logoUrl);
     // Transient miss (fetch failed / no logo) gets a short TTL so we retry soon.
-    const ttl = avatarUrl === null && logoUrl === null ? NEGATIVE_TTL_MS : CACHE_TTL_MS;
+    const ttl = avatarUrl === null ? NEGATIVE_TTL_MS : CACHE_TTL_MS;
     setCache(key, avatarUrl, ttl);
     return avatarUrl;
   })();
@@ -263,9 +235,8 @@ export async function batchResolveProviderIconUrls(providerNames: readonly strin
 /** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function clearProviderIconCache(): void {
   cache.clear();
+  negativeCache.clear();
   inflightByKey.clear();
-  registryInFlight = 0;
-  registryQueue.length = 0;
 }
 
 /** @public Intentional surface: benchmark/test hook or cross-module API. */

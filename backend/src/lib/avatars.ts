@@ -38,6 +38,7 @@ import http from "node:http";
 import https from "node:https";
 import { lookup } from "node:dns/promises";
 import { db } from "../db";
+import { discover } from "./discovery-queue";
 import type { DeepReadonly } from "./utils";
 
 export const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
@@ -131,6 +132,7 @@ function ensureRecorded(providerId: string, url: string): string {
   if (pendingWrites.has(key)) return key;
   // A sweep may have deleted the metadata; re-record in that case.
   if (existsSync(metaPath(key))) return key;
+  if (pendingWrites.size >= 128) throw new Error("Avatar metadata queue is full");
   const write = (async (): Promise<void> => {
     const meta: AvatarMeta = {
       key, providerId, url, state: "pending",
@@ -170,8 +172,11 @@ function resolveUrl(providerId: string, url: string | null | undefined): string 
     return null;
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-  const key = ensureRecorded(providerId, url);
-  return `/api/v2/avatars/${key}`;
+  if (url.length > 8192) return null;
+  try {
+    const key = ensureRecorded(providerId, url);
+    return `/api/v2/avatars/${key}`;
+  } catch { return null; }
 }
 
 /**
@@ -483,6 +488,7 @@ async function requestPinned(target: DeepReadonly<{
   headers: Record<string, string>;
   timeoutMs: number;
   maxBytes: number;
+  signal: Readonly<AbortSignal>;
 }>): Promise<RawResponse> {
   return new Promise((resolvePromise, rejectPromise): void => {
     const { scheme, address, hostname, port, path, headers, timeoutMs, maxBytes } = target;
@@ -502,7 +508,7 @@ async function requestPinned(target: DeepReadonly<{
       // TLS SNI + certificate verification stay bound to the ORIGINAL hostname.
       servername: scheme === "https" ? hostname : undefined,
       headers: { ...headers, Host: hostHeader },
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.any([target.signal, AbortSignal.timeout(timeoutMs)]),
     };
     const request = mod.request(options, (res: http.IncomingMessage): void => {
       const chunks: Uint8Array[] = [];
@@ -664,11 +670,12 @@ async function handleAvatarSuccess(meta: DeepReadonly<AvatarMeta>, raw: DeepRead
 }
 
 /** Fetch/revalidate the upstream and refresh the local cache. Never throws. */
-async function doRefreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
+async function doRefreshAvatar(meta: AvatarMeta, signal: Readonly<AbortSignal>): Promise<AvatarFetchResult> {
   const decision = await assertSafeAvatarDestination(meta.url, meta.providerId);
   if ("error" in decision) {
     return { ok: false, status: 422, message: decision.error, meta };
   }
+  signal.throwIfAborted();
   const { scheme, hostname, port, path } = parseAvatarUrl(meta.url);
   const hasCached = hasCachedImage(meta.key);
   const headers = buildRevalidationHeaders(meta, hasCached);
@@ -683,6 +690,7 @@ async function doRefreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
       headers,
       timeoutMs: FETCH_TIMEOUT_MS,
       maxBytes: MAX_AVATAR_BYTES,
+      signal,
     });
   } catch (error) {
     return { ok: false, status: 0, message: error instanceof Error ? error.message : "fetch failed", meta };
@@ -697,17 +705,35 @@ async function doRefreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
 // One upstream refresh per key at a time: concurrent requests for the same
 // avatar share a single fetch instead of duplicating it / racing the writes.
 const refreshInFlight = new Map<string, Promise<AvatarFetchResult>>();
+const refreshFailures = new Map<string, Readonly<{ until: number; status: number; message: string | null }>>();
 
-/** Fetch/revalidate the upstream and refresh the local cache. Never throws. */
+/** Fetch/revalidate with bounded admission; failures use a short negative cache. */
 async function refreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
+  const failure = refreshFailures.get(meta.key);
+  if (failure !== undefined && failure.until > Date.now()) return { ok: false, status: failure.status, message: failure.message, meta };
+  refreshFailures.delete(meta.key);
   const running = refreshInFlight.get(meta.key);
   if (running !== undefined) return running;
-  const run = doRefreshAvatar(meta);
+  let host: string;
+  try { host = new URL(meta.url).hostname; }
+  catch { return { ok: false, status: 422, message: "Invalid avatar URL", meta }; }
+  const discovery = discover(host, async (signal): Promise<AvatarFetchResult> => doRefreshAvatar(meta, signal));
+  if (discovery === null) return { ok: false, status: 503, message: "Avatar refresh temporarily unavailable", meta };
+  const run = (async (): Promise<AvatarFetchResult> => {
+    const result = await discovery
+      ?? { ok: false, status: 503, message: "Avatar refresh temporarily unavailable", meta };
+    if (!result.ok) {
+      if (refreshFailures.size >= 512) {
+        const oldest = refreshFailures.keys().next().value;
+        if (oldest !== undefined) refreshFailures.delete(oldest);
+      }
+      refreshFailures.set(meta.key, { until: Date.now() + 5_000, status: result.status, message: result.message });
+    }
+    return result;
+  })();
   refreshInFlight.set(meta.key, run);
-  void run.finally(() => {
-    if (refreshInFlight.get(meta.key) === run) refreshInFlight.delete(meta.key);
-  });
-  return run;
+  try { return await run; }
+  finally { if (refreshInFlight.get(meta.key) === run) refreshInFlight.delete(meta.key); }
 }
 
 async function readCachedImageBytes(key: string): Promise<Buffer | null> {

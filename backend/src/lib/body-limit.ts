@@ -31,10 +31,11 @@ export function isUploadPath(pathname: string): boolean {
 }
 
 /**
- * Reads the request body as text, aborting once `limit` bytes are exceeded.
+ * Reads a request or response body as text, aborting once `limit` bytes are exceeded.
  * Throws BodyTooLargeError instead of buffering an unbounded chunked body.
  */
-export async function readTextWithLimit(request: Request, limit: number): Promise<string> {
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- consumes the native body stream through its reader.
+export async function readTextWithLimit(request: Readonly<Pick<Request, "body">>, limit: number): Promise<string> {
   const reader = request.body?.getReader();
   if (reader === undefined) return "";
   const chunks: Uint8Array[] = [];
