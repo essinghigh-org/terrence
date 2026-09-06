@@ -31,7 +31,7 @@ This page covers the most common operation: moving a Terrence instance to a newe
 
 Each stable release publishes a build manifest containing the source commit, image digest, SQLite and PostgreSQL migration-set digests, the tracked CLI/provider matrix digest, and hashes of the redacted lifecycle evidence. The manifest contains no credentials or state values. Keep it with the database and storage backup so an operator can prove exactly which code and migrations were run.
 
-Before promotion, CI runs the upgrade fixture from earlier bundled migration sets, verifies identities, uniqueness, foreign keys, JSON ordering, encrypted envelopes, artifacts, and repeated migration idempotence. The same fixture is run against SQLite and PostgreSQL where the service is configured for PostgreSQL. Reproduce the database checks with:
+Before promotion, CI runs the upgrade fixture from earlier bundled migration sets. It seeds a prior-release user, state payload, encrypted workspace/MFA secrets, and a real configuration archive, then verifies that those values remain readable, the archive reference remains available, duplicate identities are still rejected, migrations are idempotent, and `tfectl --version` still works. The same fixture is run against SQLite and PostgreSQL where the service is configured for PostgreSQL. Reproduce the database checks with:
 
 ```sh
 bun test backend/tests/db/upgrade-invariants.test.ts backend/tests/db/domain-invariants.test.ts --max-concurrency=1 --no-orphans

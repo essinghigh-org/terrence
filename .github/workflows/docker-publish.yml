@@ -97,6 +97,25 @@ jobs:
             type=raw,value=${{ steps.version.outputs.tag }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=sha,format=short
 
+      - name: Download tested CLI/provider evidence from the validated CI run
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh run download "${{ github.event.workflow_run.id }}" --name cli-compatibility-report --dir release-evidence || true
+
+      - name: Download tested CLI/provider evidence for the stable commit
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          run_id="$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          if [[ -z "$run_id" ]]; then
+            echo "No successful CI run found for stable release commit $GITHUB_SHA" >&2
+            exit 1
+          fi
+          gh run download "$run_id" --name cli-compatibility-report --dir release-evidence
+
       - name: Build and push Docker image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -114,12 +133,6 @@ jobs:
           provenance: mode=max
           sbom: true
           outputs: type=image,name=ghcr.io/${{ github.repository }},push=true
-
-      - name: Download tested CLI/provider evidence from the validated CI run
-        if: github.event_name == 'workflow_run'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh run download "${{ github.event.workflow_run.id }}" --name cli-compatibility-report --dir release-evidence || true
 
       - name: Write redacted build manifest
         run: |

@@ -171,7 +171,7 @@ jobs:
         run: bun test backend/tests/worker/env-isolation.test.ts
       - name: Verify operational runbook in disposable storage (issue #757)
         run: bun backend/scripts/verify-operations-docs.ts
-      - name: Run documented upgrade fixture (issue #757)
+      - name: Run documented upgrade fixture (issue #754)
         run: bun test backend/tests/db/upgrade-invariants.test.ts --max-concurrency=1 --no-orphans
 
   # Coverage gate (issue #380): runs the backend suite under coverage and
