@@ -1,5 +1,6 @@
 import { normalizeRunVariables } from "./lib/run-variables";
 export { normalizeRunVariables } from "./lib/run-variables";
+import { terraformVariableLine } from "./lib/tfvars";
 import { compareVariableSets } from "./lib/variable-set-precedence";
 import { newResourceId } from "./lib/resource-id";
 import { envEnabled } from "./lib/env";
@@ -1407,7 +1408,7 @@ export function runTerraformVariableLines(runVariables: unknown, workspaceVars: 
   const priorityKeys = new Set(workspaceVars.filter((variable) => variable.category === "terraform" && variable.priority === true).map((variable) => variable.key));
   return normalizeRunVariables(runVariables)
     .filter((variable) => variable.category === "terraform" && !priorityKeys.has(variable.key))
-    .map((variable) => `${variable.key} = ${JSON.stringify(variable.value)}`);
+    .map((variable) => terraformVariableLine(variable.key, variable.value, false));
 }
 
 type ExecutionVariable = {
@@ -2175,7 +2176,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     if (run.debuggingMode) envVars["TF_LOG"] = "TRACE";
     const tfVarsLines = vars
       .filter((variable: { readonly category: string }): boolean => variable.category === "terraform")
-      .map((variable: { readonly key: string; readonly hcl: boolean; readonly value: string }): string => `${variable.key} = ${variable.hcl ? variable.value : JSON.stringify(variable.value)}`);
+      .map((variable: { readonly key: string; readonly hcl: boolean; readonly value: string }): string => terraformVariableLine(variable.key, variable.value, variable.hcl));
 
     if (tfVarsLines.length > 0) {
       await writeFile(join(executionDir, "terrence.workspace.tfvars"), tfVarsLines.join("\n"), { mode: 0o600 });
@@ -4124,7 +4125,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       const terraformVariables = variables
         .filter((variable: Readonly<{ category: string }>): boolean => variable.category === "terraform")
         .map((variable: Readonly<{ key: string; hcl: boolean; value: string }>): string =>
-          `${variable.key} = ${variable.hcl ? variable.value : JSON.stringify(variable.value)}`);
+          terraformVariableLine(variable.key, variable.value, variable.hcl));
       if (terraformVariables.length > 0) {
         await writeFile(
           join(executionDir, "terrence.workspace.tfvars"),
