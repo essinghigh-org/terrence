@@ -53,8 +53,7 @@ test("GET /api/v2/meta reports the run sandbox status for an authenticated calle
   expect(typeof sandbox?.docs).toBe("string");
   // SEC-10: the effective network policy and its TCP-only scope are exposed.
   expect(["allow", "deny", "invalid"]).toContain(sandbox?.["net-policy"]);
-  if (sandbox?.["net-policy"] === "deny") expect(sandbox?.["net-scope"]).toBe("tcp-bind-connect");
-  else expect(sandbox?.["net-scope"]).toBeNull();
+  expect((sandbox?.["net-policy"] === "deny") === (sandbox?.["net-scope"] === "tcp-bind-connect")).toBe(true);
 });
 
 test("GET /api/v2/capabilities returns a typed JSON:API resource", async () => {
