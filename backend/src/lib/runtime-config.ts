@@ -49,6 +49,8 @@ export const integerConfiguration = {
   RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX: { default: 120, min: 1, max: 1_000_000 },
   RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS: { default: 60_000, min: 1, max: timerMaximum },
   RATE_LIMIT_METRICS_MAX: { default: 30, min: 1, max: 1_000_000 },
+  TERRENCE_SUPPORT_BUNDLE_MAX_BYTES: { default: 10 * 1024 * 1024, min: 1, max: 100 * 1024 * 1024 },
+  TERRENCE_SUPPORT_BUNDLE_TTL_MS: { default: 24 * 60 * 60 * 1000, min: 1, max: 30 * 24 * 60 * 60 * 1000 },
 } as const satisfies Readonly<Record<string, IntegerRule>>;
 
 export type IntegerConfigurationName = keyof typeof integerConfiguration;

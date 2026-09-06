@@ -13,6 +13,7 @@ import { fetchResolvedExternalUrl, privateHostReason, resolveExternalUrl } from 
 import { landlockAccessFlagsForAbi, probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
 import { envFlag } from "../lib/env";
 import { readinessNodeId } from "./health";
+import { integerSetting } from "../lib/runtime-config";
 
 type Status = "OK" | "WARNING" | "ERROR";
 type BundleStatus = "generating" | "finished" | "errored" | "deleted";
@@ -105,8 +106,6 @@ const BUNDLE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{
 const SUPPORT_BUNDLE_PATH = "/api/v1/support/bundle-requests";
 const SUPPORT_BUNDLE_COMPATIBILITY_PATH = "/api/v1/support-bundle-requests";
 const SUPPORT_BUNDLE_PROJECTION_VERSION = "support-bundle-v1";
-const DEFAULT_SUPPORT_BUNDLE_MAX_BYTES = 10 * 1024 * 1024;
-const DEFAULT_SUPPORT_BUNDLE_TTL_MS = 24 * 60 * 60 * 1000;
 let diagnosticsRunning = false;
 
 function storageDirectory(): string {
@@ -117,19 +116,12 @@ function supportBundleDirectory(): string {
   return join(storageDirectory(), "support-bundles");
 }
 
-function boundedEnvironmentInteger(name: string, fallback: number, maximum: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || !/^\d+$/.test(raw)) return fallback;
-  const value = Number(raw);
-  return Number.isSafeInteger(value) && value > 0 && value <= maximum ? value : fallback;
-}
-
 function supportBundleMaxBytes(): number {
-  return boundedEnvironmentInteger("TERRENCE_SUPPORT_BUNDLE_MAX_BYTES", DEFAULT_SUPPORT_BUNDLE_MAX_BYTES, 100 * 1024 * 1024);
+  return integerSetting("TERRENCE_SUPPORT_BUNDLE_MAX_BYTES");
 }
 
 function supportBundleTtlMs(): number {
-  return boundedEnvironmentInteger("TERRENCE_SUPPORT_BUNDLE_TTL_MS", DEFAULT_SUPPORT_BUNDLE_TTL_MS, 30 * 24 * 60 * 60 * 1000);
+  return integerSetting("TERRENCE_SUPPORT_BUNDLE_TTL_MS");
 }
 
 function supportBundleExpiry(createdAt: string): string {
