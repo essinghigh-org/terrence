@@ -63,7 +63,7 @@ import { RunStageStrip, resolveStages } from "../components/RunStageStrip";
 import { ACTION_CONFIRMATIONS, resolveRunDecision, type RunActionKind } from "../lib/run-decision";
 import { useRunView } from "../lib/use-run-view";
 import { sectionLabel, TERMINAL_STATUSES, type PolicyCheck, type RunComment, type RunEvent } from "../lib/run-view-state";
-import { formatPhaseState, phaseTone, resolvePhaseStatus, TONE_ACCENT } from "../lib/run-status";
+import { formatPhaseState, phaseTone, resolvePhaseStatus, resolveRunDisplay, TONE_ACCENT } from "../lib/run-status";
 import { Callout } from "../components/ui/callout";
 import { Disclosure } from "../components/ui/disclosure";
 import { MetaList } from "../components/ui/meta-list";
@@ -136,6 +136,24 @@ type RunProvenanceManifest = Readonly<{
   sandbox: Readonly<{ required: boolean; networkPolicy: string; executor: string }>;
   rerun?: Readonly<{ mode: "original" | "current"; sourceRunId: string; changedSinceSource: readonly string[] }>;
 }>;
+
+type RunTaskStage = Readonly<{
+  attributes?: Readonly<{ status?: unknown }>;
+}>;
+
+function taskOutcomeLabel(value: unknown): string {
+  if (!Array.isArray(value)) return "Unavailable";
+  if (value.length === 0) return "No task stages";
+  const statuses = value.map((item: unknown): string => {
+    const status = (item as RunTaskStage | null)?.attributes?.status;
+    return isString(status) ? status : "unknown";
+  });
+  if (statuses.some((status: string): boolean => ["failed", "errored", "unreachable"].includes(status))) return "Failed";
+  if (statuses.some((status: string): boolean => ["running"].includes(status))) return "Running";
+  if (statuses.some((status: string): boolean => ["pending", "queued"].includes(status))) return "Queued";
+  if (statuses.every((status: string): boolean => ["passed", "overridden"].includes(status))) return "Passed";
+  return "Reported";
+}
 
 function firstTimestampMilliseconds(
   timestamps: Readonly<Record<string, string>>,
@@ -499,6 +517,20 @@ export function RunDetail({
   const [explainError, setExplainError] = useState("");
   const [provenanceManifest, setProvenanceManifest] = useState<RunProvenanceManifest | null>(null);
   const [provenanceError, setProvenanceError] = useState("");
+  const [taskOutcome, setTaskOutcome] = useState("No task result");
+  useEffect((): (() => void) => {
+    const controller = new AbortController();
+    setTaskOutcome("Loading…");
+    fetchApi(`/api/v2/runs/${encodeURIComponent(runId)}/task-stages`, { signal: controller.signal })
+      .then((payload: unknown): void => {
+        if (controller.signal.aborted) return;
+        setTaskOutcome(taskOutcomeLabel((payload as { data?: unknown }).data));
+      })
+      .catch((): void => {
+        if (!controller.signal.aborted) setTaskOutcome("Unavailable");
+      });
+    return (): void => { controller.abort(); };
+  }, [runId]);
   useEffect((): (() => void) => {
     const controller = new AbortController();
     setProvenanceManifest(null);
@@ -1143,7 +1175,43 @@ export function RunDetail({
   const stages = resolveStages(status, timestamps, {
     planOnly: attributes["plan-only"] === true,
     hasPolicyChecks: policyChecks.length > 0,
+    executionMode: attributes["execution-mode"],
+    positionInQueue: attributes["position-in-queue"],
+    scheduledAt: attributes["scheduled-at"],
   });
+  const runDisplay = resolveRunDisplay({
+    ...attributes,
+    status,
+    "status-timestamps": timestamps,
+  });
+  const savedPlanVersion = isString(timestamps["saved-plan-sha256"]) ? timestamps["saved-plan-sha256"] : null;
+  const artifactPlanVersion = isString(plan?.attributes["status-timestamps"]?.["saved-plan-sha256"])
+    ? plan.attributes["status-timestamps"]["saved-plan-sha256"]
+    : null;
+  const stalePlanWarning = savedPlanVersion !== null && artifactPlanVersion !== null && savedPlanVersion !== artifactPlanVersion
+    ? "The run metadata and plan artifact use different versions. Refresh before making a decision."
+    : !fresh
+      ? "Run data may be out of date. Refresh before making a decision."
+      : failedSections.includes("plan")
+        ? "The plan could not be refreshed. Refresh before making a decision."
+        : null;
+  const decisionContext = {
+    planId: `plan-${runId}`,
+    planVersion: savedPlanVersion,
+    additions: planCounts["resource-additions"],
+    changes: planCounts["resource-changes"],
+    destructions: planCounts["resource-destructions"],
+    age: formatRelativeTime(attributes["created-at"]),
+    actor: creatorUsername !== "" ? creatorUsername : attributes["triggered-by"] ?? "System",
+    // The badge and policy section already show the raw summary. Prefixing it
+    // in the rail keeps the compact context useful without creating a second
+    // indistinguishable status announcement for screen readers or tests.
+    policyOutcome: policySummary === "not required" ? "Not required" : `Result: ${policySummary}`,
+    taskOutcome,
+    waitingReason: runDisplay.waitingLabel,
+    responsible: runDisplay.responsible,
+    staleWarning: stalePlanWarning,
+  };
 
   const baseline = attributes["duration-baseline"];
   const medianSeconds = baseline?.["median-duration-seconds"];
@@ -1337,18 +1405,6 @@ export function RunDetail({
 
       <RunStageStrip stages={stages} className="mb-5" />
 
-      <div className="mb-5">
-        <RunDecisionPanel
-          decision={decision}
-          status={status}
-          canComment={canComment}
-          // The comment form shares pendingAction ("comment" while posting):
-          // the panel must not report that as run-action work.
-          pending={pendingAction === "comment" ? "" : pendingAction}
-          onConfirm={handleDecisionConfirm}
-        />
-      </div>
-
       {attributes["has-recovery-state"] === true && (
         <Callout
           tone="warning"
@@ -1394,8 +1450,8 @@ export function RunDetail({
         </Callout>
       )}
 
-      <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_264px]">
-      <div className="min-w-0 space-y-5">
+      <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]">
+      <div className="order-2 min-w-0 space-y-5 xl:order-1">
           <details
             aria-labelledby="plan-heading"
             className="group overflow-hidden rounded-lg border border-border bg-card"
@@ -1769,7 +1825,20 @@ export function RunDetail({
 
 
       </div>
-      <aside aria-label="Run context" className="min-w-0 space-y-5">
+      <aside aria-label="Run decision and context" className="order-1 min-w-0 space-y-5 xl:order-2">
+      <div className="xl:sticky xl:top-4">
+        <RunDecisionPanel
+          decision={decision}
+          status={status}
+          canComment={canComment}
+          rail
+          context={decisionContext}
+          // The comment form shares pendingAction ("comment" while posting):
+          // the panel must not report that as run-action work.
+          pending={pendingAction === "comment" ? "" : pendingAction}
+          onConfirm={handleDecisionConfirm}
+        />
+      </div>
       {provenanceManifest !== null && (
         <section aria-labelledby="run-provenance-heading" className="overflow-hidden rounded-lg border border-border bg-card">
           <div className="flex items-center justify-between border-b border-border px-5 py-4">

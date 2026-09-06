@@ -49,6 +49,15 @@ test("progress marks a finished plan complete without timestamps and keeps runni
   expect(resolveStages("planned_and_finished", {}, options).find(stage => stage.id === "apply")?.state).toBe("skipped");
 });
 
+test("approval waits attach to the apply stage instead of animating the finished plan", () => {
+  const apply = resolveStages("needs_confirmation", { "planned-at": "t1" }, {
+    planOnly: false,
+    hasPolicyChecks: false,
+  }).find(stage => stage.id === "apply");
+  expect(apply?.state).toBe("waiting");
+  expect(apply?.waitingReason).toBe("Waiting for a human decision");
+});
+
 test("terminal stages retain completed work and identify the stage that stopped", () => {
   const options = { planOnly: false, hasPolicyChecks: false };
   expect(resolveStages("policy_hard_failed", {}, options).map(stage => [stage.id, stage.state])).toEqual([

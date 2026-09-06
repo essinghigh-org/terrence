@@ -28,6 +28,7 @@ type PreflightData = NonNullable<PreflightResponse["data"]>;
 
 export function WorkspaceGettingStarted({
   workspaceId, orgName, workspaceName, engine, source, hasRepository, localExecution, canQueueRun, canUpdate, canReadVariable,
+  locked,
 }: Readonly<{
   workspaceId?: string;
   orgName: string;
@@ -39,6 +40,7 @@ export function WorkspaceGettingStarted({
   canQueueRun: boolean;
   canUpdate: boolean;
   canReadVariable: boolean;
+  locked?: boolean;
 }>): React.JSX.Element {
   const [preflight, setPreflight] = useState<PreflightData | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
@@ -83,6 +85,7 @@ export function WorkspaceGettingStarted({
     ? (preflight.attributes.checks as PreflightCheck[])
     : [];
   const preflightStatus = typeof preflight?.attributes?.status === "string" ? preflight.attributes.status : "unknown";
+  const isLocked = locked === true;
 
   return (
     <div className="space-y-5">
@@ -94,6 +97,9 @@ export function WorkspaceGettingStarted({
             : source === "local" ? "Mount your configuration directory on the Terrence server, then add any variables your code needs."
             : "Connect your existing configuration to this workspace. Your CLI uploads the code; Terrence keeps the state and run history together."}
         </p>
+        {isLocked && (
+          <p className="mt-2 text-sm font-medium text-warning">This workspace is locked. Unlock it before starting a run.</p>
+        )}
       </div>
       <section aria-labelledby="workspace-readiness-heading" className="rounded-md border border-border bg-muted/20 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -136,7 +142,7 @@ export function WorkspaceGettingStarted({
         </>
       )}
       <div className="flex flex-wrap items-center gap-3">
-        {usesServerCode && canQueueRun && <Link className={buttonVariants({ size: "sm" })} to={`${workspacePath}/runs?new-run=true`}>Start first plan</Link>}
+        {usesServerCode && canQueueRun && !isLocked && <Link className={buttonVariants({ size: "sm" })} to={`${workspacePath}/runs?new-run=true`}>Start first plan</Link>}
         {canReadVariable && <Link className={buttonVariants({ variant: "outline", size: "sm" })} to={`${workspacePath}/variables`}>Configure variables</Link>}
         {!hasRepository && canUpdate && <Link className="text-sm font-medium text-primary hover:underline" to={`${workspacePath}/settings/version-control`}>Connect a Git repository</Link>}
         <Link className="text-sm font-medium text-primary hover:underline" to="/app/docs/quickstart">Quick start guide</Link>

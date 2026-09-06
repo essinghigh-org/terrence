@@ -31,6 +31,7 @@ import { isNumber, isString } from "../lib/type-guards";
 import { safeHttpUrl } from "../lib/safe-url";
 import type { JsonObject } from "@/lib/json";
 import { formatRunSource, isVcsRunSource } from "../lib/run-labels";
+import { resolveRunDisplay } from "../lib/run-status";
 
 type RunItem = {
   id: string;
@@ -50,6 +51,10 @@ type RunItem = {
     "plan-only"?: boolean;
     "refresh-only"?: boolean;
     "allow-empty-apply"?: boolean;
+    "execution-mode"?: string | null;
+    "position-in-queue"?: number | null;
+    "scheduled-at"?: string | null;
+    "status-timestamps"?: Readonly<Record<string, string>> | null;
     "target-addrs"?: string[] | null;
     "replace-addrs"?: string[] | null;
   };
@@ -506,6 +511,7 @@ export function RunList({
                 const sourceLabel = formatRunSource(run.attributes.source, run.attributes["trigger-reason"]);
 // SAFETY: the fixed source list matches the VCS source union the UI renders.
                 const externalSource = isVcsSource;
+                const display = resolveRunDisplay(run.attributes);
                 return (
                   <article
                     key={run.id}
@@ -561,11 +567,14 @@ export function RunList({
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-4">
-                      <span aria-live="polite" aria-atomic="true">
+                      <span aria-live="polite" aria-atomic="true" className="flex flex-col items-end gap-0.5">
                         <span className="sr-only">
                           Run {shortRunId(run.id)} ({run.attributes.message ?? "Triggered via UI"}): {" "}
                         </span>
                         <StatusBadge status={run.attributes.status} />
+                        <span className="text-right text-2xs text-muted-foreground">
+                          {display.waitingLabel ?? display.outcomeLabel}
+                        </span>
                       </span>
                       <div className="text-right text-xs text-muted-foreground min-w-[5.5rem]">
                         <time dateTime={run.attributes["created-at"]} title={formatDateTime(run.attributes["created-at"])}>

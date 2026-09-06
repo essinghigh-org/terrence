@@ -47,6 +47,7 @@ import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { copyTextToClipboard } from "../lib/utils";
 import { formatDate, formatDateTime, formatRelativeTime } from "../lib/utils";
 import { formatRunSource, formatRunStatus } from "../lib/run-labels";
+import { resolveRunDisplay } from "../lib/run-status";
 import { useTerrenceEvent } from "../lib/event-provider";
 import { WorkspaceRepositoryLink } from "../components/WorkspaceRepositoryLink";
 import { isNumber, isString } from "../lib/type-guards";
@@ -230,6 +231,10 @@ type RunSummary = {
     "resource-destructions"?: number;
     source?: string;
     "trigger-reason"?: string;
+    "execution-mode"?: string | null;
+    "position-in-queue"?: number | null;
+    "scheduled-at"?: string | null;
+    "status-timestamps"?: Readonly<Record<string, string>> | null;
     status: string;
     [key: string]: JsonValue;
   };
@@ -257,6 +262,7 @@ export function WorkspaceDetail({
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [latestRun, setLatestRun] = useState<RunSummary | null>(null);
+  const [lastSuccessfulRun, setLastSuccessfulRun] = useState<RunSummary | null>(null);
   const [latestRunLoading, setLatestRunLoading] = useState(true);
   const [latestRunError, setLatestRunError] = useState(false);
   const [projectName, setProjectName] = useState<string | null>(null);
@@ -311,6 +317,32 @@ export function WorkspaceDetail({
     }
   }, []);
 
+  /** Best-effort history read used only to keep a failed current run from
+   * hiding the last successful deployment. The one-run request above remains
+   * the fast path and this secondary read never makes the overview unavailable.
+   */
+  const loadLastSuccessfulRun = useCallback(async (
+    workspaceId: string,
+    signal: AbortSignal,
+    requestGeneration: number,
+  ): Promise<void> => {
+    try {
+// SAFETY: the endpoint contract returns a JSON:API run collection.
+      const response = await fetchApi(
+        `/api/v2/workspaces/${workspaceId}/runs?page[size]=20`,
+        { signal },
+      ) as { data: JsonValue };
+      if (signal.aborted || activeWorkspaceId.current !== workspaceId || latestRunRequestGeneration.current !== requestGeneration) return;
+// SAFETY: the collection carries RunSummary resources per the endpoint contract.
+      const runs = Array.isArray(response.data) ? response.data as RunSummary[] : [];
+      const successful = runs.find((item): boolean => ["applied", "planned_and_finished"].includes(item.attributes.status)) ?? null;
+      setLastSuccessfulRun(successful);
+    } catch {
+      // The current-run card remains useful when older history is forbidden or
+      // unavailable, so this secondary read is intentionally silent.
+    }
+  }, []);
+
   const loadWorkspace = useCallback(async (): Promise<void> => {
     workspaceRequest.current?.abort();
     latestRunRequest.current?.abort();
@@ -328,6 +360,7 @@ export function WorkspaceDetail({
       if (activeWorkspaceId.current !== data.data.id) {
         activeWorkspaceId.current = data.data.id;
         setLatestRun(null);
+        setLastSuccessfulRun(null);
         setLatestRunLoading(true);
         setLatestRunError(false);
       }
@@ -376,6 +409,7 @@ export function WorkspaceDetail({
       latestRunRequestGeneration.current = requestGeneration;
       const latest = await loadLatestRun(workspace.id, controller.signal, requestGeneration);
       if (requestGeneration !== latestRunRequestGeneration.current) return;
+      void loadLastSuccessfulRun(workspace.id, controller.signal, requestGeneration);
       if (latest !== null && TERMINAL_RUN_STATUSES.has(latest.attributes.status)) return;
       if (shouldStop()) return;
       timer = window.setTimeout((): void => { void refresh(); }, 5000);
@@ -402,7 +436,7 @@ export function WorkspaceDetail({
       if (latestRunRefreshRef.current === requestRefresh) latestRunRefreshRef.current = noop;
       clearTimer();
     };
-  }, [activeSection, loadLatestRun, workspace]);
+  }, [activeSection, loadLastSuccessfulRun, loadLatestRun, workspace]);
 
   useTerrenceEvent(
     "run.status",
@@ -531,6 +565,13 @@ export function WorkspaceDetail({
     ? undefined
     : formatRunStatus(latestRunStatusValue);
   const latestRunSucceeded = latestRunStatusValue === "applied" || latestRunStatusValue === "planned_and_finished";
+  const latestRunDisplay = latestRun === null ? null : resolveRunDisplay(latestRun.attributes);
+  const latestRunNeedsAttention = latestRunDisplay?.waitingReason === "human-approval"
+    || latestRunDisplay?.waitingReason === "policy-override";
+  const currentRunIsActive = latestRunDisplay?.outcome === "queued"
+    || latestRunDisplay?.outcome === "running"
+    || latestRunDisplay?.outcome === "waiting"
+    || latestRunNeedsAttention;
   const latestRunCreatedAt = latestRun?.attributes["created-at"];
   const latestRunCounts = latestRun?.attributes;
   const latestRunSource = latestRun?.attributes.source;
@@ -544,7 +585,11 @@ export function WorkspaceDetail({
   const latestRunPath = latestRun?.id === undefined
     ? null
     : `${workspacePath}/runs/${encodeURIComponent(latestRun.id)}`;
+  const lastSuccessfulRunPath = lastSuccessfulRun?.id === undefined
+    ? null
+    : `${workspacePath}/runs/${encodeURIComponent(lastSuccessfulRun.id)}`;
   const canQueueRun = workspace.attributes.permissions?.["can-queue-run"] === true;
+  const canStartRun = canQueueRun && workspace.attributes.locked !== true;
   const canUpdate = workspace.attributes.permissions?.["can-update"] === true;
   const canReadStateVersions =
     workspace.attributes.permissions?.["can-read-state-versions"] === true;
@@ -683,7 +728,7 @@ export function WorkspaceDetail({
           )}
           {activeSection !== "runs" && (
             <Link
-              to={canQueueRun && activeSection === "overview"
+              to={canStartRun && activeSection === "overview"
                 ? `${workspacePath}/runs?new-run=true`
                 : `${workspacePath}/runs`}
               className={buttonVariants({
@@ -691,7 +736,7 @@ export function WorkspaceDetail({
               })}
             >
               <Play data-icon="inline-start" />
-              {canQueueRun && activeSection === "overview" ? "New run" : "View runs"}
+              {canStartRun && activeSection === "overview" ? "New run" : "View runs"}
             </Link>
           )}
         </div>
@@ -819,7 +864,7 @@ export function WorkspaceDetail({
         confirmText="Yes, force unlock"
         cancelText="Cancel"
         confirmVariant="destructive"
-        onConfirm={(): Promise<void> => submitUnlock(true)}
+        onConfirm={async (): Promise<void> => submitUnlock(true)}
         loading={togglingLock}
       />
 
@@ -861,14 +906,60 @@ export function WorkspaceDetail({
                           source={workspace.attributes.source}
                           hasRepository={Boolean(workspace.attributes["vcs-repo"]?.identifier)}
                           localExecution={workspace.attributes["execution-mode"] === "local"}
-                          canQueueRun={canQueueRun}
+                          canQueueRun={canStartRun}
                           canUpdate={canUpdate}
                           canReadVariable={canReadVariable}
+                          locked={workspace.attributes.locked === true}
                         />
                       )}
                     </div>
                   ) : (
                     <>
+                      <div className="mb-4 grid gap-3 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-2">
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{currentRunIsActive ? "Current run" : "Latest run"}</p>
+                          {latestRunPath === null ? (
+                            <p className="mt-1 font-semibold text-foreground">{latestRunStatus ?? "Unknown status"}</p>
+                          ) : (
+                            <Link to={latestRunPath} className="mt-1 block truncate font-semibold text-primary hover:underline">
+                              {currentRunIsActive ? "Open current run" : "Open latest run"}
+                            </Link>
+                          )}
+                          {latestRunDisplay !== null && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {latestRunDisplay.waitingLabel ?? latestRunDisplay.outcomeLabel}
+                            </p>
+                          )}
+                        </div>
+                        <div className="min-w-0 border-t border-border pt-3 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Last successful run</p>
+                          {lastSuccessfulRunPath === null ? (
+                            <p className="mt-1 font-medium text-foreground">No successful run yet</p>
+                          ) : (
+                            <Link to={lastSuccessfulRunPath} className="mt-1 block truncate font-medium text-primary hover:underline">
+                              {lastSuccessfulRun?.attributes.status === "applied" ? "Applied" : "Plan complete"}
+                            </Link>
+                          )}
+                          {lastSuccessfulRun?.attributes["created-at"] !== undefined && (
+                            <time
+                              dateTime={lastSuccessfulRun.attributes["created-at"]}
+                              title={formatDateTime(lastSuccessfulRun.attributes["created-at"])}
+                              className="mt-1 block text-xs text-muted-foreground"
+                            >
+                              {formatRelativeTime(lastSuccessfulRun.attributes["created-at"])}
+                            </time>
+                          )}
+                        </div>
+                      </div>
+                      {latestRunNeedsAttention && latestRunPath !== null && (
+                        <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2.5 text-sm">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium text-warning">Action needed: {latestRunDisplay.outcomeLabel}</p>
+                            <p className="mt-0.5 text-xs text-muted-foreground">{latestRunDisplay.waitingLabel}. Open the run to review the decision.</p>
+                          </div>
+                          <Link to={latestRunPath} className="text-sm font-medium text-warning underline underline-offset-2 hover:no-underline">Open run</Link>
+                        </div>
+                      )}
                       <div aria-live="polite" aria-atomic="true">
                         {latestRunPath === null ? (
                           <p className="font-semibold text-foreground">

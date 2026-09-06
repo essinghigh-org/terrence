@@ -32,6 +32,7 @@ export type RunAttributes = Readonly<{
     "median-duration-seconds"?: number | null;
     "is-slow"?: boolean;
   }> | null;
+  "execution-mode"?: string | null;
   "has-changes"?: boolean;
   "has-recovery-state"?: boolean;
   "recovery-state-format-supported"?: boolean;
@@ -41,6 +42,7 @@ export type RunAttributes = Readonly<{
   operation?: string;
   permissions?: RunPermissions;
   "plan-only"?: boolean;
+  "position-in-queue"?: number | null;
   "refresh-only"?: boolean;
   "resource-additions"?: number;
   "resource-changes"?: number;
@@ -49,6 +51,7 @@ export type RunAttributes = Readonly<{
   source?: string;
   status: string;
   "status-timestamps"?: Readonly<Record<string, string>> | null;
+  "scheduled-at"?: string | null;
   "terraform-version"?: string | null;
   "trigger-reason"?: string;
   "triggered-by"?: string | null;
