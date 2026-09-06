@@ -20,7 +20,7 @@ import { setRequestTokenScopes, setRequestSiteAdmin, currentTokenScopes } from "
 import { beginAuditRequest, resetAuditRequest, setAuditPrincipal } from "./lib/audit-trail";
 import { applySecurityHeaders, HSTS_VALUE, shouldSendHsts, staticCacheControl, staticMimeFor } from "./lib/security-headers";
 import openapiJson from "../openapi.json" with { type: "json" };
-import { requestFinished, requestStarted } from "./lib/process-metrics";
+import { recordRequestLatency, requestFinished, requestStarted } from "./lib/process-metrics";
 import { API_BODY_LIMIT_BYTES, BodyTooLargeError, readTextWithLimit } from "./lib/body-limit";
 import { acceptsJsonApi, isJsonApiContentType, isJsonApiResponseContentType, isJsonContentType, JSON_API_MEDIA_TYPE } from "./lib/media-types";
 import { COMPATIBILITY_PROMISE } from "./lib/constants";
@@ -274,6 +274,7 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
       : code === "VALIDATION" ? 422
         : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? (bodyTooLarge !== null ? 413 : 400)
           : typeof mutableSet.status === "number" ? mutableSet.status : 500;
+    recordRequestLatency(errored.path, Date.now() - errored.startTime);
     requestFinished(status);
     requestMeta.delete(request as unknown as Request);
     resetAuditRequest();
@@ -763,6 +764,7 @@ export const app = new Elysia()
       const path = meta.path;
       const status = unacceptable ? 406 : set.status ?? (response instanceof Response ? response.status : 200);
       const numericStatus = typeof status === "number" ? status : Number.parseInt(String(status), 10) || 200;
+      recordRequestLatency(path, duration);
       requestFinished(numericStatus);
       // Idempotent bookkeeping: the WeakMap entry is consumed here so an
       // error path (onError) can never double-count the same request.

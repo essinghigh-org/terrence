@@ -173,6 +173,24 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
       in_flight: snapshot.requests.inFlight,
       errors5xx: snapshot.requests.errors5xx,
     };
+    // Journey labels are a fixed allow-list from process-metrics.ts. Do not
+    // add workspace IDs, run IDs, or resource addresses to this map.
+    metrics["terrence_request_latency"] = Object.fromEntries(
+      Object.entries(snapshot.journeys).map(([journey, stats]): [string, Record<string, number | null>] => [journey, {
+        requests: stats.requests,
+        sample_count: stats.sampleCount,
+        p50_ms: stats.p50Ms,
+        p95_ms: stats.p95Ms,
+        max_ms: stats.maxMs,
+      }]),
+    );
+    metrics["terrence_event_loop_delay"] = {
+      sample_count: snapshot.eventLoopDelay.sampleCount,
+      min_ms: snapshot.eventLoopDelay.minMs,
+      mean_ms: snapshot.eventLoopDelay.meanMs,
+      p95_ms: snapshot.eventLoopDelay.p95Ms,
+      max_ms: snapshot.eventLoopDelay.maxMs,
+    };
     metrics["terrence_failures"] = { ...snapshot.failures };
     metrics["terrence_storage_degraded"] = isStorageDegraded() ? 1 : 0;
     metrics["terrence_worker"] = {
@@ -395,6 +413,21 @@ function prometheusLines(collection: MetricsCollection): string[] {
       "# HELP terrence_requests_errors5xx_total Responses with status >= 500.",
       "# TYPE terrence_requests_errors5xx_total counter",
       `terrence_requests_errors5xx_total ${snapshot.requests.errors5xx}`,
+      "# HELP terrence_request_duration_ms Server request latency by bounded user journey.",
+      "# TYPE terrence_request_duration_ms gauge",
+      "# HELP terrence_request_duration_samples Requests observed by bounded user journey.",
+      "# TYPE terrence_request_duration_samples counter",
+      ...Object.entries(snapshot.journeys).flatMap(([journey, stats]): string[] => [
+        `terrence_request_duration_samples{journey="${prometheusLabel(journey)}"} ${stats.sampleCount}`,
+        ...(stats.p50Ms === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="0.5"} ${stats.p50Ms}`]),
+        ...(stats.p95Ms === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="0.95"} ${stats.p95Ms}`]),
+        ...(stats.maxMs === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="max"} ${stats.maxMs}`]),
+      ]),
+      "# HELP terrence_event_loop_delay_ms Event-loop delay from the bounded runtime histogram.",
+      "# TYPE terrence_event_loop_delay_ms gauge",
+      "# HELP terrence_event_loop_delay_samples Event-loop histogram samples.",
+      "# TYPE terrence_event_loop_delay_samples gauge",
+      `terrence_event_loop_delay_samples ${snapshot.eventLoopDelay.sampleCount}`,
       "# HELP terrence_failures_total Best-effort subsystem write failures (audit log, run logs).",
       "# TYPE terrence_failures_total counter",
       ...Object.entries(snapshot.failures).map(([kind, value]): string =>
@@ -427,6 +460,13 @@ function prometheusLines(collection: MetricsCollection): string[] {
     }
     if (history.stats.rss.growthPerHour !== null) {
       lines.push(`terrence_process_history_rss_growth_per_hour ${history.stats.rss.growthPerHour}`);
+    }
+    if (snapshot.eventLoopDelay.p95Ms !== null) {
+      lines.push(
+        `terrence_event_loop_delay_ms{quantile="0.5"} ${snapshot.eventLoopDelay.meanMs ?? snapshot.eventLoopDelay.p95Ms}`,
+        `terrence_event_loop_delay_ms{quantile="0.95"} ${snapshot.eventLoopDelay.p95Ms}`,
+        ...(snapshot.eventLoopDelay.maxMs === null ? [] : [`terrence_event_loop_delay_ms{quantile="max"} ${snapshot.eventLoopDelay.maxMs}`]),
+      );
     }
     for (const [poller, stats] of Object.entries(snapshot.worker.pollers)) {
       const label = `poller="${prometheusLabel(poller)}"`;
