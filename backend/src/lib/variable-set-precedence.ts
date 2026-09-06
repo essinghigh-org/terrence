@@ -27,6 +27,17 @@ export function compareVariableSets(
   // UTF-8 byte ordering matches Unicode code-point ordering, unlike localeCompare
   // or UTF-16 string comparison for supplementary characters.
   return rank(left) - rank(right)
-    || Buffer.compare(Buffer.from(right.name), Buffer.from(left.name))
-    || Buffer.compare(Buffer.from(right.id), Buffer.from(left.id));
+    || compareCodePoints(right.name, left.name)
+    || compareCodePoints(right.id, left.id);
+}
+
+/**
+ * Deterministic code-point string comparison (issue #704). UTF-8 byte
+ * ordering matches Unicode code-point ordering on every host, unlike
+ * localeCompare, whose result depends on the runtime locale. Use this for
+ * every precedence tie-break so workers, the agent payload and the UI
+ * agree regardless of host locale.
+ */
+export function compareCodePoints(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left), Buffer.from(right));
 }

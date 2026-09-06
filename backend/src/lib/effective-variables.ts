@@ -1,4 +1,4 @@
-import { compareVariableSets } from "./variable-set-precedence";
+import { compareCodePoints, compareVariableSets } from "./variable-set-precedence";
 import { asc, eq, inArray } from "drizzle-orm";
 
 import { db } from "../db";
@@ -62,7 +62,7 @@ export async function effectiveWorkspaceVariables(
   const setOrder = new Map(activeSets.map((set, index): [string, number] => [set.id, index]));
   const orderedSetVars = [...setVars].sort((left, right): number =>
     (setOrder.get(left.variableSetId) ?? Number.MAX_SAFE_INTEGER) - (setOrder.get(right.variableSetId) ?? Number.MAX_SAFE_INTEGER)
-    || left.id.localeCompare(right.id));
+    || compareCodePoints(left.id, right.id));
   const effective = new Map<string, EffectiveVariable>();
   const setNames = new Map(activeSets.map((set): readonly [string, string] => [set.id, set.name]));
   const setNameOf = (variableSetId: string): string => setNames.get(variableSetId) ?? variableSetId;
@@ -81,5 +81,5 @@ export async function effectiveWorkspaceVariables(
     }
   }
   return [...effective.values()].sort((left, right): number =>
-    left.variable.key.localeCompare(right.variable.key) || left.variable.id.localeCompare(right.variable.id));
+    compareCodePoints(left.variable.key, right.variable.key) || compareCodePoints(left.variable.id, right.variable.id));
 }
