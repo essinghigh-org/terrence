@@ -99,7 +99,7 @@ test("logs in without persisting the access token and navigates home", async () 
     getUrlString(input) === "/api/v2/users/login");
   expect(loginCall).toBeDefined();
 // SAFETY: the captured call init is the RequestInit the component passed to fetch.
-  const loginOptions = loginCall![1] as RequestInit;
+  const loginOptions = loginCall![1]!;
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(loginOptions.body as string)).toEqual({
     data: { attributes: { username: "alice", password: "correct horse", "browser-session": true } },
@@ -1309,10 +1309,10 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
     if (url === "/api/v2/organizations/acme" && init?.method === undefined) {
       return json({ data: { attributes: { permissions: { "can-manage-workspaces": true } } } });
     }
-    if (url.includes("/organizations/acme/varsets?") && init?.method === undefined) {
+    if (url.includes("/organizations/acme/varsets?") && (init?.method === undefined || init?.method === "GET")) {
       return json({ data: sets });
     }
-    if (url.includes("/organizations/acme/workspaces?") && init?.method === undefined) {
+    if (url.includes("/organizations/acme/workspaces?") && (init?.method === undefined || init?.method === "GET")) {
       return json({
         data: [
           { id: "ws-dev", type: "workspaces", attributes: { name: "development" } },
@@ -1322,7 +1322,7 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
     }
     if (
       url.includes("/varsets/varset-shared/relationships/vars?") &&
-      init?.method === undefined
+      (init?.method === undefined || init?.method === "GET")
     ) {
       return json({ data: varsList });
     }
@@ -1480,7 +1480,7 @@ test("keeps variable sets readable without workspace management permission", asy
   expect(body.queryByRole("button", { name: "Add variable" })).toBeNull();
   expect(body.queryByRole("button", { name: "Edit" })).toBeNull();
   expect(body.queryByRole("button", { name: "Delete" })).toBeNull();
-  expect(fetchMock.mock.calls.every(([, init]): boolean => init?.method === undefined)).toBeTrue();
+  expect(fetchMock.mock.calls.every(([, init]): boolean => init?.method === undefined || init?.method === "GET")).toBeTrue();
 });
 
 test("creates variable sets and toggles global scope", async () => {

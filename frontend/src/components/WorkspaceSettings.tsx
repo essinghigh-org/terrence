@@ -234,6 +234,7 @@ export function WorkspaceSettings({
       fetchAllApiPages<RemoteStateWorkspace>(
         `/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`,
         controller.signal,
+        { retryAttempts: 0 },
       ),
       fetchApi(
         `/workspaces/${workspace.id}/relationships/remote-state-consumers`,
