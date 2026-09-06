@@ -30,6 +30,7 @@ import { insertStateOutputIndex, replaceStateOutputIndex } from "../lib/state-ou
 import { persistUploadBody } from "../lib/upload-body";
 import { storageDir } from "../db/driver";
 import { auditLogValues } from "../lib/audit-trail";
+import { commitStateVersion } from "../lib/commands/state-version";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -551,106 +552,38 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (ws === undefined || (!validSignedApiURL(request, path, "PUT") && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-write")))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    // A lost success response must not force a client to reserve another serial.
-    // Authenticate first, then accept only exactly the committed bytes; this
-    // branch never republishes outputs or changes the current state. Identity
-    // is the persisted SHA-256 recorded at finalize time (issue #690); rows
-    // finalized before that column existed fall back to hashing the stored
-    // payload, which is byte-identical to what finalize compared.
-    if (sv.status === "finalized" && typeof sv.statePayload === "string" && sv.statePayload !== "") {
-      const retry = await requestBodyText(body, request);
-      if (!retry.ok) {
-        (set as { status: number }).status = retry.reason === "too-large" ? 413 : 400;
-        return { errors: [{ status: String(set.status), title: "Invalid state upload body" }] };
-      }
-      const committedSha256 = sv.uploadSha256
-        ?? createHash("sha256").update(decodeStatePayload(sv.statePayload)).digest("hex");
-      if (createHash("sha256").update(retry.text).digest("hex") === committedSha256) {
-        // Converge rows finalized before the digest column existed.
-        if (sv.uploadSha256 === null) {
-          await db.update(stateVersions).set({ uploadSha256: committedSha256 }).where(eq(stateVersions.id, stateVersionId));
-        }
-        (set as { status: number }).status = 200;
-        return {};
-      }
-    }
-    if (sv.status !== "pending" || (typeof sv.statePayload === "string" && sv.statePayload !== "")) {
-      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State content was already uploaded" }] };
-    }
     // Issue #578: claim before the network-bound body transfer so two
-    // simultaneous PUTs do not both stream bodies; the conditional finalize
-    // below is the atomic backstop.
-    if (sv.status === "pending" && stateReservationObsolete(sv, ws)) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "State upload reservation expired or its workspace lock changed" }] };
-    }
+    // simultaneous PUTs do not both stream bodies. The domain command below
+    // remains the cross-process atomic backstop.
     if (!tryAcquireStateUpload(stateVersionId)) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] };
     }
     try {
       const rawStateResult = await requestBodyText(body, request);
       if (!rawStateResult.ok) {
-        (set as { status: number }).status = rawStateResult.reason === "too-large" ? 413 : 400;
-        return { errors: [{ status: String(rawStateResult.reason === "too-large" ? 413 : 400), title: rawStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] };
+        const status = rawStateResult.reason === "too-large" ? 413 : 400;
+        (set as { status: number }).status = status;
+        const title = sv.status === "finalized" && typeof sv.statePayload === "string" && sv.statePayload !== ""
+          ? "Invalid state upload body"
+          : status === 413 ? "Payload Too Large" : "Bad Request";
+        return { errors: [{ status: String(status), title }] };
       }
       const rawState = rawStateResult.text;
-      if (rawState === "" || parseStatePayload(rawState) === null) {
-        (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(rawState) }] };
+      const committed = await commitStateVersion({ stateVersionId, rawState });
+      if (committed.kind === "not-found") {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      const parsedTerraformState = parseTerraformStatePayload(rawState);
-      if (parsedTerraformState === null) {
-        (set as { status: number }).status = 400;
-        return { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(rawState) }] };
+      if (committed.kind === "invalid") {
+        const status = committed.reason === "state-payload" ? 400 : 422;
+        (set as { status: number }).status = status;
+        return { errors: [{ status: String(status), title: status === 400 ? "Bad Request" : "Unprocessable Entity", detail: committed.detail }] };
       }
-      if (parsedTerraformState["serial"] !== sv.serial) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial does not match the state reservation" }] };
+      if (committed.kind === "conflict") {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: committed.detail }] };
       }
-      if ((sv.expectedLineage !== null && parsedTerraformState["lineage"] !== sv.expectedLineage)
-        || (sv.expectedMd5 !== null && sv.expectedMd5 !== createHash("md5").update(rawState).digest("base64")
-          && sv.expectedMd5.toLowerCase() !== createHash("md5").update(rawState).digest("hex"))) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "State bytes do not match the reserved checksum or lineage" }] };
-      }
-      const latestState = await db.query.stateVersions.findFirst({
-        where: and(eq(stateVersions.workspaceId, sv.workspaceId), eq(stateVersions.status, "finalized")),
-        orderBy: [desc(stateVersions.serial)],
-        columns: { statePayload: true },
-      });
-      const lineageError = stateLineageError(latestState, parsedTerraformState);
-      if (lineageError !== null) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] };
-      }
-      const encrypted = await encryptStatePayload(rawState);
-      const decodedJsonState = sv.jsonState === null ? null : decodeStatePayload(sv.jsonState);
-      // Atomic conditional finalize: exactly one concurrent PUT can move the
-      // version out of pending. The output index is rebuilt in the same
-      // transaction so it can never mix output names across writers.
-      const finalized = await db.transaction(async (tx): Promise<boolean> => {
-        if (!(await fenceStateWorkspace(tx, ws)) || stateReservationObsolete(sv, ws)) return false;
-        const current = await tx.query.stateVersions.findFirst({
-          where: and(eq(stateVersions.workspaceId, sv.workspaceId), eq(stateVersions.status, "finalized")),
-          orderBy: [desc(stateVersions.serial)],
-        });
-        if (current !== undefined && (current.serial >= sv.serial || stateLineageError(current, parsedTerraformState) !== null)) return false;
-        const won = await tx.update(stateVersions).set({
-          statePayload: encrypted,
-          status: "finalized",
-          uploadSha256: createHash("sha256").update(rawState).digest("hex"),
-        }).where(and(
-          eq(stateVersions.id, stateVersionId),
-          eq(stateVersions.status, "pending"),
-          or(isNull(stateVersions.statePayload), eq(stateVersions.statePayload, "")),
-        )).returning({ id: stateVersions.id });
-        if (won.length === 0) return false;
-        await replaceStateOutputIndex(tx, stateVersionId, sv.workspaceId, decodedJsonState, rawState);
-        return true;
-      });
-      if (!finalized) {
-        (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State content was already uploaded" }] };
-      }
-      scheduleExplorerInventory(sv.workspaceId);
+      if (committed.kind === "committed") scheduleExplorerInventory(sv.workspaceId);
       (set as { status: number }).status = 200;
       return {};
     } finally {
