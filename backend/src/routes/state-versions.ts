@@ -183,8 +183,9 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     // Issue #703: reservations are upload-in-progress handles, not history.
     // They stay reachable through the direct show endpoint the uploader
-    // polls, but listings only ever return committed versions.
-    const conditions = [inArray(stateVersions.workspaceId, [...allowedWorkspaceIds]), ne(stateVersions.status, "pending")];
+    // polls, but listings only ever return committed versions. The NULL arm
+    // preserves legacy rows that predate the status column default.
+    const conditions = [inArray(stateVersions.workspaceId, [...allowedWorkspaceIds]), or(isNull(stateVersions.status), ne(stateVersions.status, "pending"))];
     if (workspaceFilter !== null) conditions.push(eq(stateVersions.workspaceId, workspaceFilter));
     if (runFilter !== null) conditions.push(eq(stateVersions.runId, runFilter));
     const where = and(...conditions);
@@ -209,8 +210,8 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const { number, size } = pageRequest(request);
     // Issue #703: see the index endpoint above; listings exclude pending
-    // upload reservations.
-    const where = and(eq(stateVersions.workspaceId, workspaceId), ne(stateVersions.status, "pending"));
+    // upload reservations (NULL statuses predate the default and stay listed).
+    const where = and(eq(stateVersions.workspaceId, workspaceId), or(isNull(stateVersions.status), ne(stateVersions.status, "pending")));
     const [versions, countRows] = await Promise.all([
       db.query.stateVersions.findMany({ where, orderBy: [desc(stateVersions.serial)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(stateVersions).where(where),

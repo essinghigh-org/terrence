@@ -123,6 +123,22 @@ describe("state upload reservation lifecycle", () => {
     expect(((await listed.json()) as { data: { id: string }[] }).data.map((entry) => entry.id)).toContain(reserved.id);
   });
 
+  it("keeps legacy NULL-status rows listed while pending stays out", async () => {
+    const legacyId = `sv-legacy-${crypto.randomUUID()}`;
+    await db.insert(stateVersions).values({
+      id: legacyId, workspaceId, serial: 100, status: null, statePayload: null, createdAt: Date.now(),
+    });
+    try {
+      for (const path of [`/api/v2/workspaces/${workspaceId}/state-versions`, `/api/v2/state-versions?filter[workspace][id]=${workspaceId}`]) {
+        const listed = await request(path, { headers });
+        expect(listed.status).toBe(200);
+        expect(((await listed.json()) as { data: { id: string }[] }).data.map((entry) => entry.id)).toContain(legacyId);
+      }
+    } finally {
+      await db.delete(stateVersions).where(eq(stateVersions.id, legacyId));
+    }
+  });
+
   it("recovers a killed client through unlock and re-reserve without moving the current serial", async () => {
     const raw = stateForSerial(5);
     const abandoned = await expectSuccessResponse(await reserve(workspaceId, 5), 201, "state-versions");
