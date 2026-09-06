@@ -1,6 +1,6 @@
 import { open, readdir, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
-import { scanTerraformModuleVariables } from "./terraform-variables";
+import { scanTerraformModuleVariablesWithDiagnostics } from "./terraform-variables";
 
 const MAX_INSPECT_OUTPUT_BYTES = 8 * 1024 * 1024;
 const MAX_README_BYTES = 1024 * 1024;
@@ -149,11 +149,16 @@ function descriptionFromReadme(readme: string): string | null {
 }
 
 async function inspectSection(directory: string, path: string): Promise<Readonly<{ section: RegistryModuleSectionMetadata; diagnostics: string[] }>> {
-  const [{ value, diagnostics }, variables, readme] = await Promise.all([
+  const [{ value, diagnostics }, scanned, readme] = await Promise.all([
     inspectJson(directory),
-    scanTerraformModuleVariables(directory),
+    scanTerraformModuleVariablesWithDiagnostics(directory),
     readReadme(directory).catch((): string => ""),
   ]);
+  const variables = scanned.variables;
+  const scanDiagnostics = scanned.skipped.map((skip): string => {
+    const what = skip.name === null ? "a variable block" : `variable "${skip.name}"`;
+    return `${skip.file}: ${what} skipped (${skip.reason}); input assistance is incomplete for this block`;
+  });
   const variableMap = record(value["variables"]);
   const inputs = variables.map((variable) => {
     const inspected = record(variableMap[variable.name]);
@@ -209,7 +214,7 @@ async function inspectSection(directory: string, path: string): Promise<Readonly
       modules,
       resources,
     },
-    diagnostics,
+    diagnostics: [...diagnostics, ...scanDiagnostics],
   };
 }
 
