@@ -9,6 +9,9 @@ import {
   workspaces,
   workspaceVariables,
 } from "../../src/db/schema";
+import { agentEnvironment } from "../../src/lib/agent-api";
+import { executionVariables } from "../../src/worker";
+import { compareVariableSets } from "../../src/lib/variable-set-precedence";
 import { effectiveWorkspaceVariables } from "../../src/lib/effective-variables";
 
 // Issue #627: same-rank ties, workspace-vs-set, and priority precedence must
@@ -78,5 +81,38 @@ describe("effectiveWorkspaceVariables precedence", (): void => {
     if (tie?.source !== "varset") throw new Error("expected DUP to come from a set");
     expect(tie.setName).toBe("alpha");
     expect(tie.variable.value).toBe("from-alpha");
+    // Priority global wins even over priority workspace scope, for both views.
+    await db.update(variableSets).set({ global: true, priority: true }).where(eq(variableSets.id, betaId));
+    const displayed = await effectiveWorkspaceVariables(workspaceId, orgId, null);
+    const executed = await executionVariables(workspaceId, orgId, null);
+    expect(displayed.find((entry) => entry.variable.key === "DUP")?.variable.value).toBe("from-beta");
+    expect(executed.find((entry) => entry.key === "DUP")?.value).toBe("from-beta");
+    const agent = await agentEnvironment(workspaceId, orgId, null, [
+      { key: "DUP", value: "run", sensitive: true },
+      { key: "RUN_ONLY", value: "run", sensitive: true },
+      { key: "RUN_ENV", value: "environment", category: "env" },
+    ]);
+    expect(agent["TF_VAR_DUP"]).toBe("from-beta");
+    expect(agent["TF_VAR_RUN_ONLY"]).toBe("run");
+    expect(agent["RUN_ENV"]).toBe("environment");
   });
+});
+
+
+test("variable set ordering covers scope, ownership, priority and Unicode ties", () => {
+  const sets = [
+    { id: "g", global: true, parentProjectId: null },
+    { id: "op", global: false, parentProjectId: null },
+    { id: "ow", global: false, parentProjectId: null },
+    { id: "pp", global: false, parentProjectId: "project" },
+    { id: "pw", global: false, parentProjectId: "project" },
+  ].map((set) => ({ ...set, name: set.id, priority: false }));
+  const workspaceLinks = new Set(["ow", "pw"]);
+  const projectLinks = new Set(["op", "pp"]);
+  const compare = (left: typeof sets[number], right: typeof sets[number]) => compareVariableSets(left, right, workspaceLinks, projectLinks);
+  expect([...sets].reverse().sort(compare).map((set) => set.id)).toEqual(["g", "op", "ow", "pp", "pw"]);
+  expect(sets.map((set) => ({ ...set, priority: true })).sort(compare).map((set) => set.id)).toEqual(["pw", "pp", "ow", "op", "g"]);
+  const names = ["a", "A", "_", "é", "\uE000", "😀"];
+  expect(names.map((name) => ({ id: name, name, priority: false, global: true, parentProjectId: null })).sort(compare).map((set) => set.name))
+    .toEqual(["😀", "\uE000", "é", "a", "_", "A"]);
 });

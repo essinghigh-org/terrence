@@ -1,7 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db";
 import { runExplanations } from "../db/schema";
-import { readPlanJsonArtifact } from "./plan-json";
+import { readPlanJsonArtifact, sanitizePlanJson } from "./plan-json";
 import { readRunLogs } from "./run-logs";
 import { log } from "./log";
 
@@ -52,7 +52,7 @@ export async function buildExplainSource(runId: string, kind: ExplainKind): Prom
   if (kind === "plan") {
     const planJson = await readPlanJsonArtifact(runId);
     if (planJson === undefined) return undefined;
-    const serialized = JSON.stringify(planJson);
+    const serialized = JSON.stringify(sanitizePlanJson(planJson));
     const truncated = serialized.length > EXPLAIN_MAX_PROMPT_CHARS
       ? `${serialized.slice(0, EXPLAIN_MAX_PROMPT_CHARS)}\n... (truncated)`
       : serialized;
@@ -71,7 +71,7 @@ export async function buildExplainSource(runId: string, kind: ExplainKind): Prom
 
 /** Stable storage key for the one plan or apply-error answer belonging to a run. */
 export function explanationCacheKey(runId: string, kind: ExplainKind): string {
-  return `${runId}-${kind === "plan" ? "plan" : "apply-error"}`;
+  return `${runId}-${kind === "plan" ? "plan-public-v1" : "apply-error"}`;
 }
 
 /**
@@ -80,7 +80,7 @@ export function explanationCacheKey(runId: string, kind: ExplainKind): string {
  */
 export async function findExplanation(runId: string, kind: ExplainKind): Promise<StoredExplanation | undefined> {
   const rows = await db.query.runExplanations.findMany({
-    where: and(eq(runExplanations.runId, runId), eq(runExplanations.kind, kind)),
+    where: and(eq(runExplanations.runId, runId), eq(runExplanations.kind, kind), eq(runExplanations.cacheKey, explanationCacheKey(runId, kind))),
     orderBy: [desc(runExplanations.createdAt)],
     limit: 1,
   });

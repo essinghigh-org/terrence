@@ -90,8 +90,8 @@ describe("State storage and retention", () => {
             attributes: {
               serial,
               intermediate,
-              state: Buffer.from(JSON.stringify({ version: 4, serial, resources: [] })).toString("base64"),
-              md5: createHash("md5").update(JSON.stringify({ version: 4, serial, resources: [] })).digest("base64"),
+              state: Buffer.from(JSON.stringify({ version: 4, serial, lineage: "test-lineage", resources: [] })).toString("base64"),
+              md5: createHash("md5").update(JSON.stringify({ version: 4, serial, lineage: "test-lineage", resources: [] })).digest("base64"),
             },
           },
         }),
@@ -150,6 +150,8 @@ describe("State storage and retention", () => {
     ));
     expect(createPolicyResponse.status).toBe(201);
     const createdPolicy = (await createPolicyResponse.json()).data;
+    const organizationResponse = await app.handle(new Request(`http://localhost/api/v2/organizations/${orgId}`, { headers: authHeaders }));
+    expect((await organizationResponse.json()).data.relationships["data-retention-policy"].data).toEqual({ id: createdPolicy.id, type: "data-retention-policy-delete-olders" });
     expect(createdPolicy.meta.gc[workspaceId]).toMatchObject({
       softDeleted: 1,
       policySource: "organization",
@@ -234,6 +236,7 @@ describe("State storage and retention", () => {
       `http://localhost/api/v2/runs/${oldRunId}/apply/log`,
       { headers: authHeaders },
     ));
+    expect((await db.query.runs.findFirst({ where: eq(runs.id, oldRunId) }))?.logToken).toBeNull();
     expect(archivedLogResponse.status).toBe(200);
     expect(await archivedLogResponse.text()).toBe("old");
 

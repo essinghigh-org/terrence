@@ -10,7 +10,7 @@ The brand palette is ink #233654, blue #96B9F6, paper #EDF3FF, line #C9D9F2, and
 
 Headings use the local Trebuchet/Avenir/system stack; body text uses Inter/system and technical values use the monospace stack. Shared buttons, cards, and page shells own sizing and spacing. Use the existing 4px spacing scale, 24px between sections, 20px within standard cards (12px in compact cards), and the shared 10px base radius. Default form controls and buttons are 40px tall; compact table actions keep their smaller sizes. Status labels always accompany icons and colors.
 
-Run `bun run --cwd frontend scripts/brand-assets.tsx` from the repository root to export the canonical SVGs to `public/brand` and the mark to `public/favicon.svg`. The same command refreshes the inline illustrations in the self-contained `public/404.html`. Regenerate app PNGs from that mark with rsvg-convert (192px, 512px, and 180px for Apple touch); the maskable icon uses a centered 360px mark on a 512px ink background.
+Run `bun run --cwd frontend scripts/brand-assets.tsx` from the repository root to export the canonical SVGs to `public/brand` and the mark to `public/favicon.svg`. CI runs the same script with `--check` to reject stale SVGs, the brand gallery, favicon SVG, or standalone fallback without rewriting files. The same command refreshes the inline illustrations in the self-contained `public/404.html`. Regenerate app PNGs from that mark with rsvg-convert (192px, 512px, and 180px for Apple touch); the maskable icon uses a centered 360px mark on a 512px ink background.
 
 
 ## Frontend audit coverage
@@ -30,3 +30,5 @@ The September 2026 audit covers the route views and shared components, including
 | Server 404, application 404, crash boundary | Canonical lost/failed art with readable explanations and recovery links or reload action. Server 404 contains its own SVG and CSS. |
 
 Validation combines frontend unit tests, the existing browser/accessibility suite across supported themes, a mobile standalone-404 accessibility check, backend error-response tests, and manual desktop/mobile inspection. Browser fixtures verify presentation and interaction; they do not prove live cloud integration behavior.
+
+PNG and maskable icon rasterization remains a separate operator step; the SVG freshness check does not yet verify those binary exports.

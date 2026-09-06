@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { forEachUpstreamDelta, parseCompletionBody, splitInlineThinking } from "../../src/lib/run-explanations";
+import { buildExplainSource, forEachUpstreamDelta, parseCompletionBody, splitInlineThinking } from "../../src/lib/run-explanations";
 
 test("removes inline think tags from the returned explanation", () => {
   const parts = parseCompletionBody({
@@ -37,4 +37,18 @@ test("keeps inline thinking out of streamed content across chunk boundaries", as
   expect(events.filter(({ channel }) => channel === "content").map(({ text }) => text).join(""))
     .toBe("Brief answer.");
   expect(events.some(({ channel, text }) => channel === "content" && text.includes("<think"))).toBeFalse();
+});
+
+
+test("plan explanation prompts use the public projection", async () => {
+  const { writePlanJsonArtifact, deletePlanJsonArtifact } = await import("../../src/lib/plan-json");
+  const runId = `explain-${crypto.randomUUID()}`;
+  try {
+    await writePlanJsonArtifact(runId, { variables: { password: { value: "REVIEW_SYNTHETIC_SECRET" } }, resource_changes: [{ address: "test.example", change: { actions: ["create"], after: "REVIEW_SYNTHETIC_SECRET", after_sensitive: true } }] });
+    const source = await buildExplainSource(runId, "plan");
+    expect(source?.prompt).toContain("test.example");
+    expect(source?.prompt).not.toContain("REVIEW_SYNTHETIC_SECRET");
+  } finally {
+    await deletePlanJsonArtifact(runId);
+  }
 });

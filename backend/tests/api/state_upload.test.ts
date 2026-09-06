@@ -140,6 +140,6 @@ describe("Terraform/OpenTofu state import", () => {
     });
     expect(deleted.status).toBe(204);
     expect(await deleted.text()).toBe("");
-    expect((await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, malformedPendingResource.id) }))?.status).toBe("discarded");
+    expect(await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, malformedPendingResource.id) })).toBeUndefined();
   });
 });

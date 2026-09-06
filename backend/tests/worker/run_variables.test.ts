@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildRunPhaseEnv, buildSanitizedEnv, normalizeRunVariables } from "../../src/worker";
+import { buildRunPhaseEnv, buildSanitizedEnv, normalizeRunVariables, runTerraformVariableLines } from "../../src/worker";
 
 // Issue #577: per-run variables respect category. Env-category keys land in
 // the environment directly (never TF_VAR_-prefixed, never -var flags);
@@ -45,11 +45,11 @@ describe("run variable normalization and env composition (#577)", () => {
     expect(env["TF_VAR_VERBOSE"]).toBeUndefined();
   });
 
-  it("maps sensitive terraform run variables to TF_VAR_ entries", () => {
-    const env = buildSanitizedEnv(normalizeRunVariables([
-      { key: "db_password", value: "s", category: "terraform", sensitive: true },
-    ]));
-    expect(env["TF_VAR_db_password"]).toBe("s");
+  it("transports sensitive run Terraform values only through the private file", () => {
+    const variables = [{ key: "db_password", value: "s", category: "terraform", sensitive: true }];
+    const env = buildRunPhaseEnv([], variables, {});
+    expect(runTerraformVariableLines(variables, [])).toEqual(['db_password = "s"']);
+    expect(env["TF_VAR_db_password"]).toBeUndefined();
     expect(env["db_password"]).toBeUndefined();
   });
 
@@ -95,12 +95,12 @@ describe("run variable env parity across phases (#607, #608)", () => {
     expect(plan).toEqual({ ...apply, TF_CLI_CONFIG_FILE: "/plan" });
   });
 
-  it("keeps env credentials verbatim and terraform secrets TF_VAR_-prefixed in both phases", () => {
+  it("keeps run Terraform secrets exclusively in private files while preserving environment inputs", () => {
     for (const phase of ["plan", "apply"]) {
       const env = buildRunPhaseEnv(workspaceVars, runVariables, { TF_CLI_CONFIG_FILE: `/${phase}` });
       expect(env["AWS_SECRET_ACCESS_KEY"]).toBe("s");
       expect(env["TF_VAR_AWS_SECRET_ACCESS_KEY"]).toBeUndefined();
-      expect(env["TF_VAR_db_password"]).toBe("s");
+      expect(env["TF_VAR_db_password"]).toBeUndefined();
       expect(env["db_password"]).toBeUndefined();
       expect(env["region"]).toBeUndefined();
       expect(env["TF_VAR_region"]).toBeUndefined();
@@ -108,4 +108,39 @@ describe("run variable env parity across phases (#607, #608)", () => {
       expect(env["TF_VAR_ws_secret"]).toBe("s");
     }
   });
+});
+
+
+it("sensitivity does not change run value precedence and priority inputs win in both categories", () => {
+  const workspace = [
+    { key: "HOME", value: "/workspace-home", category: "env" },
+    { key: "region", value: "workspace", category: "terraform" },
+    { key: "fixed", value: "priority", category: "terraform", priority: true, sensitive: true },
+    { key: "FIXED_ENV", value: "priority", category: "env", priority: true },
+  ];
+  for (const sensitive of [false, true]) {
+    const run = [
+      { key: "region", value: "run", sensitive },
+      { key: "fixed", value: "run", sensitive },
+      { key: "FIXED_ENV", value: "run", category: "env" },
+    ];
+    expect(runTerraformVariableLines(run, workspace)).toEqual(['region = "run"']);
+    const env = buildRunPhaseEnv(workspace, run, {});
+    expect(env["HOME"]).toBe("/workspace-home");
+    expect(env["FIXED_ENV"]).toBe("priority");
+    expect(env["TF_VAR_fixed"]).toBe("priority");
+  }
+});
+
+
+it("rejects misspelled network policies instead of silently allowing traffic", async () => {
+  const { runNetPolicy } = await import("../../src/lib/sandbox");
+  const previous = process.env["TERRENCE_RUN_NET_POLICY"];
+  try {
+    process.env["TERRENCE_RUN_NET_POLICY"] = "deny-all";
+    expect(() => runNetPolicy()).toThrow("must be allow or deny");
+  } finally {
+    if (previous === undefined) delete process.env["TERRENCE_RUN_NET_POLICY"];
+    else process.env["TERRENCE_RUN_NET_POLICY"] = previous;
+  }
 });

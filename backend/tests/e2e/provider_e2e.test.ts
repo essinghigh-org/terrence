@@ -1,10 +1,13 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { mkdtempSync, openSync, readdirSync, statSync, readlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, openSync, closeSync, readdirSync, statSync, readlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { makeRegistryModuleArchive } from "../registry-module-helpers";
+import cliMatrix from "./cli_matrix.json";
+import { safeJsonStringify } from "../../src/lib/log";
+import providerSurface from "./provider_surface.json";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const BACKEND_DIR = join(REPO_ROOT, "backend");
@@ -21,6 +24,11 @@ const sleep = (ms: number): Promise<void> => new Promise((resolveFn) => setTimeo
 
 let terraformBin = "";
 let tofuBin = "";
+const binaryDigests = new Map<string, string>();
+const matrixTier = process.env["TERRENCE_E2E_TIER"] ?? "current";
+if (!["floor", "current", "canary"].includes(matrixTier)) throw new Error("TERRENCE_E2E_TIER must be floor, current or canary");
+const providerVersion = /v(\d+\.\d+\.\d+)/.exec(providerSurface.provider)?.[1];
+if (providerVersion === undefined) throw new Error("The provider catalog must name an exact version");
 
 // Iteration aid: TERRENCE_E2E_CLI=terraform (or tofu) runs only that CLI;
 // unset runs both.
@@ -113,54 +121,86 @@ function freePort(): Promise<number> {
   });
 }
 
-type Backend = { port: number; proc: Bun.Subprocess; dbDir: string; logPath: string; storageDir: string };
+type Backend = { port: number; proc: Bun.Subprocess; dbDir: string; logPath: string; storageDir: string; databaseKind: "sqlite" | "postgres"; securityProfile: "disabled" | "required"; dropDatabase: () => Promise<void> };
 
-async function startBackend(workDir: string): Promise<Backend> {
+async function startBackend(workDir: string, engine: "terraform" | "tofu"): Promise<Backend> {
+  const incomingUrl = process.env["DATABASE_URL"] ?? "file:";
+  if (!/^(file:|postgres(?:ql)?:\/\/)/.test(incomingUrl)) throw new Error("Provider E2E supports only SQLite file: or PostgreSQL URLs");
+  const databaseKind = incomingUrl.startsWith("postgres") ? "postgres" : "sqlite";
+  const securityProfile = process.env["TERRENCE_E2E_SECURITY_PROFILE"] ?? "disabled";
+  if (securityProfile !== "disabled" && securityProfile !== "required") throw new Error("TERRENCE_E2E_SECURITY_PROFILE must be disabled or required");
   const dbDir = mkdtempSync(join(tmpdir(), "terrence-provider-e2e-"));
+  let databaseUrl = `file:${join(dbDir, "test.db")}`;
+  let dropDatabase = async (): Promise<void> => { /* SQLite is removed with dbDir. */ };
   const port = await freePort();
   const logPath = join(workDir, "server.log");
-  const proc = Bun.spawn(["bun", "run", "index.ts"], {
-    cwd: BACKEND_DIR,
-    env: {
-      ...process.env,
-      NODE_ENV: "production",
-      PORT: String(port),
-      DATABASE_URL: `file:${join(dbDir, "test.db")}`,
-      STORAGE_DIR: dbDir,
-      TERRENCE_JWT_SECRET: "provider-e2e-secret",
-      ADMIN_PASSWORD: "pe2e-admin-password-123",
-      TERRENCE_RUN_SANDBOX: "false",
-      TERRENCE_ENABLE_LOCAL_SIGNUP: "true",
-      SIMULATED_RUNS: "false",
-      TERRENCE_BINARY_CACHE_DIR: SHARED_BINARY_CACHE,
-      // Real backend: the worker queue must run (setup.ts disables it for
-      // test workers; spawned backends opt back in).
-      TERRENCE_DISABLE_WORKER: "0",
-    },
-    stdout: openSync(logPath, "w"),
-    stderr: openSync(logPath, "w"),
-  });
-  for (let i = 0; i < 300; i++) {
+  let proc: Bun.Subprocess | undefined;
+  try {
+    if (databaseKind === "postgres") {
+      const name = `terrence_provider_${crypto.randomUUID().replaceAll("-", "")}`;
+      const admin = new Bun.SQL(incomingUrl);
+      try { await admin.unsafe(`CREATE DATABASE "${name}"`); } finally { await admin.close(); }
+      dropDatabase = async (): Promise<void> => {
+        const admin = new Bun.SQL(incomingUrl);
+        try { await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`); } finally { await admin.close(); }
+      };
+      const target = new URL(incomingUrl);
+      target.pathname = `/${name}`;
+      databaseUrl = target.toString();
+    }
+    await writeFile(join(workDir, "profile.json"), JSON.stringify({ engine, databaseKind, securityProfile }), { mode: 0o600 });
+    console.log(`[e2e] database=${databaseKind} sandbox=${securityProfile}`);
+    const logFd = openSync(logPath, "w", 0o600);
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/healthz`);
-      if (res.ok) return { port, proc, dbDir, logPath, storageDir: dbDir };
-    } catch {}
-    if (proc.exitCode !== null) break;
-    await sleep(200);
+      proc = Bun.spawn(["bun", "run", "index.ts"], {
+        cwd: BACKEND_DIR,
+        env: {
+          ...process.env,
+          NODE_ENV: "production",
+          PORT: String(port),
+          DATABASE_URL: databaseUrl,
+          STORAGE_DIR: dbDir,
+          TERRENCE_JWT_SECRET: "provider-e2e-secret",
+          ADMIN_PASSWORD: "pe2e-admin-password-123",
+          TERRENCE_RUN_SANDBOX: securityProfile === "required" ? "true" : "false",
+          TERRENCE_ENABLE_LOCAL_SIGNUP: "true",
+          SIMULATED_RUNS: "false",
+          TERRENCE_BINARY_CACHE_DIR: SHARED_BINARY_CACHE,
+          TERRENCE_DISABLE_WORKER: "0",
+          TERRENCE_TRUSTED_PROXY_CIDRS: "127.0.0.1/32",
+        },
+        stdout: logFd,
+        stderr: logFd,
+      });
+    } finally { closeSync(logFd); }
+    for (let i = 0; i < 300; i++) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+        if (res.ok) return { port, proc, dbDir, logPath, storageDir: dbDir, databaseKind, securityProfile, dropDatabase };
+      } catch {}
+      if (proc.exitCode !== null) break;
+      await sleep(200);
+    }
+    const tail = (await readFile(logPath, "utf8").catch(() => "")).split("\n").slice(-60).join("\n");
+    throw new Error(`backend failed to start within 60s\n${tail}`);
+  } catch (error) {
+    proc?.kill();
+    if (proc) await proc.exited;
+    await dropDatabase();
+    await rm(dbDir, { recursive: true, force: true });
+    throw error;
   }
-  const tail = (await readFile(logPath, "utf8").catch(() => "")).split("\n").slice(-60).join("\n");
-  throw new Error(`backend failed to start within 60s\n${tail}`);
 }
 
-async function startTlsProxy(backendPort: number): Promise<Awaited<ReturnType<typeof Bun.serve>>> {
+async function startTlsProxy(backendPort: number, workDir: string): Promise<Awaited<ReturnType<typeof Bun.serve>>> {
   const port = await freePort();
-  const proc = Bun.spawn(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", "/tmp/key.pem", "-out", "/tmp/cert.pem"], {
+  const proc = Bun.spawn(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", join(workDir, "key.pem"), "-out", join(workDir, "cert.pem")], {
     stdout: "ignore",
     stderr: "ignore",
   });
-  await proc.exited;
-  const cert = await Bun.file("/tmp/cert.pem").arrayBuffer();
-  const key = await Bun.file("/tmp/key.pem").arrayBuffer();
+  if (await proc.exited !== 0) throw new Error("Could not create TLS fixture certificate");
+  const cert = await Bun.file(join(workDir, "cert.pem")).arrayBuffer();
+  const key = await Bun.file(join(workDir, "key.pem")).arrayBuffer();
   return Bun.serve({
     hostname: "127.0.0.1",
     port,
@@ -172,7 +212,10 @@ async function startTlsProxy(backendPort: number): Promise<Awaited<ReturnType<ty
       if (process.env["TERRENCE_E2E_PROXY_LOG"] === "1") {
         console.log(`[proxy] ${req.method} ${req.url}`);
       }
-      return fetch(new Request(url, req)).then((res) => {
+      const headers = new Headers(req.headers);
+      headers.set("X-Forwarded-Host", new URL(req.url).host);
+      headers.set("X-Forwarded-Proto", "https");
+      return fetch(new Request(new Request(url, req), { headers })).then((res) => {
         if (process.env["TERRENCE_E2E_PROXY_LOG"] === "1") {
           console.log(`[proxy] -> ${res.status} ${req.method} ${req.url}`);
         }
@@ -249,24 +292,38 @@ async function signupAndToken(port: number): Promise<{ token: string; userId: st
   return { token, userId, username };
 }
 
-async function cli(bin: string, args: string[], cwd: string, env: Record<string, string>): Promise<CliResult> {
-  const proc = Bun.spawn([bin, ...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
-  const code = await proc.exited;
-  const out = await new Response(proc.stdout).text();
-  const err = await new Response(proc.stderr).text();
+async function cli(bin: string, args: string[], cwd: string, env: Record<string, string>, input?: string): Promise<CliResult> {
+  const sandboxed = process.env["TERRENCE_E2E_SECURITY_PROFILE"] === "required";
+  const cliEnv = { ...env };
+  if (sandboxed && input !== undefined) throw new Error("Interactive CLI input is not supported by the sandbox harness");
+  if (sandboxed) {
+    // Provider installs must stay inside the sandbox workdir, not the shared writable cache.
+    delete cliEnv["TF_PLUGIN_CACHE_DIR"];
+    await mkdir(join(cwd, "tmp"), { recursive: true });
+  }
+  const proc = sandboxed
+    ? new (await import("../../src/lib/sandbox")).RunSandbox().spawnGeneric([bin, ...args], { cwd, env: cliEnv })
+    : Bun.spawn([bin, ...args], { cwd, env: cliEnv, stdin: input === undefined ? "ignore" : new Blob([input]), stdout: "pipe", stderr: "pipe", timeout: 180_000 });
+  const [code, out, err] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
   return { code, out, err };
 }
 
 function cliOk(result: CliResult, what: string): void {
   if (result.code !== 0) {
-    throw new Error(`${what} failed (exit ${result.code}):\n--- stdout ---\n${result.out}\n--- stderr ---\n${result.err}`);
+    const safe = JSON.parse(safeJsonStringify(result)) as CliResult;
+    const directory = process.env["TERRENCE_E2E_RESULTS_DIR"];
+    if (directory !== undefined) {
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, `failure-${Date.now()}-${crypto.randomUUID()}.json`), JSON.stringify({ command: what, ...safe }, null, 2), { mode: 0o600 });
+    }
+    throw new Error(`${what} failed (exit ${safe.code}):\n--- stdout ---\n${safe.out}\n--- stderr ---\n${safe.err}`);
   }
 }
 
 function providerTf(proxyPort: number, token: string): string {
   return `terraform {
   required_providers {
-    tfe = { source = "hashicorp/tfe" }
+    tfe = { source = "hashicorp/tfe", version = "${providerVersion}" }
   }
 }
 
@@ -395,6 +452,7 @@ resource "tfe_ssh_key" "ssh" {
 resource "tfe_workspace_settings" "ws_settings" {
   workspace_id        = tfe_workspace.ws.id
   global_remote_state = true
+  execution_mode      = "remote"
 }
 
 # --- coverage additions beyond the original smoke test ---
@@ -407,13 +465,21 @@ resource "tfe_audit_trail_token" "audit_tok" {
   organization = tfe_organization.org.name
 }
 
+resource "tfe_team" "members_team" {
+  organization = tfe_organization.org.name
+  name = "pe2e-members-${suffix}"
+}
+resource "tfe_team" "org_members_team" {
+  organization = tfe_organization.org.name
+  name = "pe2e-org-members-${suffix}"
+}
 resource "tfe_team_members" "team_members" {
-  team_id   = tfe_team.team.id
+  team_id   = tfe_team.members_team.id
   usernames = ["${username}"]
 }
 
 resource "tfe_team_organization_members" "team_org_members" {
-  team_id                     = tfe_team.team.id
+  team_id                     = tfe_team.org_members_team.id
   organization_membership_ids = [tfe_organization_membership.member.id]
 }
 
@@ -1103,7 +1169,8 @@ describe("tfe provider e2e", () => {
         /* ignore races */
       }
     }
-    const { ensureBinary } = await import("../../src/binaryManager");
+    const { ensureBinary, readBinaryIntegrity, verifyBinaryIntegrity } = await import("../../src/binaryManager");
+    if (["1", "true"].includes(process.env["ALLOW_UNVERIFIED_CHECKSUMS"]?.toLowerCase() ?? "")) throw new Error("Compatibility tests require verified CLI checksums");
     // Upstream registry lookups are occasionally transient (CI runners share
     // egress); retry each download before giving the whole file up.
     const ensureWithRetry = async (tool: "terraform" | "tofu"): Promise<{ binaryPath: string } | null> => {
@@ -1111,7 +1178,9 @@ describe("tfe provider e2e", () => {
       for (let attempt = 0; attempt < 3; attempt++) {
         if (attempt > 0) await sleep(5_000 * attempt);
         try {
-          last = await ensureBinary(tool);
+          const version = process.env[`TERRENCE_E2E_${tool.toUpperCase()}_VERSION`] ?? (matrixTier === "canary" ? "latest" : matrixTier === "floor" ? cliMatrix[tool].floor : cliMatrix[tool].current);
+          if (!/^(?:latest|\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?)$/.test(version)) throw new Error("Compatibility tests require an exact CLI version or latest canary");
+          last = await ensureBinary(tool, version);
         } catch {
           last = null;
         }
@@ -1119,16 +1188,38 @@ describe("tfe provider e2e", () => {
       }
       return null;
     };
-    const terraform = await ensureWithRetry("terraform");
-    const tofu = await ensureWithRetry("tofu");
-    if (terraform === null || tofu === null) throw new Error("could not obtain terraform and tofu binaries (network required)");
-    terraformBin = terraform.binaryPath;
-    tofuBin = tofu.binaryPath;
+    for (const tool of ["terraform", "tofu"] as const) {
+      if (e2eCliFilter !== null && e2eCliFilter !== tool) continue;
+      const binary = await ensureWithRetry(tool);
+      if (binary === null) throw new Error(`Could not obtain ${tool} binary`);
+      const integrity = await readBinaryIntegrity(dirname(binary.binaryPath));
+      if (integrity.status !== "ok" || !(await verifyBinaryIntegrity(binary.binaryPath, integrity.integrity))) throw new Error(`Compatibility tests require a verified managed ${tool} binary`);
+      binaryDigests.set(binary.binaryPath, integrity.integrity.binarySha256);
+      if (tool === "terraform") terraformBin = binary.binaryPath;
+      else tofuBin = binary.binaryPath;
+    }
   }, 300_000);
+
+  test("an unavailable PostgreSQL target fails instead of falling back to SQLite", async () => {
+    const previous = process.env["DATABASE_URL"];
+    const directory = mkdtempSync(join(tmpdir(), "terrence-provider-unavailable-"));
+    let backend: Backend | undefined;
+    try {
+      process.env["DATABASE_URL"] = `postgres://unused:unused@127.0.0.1:${await freePort()}/unavailable`;
+      let failure: unknown;
+      try { backend = await startBackend(directory, "terraform"); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(Error);
+    } finally {
+      if (previous === undefined) delete process.env["DATABASE_URL"];
+      else process.env["DATABASE_URL"] = previous;
+      if (backend) { backend.proc.kill(); await backend.proc.exited; await backend.dropDatabase(); await rm(backend.dbDir, { recursive: true, force: true }); }
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   for (const cliName of ["terraform", "tofu"] as const) {
     if (e2eCliFilter !== null && cliName !== e2eCliFilter) continue;
-    test(`latest hashicorp/tfe provider: full lifecycle against Terrence via ${cliName} CLI`, async () => {
+    test(`tracked hashicorp/tfe provider: full lifecycle against Terrence via ${cliName} CLI`, async () => {
       const bin = cliName === "terraform" ? terraformBin : tofuBin;
       const suffix = `${cliName}${Date.now().toString(36)}`;
       const workDir = mkdtempSync(join(tmpdir(), `terrence-provider-e2e-${suffix}-`));
@@ -1139,11 +1230,19 @@ describe("tfe provider e2e", () => {
         TF_PLUGIN_CACHE_DIR: SHARED_PLUGIN_CACHE,
       };
 
-      const backend = await startBackend(workDir);
+      const backend = await startBackend(workDir, cliName);
       try {
-        const proxy = await startTlsProxy(backend.port);
+        const proxy = await startTlsProxy(backend.port, workDir);
         try {
           const auth = await signupAndToken(backend.port);
+          const dbStatus = await api(backend.port, "GET", "/api/v2/admin/db-migration/status", undefined, auth.token);
+          expect(dbStatus.status).toBe(200);
+          expect(dbStatus.json["data"]["source-database"] === null).toBe(backend.databaseKind === "postgres");
+          const meta = await api(backend.port, "GET", "/api/v2/meta", undefined, auth.token);
+          expect(meta.status).toBe(200);
+          expect(meta.json["data"].attributes["run-sandbox"].enabled).toBe(backend.securityProfile === "required");
+          if (backend.securityProfile === "required") expect(meta.json["data"].attributes["run-sandbox"].available).toBe(true);
+          console.log(`[e2e] engine=${cliName} database=${backend.databaseKind} sandbox=${backend.securityProfile} verified`);
 
           // mkdtemp: unique per run, no check-then-create race (CodeQL).
           const cfgDir = mkdtempSync(join(workDir, "config-"));
@@ -1156,6 +1255,33 @@ describe("tfe provider e2e", () => {
           const apply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(apply, "apply");
           expect(apply.out).toContain("Apply complete");
+
+          // A successful create is not convergence: refresh and plan twice.
+          for (let refresh = 0; refresh < 2; refresh++) {
+            cliOk(await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], cfgDir, cliEnv), `unchanged plan ${refresh + 1}`);
+          }
+          const repeatedApply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
+          cliOk(repeatedApply, "unchanged apply");
+          expect(repeatedApply.out).toContain("Resources: 0 added, 0 changed, 0 destroyed.");
+
+          for (const description of ["updated description", "", "provider e2e variable set"]) {
+            await writeFile(join(cfgDir, "main.tf"), mainTf(suffix, auth.username).replace('description  = "provider e2e variable set"', `description  = "${description}"`));
+            cliOk(await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv), "variable set description update");
+            cliOk(await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], cfgDir, cliEnv), "variable set description convergence");
+          }
+
+          // Import into a minimal, separate state: no generated IDs or timestamps
+          // in configuration, and never destroy the imported shared object here.
+          const importDir = mkdtempSync(join(workDir, "import-"));
+          await writeFile(join(importDir, "providers.tf"), providerTf(proxy.port!, auth.token));
+          await writeFile(join(importDir, "main.tf"), `resource "tfe_team" "imported" {
+  organization = "pe2e-org-${suffix}"
+  name = "pe2e-team-${suffix}"
+}
+`);
+          cliOk(await cli(bin, ["init", "-input=false", "-no-color"], importDir, cliEnv), "import init");
+          cliOk(await cli(bin, ["import", "-input=false", "-no-color", "tfe_team.imported", `pe2e-org-${suffix}/pe2e-team-${suffix}`], importDir, cliEnv), "team import");
+          cliOk(await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], importDir, cliEnv), "import convergence");
 
           const stateList = await cli(bin, ["state", "list"], cfgDir, cliEnv);
           cliOk(stateList, "state list");
@@ -1228,6 +1354,48 @@ data "tfe_hyok_encrypted_data_key" "d_hyok_dek" {
           expect(val("ds_pset_name")).toBe(`pe2e-pset-${suffix}`);
           expect(String(val("ds_gpg_armor"))).toContain("BEGIN PGP PUBLIC KEY BLOCK");
           expect(Number(val("ds_gpgs_count"))).toBeGreaterThan(0);
+
+          if (backend.securityProfile === "disabled") {
+            const remoteDir = mkdtempSync(join(workDir, "remote-"));
+            const versions = await cli(bin, ["version", "-json"], cfgDir, cliEnv);
+            cliOk(versions, "remote CLI version");
+            const engineVersion = (JSON.parse(versions.out) as { terraform_version: string }).terraform_version;
+            const remoteName = `pe2e-remote-${suffix}`;
+            const created = await api(backend.port, "POST", `/api/v2/organizations/pe2e-org-${suffix}/workspaces`, { data: { attributes: { name: remoteName, "execution-mode": "remote", "terraform-version": engineVersion, "iac-binary": cliName, "auto-apply": false } } }, auth.token);
+            expect(created.status).toBe(201);
+            const uploadProbe = await fetch(`https://127.0.0.1:${proxy.port}/api/v2/workspaces/${created.json["data"].id}/configuration-versions`, {
+              method: "POST", headers: { Authorization: `Bearer ${auth.token}`, "Content-Type": "application/vnd.api+json" },
+              body: JSON.stringify({ data: { type: "configuration-versions", attributes: { "auto-queue-runs": false, speculative: true } } }),
+              tls: { ca: await readFile(join(workDir, "cert.pem"), "utf8") },
+            });
+            expect(uploadProbe.status).toBe(201);
+            const uploadUrl = ((await uploadProbe.json()) as { data: { attributes: { "upload-url": string } } }).data.attributes["upload-url"];
+            expect(new URL(uploadUrl).origin).toBe(`https://127.0.0.1:${proxy.port}`);
+
+            await writeFile(join(workDir, "remote.tfrc"), `credentials "127.0.0.1:${proxy.port}" { token = "${auth.token}" }`, { mode: 0o600 });
+            await writeFile(join(remoteDir, "main.tf"), `terraform {
+  backend "remote" {
+    hostname = "127.0.0.1:${proxy.port}"
+    organization = "pe2e-org-${suffix}"
+    workspaces { name = "${remoteName}" }
+  }
+}
+resource "terraform_data" "probe" { input = "remote-cli-value" }
+output "probe" { value = terraform_data.probe.output }
+`);
+            const remoteEnv = { ...cliEnv, SSL_CERT_FILE: join(workDir, "cert.pem"), TF_CLI_CONFIG_FILE: join(workDir, "remote.tfrc"), HOME: remoteDir };
+            cliOk(await cli(bin, ["init", "-input=false", "-no-color"], remoteDir, remoteEnv), "remote init");
+            cliOk(await cli(bin, ["plan", "-input=false", "-no-color"], remoteDir, remoteEnv), "remote plan");
+            const approved = await cli(bin, ["apply", "-no-color"], remoteDir, remoteEnv, "yes\n");
+            cliOk(approved, "remote approved apply");
+            expect(approved.out).toContain("Apply complete");
+            const pulled = await cli(bin, ["state", "pull"], remoteDir, remoteEnv);
+            cliOk(pulled, "remote state pull");
+            const pulledState = JSON.parse(pulled.out) as { version: number; outputs: { probe: { value: string } } };
+            expect(pulledState.version).toBe(4);
+            expect(pulledState.outputs.probe.value).toBe("remote-cli-value");
+            cliOk(await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], remoteDir, remoteEnv), "remote unchanged plan");
+          }
 
           await planAndApply(backend.port, auth.token, `pe2e-org-${suffix}`, `pe2e-ws-${suffix}`, workDir);
 
@@ -1433,11 +1601,39 @@ data "tfe_no_code_module" "d_ncm" {
           const destroy = await cli(bin, ["destroy", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(destroy, "destroy");
           expect(destroy.out).toContain("Destroy complete");
+          const emptyState = await cli(bin, ["state", "list"], cfgDir, cliEnv);
+          cliOk(emptyState, "state after destroy");
+          expect(emptyState.out.trim()).toBe("");
+          const version = await cli(bin, ["version", "-json"], cfgDir, cliEnv);
+          cliOk(version, "version evidence");
+          const versionInfo = JSON.parse(version.out) as { terraform_version: string };
+          expect(versionInfo.terraform_version).toMatch(/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$/);
+          const tier = matrixTier === "canary" ? "experimental" : versionInfo.terraform_version === cliMatrix[cliName].floor ? "floor" : versionInfo.terraform_version === cliMatrix[cliName].current ? "current" : "experimental";
+          const resultsDir = process.env["TERRENCE_E2E_RESULTS_DIR"] ?? workDir;
+          await mkdir(resultsDir, { recursive: true });
+          await writeFile(join(resultsDir, `${cliName}-${versionInfo.terraform_version}-${backend.databaseKind}-${backend.securityProfile}-lifecycle.json`), JSON.stringify({
+            fixture: "backend/tests/e2e/provider_e2e.test.ts",
+            completedAt: new Date().toISOString(),
+            engine: cliName,
+            versions: versionInfo,
+            tier,
+            binarySha256: binaryDigests.get(bin),
+            database: backend.databaseKind,
+            sandbox: backend.securityProfile,
+            claims: [
+              { resources: stateList.out.trim().split("\n").filter((address) => !address.startsWith("data.")), behaviors: ["create", "read", "two-unchanged-plans", "unchanged-apply", "destroy"] },
+              { resources: ["tfe_variable_set.vs"], behaviors: ["set-description", "clear-description", "restore-description", "unchanged-plan-after-each-update"] },
+              { resources: ["tfe_team.team"], behaviors: ["import-minimal-config", "unchanged-plan-after-import"] },
+              ...(backend.securityProfile === "disabled" ? [{ resources: ["terraform_data.probe"], behaviors: ["remote-init", "remote-plan", "interactive-apply-approval", "remote-state-pull", "remote-unchanged-plan"] }] : []),
+            ],
+          }, null, 2), { mode: 0o600 });
         } finally {
           await proxy.stop(true);
         }
       } finally {
         backend.proc.kill();
+        await backend.proc.exited;
+        await backend.dropDatabase();
         // The backend's temp dir (db + downloaded terraform/tofu binaries,
         // ~300 MB) is on tmpfs (/tmp) and is otherwise never cleaned up;
         // leaving it behind fills the container's 8 GB cgroup RAM and OOM-kills

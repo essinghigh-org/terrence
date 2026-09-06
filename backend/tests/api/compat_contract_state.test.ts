@@ -22,7 +22,7 @@ describe("remote-workflow state versions contract", () => {
   const workspaceId = `workspace-${seed.suffix}`;
   let stateVersionId = "";
   const stateJson = (serial: number) =>
-    JSON.stringify({ version: 4, serial, lineage: "test-lineage", outputs: {} });
+    JSON.stringify({ version: 4, serial, lineage: "test-lineage", resources: [], outputs: {} });
   const stateMd5 = (serial: number) => createHash("md5").update(stateJson(serial)).digest("base64");
 
   const statePayload = {
@@ -68,7 +68,7 @@ describe("remote-workflow state versions contract", () => {
     expect(resource.attributes["serial"]).toBe(1);
     // the reference format returns the MD5 digest of the state payload.
     expect(resource.attributes["md5"]).toBe(
-      createHash("md5").update('{"version":4,"serial":1,"lineage":"test-lineage","outputs":{}}').digest("hex"),
+      createHash("md5").update(stateJson(1)).digest("hex"),
     );
     expect(resource.attributes["lineage"]).toBe("test-lineage");
     expect(resource.attributes["status"]).toBe("finalized");

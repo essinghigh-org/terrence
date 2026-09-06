@@ -1,3 +1,4 @@
+import { CLIENT_ENCRYPTED_STATE_ERROR, isClientEncryptedState } from "../lib/validation";
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { tokenHashCandidates } from "../lib/token-service";
@@ -115,7 +116,7 @@ async function rawBody(ctx: AgentCtx): Promise<Buffer> {
       return Buffer.alloc(0);
     }
   }
-  return Buffer.from(String(body ?? ""));
+  return Buffer.from(JSON.stringify(body) ?? "");
 }
 
 /** Parse a JSON request body, preferring Elysia's parsed ctx.body. */
@@ -525,6 +526,10 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
           set.status = 422;
           return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent state payload must be valid JSON strings" }] };
         }
+        if (isClientEncryptedState(statePayload)) {
+          set.status = 422;
+          return { errors: [{ status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR }] };
+        }
         if (!isAgentResultValid(result)) {
           set.status = 422;
           return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `result exceeds ${MAX_AGENT_RESULT_BYTES} bytes or structural limits` }] };
@@ -796,15 +801,8 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       const version = run.terraformVersion ?? workspace.terraformVersion ?? org.defaultTerraformVersion ?? "latest";
       const terraformInfo = await terraformReleaseInfo(version, agent.architecture ?? "amd64");
       if (terraformInfo === null) throw new Error("Unable to resolve Terraform release");
-      const environment = await agentEnvironment(workspace.id, workspace.orgId, workspace.projectId ?? null);
+      const environment = await agentEnvironment(workspace.id, workspace.orgId, workspace.projectId ?? null, run.variables);
       const runVars: Record<string, string> = {};
-      if (Array.isArray(run.variables)) {
-        for (const v of run.variables as { key?: string; value?: string; category?: string }[]) {
-          if (v && typeof v.key === "string" && typeof v.value === "string" && v.category === "terraform") {
-            runVars[v.key] = v.value;
-          }
-        }
-      }
       // Mint the run token only after all fallible lookups/resolution work has
       // succeeded, so a failed payload build cannot accumulate valid tokens.
       const runToken = await agentRunToken(run.id, workspace.id, workspace.orgId);
@@ -1021,8 +1019,23 @@ async function storeSideArtifact(ctx: AgentCtx, kind: string, ext: string): Prom
     set.status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
   }
+  if (ext === "json") {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Expected a JSON object");
+    } catch {
+      set.status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Artifact must be a JSON object" }] };
+    }
+  }
   const path = sideArtifactPath(details.job.runId, kind, ext);
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, raw, { mode: 0o600 });
+  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, raw, { mode: 0o600, flag: "wx" });
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true });
+  }
   return {};
 }

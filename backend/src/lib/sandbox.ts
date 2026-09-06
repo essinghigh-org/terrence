@@ -37,7 +37,8 @@ const SANDBOX_DISABLED = ["false", "0", "none", "no", "off"].includes(
 
 export function runNetPolicy(): "allow" | "deny" {
   const raw = (process.env["TERRENCE_RUN_NET_POLICY"] ?? "allow").toLowerCase().trim();
-  return raw === "deny" ? "deny" : "allow";
+  if (raw !== "allow" && raw !== "deny") throw new Error("TERRENCE_RUN_NET_POLICY must be allow or deny");
+  return raw;
 }
 export function runNetDenyEnabled(): boolean {
   return runNetPolicy() === "deny";

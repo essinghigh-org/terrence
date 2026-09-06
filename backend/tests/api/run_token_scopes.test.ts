@@ -66,8 +66,8 @@ describe("run-scoped token scope/lifetime/revocation (RUN-022)", () => {
       }));
       if (lock.status !== 200) throw new Error(`workspace lock failed: ${lock.status}`);
     }
-    const stateA = JSON.stringify({ ...JSON.parse(STATE_A), serial: 1, resources: [] });
-    const stateB = JSON.stringify({ ...JSON.parse(STATE_B), serial: 1, resources: [] });
+    const stateA = JSON.stringify({ ...JSON.parse(STATE_A), serial: 1, lineage: "test-lineage", resources: [] });
+    const stateB = JSON.stringify({ ...JSON.parse(STATE_B), serial: 1, lineage: "test-lineage", resources: [] });
     const post = await app.handle(new Request(`http://terrence.test/api/v2/workspaces/${wsA}/state-versions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${userToken}`, "Content-Type": "application/vnd.api+json" },

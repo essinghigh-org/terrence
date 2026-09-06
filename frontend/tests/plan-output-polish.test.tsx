@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { operationFor, operationForResource } from "../src/lib/plan-operations";
 import { PlanOutput } from "../src/components/PlanOutput";
 import { EventProvider, type EventStreamFactory } from "../src/lib/event-provider";
 import { isString } from "../src/lib/type-guards";
@@ -498,4 +499,33 @@ test("the healthy illustration requires a completed plan without changes or drif
   const drifted = render(<PlanOutput runId="run-drift" status="planned_and_finished" planStatus="finished" />);
   await waitFor((): void => { expect(drifted.getByText("This plan has no resource changes.")).toBeTruthy(); });
   expect(drifted.container.querySelector('[data-pose="healthy"]')).toBeNull();
+});
+
+
+test("keeps state removal and unsupported operations visible, and counts real deletion", async () => {
+  expect(operationFor(["forget"])).toBe("remove");
+  expect(operationFor(["create", "delete"])).toBe("replace");
+  expect(operationFor(["delete", "create"])).toBe("replace");
+  expect(operationFor(["create", "forget"])).toBe("unsupported");
+  expect(operationFor([])).toBe("unsupported");
+  expect(operationFor(["future-action"])).toBe("unsupported");
+  expect(operationForResource({ address: "test.deleted", type: "test", action_reason: "delete_because_no_resource_config", change: { actions: ["delete"], before: {}, after: null } })).toBe("delete");
+  globalThis.fetch = mock(async (): Promise<Response> => json({
+    public_plan_version: 1,
+    resource_changes: [
+      { address: "test.forgotten", type: "test", change: { actions: ["forget"], before: {}, after: null } },
+      { address: "test.future", type: "test", change: { actions: ["unsupported"], before: {}, after: {} } },
+      { address: "test.deleted", type: "test", action_reason: "delete_because_no_resource_config", change: { actions: ["delete"], before: {}, after: null } },
+    ],
+  })) as unknown as typeof fetch;
+  const view = render(<PlanOutput runId="run-operation-contract" status="planned" />);
+  await waitFor((): void => {
+    expect(view.getByLabelText("1 to remove from state")).toBeTruthy();
+    expect(view.getByLabelText("1 unsupported operations")).toBeTruthy();
+    expect(view.getByLabelText("1 to destroy")).toBeTruthy();
+    expect(view.getByText("test.forgotten")).toBeTruthy();
+    expect(view.getByText("test.future")).toBeTruthy();
+    expect(view.queryByLabelText("No resource changes")).toBeNull();
+    expect(view.getByRole("alert").textContent).toContain("review the CLI plan before approval");
+  });
 });

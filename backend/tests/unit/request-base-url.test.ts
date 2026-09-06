@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { requestBaseUrl } from "../../src/lib/utils";
+import { isIPv4InCidr } from "../../src/lib/url-safety";
 import { refreshTrustedClientIpHeaders } from "../../src/lib/client-ip";
 
 // Issue #576: generated links prefer PUBLIC_URL, then proxy headers, then
@@ -38,6 +39,15 @@ describe("request base URL resolution (#576, #648)", () => {
         "x-forwarded-host": "terraform.example.com",
         "x-forwarded-proto": "https",
       }, "127.0.0.1"))).toBe("https://terraform.example.com");
+      expect(requestBaseUrl(req("http://terrence:3000/x", {
+        "x-forwarded-host": "terraform.example.com",
+        "x-forwarded-proto": "https",
+      }, "::ffff:127.0.0.1"))).toBe("https://terraform.example.com");
+      expect(requestBaseUrl(req("http://terrence:3000/x", {
+        "x-forwarded-host": "terraform.example.com",
+        "x-forwarded-proto": "https",
+      }, "::ffff:192.0.2.1"))).toBe("http://terrence:3000");
+
     });
   });
 
@@ -93,4 +103,17 @@ describe("request base URL resolution (#576, #648)", () => {
       }, "127.0.0.1"))).toBe("http://terrence:3000");
     });
   });
+});
+
+it("CIDR matching validates both addresses and prefix lengths", () => {
+  expect(isIPv4InCidr("::ffff:127.0.0.1", "127.0.0.1")).toBe(true);
+  expect(isIPv4InCidr("::FFFF:192.0.2.1", "192.0.2.0/24")).toBe(true);
+  expect(isIPv4InCidr("192.0.2.255", "192.0.2.0/24")).toBe(true);
+  expect(isIPv4InCidr("192.0.3.0", "192.0.2.0/24")).toBe(false);
+  for (const host of ["garbage.0.0.1", "999.0.0.1", "::1", "192.0.2.1evil", "192.0.02.1"]) {
+    expect(isIPv4InCidr(host, "0.0.0.0/0")).toBe(false);
+  }
+  for (const cidr of ["garbage.0.0.0/0", "0.0.0.0/0evil", "0.0.0.0/", "0.0.0.0/33", "0.0.0.0/-1", "0.0.0.0/1/2"]) {
+    expect(isIPv4InCidr("192.0.2.1", cidr)).toBe(false);
+  }
 });

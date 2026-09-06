@@ -2,7 +2,7 @@ import { EmptyState } from "../components/EmptyState";
 import { useEffect, useRef, useState } from "react";
 import { isNumber, isRecord, isString } from "../lib/type-guards";
 import { Link } from "react-router-dom";
-import { fetchAllApiPages, fetchApi } from "@/lib/api";
+import { fetchAllApiPages, fetchApi, fetchApiBlob } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/utils";
 import { formatRunStatusForUi } from "@/lib/run-labels";
@@ -134,9 +134,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
 
   const handleDownload = async (s: StateItem): Promise<void> => {
     try {
-      const rawText: unknown = await fetchApi(`/state-versions/${s.id}/download`);
-      const payloadString = isString(rawText) ? rawText : JSON.stringify(rawText, null, 2);
-      const blob = new Blob([payloadString], { type: "application/json" });
+      const blob = await fetchApiBlob(`/state-versions/${s.id}/download`);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -210,7 +208,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold">State version history</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Browse historical state, inspect the run that produced it, and download a safe copy for recovery.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Browse historical state and its source run. Raw downloads may contain secrets. Client-encrypted OpenTofu state cannot be uploaded or inspected as structured state.</p>
         </div>
         {canUpload && (
           <>
@@ -324,14 +322,17 @@ s.attributes["serial"] as number}</p>
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={loadingStateId === s.id}
+                    disabled={loadingStateId === s.id || s.attributes["state-representation"] === "opentofu-encrypted"}
                     onClick={(): void => { void handleViewJson(s); }}
                   >
                     {loadingStateId === s.id ? "Loading…" : "View JSON"}
                   </Button>
                   <Button variant="ghost" size="sm" onClick={(): void => { void handleDownload(s); }}>
-                    Download state
+                    Download raw state
                   </Button>
+                  {s.attributes["state-representation"] === "opentofu-encrypted" && (
+                    <span className="text-xs text-muted-foreground">Client-encrypted state: structured inspection is unavailable. Download it with its client keys for recovery.</span>
+                  )}
                 </TableCell>
               </TableRow>
             ))}

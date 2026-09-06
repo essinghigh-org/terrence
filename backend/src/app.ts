@@ -247,8 +247,8 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
   const pathname = new URL(request.url).pathname;
   // Elysia wraps onParse failures in its own ParseError; the original is
   // preserved as `cause` (elysia/dist/error.js ParseError).
-  const isBodyTooLarge = error instanceof BodyTooLargeError
-    || (code === "PARSE" && error instanceof Error && error.cause instanceof BodyTooLargeError);
+  const bodyTooLarge = error instanceof BodyTooLargeError ? error
+    : code === "PARSE" && error instanceof Error && error.cause instanceof BodyTooLargeError ? error.cause : null;
   // Error path: the request never reached onAfterHandle, so settle the
   // in-flight counter here instead (same WeakMap consumption rule). The
   // status mirrors the branch logic below so 404/422/400/413 do not count
@@ -257,7 +257,7 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
   if (errored !== undefined) {
     const status = code === "NOT_FOUND" ? 404
       : code === "VALIDATION" ? 422
-        : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? (isBodyTooLarge ? 413 : 400)
+        : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? (bodyTooLarge !== null ? 413 : 400)
           : typeof mutableSet.status === "number" ? mutableSet.status : 500;
     requestFinished(status);
     requestMeta.delete(request as unknown as Request);
@@ -275,13 +275,13 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
     return { errors: [{ status: "404", title: "Not Found", detail: COMPATIBILITY_PROMISE }] };
   }
   mutableSet.headers["Content-Type"] = "application/vnd.api+json";
-  if (isBodyTooLarge) {
+  if (bodyTooLarge !== null) {
     mutableSet.status = 413;
     return {
       errors: [{
         status: "413",
         title: "Payload Too Large",
-        detail: `Request body exceeds the ${API_BODY_LIMIT_BYTES} byte limit for this endpoint`,
+        detail: `${bodyTooLarge.message} for this endpoint`,
       }],
     };
   }
@@ -855,6 +855,10 @@ export const app = new Elysia()
     const hasBody = requestBody !== undefined
       ? requestBody !== null
       : Number(request.headers.get("content-length")) > 0 || request.headers.get("transfer-encoding") !== null;
+    // State upload checksums bind the exact bytes, including whitespace.
+    if (/^\/api\/v2\/state-versions\/[^/]+\/upload$/.test(pathname)) {
+      return readTextWithLimit(request as unknown as Request, 100 * 1024 * 1024);
+    }
     if (hasBody && isJsonApiRequestPath(pathname)) {
       // Read through the same bounded path used for JSON. Invalid media types
       // remain text until the authenticated onBeforeHandle guard returns 415;

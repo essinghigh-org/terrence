@@ -73,7 +73,7 @@ async function organizationResourceForPrincipal(
     canManageProviders,
     canManageModules,
   ] = orgPermissionFlags;
-  const resource = organizationResource(org);
+  const resource = await organizationResource(org);
   return {
     ...resource,
     attributes: {
@@ -281,7 +281,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       db.select({ total: count() }).from(organizations).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    return { data: orgs.map((o: Readonly<typeof organizations.$inferSelect>): Record<string, unknown> => organizationResource(o)), ...pagination(request, number, size, totalCount) };
+    return { data: await Promise.all(orgs.map(organizationResource)), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organizations/:org_name/reserved-tag-keys", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";

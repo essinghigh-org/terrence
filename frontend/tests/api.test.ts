@@ -9,6 +9,7 @@ import {
   extractFieldErrors,
   fetchAllApiPages,
   fetchApi,
+  fetchApiBlob,
   getAuthToken,
   getAuthTokenExpiry,
   isRefreshableSession,
@@ -384,12 +385,56 @@ test("fetchApi surfaces field-level 422 details on ApiError", async () => {
   try {
     setAuthToken("tk", Date.now() + 60_000);
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-    const caught = (await fetchApi("/notification-configurations").catch((e) => e)) as ApiError;
+    const caught = (await fetchApi("/notification-configurations").catch((e: unknown) => e)) as ApiError;
     expect(caught).toBeInstanceOf(ApiError);
     expect(caught.status).toBe(422);
     expect(caught.message).toBe("Name is required");
     expect(caught.fieldErrors).toEqual({ name: "Name is required", url: "Bad URL" });
   } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("workspace 404 refresh recovery never replays mutations", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const method of ["POST", "PATCH", "DELETE"]) {
+      setAuthToken("current-access", Date.now() + 60_000, true);
+      const calls: string[] = [];
+      globalThis.fetch = (async (input): Promise<Response> => {
+        calls.push(requestUrl(input));
+        return Response.json({ errors: [{ status: "404", title: "Not Found" }] }, { status: 404 });
+      }) as typeof fetch;
+      let failure: unknown;
+      try { await fetchApi("/workspaces/ws-test/vars", { method }); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(ApiError);
+      expect(calls).toEqual(["/api/v2/workspaces/ws-test/vars"]);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    setAuthToken("");
+  }
+});
+
+
+test("raw downloads preserve JSON bytes and use the authenticated API error path", async () => {
+  const originalFetch = globalThis.fetch;
+  const bytes = '{  "large": 123456789012345678901234567890, "label": "☃" }\n';
+  try {
+    setAuthToken("download-token");
+    globalThis.fetch = (async (_input: string | URL | Request, options?: RequestInit): Promise<Response> => {
+      expect(new Headers(options?.headers).get("Authorization")).toBe("Bearer download-token");
+      return new Response(bytes, { headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const blob = await fetchApiBlob("/state-versions/sv-1/download");
+    expect(await blob.text()).toBe(bytes);
+    globalThis.fetch = (async (): Promise<Response> => new Response(JSON.stringify({ errors: [{ detail: "State download is unavailable" }] }), { status: 422, headers: { "Content-Type": "application/json" } })) as unknown as typeof fetch;
+    let failure: unknown;
+    try { await fetchApiBlob("/state-versions/sv-1/download"); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(ApiError);
+    expect((failure as Error).message).toBe("State download is unavailable");
+  } finally {
+    setAuthToken("");
     globalThis.fetch = originalFetch;
   }
 });

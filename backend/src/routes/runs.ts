@@ -1,17 +1,20 @@
+import { log } from "../lib/log";
+import { runVariablesForWrite } from "../lib/run-variables";
 import { newResourceId } from "../lib/resource-id";
 import { createHash } from "node:crypto";
-import { exists } from "node:fs/promises";
+import { exists, readFile } from "node:fs/promises";
+import { isClientEncryptedState, parseTerraformStatePayload, statePayloadError } from "../lib/validation";
 import { join } from "node:path";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { storageDir } from "../db/driver";
-import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users, organizations, notificationConfigurations, notificationConfigurationWorkspaceExclusions } from "../db/schema";
+import { agentJobs, agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users, organizations, notificationConfigurations, notificationConfigurationWorkspaceExclusions } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt, sql } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource, taskStageResource, type RunRelationshipLinkage } from "../lib/response";
 import { tfPolicyEvaluationResource, tfStageTypesForEvaluations } from "./policy-evaluations";
 import { configurationVersionResource, configurationVersionIngressResource } from "./configuration-versions";
 import { costEstimateResource } from "./misc";
-import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, workspaceIdsForPermission, workspaceRunHistoryWhere, organizationRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, DISCARDABLE_RUN_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, runLogURL, pageRequest, pagination, cursorPagination, workspaceIdsForPermission, workspaceRunHistoryWhere, organizationRunHistoryWhere, signedApiURL, FINAL_RUN_STATUSES, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, DISCARDABLE_RUN_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, parseLogSliceParams, readRunLogSlice, readRunLogsPage } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../lib/plan-json";
@@ -133,6 +136,8 @@ async function rawRunLogResponse(
 ): Promise<Uint8Array> {
   const { offset, limit } = parseLogSliceParams(request);
   const slice = await readRunLogSlice(runId, phase, offset, limit);
+  set.headers["Cache-Control"] = "private, no-store";
+  set.headers["Referrer-Policy"] = "no-referrer";
   set.headers["Content-Type"] = "text/plain; charset=utf-8";
   set.headers["Content-Disposition"] = `attachment; filename="${rawRunLogFilename(runId, phase)}"`;
   set.headers["X-Terrence-Log-Total-Bytes"] = String(slice.totalBytes);
@@ -728,7 +733,7 @@ export async function createRun(
     || (typeof attributes["refresh-only"] === "boolean" ? attributes["refresh-only"] : false);
   const targetAddrs = Array.isArray(attributes["target-addrs"]) ? (attributes["target-addrs"] as string[]) : null;
   const replaceAddrs = Array.isArray(attributes["replace-addrs"]) ? (attributes["replace-addrs"] as string[]) : null;
-  const runVariables = Array.isArray(attributes["variables"]) ? attributes["variables"] : null;
+  const runVariablesInput = Array.isArray(attributes["variables"]) ? attributes["variables"] : null;
   const terraformVersion = typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : undefined;
   const debuggingMode = typeof attributes["debugging-mode"] === "boolean" ? attributes["debugging-mode"] : false;
   const allowEmptyApply = requestedOperation === "empty_apply"
@@ -861,6 +866,7 @@ export async function createRun(
   const createdAt = Date.now();
   const logToken = crypto.randomUUID();
   const planOnly = requestedPlanOnly ?? configurationVersion?.speculative ?? false;
+  const runVariables = runVariablesInput === null ? null : await runVariablesForWrite(runVariablesInput);
   const nowIso = new Date(createdAt).toISOString();
   const finalMsg = message !== "" ? message : (configurationVersion?.source === "tfe-cli" ? "Triggered via CLI" : "Triggered via UI");
   const origin = originForConfiguration(configurationVersion);
@@ -1204,6 +1210,13 @@ export const runRoutes = new Elysia({ name: "runs" })
     // (capture completion marker present) may be the only record of the
     // infrastructure state after an interrupted apply.
     detailAttributes["has-recovery-state"] = await exists(join(storageDir, "recovery", runId, ".recovered"));
+    if (detailAttributes["has-recovery-state"] === true) {
+      const recoveryPayload = await readFile(join(storageDir, "recovery", runId, "terraform.tfstate"), "utf8").catch((): null => null);
+      const parsedRecovery = parseTerraformStatePayload(recoveryPayload);
+      detailAttributes["recovery-state-format-supported"] = parsedRecovery !== null;
+      detailAttributes["recovery-state-representation"] = isClientEncryptedState(recoveryPayload) ? "opentofu-encrypted" : parsedRecovery === null ? "invalid" : "terraform-v4";
+      detailAttributes["recovery-state-unavailable-reason"] = parsedRecovery === null ? statePayloadError(recoveryPayload) : null;
+    }
     const includes = requestedRunIncludes(request);
     const included = await includedRunResources([authorized.run], request, includes);
     return { data, ...(included.length > 0 ? { included } : {}) };
@@ -1212,9 +1225,32 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "admin");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(logs).where(eq(logs.runId, runId));
-    await Promise.all([deleteRunLogArchive(runId), deletePlanJsonArtifact(runId)]);
-    await db.delete(runs).where(eq(runs.id, runId));
+    const { hasActiveRunExecution } = await import("../worker");
+    const deleted = await db.transaction(async (tx): Promise<boolean> => {
+      // Fence the status read used for authorization before deleting any data.
+      const current = await tx.update(runs).set({ status: authorized.run.status }).where(and(
+        eq(runs.id, runId), eq(runs.status, authorized.run.status), inArray(runs.status, FINAL_RUN_STATUSES),
+      )).returning({ id: runs.id });
+      if (current.length === 0) return false;
+      const activeJob = await tx.query.agentJobs.findFirst({
+        where: and(eq(agentJobs.runId, runId), inArray(agentJobs.status, ["queued", "claimed"])),
+        columns: { id: true },
+      });
+      if (hasActiveRunExecution(runId) || activeJob !== undefined) return false;
+      await tx.delete(logs).where(eq(logs.runId, runId));
+      await tx.delete(runs).where(eq(runs.id, runId));
+      return true;
+    });
+    if (!deleted) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Cancel the run and wait for execution to stop before deleting it." }] };
+    }
+    // Filesystem deletion cannot roll back with SQL. Remove artifacts only
+    // after the database commits; a rejected deletion must preserve them.
+    const cleanup = await Promise.allSettled([deleteRunLogArchive(runId), deletePlanJsonArtifact(runId)]);
+    for (const result of cleanup) {
+      if (result.status === "rejected") log.warn("Artifact cleanup failed after run deletion", { runId, error: result.reason });
+    }
     (set as { status: number }).status = 204;
     return new Response(null, { status: 204 });
   })
@@ -1253,7 +1289,7 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   .get("/api/v2/applies/:apply_id/errored-state", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = (params["apply_id"] ?? "").replace(/^apply-/, "");
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "state-read");
     if (authorized === undefined || authorized.run.status !== "errored") {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -1364,7 +1400,7 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   .get("/api/v2/runs/:run_id/input-state-version", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "state-read");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const inputStateId = authorized.run.statusTimestamps?.["input-state-version-id"];
     if (typeof inputStateId !== "string" || inputStateId === "") return { data: null };
@@ -1374,6 +1410,15 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (currentSV === undefined) return { data: null };
     const { stateVersionResource } = await import("../lib/response");
     return { data: stateVersionResource(currentSV, request) };
+  })
+  .post("/api/v2/runs/:run_id/actions/revoke-log-links", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const runId = params["run_id"] ?? "";
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "admin");
+    if (authorized === undefined || authorized.run.softDeletedAt !== null) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    await db.update(runs).set({ logToken: crypto.randomUUID() }).where(eq(runs.id, runId));
+    await auditLog("revoke-log-links", "runs", runId, user?.id ?? null, authorized.workspace.orgId);
+    set.status = 204;
+    return null;
   })
   .get("/api/v2/runs/:run_id/logs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
@@ -1391,13 +1436,13 @@ export const runRoutes = new Elysia({ name: "runs" })
   .get("/api/v2/runs/:run_id/plan/log/:log_token", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const logToken = params["log_token"] ?? "";
-    if ((await findLogCapability(runId, logToken)) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
+    if ((await findLogCapability(runId, logToken, "plan")) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
     return rawRunLogResponse(runId, "plan", request, set);
   })
   .get("/api/v2/runs/:run_id/apply/log/:log_token", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const logToken = params["log_token"] ?? "";
-    if ((await findLogCapability(runId, logToken)) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
+    if ((await findLogCapability(runId, logToken, "apply")) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
     return rawRunLogResponse(runId, "apply", request, set);
   })
   .get("/api/v2/runs/:run_id/plan/log", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -1416,7 +1461,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: `apply-${runId}`, type: "applies", attributes: { "log-read-url": typeof authorized.run.logToken === "string" && authorized.run.logToken !== "" ? apiURL(request, `/api/v2/runs/${runId}/apply/log/${authorized.run.logToken}`) : null } } };
+    return { data: { id: `apply-${runId}`, type: "applies", attributes: { "log-read-url": runLogURL(authorized.run, "apply", request) } } };
   })
   .post("/api/v2/runs/:run_id/actions/apply", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
@@ -1864,7 +1909,7 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   .post("/api/v2/runs/:run_id/comments", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "plan");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
@@ -1887,6 +1932,11 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (c === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const authorized = await findAuthorizedRun(c.runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const isAuthor = c.userId !== null && c.userId === user?.id && orgId === null && teamId === null;
+    if (!isAuthor && !(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: "Only the comment author or a workspace administrator can delete it." }] };
+    }
     await db.delete(runComments).where(eq(runComments.id, commentId));
     (set as { status: number }).status = 204;
     return new Response(null, { status: 204 });

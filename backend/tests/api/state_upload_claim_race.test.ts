@@ -37,10 +37,10 @@ describe("state-version deferred-upload claim race", () => {
       body: body ?? null,
     }));
 
-  const statePayload = (tag: string): string => JSON.stringify({
+  const statePayload = (tag: string, serial: number): string => JSON.stringify({
     version: 4,
     terraform_version: "1.9.0",
-    serial: 1,
+    serial,
     lineage: `lineage-${suffix}`,
     outputs: { [`out_${tag}`]: { value: tag, type: "string" } },
     resources: [],
@@ -72,8 +72,8 @@ describe("state-version deferred-upload claim race", () => {
   it("only one of two simultaneous state uploads wins; the index matches the winner", async () => {
     const svId = await createPending(11);
     const [a, b] = await Promise.all([
-      request(`/api/v2/state-versions/${svId}/upload`, "PUT", statePayload("a")),
-      request(`/api/v2/state-versions/${svId}/upload`, "PUT", statePayload("b")),
+      request(`/api/v2/state-versions/${svId}/upload`, "PUT", statePayload("a", 11)),
+      request(`/api/v2/state-versions/${svId}/upload`, "PUT", statePayload("b", 11)),
     ]);
     const statuses = [a.status, b.status].sort();
     expect(statuses).toEqual([200, 409]);
@@ -106,7 +106,7 @@ describe("state-version deferred-upload claim race", () => {
 
   it("outputs upload is rejected once the version is finalized", async () => {
     const svId = await createPending(14);
-    const uploaded = await request(`/api/v2/state-versions/${svId}/upload`, "PUT", statePayload("final"));
+    const uploaded = await request(`/api/v2/state-versions/${svId}/upload`, "PUT", statePayload("final", 14));
     expect(uploaded.status).toBe(200);
     const outputs = await request(`/api/v2/state-versions/${svId}/json-outputs-upload`, "PUT", JSON.stringify({ x: 1 }));
     expect(outputs.status).toBe(409);

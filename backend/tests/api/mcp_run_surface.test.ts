@@ -139,7 +139,7 @@ describe("mcp run plan surface", () => {
     };
     expect(body.run_id).toBe(runId);
     expect(body.plan?.terraform_version).toBe("1.9.8");
-    expect(body.plan?.values?.secret).toBeNull();
+    expect(body.plan?.values).toBeUndefined();
   });
 
   it("denies plan JSON for runs outside the token's workspaces", async () => {

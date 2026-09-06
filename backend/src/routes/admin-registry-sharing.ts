@@ -137,7 +137,7 @@ async function consumerResources(producerId: string, kind: "modules" | "provider
   const consumers = await db.query.organizations.findMany({
     where: inArray(organizations.id, partnerships.map((partnership): string => partnership.consumerOrgId)),
   });
-  return consumers.map((consumer): Record<string, unknown> => organizationResource(consumer));
+  return Promise.all(consumers.map(organizationResource));
 }
 
 function relationshipIdentifiers(body: unknown): string[] | null {

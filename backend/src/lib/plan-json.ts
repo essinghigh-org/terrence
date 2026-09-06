@@ -57,25 +57,63 @@ function redact(value: unknown, mask: unknown): unknown {
     const maskObject = mask as Record<string, unknown>;
     return Object.fromEntries(Object.entries(object).map(([key, item]) => [key, redact(item, maskObject[key])]));
   }
-  return value;
+  return mask === undefined || mask === false ? value : null;
 }
 
-/** Apply Terraform's *_sensitive shape when an agent did not upload a side artifact. */
+/** Public plan contract: raw variables, configuration and state are never copied. */
 export function sanitizePlanJson(planJson: PlanJson): PlanJson {
-  const visit = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(visit);
-    if (value === null || typeof value !== "object") return value;
-    const object = Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, visit(item)]));
-    for (const [key, mask] of Object.entries(object)) {
-      if (!key.endsWith("_sensitive")) continue;
-      const base = key.slice(0, -"_sensitive".length);
-      if (base in object) object[base] = redact(object[base], mask);
-    }
-    if ("sensitive_values" in object && "values" in object) object["values"] = redact(object["values"], object["sensitive_values"]);
-    if (object["sensitive"] === true && "value" in object) object["value"] = null;
-    return object;
+  const strings = (object: PlanJson, keys: readonly string[]): Record<string, unknown> =>
+    Object.fromEntries(keys.filter((key) => typeof object[key] === "string").map((key) => [key, object[key]]));
+  const sensitivity = (value: unknown): unknown => {
+    if (typeof value === "boolean") return value;
+    if (Array.isArray(value)) return value.map(sensitivity);
+    const object = asObject(value);
+    return object === undefined ? true : Object.fromEntries(Object.entries(object).map(([key, mask]) => [key, sensitivity(mask)]));
   };
-  return visit(planJson) as PlanJson;
+  const change = (raw: unknown): PlanJson => {
+    const object = asObject(raw) ?? {};
+    const beforeMask = sensitivity(object["before_sensitive"]);
+    const afterMask = sensitivity(object["after_sensitive"]);
+    return {
+      actions: Array.isArray(object["actions"])
+        ? object["actions"].map((action: unknown) => typeof action === "string" && ["no-op", "create", "read", "update", "delete", "forget"].includes(action) ? action : "unsupported") : ["unsupported"],
+      ...(Array.isArray(object["replace_paths"]) ? { replace_paths: object["replace_paths"].filter((path: unknown) => Array.isArray(path) && path.every((part: unknown) => typeof part === "string" || (typeof part === "number" && Number.isSafeInteger(part)))) } : {}),
+      ...(Object.hasOwn(object, "before") ? { before: redact(object["before"], beforeMask) } : {}),
+      ...(Object.hasOwn(object, "after") ? { after: redact(object["after"], afterMask) } : {}),
+      before_sensitive: beforeMask,
+      after_sensitive: afterMask,
+      ...(object["after_unknown"] === undefined ? {} : { after_unknown: sensitivity(object["after_unknown"]) }),
+      ...(asObject(object["importing"]) === undefined ? {} : { importing: { unknown: true } }),
+    };
+  };
+  const result: Record<string, unknown> = { public_plan_version: 1, ...strings(planJson, ["format_version", "terraform_version"]) };
+  for (const key of ["resource_changes", "resource_drift"]) {
+    const resources = planJson[key];
+    if (!Array.isArray(resources)) continue;
+    result[key] = resources.flatMap((raw) => {
+      const resource = asObject(raw);
+      if (resource === undefined) return [];
+      return [{
+        ...strings(resource, ["address", "previous_address", "module_address", "mode", "type", "name", "provider_name", "deposed", "action_reason"]),
+        change: change(resource["change"]),
+      }];
+    });
+  }
+  if (Array.isArray(planJson["action_invocations"])) {
+    result["action_invocations"] = planJson["action_invocations"].flatMap((raw) => {
+      const action = asObject(raw);
+      if (action === undefined) return [];
+      const trigger = asObject(action["lifecycle_action_trigger"]);
+      return [{
+        ...strings(action, ["address", "type", "name", "provider_name"]),
+        ...(trigger === undefined ? {} : { lifecycle_action_trigger: strings(trigger, ["triggering_resource_address", "action_trigger_event"]) }),
+        ...(asObject(action["invoke_action_trigger"]) === undefined ? {} : { invoke_action_trigger: {} }),
+      }];
+    });
+  }
+  const outputs = asObject(planJson["output_changes"]);
+  if (outputs !== undefined) result["output_changes"] = Object.fromEntries(Object.entries(outputs).map(([name, raw]) => [name, change(raw)]));
+  return result;
 }
 
 async function streamFileToPrivatePath(sourcePath: string, destinationPath: string): Promise<void> {
@@ -156,16 +194,15 @@ export async function readPlanJsonSideArtifact(runId: string, kind: string): Pro
 }
 
 export async function deletePlanJsonArtifact(runId: string): Promise<boolean> {
-  try {
-    await rm(artifactPath(runId));
-    return true;
-  } catch (error: unknown) {
-    if (
-      error !== null
-      && typeof error === "object"
-      && "code" in error
-      && error.code === "ENOENT"
-    ) return false;
-    throw error;
-  }
+  const paths = [artifactPath(runId), ...["redacted.json", "sanitized.json", "provider-schemas.json", "description.txt"].map((suffix) => join(planJsonDirectory, `${runId}.${suffix}`))];
+  const deleted = await Promise.all(paths.map(async (path): Promise<boolean> => {
+    try {
+      await rm(path);
+      return true;
+    } catch (error: unknown) {
+      if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+      throw error;
+    }
+  }));
+  return deleted.some(Boolean);
 }

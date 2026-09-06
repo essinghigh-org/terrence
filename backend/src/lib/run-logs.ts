@@ -1,7 +1,7 @@
 import { gzipSync, gunzipSync } from "node:zlib";
 import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { and, asc, count, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, count, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import { isPostgres } from "../db/driver";
 import { logs } from "../db/schema";
@@ -31,7 +31,9 @@ type RunLogArchiveEnvelope = Readonly<{
 function isArchiveEnvelope(value: unknown): value is RunLogArchiveEnvelope {
   if (typeof value !== "object" || value === null) return false;
   const envelope = value as Record<string, unknown>;
-  return envelope["version"] === 1 && Array.isArray(envelope["logs"]);
+  return envelope["version"] === 1 && Array.isArray(envelope["logs"])
+    && typeof envelope["truncated"] === "boolean"
+    && Number.isSafeInteger(envelope["totalCount"]) && (envelope["totalCount"] as number) >= envelope["logs"].length;
 }
 
 export async function archiveRunLogs(runId: string): Promise<boolean> {
@@ -40,16 +42,15 @@ export async function archiveRunLogs(runId: string): Promise<boolean> {
   if (totalCount === 0) return false;
   const runLogs = await db.query.logs.findMany({
     where: eq(logs.runId, runId),
-    orderBy: [asc(logs.createdAt), asc(logs.id)],
+    orderBy: [desc(logs.createdAt), desc(logs.id)],
     limit: MAX_RUN_LOGS_PER_RUN,
   });
-  // Issue #585: the archive keeps the first MAX_RUN_LOGS_PER_RUN rows, but
-  // the envelope now says so explicitly instead of truncating silently.
+  // Preserve the failure tail in chronological order when the run exceeds the cap.
   const envelope: RunLogArchiveEnvelope = {
     version: 1,
     truncated: totalCount > runLogs.length,
     totalCount,
-    logs: runLogs,
+    logs: runLogs.reverse(),
   };
   let temporary: string | null = null;
   try {
@@ -84,21 +85,22 @@ async function readArchivedRunLogs(runId: string): Promise<RunLogArchiveEnvelope
         logs,
       };
     }
-    if (!isArchiveEnvelope(parsed)) return empty;
+    if (!isArchiveEnvelope(parsed)) throw new Error("Invalid run log archive format");
     const logs = parsed.logs.length > MAX_RUN_LOGS_PER_RUN ? parsed.logs.slice(0, MAX_RUN_LOGS_PER_RUN) : parsed.logs;
     return { version: 1, truncated: parsed.truncated, totalCount: parsed.totalCount, logs };
-  } catch {
-    return empty;
+  } catch (error: unknown) {
+    if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") return empty;
+    throw error;
   }
 }
 
 export async function readRunLogs(runId: string, phase?: string): Promise<StoredRunLog[]> {
   const liveLogs = await db.query.logs.findMany({
     where: phase === undefined ? eq(logs.runId, runId) : and(eq(logs.runId, runId), eq(logs.phase, phase)),
-    orderBy: [asc(logs.createdAt), asc(logs.id)],
+    orderBy: [desc(logs.createdAt), desc(logs.id)],
     limit: MAX_RUN_LOGS_PER_RUN,
   });
-  if (liveLogs.length > 0) return liveLogs;
+  if (liveLogs.length > 0) return liveLogs.reverse();
 
   const archived = await readArchivedRunLogs(runId);
   return phase === undefined ? archived.logs : archived.logs.filter((log): boolean => log.phase === phase);

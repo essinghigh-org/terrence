@@ -60,3 +60,15 @@ test("renders bare-relative doc links as anchors and blocks dangerous schemes", 
   expect(view.container.textContent).toContain("Bad");
   expect(view.container.querySelector("a[href^='javascript']")).toBeNull();
 });
+
+
+test("renders malformed and streamed table prefixes without hanging", () => {
+  const malformed = "| not followed by a table separator";
+  const view = render(<MarkdownContent markdown={malformed} />);
+  expect(view.container.textContent).toBe(malformed);
+  const document = "Paragraph\n| Header | Value |\n|---|---|\n| one | two |\n\n```hcl\nvalue = 1\n```";
+  for (let end = 0; end <= document.length; end += 1) {
+    view.rerender(<MarkdownContent markdown={document.slice(0, end)} />);
+  }
+  expect(view.container.querySelector("table")).not.toBeNull();
+});

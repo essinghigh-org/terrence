@@ -115,7 +115,7 @@ describe("the reference format API v2 - State Versions & Locking", () => {
       }),
     );
     expect(lockResponse.status).toBe(200);
-    const rawState = JSON.stringify({ version: 4, serial: 1, terraform_version: "1.5.0", resources: [] });
+    const rawState = JSON.stringify({ version: 4, serial: 1, lineage: "state-test", terraform_version: "1.5.0", resources: [] });
     const response = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
         method: "POST",

@@ -1,3 +1,4 @@
+import { discardStateReservation, fenceStateWorkspace, pruneStateReservations, stateReservationObsolete, stateUploadLock, STATE_UPLOAD_TTL_MS } from "../lib/state-reservations";
 import { Elysia } from "elysia";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -6,7 +7,7 @@ import { db } from "../db";
 import { stateOutputIndex, stateVersions, workspaces, runs, organizationMemberships, teams, type users } from "../db/schema";
 import { eq, and, desc, count, inArray, or, isNull } from "drizzle-orm";
 import { stateVersionResource, stateOutputResources } from "../lib/response";
-import { encryptStatePayload, parseTerraformStatePayload } from "../lib/validation";
+import { encryptStatePayload, isClientEncryptedState, parseTerraformStatePayload, statePayloadError, statePayloadWithSerial } from "../lib/validation";
 import {
   checkWorkspacePermission,
   checkRunStateAccess,
@@ -274,6 +275,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       orderBy: [desc(stateVersions.serial)],
     });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (isClientEncryptedState(sv.statePayload)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unsupported state representation", detail: statePayloadError(sv.statePayload) }] };
+    }
     return { data: stateOutputResources(sv) };
   })
   .patch("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -291,29 +296,45 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (sourceId === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "rollback-state-version is required" }] }; }
     const source = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, sourceId) });
     if (source === undefined || source.workspaceId !== workspaceId || source.status !== "finalized" || source.statePayload === null) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State version cannot be rolled back" }] }; }
+    const sourcePayload = decodeStatePayload(source.statePayload);
+    const parsedSource = parseTerraformStatePayload(sourcePayload);
+    if (parsedSource === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(sourcePayload) }] };
+    }
     const id = crypto.randomUUID();
-    await withStateSerialRetry(async () => db.transaction(async (tx): Promise<void> => {
-      const latest = await tx.query.stateVersions.findFirst({ where: eq(stateVersions.workspaceId, workspaceId), orderBy: [desc(stateVersions.serial)] });
-      await tx.insert(stateVersions).values({
-        id,
-        workspaceId,
-        serial: (latest?.serial ?? 0) + 1,
-        statePayload: source.statePayload === null ? null : await encryptStatePayload(decodeStatePayload(source.statePayload)),
-        jsonState: source.jsonState === null ? null : await encryptStatePayload(decodeStatePayload(source.jsonState)),
-        jsonStateOutputs: source.jsonStateOutputs === null ? null : await encryptStatePayload(decodeStatePayload(source.jsonStateOutputs)),
-        vcsCommitSha: source.vcsCommitSha,
-        vcsCommitUrl: source.vcsCommitUrl,
-        runId: null,
-        createdBy: user?.id ?? null,
-        terraformVersion: source.terraformVersion,
-        intermediate: false,
-        status: "finalized",
-        createdAt: Date.now(),
-      });
-      await insertStateOutputIndex(tx, id, workspaceId,
-        source.jsonState === null ? null : decodeStatePayload(source.jsonState),
-        source.statePayload === null ? null : decodeStatePayload(source.statePayload));
-    }));
+    try {
+      await withStateSerialRetry(async () => db.transaction(async (tx): Promise<void> => {
+        if (!(await fenceStateWorkspace(tx, workspace))) throw new StateSerialConflictError();
+        await pruneStateReservations(tx, workspace);
+        const latest = await tx.query.stateVersions.findFirst({ where: eq(stateVersions.workspaceId, workspaceId), orderBy: [desc(stateVersions.serial)] });
+        const serial = (latest?.serial ?? 0) + 1;
+        if (!Number.isSafeInteger(serial)) throw new StateSerialConflictError();
+        const promoted = statePayloadWithSerial(sourcePayload, serial);
+        await tx.insert(stateVersions).values({
+          id,
+          workspaceId,
+          serial,
+          statePayload: await encryptStatePayload(promoted),
+          jsonState: await encryptStatePayload(promoted),
+          jsonStateOutputs: await encryptStatePayload(JSON.stringify(parsedSource["outputs"] ?? {})),
+          vcsCommitSha: source.vcsCommitSha,
+          vcsCommitUrl: source.vcsCommitUrl,
+          runId: null,
+          createdBy: user?.id ?? null,
+          terraformVersion: source.terraformVersion,
+          intermediate: false,
+          status: "finalized",
+          createdAt: Date.now(),
+        });
+        await insertStateOutputIndex(tx, id, workspaceId,
+          promoted, promoted);
+      }));
+    } catch (error) {
+      if (!(error instanceof StateSerialConflictError) && !isUniqueConstraintError(error)) throw error;
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }] };
+    }
     scheduleExplorerInventory(workspaceId);
     const created = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
     if (created === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
@@ -347,6 +368,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    if (isClientEncryptedState(sv.statePayload)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unsupported state representation", detail: statePayloadError(sv.statePayload) }] };
+    }
     const { number, size } = pageRequest(request);
     const outputs = stateOutputResources(sv);
     const sliced = outputs.slice((number - 1) * size, number * size);
@@ -363,6 +388,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (ws === undefined || (!(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs")) && !checkRunStateAccess(run, ws.id))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (isClientEncryptedState(sv.statePayload)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unsupported state representation", detail: statePayloadError(sv.statePayload) }] };
     }
     return { data: stateOutputResources(sv) };
   })
@@ -440,6 +469,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     ) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    if (isClientEncryptedState(sv.statePayload)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unsupported state representation", detail: statePayloadError(sv.statePayload) }] };
+    }
     (set.headers as Record<string, string>)["Content-Type"] = "application/json";
     await auditLog("read", "state-version", stateVersionId, user?.id ?? null, ws.orgId, {
       workspaceId: sv.workspaceId,
@@ -454,7 +487,15 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "admin"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.update(stateVersions).set({ status: "discarded", softDeletedAt: null }).where(eq(stateVersions.id, stateVersionId));
+    if (sv.status === "pending" && sv.statePayload === null) {
+      const discarded = await db.transaction(async (tx) => discardStateReservation(tx as typeof db, sv, ws, "discarded"));
+      if (!discarded) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "State upload completed while discarding its reservation" }] };
+      }
+    } else {
+      await db.update(stateVersions).set({ status: "discarded", softDeletedAt: null }).where(eq(stateVersions.id, stateVersionId));
+    }
     (set as { status: number }).status = 204;
     return new Response(null, { status: 204 });
   })
@@ -492,12 +533,30 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (ws === undefined || (!validSignedApiURL(request, path, "PUT") && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-write")))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    // A lost success response must not force a client to reserve another serial.
+    // Authenticate first, then accept only exactly the committed bytes; this
+    // branch never republishes outputs or changes the current state.
+    if (sv.status === "finalized" && typeof sv.statePayload === "string" && sv.statePayload !== "") {
+      const retry = await requestBodyText(body, request);
+      if (!retry.ok) {
+        (set as { status: number }).status = retry.reason === "too-large" ? 413 : 400;
+        return { errors: [{ status: String(set.status), title: "Invalid state upload body" }] };
+      }
+      if (createHash("sha256").update(retry.text).digest("hex") === createHash("sha256").update(decodeStatePayload(sv.statePayload)).digest("hex")) {
+        (set as { status: number }).status = 200;
+        return {};
+      }
+    }
     if (sv.status !== "pending" || (typeof sv.statePayload === "string" && sv.statePayload !== "")) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State content was already uploaded" }] };
     }
     // Issue #578: claim before the network-bound body transfer so two
     // simultaneous PUTs do not both stream bodies; the conditional finalize
     // below is the atomic backstop.
+    if (sv.status === "pending" && stateReservationObsolete(sv, ws)) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "State upload reservation expired or its workspace lock changed" }] };
+    }
     if (!tryAcquireStateUpload(stateVersionId)) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] };
     }
@@ -509,12 +568,22 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       }
       const rawState = rawStateResult.text;
       if (rawState === "" || parseStatePayload(rawState) === null) {
-        (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be valid JSON" }] };
+        (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(rawState) }] };
       }
       const parsedTerraformState = parseTerraformStatePayload(rawState);
       if (parsedTerraformState === null) {
         (set as { status: number }).status = 400;
-        return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be a valid Terraform/OpenTofu state file" }] };
+        return { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(rawState) }] };
+      }
+      if (parsedTerraformState["serial"] !== sv.serial) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial does not match the state reservation" }] };
+      }
+      if ((sv.expectedLineage !== null && parsedTerraformState["lineage"] !== sv.expectedLineage)
+        || (sv.expectedMd5 !== null && sv.expectedMd5 !== createHash("md5").update(rawState).digest("base64")
+          && sv.expectedMd5.toLowerCase() !== createHash("md5").update(rawState).digest("hex"))) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "State bytes do not match the reserved checksum or lineage" }] };
       }
       const latestState = await db.query.stateVersions.findFirst({
         where: and(eq(stateVersions.workspaceId, sv.workspaceId), eq(stateVersions.status, "finalized")),
@@ -532,6 +601,12 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       // version out of pending. The output index is rebuilt in the same
       // transaction so it can never mix output names across writers.
       const finalized = await db.transaction(async (tx): Promise<boolean> => {
+        if (!(await fenceStateWorkspace(tx, ws)) || stateReservationObsolete(sv, ws)) return false;
+        const current = await tx.query.stateVersions.findFirst({
+          where: and(eq(stateVersions.workspaceId, sv.workspaceId), eq(stateVersions.status, "finalized")),
+          orderBy: [desc(stateVersions.serial)],
+        });
+        if (current !== undefined && (current.serial >= sv.serial || stateLineageError(current, parsedTerraformState) !== null)) return false;
         const won = await tx.update(stateVersions).set({ statePayload: encrypted, status: "finalized" }).where(and(
           eq(stateVersions.id, stateVersionId),
           eq(stateVersions.status, "pending"),
@@ -563,6 +638,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (typeof sv.jsonState === "string" && sv.jsonState !== "") {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "JSON state content was already uploaded" }] };
     }
+    if (sv.status === "pending" && stateReservationObsolete(sv, ws)) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "State upload reservation expired or its workspace lock changed" }] };
+    }
     if (!tryAcquireStateUpload(stateVersionId)) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] };
     }
@@ -580,8 +659,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       // Issue #578: atomic conditional write plus index rebuild in one
       // transaction, so concurrent PUTs cannot both win or mix index rows.
       const uploaded = await db.transaction(async (tx): Promise<boolean> => {
+        if (sv.status === "pending" && (!(await fenceStateWorkspace(tx, ws)) || stateReservationObsolete(sv, ws))) return false;
         const won = await tx.update(stateVersions).set({ jsonState: encrypted }).where(and(
           eq(stateVersions.id, stateVersionId),
+          inArray(stateVersions.status, ["pending", "finalized"]),
           or(isNull(stateVersions.jsonState), eq(stateVersions.jsonState, "")),
         )).returning({ id: stateVersions.id, status: stateVersions.status, statePayload: stateVersions.statePayload });
         const row = won[0];
@@ -621,6 +702,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (sv.status === "finalized") {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State version is finalized; outputs can no longer be uploaded" }] };
     }
+    if (sv.status === "pending" && stateReservationObsolete(sv, ws)) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "State upload reservation expired or its workspace lock changed" }] };
+    }
     if (!tryAcquireStateUpload(stateVersionId)) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] };
     }
@@ -635,10 +720,14 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state outputs must be valid JSON" }] };
       }
       const encrypted = await encryptStatePayload(jsonStateOutputs);
-      const uploaded = await db.update(stateVersions).set({ jsonStateOutputs: encrypted }).where(and(
-        eq(stateVersions.id, stateVersionId),
-        or(isNull(stateVersions.jsonStateOutputs), eq(stateVersions.jsonStateOutputs, "")),
-      )).returning({ id: stateVersions.id });
+      const uploaded = await db.transaction(async (tx) => {
+        if (!(await fenceStateWorkspace(tx, ws)) || stateReservationObsolete(sv, ws)) return [];
+        return tx.update(stateVersions).set({ jsonStateOutputs: encrypted }).where(and(
+          eq(stateVersions.id, stateVersionId),
+          eq(stateVersions.status, "pending"),
+          or(isNull(stateVersions.jsonStateOutputs), eq(stateVersions.jsonStateOutputs, "")),
+        )).returning({ id: stateVersions.id });
+      });
       if (uploaded.length === 0) {
         (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "JSON state outputs were already uploaded" }] };
       }
@@ -662,32 +751,48 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (sv.statePayload === null || sv.status !== "finalized") {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State version cannot be rolled back" }] };
     }
+    const sourcePayload = decodeStatePayload(sv.statePayload);
+    const parsedSource = parseTerraformStatePayload(sourcePayload);
+    if (parsedSource === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(sourcePayload) }] };
+    }
     const newId = crypto.randomUUID();
-    await withStateSerialRetry(async () => db.transaction(async (tx): Promise<void> => {
-      const latest = await tx.query.stateVersions.findFirst({
-        where: eq(stateVersions.workspaceId, sv.workspaceId),
-        orderBy: [desc(stateVersions.serial)],
-      });
-      await tx.insert(stateVersions).values({
-        id: newId,
-        workspaceId: sv.workspaceId,
-        serial: (latest?.serial ?? 0) + 1,
-        runId: null,
-        createdBy: user?.id ?? null,
-        statePayload: sv.statePayload === null ? null : await encryptStatePayload(decodeStatePayload(sv.statePayload)),
-        jsonState: sv.jsonState === null ? null : await encryptStatePayload(decodeStatePayload(sv.jsonState)),
-        jsonStateOutputs: sv.jsonStateOutputs === null ? null : await encryptStatePayload(decodeStatePayload(sv.jsonStateOutputs)),
-        vcsCommitSha: sv.vcsCommitSha,
-        vcsCommitUrl: sv.vcsCommitUrl,
-        terraformVersion: sv.terraformVersion,
-        intermediate: false,
-        status: "finalized",
-        createdAt: Date.now(),
-      });
-      await insertStateOutputIndex(tx, newId, sv.workspaceId,
-        sv.jsonState === null ? null : decodeStatePayload(sv.jsonState),
-        sv.statePayload === null ? null : decodeStatePayload(sv.statePayload));
-    }));
+    try {
+      await withStateSerialRetry(async () => db.transaction(async (tx): Promise<void> => {
+        if (!(await fenceStateWorkspace(tx, ws))) throw new StateSerialConflictError();
+        await pruneStateReservations(tx, ws);
+        const latest = await tx.query.stateVersions.findFirst({
+          where: eq(stateVersions.workspaceId, sv.workspaceId),
+          orderBy: [desc(stateVersions.serial)],
+        });
+        const serial = (latest?.serial ?? 0) + 1;
+        if (!Number.isSafeInteger(serial)) throw new StateSerialConflictError();
+        const promoted = statePayloadWithSerial(sourcePayload, serial);
+        await tx.insert(stateVersions).values({
+          id: newId,
+          workspaceId: sv.workspaceId,
+          serial,
+          runId: null,
+          createdBy: user?.id ?? null,
+          statePayload: await encryptStatePayload(promoted),
+          jsonState: await encryptStatePayload(promoted),
+          jsonStateOutputs: await encryptStatePayload(JSON.stringify(parsedSource["outputs"] ?? {})),
+          vcsCommitSha: sv.vcsCommitSha,
+          vcsCommitUrl: sv.vcsCommitUrl,
+          terraformVersion: sv.terraformVersion,
+          intermediate: false,
+          status: "finalized",
+          createdAt: Date.now(),
+        });
+        await insertStateOutputIndex(tx, newId, sv.workspaceId,
+          promoted, promoted);
+      }));
+    } catch (error) {
+      if (!(error instanceof StateSerialConflictError) && !isUniqueConstraintError(error)) throw error;
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }] };
+    }
     scheduleExplorerInventory(sv.workspaceId);
     const newSv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, newId) });
     if (newSv === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
@@ -778,7 +883,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     try {
       if (!(await recoveryCaptureComplete(runId))) throw new Error("recovery capture incomplete");
       payload = decodeStatePayload(await readFile(recoveryStatePath(runId), "utf8"));
-      if (parseTerraformStatePayload(payload) === null) throw new Error("invalid recovery state");
+      if (parseTerraformStatePayload(payload) === null && !isClientEncryptedState(payload)) throw new Error("invalid recovery state");
     } catch {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -817,7 +922,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     if (parsed === null) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Recovered state is not a valid Terraform/OpenTofu state file" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(rawState) }] };
     }
     const latest = await db.query.stateVersions.findFirst({
       where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")),
@@ -829,30 +934,42 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] };
     }
-    const stateVersionId = await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<string> => {
-      const t = tx as typeof db;
-      const current = await t.query.stateVersions.findFirst({
-        where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")),
-        orderBy: [desc(stateVersions.serial)],
-      });
-      const id = crypto.randomUUID();
-      await t.insert(stateVersions).values({
-        id,
-        workspaceId: workspace.id,
-        serial: (current?.serial ?? 0) + 1,
-        runId,
-        statePayload: await encryptStatePayload(rawState),
-        jsonState: await encryptStatePayload(rawState),
-        jsonStateOutputs: await encryptStatePayload(parsed["outputs"] === undefined ? null : JSON.stringify(parsed["outputs"])),
-        createdBy: run.createdBy,
-        status: "finalized",
-        terraformVersion: typeof parsed["terraform_version"] === "string" ? parsed["terraform_version"] : null,
-        intermediate: false,
-        createdAt: Date.now(),
-      });
-      await insertStateOutputIndex(t, id, workspace.id, rawState, rawState);
-      return id;
-    }));
+    let stateVersionId: string;
+    try {
+      stateVersionId = await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<string> => {
+        const t = tx as typeof db;
+        if (!(await fenceStateWorkspace(t, workspace))) throw new StateSerialConflictError();
+        await pruneStateReservations(t, workspace);
+        const current = await t.query.stateVersions.findFirst({
+          where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")),
+          orderBy: [desc(stateVersions.serial)],
+        });
+        const serial = (current?.serial ?? 0) + 1;
+        if (!Number.isSafeInteger(serial)) throw new StateSerialConflictError();
+        const promoted = statePayloadWithSerial(rawState, serial);
+        const id = crypto.randomUUID();
+        await t.insert(stateVersions).values({
+          id,
+          workspaceId: workspace.id,
+          serial,
+          runId,
+          statePayload: await encryptStatePayload(promoted),
+          jsonState: await encryptStatePayload(promoted),
+          jsonStateOutputs: await encryptStatePayload(parsed["outputs"] === undefined ? null : JSON.stringify(parsed["outputs"])),
+          createdBy: run.createdBy,
+          status: "finalized",
+          terraformVersion: typeof parsed["terraform_version"] === "string" ? parsed["terraform_version"] : null,
+          intermediate: false,
+          createdAt: Date.now(),
+        });
+        await insertStateOutputIndex(t, id, workspace.id, promoted, promoted);
+        return id;
+      }));
+    } catch (error) {
+      if (!(error instanceof StateSerialConflictError) && !isUniqueConstraintError(error)) throw error;
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }] };
+    }
     await rm(join(storageDir, "recovery", runId), { recursive: true, force: true });
     const stateVersion = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (stateVersion === undefined) {
@@ -882,6 +999,13 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const runRel = typeof rels["run"] === "object" && rels["run"] !== null ? (rels["run"] as Record<string, unknown>) : {};
     const runData = typeof runRel["data"] === "object" && runRel["data"] !== null ? (runRel["data"] as Record<string, unknown>) : {};
     const serial = typeof attributes["serial"] === "number" ? attributes["serial"] : undefined;
+    const expectedMd5 = attributes["md5"];
+    const expectedLineage = attributes["lineage"];
+    if ((expectedMd5 !== undefined && (typeof expectedMd5 !== "string" || !/^(?:[a-fA-F0-9]{32}|[A-Za-z0-9+/]{22}==)$/.test(expectedMd5)))
+      || (expectedLineage !== undefined && (typeof expectedLineage !== "string" || expectedLineage === ""))) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid state checksum or lineage" }] };
+    }
     const inlineState = typeof attributes["state"] === "string" ? attributes["state"] : undefined;
     const statePayload = inlineState !== undefined && inlineState !== "" ? decodeStatePayload(inlineState) : null;
     const inlineJsonState = typeof attributes["json-state"] === "string" ? attributes["json-state"] : undefined;
@@ -900,6 +1024,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const intermediate = attributes["intermediate"] === true;
     if (serial === undefined) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "param is missing or the value is empty: serial" }] };
+    }
+    if (!Number.isSafeInteger(serial) || serial < 0) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial must be a non-negative safe integer" }] };
     }
     if (runId !== null) {
       const relatedRun = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { workspaceId: true, createdBy: true } });
@@ -921,8 +1049,12 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Intermediate state requires a locked workspace" }] };
     }
     const parsedTerraformState = statePayload === null ? null : parseTerraformStatePayload(statePayload);
-    if (statePayload !== null && parseStatePayload(statePayload) === null) {
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be valid JSON" }] };
+    if (statePayload !== null && parsedTerraformState === null) {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(statePayload) }] };
+    }
+    if (parsedTerraformState !== null && expectedLineage !== undefined && parsedTerraformState["lineage"] !== expectedLineage) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "lineage does not match the state payload" }] };
     }
     if (parsedTerraformState !== null && parsedTerraformState["serial"] !== serial) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial does not match the Terraform state payload" }] };
@@ -932,7 +1064,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     if (statePayload !== null && typeof attributes["md5"] === "string") {
       const expected = createHash("md5").update(statePayload).digest("base64");
-      if (attributes["md5"] !== expected && attributes["md5"] !== createHash("md5").update(statePayload).digest("hex")) {
+      if (attributes["md5"] !== expected && attributes["md5"].toLowerCase() !== createHash("md5").update(statePayload).digest("hex")) {
         (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "md5 does not match the state payload" }] };
       }
     }
@@ -958,6 +1090,8 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     try {
       await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<void> => {
         const t = tx as typeof db;
+        if (!(await fenceStateWorkspace(t, ws))) throw new StateSerialConflictError();
+        await pruneStateReservations(t, ws);
         // Re-check inside the same transaction as the insert. This closes the
         // race between two writers that both observed the same latest serial,
         // and includes pending/intermediate rows hidden by the finalized-only
@@ -972,6 +1106,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
           id,
           workspaceId,
           serial,
+          expectedMd5: expectedMd5 ?? null,
+          expectedLineage: expectedLineage ?? null,
+          uploadExpiresAt: statePayload === null ? Date.now() + STATE_UPLOAD_TTL_MS : null,
+          uploadLock: statePayload === null ? stateUploadLock(ws) : null,
           runId,
           statePayload: await encryptStatePayload(statePayload),
           jsonState: await encryptStatePayload(jsonState ?? statePayload),
@@ -1025,7 +1163,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const parsed = parseTerraformStatePayload(rawState);
     if (parsed === null) {
       (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Uploaded file is not a valid Terraform/OpenTofu state file" }] };
+      return { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(rawState) }] };
     }
     const latestImportedState = await db.query.stateVersions.findFirst({
       where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),

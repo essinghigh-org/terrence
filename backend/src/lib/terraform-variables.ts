@@ -160,23 +160,39 @@ function scanAttributeExpression(block: string, start: number): string | undefin
   return value === "" ? undefined : value;
 }
 
-function attributeExpression(block: string, attribute: string): string | undefined {
-  const match = new RegExp(`(?:^|\\n)\\s*${attribute.replaceAll("-", "\\-")}\\s*=`, "m").exec(block);
-  if (match === null) return undefined;
-  const equals = block.indexOf("=", match.index);
-  let start = equals + 1;
-  while (start < block.length && /[ \t\r]/.test(block[start] ?? "")) start += 1;
-  if (block.startsWith("<<", start)) {
-    const end = skipHeredoc(block, start);
-    return block.slice(start, end).trim();
+/** Metadata assistance only: tokenize lexical boundaries, not arbitrary HCL expressions.
+ * ponytail: this is not an HCL validator; use the engine for authoritative diagnostics. */
+function* topLevelMatches(input: string, pattern: RegExp): Generator<RegExpExecArray> {
+  let nesting: AttributeNesting = { round: 0, square: 0, curly: 0 };
+  for (let index = 0; index < input.length;) {
+    if (input.startsWith("//", index) || input[index] === "#") { index = skipLineComment(input, index); continue; }
+    if (input.startsWith("/*", index)) { index = skipBlockComment(input, index); continue; }
+    if (input.startsWith("<<", index)) { index = skipHeredoc(input, index); continue; }
+    if (input[index] === '\"') { index = skipQuoted(input, index); continue; }
+    if (nesting.round === 0 && nesting.square === 0 && nesting.curly === 0) {
+      pattern.lastIndex = index;
+      const match = pattern.exec(input);
+      if (match !== null) yield match;
+    }
+    nesting = advanceAttributeNesting(nesting, input[index]);
+    index += 1;
   }
+}
+
+function attributeExpression(block: string, attribute: string): string | undefined {
+  const pattern = new RegExp(`\\b${attribute}\\s*=`, "y");
+  const match = topLevelMatches(block, pattern).next().value as RegExpExecArray | undefined;
+  if (match === undefined) return undefined;
+  let start = match.index + match[0].length;
+  while (start < block.length && /[ \t\r]/.test(block[start] ?? "")) start += 1;
+  if (block.startsWith("<<", start)) return block.slice(start, skipHeredoc(block, start)).trim();
   return scanAttributeExpression(block, start);
 }
 
 export function parseTerraformVariables(source: string): readonly TerraformVariableMetadata[] {
   const variables = new Map<string, TerraformVariableMetadata>();
-  const pattern = /\bvariable\s+("(?:\\.|[^"\\])*")\s*\{/g;
-  for (let match = pattern.exec(source); match !== null; match = pattern.exec(source)) {
+  const pattern = /\bvariable\s+("(?:\\.|[^"\\])*")\s*\{/y;
+  for (const match of topLevelMatches(source, pattern)) {
     const rawName = match[1];
     if (rawName === undefined) continue;
     const name = quotedValue(rawName);
@@ -197,7 +213,6 @@ export function parseTerraformVariables(source: string): readonly TerraformVaria
       sensitive: attributeExpression(body, "sensitive")?.trim() === "true",
       nullable: attributeExpression(body, "nullable")?.trim() !== "false",
     });
-    pattern.lastIndex = closingBrace + 1;
   }
   return [...variables.values()].sort((left, right): number => left.name.localeCompare(right.name));
 }

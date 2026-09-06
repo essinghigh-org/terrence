@@ -44,7 +44,23 @@ The storage directory (`STORAGE_DIR`, default `<repo>/backend/storage`, `/app/ba
 - `exports/`: Postgres-to-SQLite export job files. `binaries/`: downloaded Terraform/OpenTofu/Infracost binaries.
 - Version cache file.
 
-State payloads, run logs, and variable values live as encrypted blobs in the database, not as files. The directory must persist across container restarts. Mount it as a volume. At boot Terrence fails fast when the directory is not writable and logs the exact `chown` fix with path and UID.
+Application encryption varies by artifact; filesystem permissions and gzip compression are not encryption. A full backup includes every row and file below, including plaintext artifacts. Protect backups with storage encryption and restrict access to the service account.
+
+| Artifact | Location and contents | Application encryption | Retention and deletion |
+| --- | --- | --- | --- |
+| State versions and outputs | Database; resource state and output values | Encrypted payload columns | State retention and explicit backing-data deletion |
+| Workspace and variable-set secrets | Database variable rows | Sensitive values encrypted; non-sensitive values plaintext | Variable deletion and database backup retention |
+| Run-specific variables | Run row JSON; may contain credentials | New sensitive inputs use authenticated encryption in the JSON record; older records require the backfill below. Non-sensitive inputs remain plaintext | Run deletion and database backup retention |
+| Live run logs | Database log rows; CLI and provider output | Plaintext | Run retention archives logs before deleting live rows |
+| Archived logs | `run-logs/*.json.gz` | Plaintext gzip, files created with mode `0600` | Run retention/deletion |
+| Raw and agent plan JSON | `plan-json/`; input, resource and output values | Plaintext, files created with mode `0600` | Run retention/deletion; public responses are projected separately |
+| Saved binary plans | `saved-plans/`; may embed input values and prior state | Plaintext private files | Saved-plan cleanup; include retained plans in backups |
+| Configuration archives | `cv/`, `configuration_versions/`; uploaded or fetched source | Plaintext archives; source may contain secrets | Configuration-version retention/deletion |
+| Recovery state | `recovery/`; interrupted-apply snapshot | Encrypted captured state; temporary execution files can be plaintext | Successful recovery removes its capture directory |
+| Generated configuration | Execution work directories; generated HCL and private variable files | Plaintext private files | Execution-directory cleanup |
+| AI explanations | Database `run_explanations`; generated text | Plaintext; old cache entries may contain previously disclosed values | Regeneration/run deletion; assess old backups separately |
+
+The directory must persist across container restarts. Mount it as a volume. At boot Terrence fails fast when the directory is not writable and logs the exact `chown` fix with path and UID.
 
 ## Backups
 
@@ -62,7 +78,7 @@ When an apply is canceled or the process dies mid-apply, the worker captures the
 
 - `GET /api/v2/runs/:run_id/recovery-state`
 
-Unrecovered copies are pruned after `TERRENCE_RECOVERY_RETENTION_MS` (default 7 days). The run log names the endpoint and the expiry when a copy is captured.
+Unrecovered copies are kept until recovery consumes them; they are never time-pruned because they may be the only record of changed infrastructure. `TERRENCE_RECOVERY_RETENTION_MS` (default 7 days) controls saved-plan expiry only. Markerless client-encrypted copies are also retained for manual investigation; see [state encryption and recovery](state#client-encrypted-opentofu-state).
 
 ## Database export
 
@@ -126,3 +142,18 @@ Terrence is a single-process application. Run exactly one control-plane instance
 In **Site administration → Users**, find the user and choose **Reset password**. Enter and confirm a temporary password that satisfies the instance policy, then share it through a secure channel. The user must choose a new password at their next login. Resetting a password revokes existing API tokens and refresh sessions, and invalidates outstanding MFA login challenges. MFA remains enabled.
 
 This action is for other users with local passwords. Use Account settings for your own password, or the identity provider for an SSO-only account. Recovery of the only administrator is described in [Configuration](configuration).
+
+
+### Backfill historical sensitive run inputs
+
+With the same database, storage and encryption settings as the server, run `bun run scripts/encrypt-run-variables.ts` from `backend`. The command processes 100 run records at a time, encrypts only legacy sensitive entries, and can be rerun after interruption. It does not print variable values. Preserve the encryption key with backups; existing backups may still contain plaintext and need their normal secure retention/deletion policy. New run creation encrypts sensitive inputs before queuing execution. Both local workers and agent payloads decrypt only for execution.
+
+## Run-log download capabilities
+
+Plan/apply resource reads return fresh, signed log URLs. Each signature binds the run, phase, expiry and current run token version. The installation signing secret authenticates the URL; the previously exposed run token is not a signing key. Signatures are in the path because go-tfe replaces the query string with byte offsets. Responses prohibit caching and referrer forwarding.
+
+`LOG_CAPABILITY_TTL_SECONDS` defaults to 172800 (48 hours), allowing the default 24-hour apply timeout plus polling headroom. Values must be positive integer seconds, at most 604800 (7 days); invalid values use the default. Choose a lifetime longer than expected queueing plus execution if clients acquire links before a phase starts. Shorter lifetimes limit disclosure but can interrupt older CLI log readers, which retain a single URL. An authorized client can resume by reading the plan/apply resource and opening its fresh `log-read-url`; older clients may need the command restarted.
+
+Removing a user's/team's access prevents new links immediately. Existing bearer links remain usable until their stated expiry (up to 48 hours by default), unless explicitly revoked. For immediate revocation, a workspace administrator sends `POST /api/v2/runs/:run_id/actions/revoke-log-links`. This invalidates both phases' existing links, records an audit event, and allows authorized readers to obtain replacements. It also interrupts existing CLI readers. Run retention disables capabilities when soft-deleting the run; authorized archive reads continue through the authenticated log endpoint.
+
+Previously issued unsigned log URLs stop working after this upgrade. Fetch a fresh plan/apply resource to obtain the new format. No short-lived automatic renewal is claimed for legacy CLI streams.

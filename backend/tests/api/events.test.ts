@@ -239,17 +239,16 @@ describe("authenticated SSE event stream", () => {
         status: "planning",
         at: new Date().toISOString(),
       });
-      // No workspace id: org-only payloads still relay (and prove the
-      // stream is alive rather than stalled).
       publish("run.status", {
         "run-id": "run-sse-orgonly",
         "org-id": seed.orgId,
         status: "planning",
-        at: new Date().toISOString(),
       });
+      // Closing the stream fences all preceding filtered events.
+      publish("authz.changed", { "user-id": memberId });
       const streamed = await readUntil(reader, "run-sse-orgonly");
       expect(streamed).not.toContain("run-sse-noaccess");
-      expect(streamed).toContain('"run-id":"run-sse-orgonly"');
+      expect(streamed).not.toContain("run-sse-orgonly");
     } finally {
       await db.delete(apiTokens).where(eq(apiTokens.userId, memberId)).catch((): void => {});
       await db.delete(organizationMemberships).where(eq(organizationMemberships.userId, memberId)).catch((): void => {});
@@ -265,6 +264,8 @@ describe("authenticated SSE event stream", () => {
     const allowedWorkspaceId = `ws-events-team-allowed-${tag}`;
     const deniedWorkspaceId = `ws-events-team-denied-${tag}`;
     const teamId = `team-events-${tag}`;
+    const owned = seedOrg("events-owned");
+    await persistSeed(owned);
     await db.insert(users).values({ id: memberId, username: memberId, passwordHash: "unused" });
     await db.insert(organizationMemberships).values({
       id: `membership-events-team-${tag}`,
@@ -284,6 +285,9 @@ describe("authenticated SSE event stream", () => {
     ]);
     await db.insert(teams).values({ id: teamId, orgId: seed.orgId, name: `events-${tag}`, organizationAccess: {} });
     await db.insert(teamMemberships).values({ id: `tm-events-${tag}`, teamId, userId: memberId });
+    await db.insert(organizationMemberships).values({
+      id: `membership-events-owned-${tag}`, userId: memberId, orgId: owned.orgId, role: "owner",
+    });
     await db.insert(teamWorkspaces).values({
       id: `tw-events-${tag}`,
       teamId,
@@ -319,6 +323,7 @@ describe("authenticated SSE event stream", () => {
       await db.delete(apiTokens).where(eq(apiTokens.userId, memberId)).catch((): void => {});
       await db.delete(organizationMemberships).where(eq(organizationMemberships.userId, memberId)).catch((): void => {});
       await db.delete(users).where(eq(users.id, memberId)).catch((): void => {});
+      await cleanupSeed(owned);
     }
   });
 });

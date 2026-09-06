@@ -73,7 +73,7 @@ describe("OAuth client agent-pool relationship", () => {
     const createdResponse = await request("POST", `/api/v2/organizations/${orgName}/oauth-clients`, {
       data: {
         type: "oauth-clients",
-        attributes: { name: "Private GitLab", "service-provider": "gitlab_ee" },
+        attributes: { name: "Private GitLab", "service-provider": "gitlab_ee", "organization-scoped": true },
         relationships: {
           "agent-pool": { data: { id: firstPoolId, type: "agent-pools" } },
         },
@@ -82,6 +82,13 @@ describe("OAuth client agent-pool relationship", () => {
     expect(createdResponse.status).toBe(201);
     const created = await createdResponse.json();
     clientId = created.data.id;
+    expect(created.data.attributes["organization-scoped"]).toBe(true);
+    for (const scoped of [false, true]) {
+      const updated = await request("PATCH", `/api/v2/oauth-clients/${clientId}`, { data: { attributes: { "organization-scoped": scoped } } });
+      expect(updated.status).toBe(200);
+      const refreshed = await request("GET", `/api/v2/oauth-clients/${clientId}`);
+      expect((await refreshed.json()).data.attributes["organization-scoped"]).toBe(scoped);
+    }
     expect(created.data.relationships["agent-pool"]).toEqual({
       data: { id: firstPoolId, type: "agent-pools" },
       links: { related: `/api/v2/agent-pools/${firstPoolId}` },

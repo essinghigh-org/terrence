@@ -85,7 +85,7 @@ describe("remote-state consumer precedence (STATE-005)", () => {
       headers: { Authorization: `Bearer ${userToken}` },
     }));
     if (lock.status !== 200) throw new Error(`workspace lock failed: ${lock.status}`);
-    const state = JSON.stringify({ ...JSON.parse(STATE), serial: 1, resources: [] });
+    const state = JSON.stringify({ ...JSON.parse(STATE), serial: 1, lineage: "test-lineage", resources: [] });
     const post = await app.handle(new Request(`http://terrence.test/api/v2/workspaces/${producer}/state-versions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${userToken}`, "Content-Type": "application/vnd.api+json" },

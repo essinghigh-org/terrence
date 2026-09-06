@@ -1,4 +1,5 @@
 import { StrictMode } from "react";
+import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { createRoot } from "react-dom/client";
 import "@xyflow/react/dist/style.css";
 import "./index.css";
@@ -22,9 +23,10 @@ if (rootElement !== null) {
     }),
   ]);
   void bootstrap.finally((): void => {
+    const router = createBrowserRouter([{ path: "*", element: <App /> }]);
     createRoot(rootElement).render(
       <StrictMode>
-        <App />
+        <RouterProvider router={router} />
       </StrictMode>,
     );
   });

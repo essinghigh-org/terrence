@@ -668,6 +668,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     const key = typeof attributes["key"] === "string" ? attributes["key"] : null;
     const secret = typeof attributes["secret"] === "string" ? attributes["secret"] : null;
     const rsaPublicKey = typeof attributes["rsa-public-key"] === "string" ? attributes["rsa-public-key"] : null;
+    if (attributes["organization-scoped"] !== undefined && typeof attributes["organization-scoped"] !== "boolean") return unprocessable(set, "organization-scoped must be a boolean");
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
       await t.insert(oauthClients).values({
@@ -676,6 +677,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
         agentPoolId: agentPoolId ?? null,
         name,
         serviceProvider,
+        organizationScoped: typeof attributes["organization-scoped"] === "boolean" ? attributes["organization-scoped"] : false,
         apiUrl,
         httpUrl,
         key,
@@ -710,6 +712,10 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const updates: Partial<typeof oauthClients.$inferInsert> = {};
+    if (attributes["organization-scoped"] !== undefined) {
+      if (typeof attributes["organization-scoped"] !== "boolean") return unprocessable(set, "organization-scoped must be a boolean");
+      updates.organizationScoped = attributes["organization-scoped"];
+    }
     if (typeof attributes["name"] === "string") updates.name = attributes["name"];
     if (attributes["service-provider"] !== undefined) {
       if (typeof attributes["service-provider"] !== "string" || !SERVICE_PROVIDERS.has(attributes["service-provider"])) return unprocessable(set, "Unsupported service provider");

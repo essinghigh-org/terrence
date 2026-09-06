@@ -3,7 +3,7 @@ import { localSignupEnabled } from "../lib/settings";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { users, apiTokens, refreshSessions, organizationMemberships, organizations, samlSettings, teams, user2FA } from "../db/schema";
-import { and, count, eq, gt, inArray, isNull, lt, ne, or } from "drizzle-orm";
+import { and, count, eq, gt, inArray, isNotNull, isNull, lt, ne, or } from "drizzle-orm";
 import { timingSafeEqual } from "node:crypto";
 import { userResource } from "../lib/response";
 import { isUniqueConstraintError } from "../lib/validation";
@@ -94,7 +94,7 @@ type ReqCtx = Readonly<{
 
 type AuthReqCtx = Readonly<{
   user?: Readonly<typeof users.$inferSelect> | null;
-  token?: Readonly<{ id: string }> | null;
+  token?: Readonly<{ id: string; refreshFamilyId?: string | null }> | null;
   orgId?: string | null;
   teamId?: string | null;
   tokenError?: string | null;
@@ -267,7 +267,7 @@ async function revokeRefreshFamily(
     const accessTokenIds = [...new Set(family.map((session): string => session.accessTokenId))];
     if (accessTokenIds.length > 0) {
       await t.delete(apiTokens).where(and(
-        inArray(apiTokens.id, accessTokenIds),
+        or(inArray(apiTokens.id, accessTokenIds), eq(apiTokens.refreshFamilyId, familyId)),
         eq(apiTokens.userId, userId),
       ));
     }
@@ -288,7 +288,7 @@ async function revokeAllRefreshSessions(userId: string, revokedAt = Date.now()):
       .where(and(eq(refreshSessions.userId, userId), isNull(refreshSessions.revokedAt)));
     const accessTokenIds = [...new Set(sessions.map((session): string => session.accessTokenId))];
     if (accessTokenIds.length > 0) {
-      await t.delete(apiTokens).where(and(inArray(apiTokens.id, accessTokenIds), eq(apiTokens.userId, userId)));
+      await t.delete(apiTokens).where(and(or(inArray(apiTokens.id, accessTokenIds), isNotNull(apiTokens.refreshFamilyId)), eq(apiTokens.userId, userId)));
     }
   });
 }
@@ -320,6 +320,7 @@ export async function issueLoginSession(
     return accessTokenDocument(tokenId, tokenStr, user);
   }
 
+  const familyId = crypto.randomUUID();
   const accessExpiresAt = createdAt + ACCESS_TOKEN_TTL_MS;
   const refreshExpiresAt = createdAt + REFRESH_TOKEN_TTL_MS;
   const refreshToken = opaqueToken("refresh");
@@ -331,13 +332,14 @@ export async function issueLoginSession(
       id: tokenId,
       token: tokenHash(tokenStr),
       userId: user.id,
+      refreshFamilyId: familyId,
       description: "Browser session access token",
       expiresAt: accessExpiresAt,
       createdAt,
     });
     await t.insert(refreshSessions).values({
       id: crypto.randomUUID(),
-      familyId: crypto.randomUUID(),
+      familyId,
       tokenHash: tokenHash(refreshToken),
       userId: user.id,
       accessTokenId: tokenId,
@@ -355,6 +357,7 @@ export async function issueLoginSession(
 function browserSessionResources(
   sessions: readonly Readonly<typeof refreshSessions.$inferSelect>[],
   currentAccessTokenId: string | null,
+  currentFamilyId: string | null,
 ): Record<string, unknown>[] {
   const families = new Map<string, {
     active: boolean;
@@ -370,7 +373,7 @@ function browserSessionResources(
     families.set(session.familyId, {
       active: (existing?.active ?? false) || session.rotatedAt === null,
       createdAt: Math.min(existing?.createdAt ?? session.createdAt, session.createdAt),
-      current: (existing?.current ?? false) || session.accessTokenId === currentAccessTokenId,
+      current: (existing?.current ?? false) || session.accessTokenId === currentAccessTokenId || session.familyId === currentFamilyId,
       expiresAt: Math.max(existing?.expiresAt ?? session.expiresAt, session.expiresAt),
       ipAddress: existing?.ipAddress ?? session.ipAddress ?? null,
       lastRotatedAt: session.rotatedAt === null
@@ -826,6 +829,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
               id: graceAccessId,
               token: tokenHash(graceAccess),
               userId: successorUser.id,
+              refreshFamilyId: successor.familyId,
               description: "Browser session access token",
               expiresAt: graceExpiresAt,
               createdAt: now,
@@ -883,6 +887,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
             id: accessTokenId,
             token: tokenHash(accessToken),
             userId: user.id,
+            refreshFamilyId: current.familyId,
             description: "Browser session access token",
             expiresAt: accessExpiresAt,
             createdAt: now,
@@ -933,6 +938,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
                 id: graceAccessId,
                 token: tokenHash(graceAccess),
                 userId: successorUser.id,
+                refreshFamilyId: successor.familyId,
                 description: "Browser session access token",
                 expiresAt: graceExpiresAt,
                 createdAt: now,
@@ -1116,7 +1122,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         gt(refreshSessions.expiresAt, Date.now()),
       ),
     });
-    return { data: browserSessionResources(sessions, token?.id ?? null) };
+    return { data: browserSessionResources(sessions, token?.id ?? null, token?.refreshFamilyId ?? null) };
   })
   .delete("/api/v2/account/sessions", async ({ user, token, set }: AuthReqCtx): Promise<unknown> => {
     if (user === null || user === undefined) {
@@ -1151,7 +1157,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       if (!activeFamily.some((session): boolean => session.rotatedAt === null)) return null;
       const isCurrent = token !== null
         && token !== undefined
-        && activeFamily.some((session): boolean => session.accessTokenId === token.id);
+        && (token.refreshFamilyId === familyId || activeFamily.some((session): boolean => session.accessTokenId === token.id));
       return await revokeRefreshFamily(familyId, user.id) ? isCurrent : null;
     });
     if (current === null) {

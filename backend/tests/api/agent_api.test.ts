@@ -253,6 +253,14 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
       body: JSON.stringify({ redacted: true }),
     }));
     out.redactedPutStatus = res.status;
+    res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/plan-json-redacted\`, {
+      method: "PUT",
+      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-fencing-token": fencingToken, "content-type": "text/plain" },
+      body: "{broken",
+    }));
+    out.invalidSideArtifactStatus = res.status;
+    out.keptSideArtifact = JSON.parse(await Bun.file(join(process.env.STORAGE_DIR, "plan-json", "run1.redacted.json")).text());
+
 
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/provider-schemas\`, {
       method: "PUT",
@@ -310,6 +318,14 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     }));
     out.fsGetStatus = res.status;
     out.fsGetBytes = await res.text();
+
+    const encryptedCompletion = await app.fetch(new Request(base + "/api/agent/status", {
+      method: "PUT",
+      headers: { authorization: "Bearer " + agentToken, "tfc-agent-id": reg.id, "tfc-agent-fencing-token": fencingToken, "content-type": "application/json" },
+      body: JSON.stringify({ status: "idle", job: { status: "finished", data: { operation: "plan", run_id: "run1", state: JSON.stringify({ encryption_version: "v0", encrypted_data: "synthetic" }) } } }),
+    }));
+    out.encryptedCompletion = encryptedCompletion.status;
+    out.jobAfterEncrypted = (await db.query.agentJobs.findFirst({ where: eq(agentJobs.id, "ajob1") })).status;
 
     // completion: finished -> run planned
     res = await app.fetch(new Request(\`\${base}/api/agent/status\`, {
@@ -376,9 +392,13 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
   expect(result["artifactUnauthStatus"]).toBe(401);
   expect(result["planJsonPutStatus"]).toBe(200);
   expect(result["redactedPutStatus"]).toBe(200);
+  expect(result["invalidSideArtifactStatus"]).toBe(422);
+  expect(result["keptSideArtifact"]).toEqual({ redacted: true });
   expect(result["schemasPutStatus"]).toBe(200);
   expect(result["logPatchStatus"]).toBe(200);
   expect(result["logStoredText"]).toBe("Terraform v1.9.5\nInitializing...\nWarning: deprecated");
+  expect(result["encryptedCompletion"]).toBe(422);
+  expect(result["jobAfterEncrypted"]).toBe("claimed");
   expect(result["completeStatus"]).toBe(200);
   expect(result["runStatusAfterComplete"]).toBe("planned");
   expect(result["runHasChanges"]).toBe(true);

@@ -1,10 +1,11 @@
+import { normalizeRunVariables } from "../../src/lib/run-variables";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { storageDir } from "../../src/db/driver";
+import { storageDir, databaseUrl } from "../../src/db/driver";
 import {
   apiTokens, configurationVersions, organizationMemberships, organizations,
   runs, stateVersions, teams, teamWorkspaces, users, workspaceTags, workspaceVariables, workspaces,
@@ -410,6 +411,29 @@ describe("the reference format API v2 - Runs", () => {
     const validVariables = [{ key: "region", value: "us-east-1" }];
     const ok = await post({ variables: validVariables });
     expect(ok.status).toBe(201);
+    const secret = "run-canary-" + crypto.randomUUID();
+    const secretResponse = await post({ variables: [{ key: "credential", value: secret, sensitive: true }] });
+    expect(secretResponse.status).toBe(201);
+    const publicText = await secretResponse.text();
+    expect(publicText).not.toContain(secret);
+    expect(publicText).not.toContain("valueEncrypted");
+    const secretId = JSON.parse(publicText).data.id as string;
+    const persisted = await db.query.runs.findFirst({ where: eq(runs.id, secretId) });
+    expect(JSON.stringify(persisted?.variables)).not.toContain(secret);
+    expect(normalizeRunVariables(persisted?.variables)[0]?.value).toBe(secret);
+    // Rehearse the backfill twice against this suite's isolated database.
+    await db.update(runs).set({ variables: [{ key: "credential", value: secret, sensitive: true } as { key: string; value: string }] }).where(eq(runs.id, secretId));
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const child = Bun.spawn([process.execPath, "run", "scripts/encrypt-run-variables.ts"], { env: { ...process.env, DATABASE_URL: databaseUrl, STORAGE_DIR: storageDir }, stdout: "pipe", stderr: "pipe" });
+      const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(stdout + stderr).not.toContain(secret);
+      expect(exitCode, stderr).toBe(0);
+      expect(stdout).toContain(`Encrypted sensitive variables in ${attempt === 0 ? 1 : 0} run records.`);
+      const backfilled = await db.query.runs.findFirst({ where: eq(runs.id, secretId) });
+      expect(JSON.stringify(backfilled?.variables)).not.toContain(secret);
+      expect(normalizeRunVariables(backfilled?.variables)[0]?.value).toBe(secret);
+    }
+    expect(() => normalizeRunVariables([{ key: "bad", value: "", sensitive: true, valueEncrypted: "broken" }])).toThrow("Invalid encrypted run variable");
 
     // Unsafe target/replace addresses must be rejected.
     for (const attrs of [
