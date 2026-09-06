@@ -217,6 +217,96 @@ test("cancel captures partial apply state before deleting the work directory", a
   expect(result.marker).toBe(true);
 }, { timeout: 30000 });
 
+test("deleting the run record mid-execution stops the subprocess without publishing success (issue #693)", async () => {
+  const result = await runCancellationScript(`
+    const { chmod, exists, mkdir, readFile, writeFile } = await import("fs/promises");
+    const { join } = await import("path");
+    const { db } = await import("./src/db/index.ts");
+    const { eq } = await import("drizzle-orm");
+    const { organizations, projects, workspaces, configurationVersions, runs } = await import("./src/db/schema.ts");
+    const { executeRun } = await import("./src/worker.ts");
+
+    const testDir = process.env.TEST_DIR;
+    const recordDir = join(testDir, "record");
+    const binaryDir = join(process.env.STORAGE_DIR, "binaries", "tofu", "1.2.3");
+    const binaryPath = join(binaryDir, "tofu");
+    const applyPidFile = join(recordDir, "apply-pid");
+    const runId = "deleted-mid-execution-run";
+    await mkdir(recordDir, { recursive: true });
+    await mkdir(binaryDir, { recursive: true });
+
+    // Fake tofu: instant plan, apply that blocks forever and only writes its
+    // success marker after the block (never reached once cancelled).
+    await writeFile(binaryPath, [
+      "#!/bin/sh",
+      "case \\"$1\\" in",
+      '  init) : ;;',
+      '  plan) echo "Plan: 1 to add, 0 to change, 0 to destroy."; : > tfplan ;;',
+      '  show) echo "{}" ;;',
+      '  apply) echo "$$" > "' + applyPidFile + '"; while :; do sleep 30; done; : > "' + join(recordDir, "applied") + '" ;;',
+      "  *) exit 2 ;;",
+      "esac",
+    ].join("\\n"));
+    await chmod(binaryPath, 0o755);
+
+    const configDir = join(testDir, "config");
+    const archivePath = join(testDir, "config.tar.gz");
+    await mkdir(configDir);
+    await writeFile(join(configDir, "main.tf"), 'output "x" { value = "y" }');
+    const tar = Bun.spawn(["tar", "-czf", archivePath, "-C", configDir, "."]);
+    if (await tar.exited !== 0) throw new Error("tar failed");
+
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(projects).values({ id: "project", orgId: "org", name: "project" });
+    await db.insert(workspaces).values({
+      id: "workspace", name: "workspace", orgId: "org", projectId: "project",
+      iacBinary: "tofu", terraformVersion: "1.2.3", autoApply: true,
+    });
+    await db.insert(configurationVersions).values({
+      id: "configuration", workspaceId: "workspace", status: "uploaded", archivePath,
+    });
+    await db.insert(runs).values({
+      id: runId, workspaceId: "workspace", configurationVersionId: "configuration",
+      status: "pending", autoApply: true, terraformVersion: "1.2.3", createdAt: Date.now(),
+    });
+
+    const runPromise = executeRun(runId);
+    let attempts = 0;
+    while (attempts++ < 1000 && !(await exists(applyPidFile))) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!(await exists(applyPidFile))) throw new Error("apply subprocess did not start");
+
+    // Unexpected removal out from under a live execution: no cancel status,
+    // no API involved, the row is simply gone.
+    await db.delete(runs).where(eq(runs.id, runId));
+
+    // Watchdog: the apply process group must die through the cooperative
+    // path (SIGINT, escalating to SIGKILL at ~5s), never orphaned.
+    let subprocessDead = false;
+    for (let i = 0; i < 900; i++) {
+      if (await exists(applyPidFile)) {
+        const p = parseInt(await readFile(applyPidFile, "utf8"), 10);
+        let alive = false;
+        try { process.kill(p, 0); alive = true; } catch { alive = false; }
+        if (!alive) { subprocessDead = true; break; }
+      }
+      await new Promise(r => setTimeout(r, 10));
+    }
+
+    let errorMessage = null;
+    await runPromise.then(() => undefined, (error) => { errorMessage = error instanceof Error ? error.message : String(error); });
+    const applied = await exists(join(recordDir, "applied")).catch(() => false);
+    const rowGone = (await db.query.runs.findFirst({ where: eq(runs.id, runId) })) === undefined;
+    process.stdout.write(JSON.stringify({ subprocessDead, applied, rowGone, errorMessage }) + "\\n");
+  `);
+
+  expect(result.subprocessDead).toBe(true);
+  expect(result.applied).toBe(false);
+  expect(result.rowGone).toBe(true);
+  expect(result.errorMessage ?? "").not.toContain("Illegal run status transition");
+}, { timeout: 30000 });
+
 test("failed recovery capture preserves the work directory (issue #579)", async () => {
   // The fake apply writes partial state and then blocks, like the capture
   // test above. A blocker file where the recovery run directory goes forces

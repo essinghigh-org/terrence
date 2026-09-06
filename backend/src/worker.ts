@@ -1228,6 +1228,27 @@ function assessmentResourceCounts(planJson: JsonObject): { drifted: number; undr
   return { drifted, undrifted };
 }
 
+/** Consecutive missing-record polls before a tracked process is stopped
+ * cooperatively (issue #693). A single miss could be a transient read
+ * anomaly; a streak means the run row is gone. */
+export const MISSING_RUN_POLLS_BEFORE_CANCEL = 3;
+
+export type CancellationPollDecision = "none" | "cancel" | "force-cancel";
+
+/** Classify one cancellation-poll observation for a tracked subprocess. A
+ * deleted record resolves to the cooperative path (SIGINT, never SIGKILL):
+ * the engine stops at a state boundary and still captures recovery state,
+ * while an uncoordinated hard kill would lose it. */
+export function classifyCancellationPoll(
+  status: string | undefined,
+  missingStreak: number,
+): CancellationPollDecision {
+  if (status === "force_canceled") return "force-cancel";
+  if (status === "canceled") return "cancel";
+  if (status === undefined && missingStreak >= MISSING_RUN_POLLS_BEFORE_CANCEL) return "cancel";
+  return "none";
+}
+
 async function waitForTrackedProcess<T>(
   runId: string,
   phase: string,
@@ -1241,6 +1262,7 @@ async function waitForTrackedProcess<T>(
   let timedOut = false;
   let cancellationRequested = false;
   let cancellationPollFailureLogged = false;
+  let missingRunPolls = 0;
   const requestCancellation = (force: boolean): void => {
     if (cancellationRequested && !force) return;
     cancellationRequested = true;
@@ -1258,8 +1280,16 @@ async function waitForTrackedProcess<T>(
   };
   const cancellationPoller = setInterval((): void => {
     void db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { status: true } }).then((run): void => {
-      if (run?.status === "force_canceled") requestCancellation(true);
-      else if (run?.status === "canceled") requestCancellation(false);
+      if (run === undefined) missingRunPolls += 1;
+      else missingRunPolls = 0;
+      const decision = classifyCancellationPoll(run?.status, missingRunPolls);
+      if (decision === "force-cancel") requestCancellation(true);
+      else if (decision === "cancel") {
+        if (run === undefined && missingRunPolls === MISSING_RUN_POLLS_BEFORE_CANCEL) {
+          log.warn("Run record deleted during execution; requesting cooperative cancellation", { runId, phase });
+        }
+        requestCancellation(false);
+      }
     }).catch((error: unknown): void => {
       if (cancellationPollFailureLogged) return;
       cancellationPollFailureLogged = true;
