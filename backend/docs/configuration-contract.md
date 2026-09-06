@@ -12,77 +12,107 @@ a process restart. Millisecond timeouts are bounded to avoid timer overflow.
 Unknown names in application-owned namespaces such as TERRENCE_, SYSTEM_API_, and
 RATE_LIMIT_ fail startup. Unrelated process variables remain available.
 
-| Name | Default | Accepted values |
-| --- | --- | --- |
-| AGENT_HEARTBEAT_TIMEOUT_MS | 60000 | Integer 1–2147483647 |
-| ALLOW_TOOL_FALLBACK | false | true, false, 1, or 0 |
-| ALLOW_UNVERIFIED_CHECKSUMS | false | true, false, 1, or 0 |
-| AUDIT_STRICT | false | true, false, 1, or 0 |
-| AVATAR_CACHE_MAX_AGE_MS | 2592000000 | Integer 1–31536000000 |
-| AVATAR_CACHE_MAX_BYTES | 67108864 | Integer 1–10737418240 |
-| AVATAR_CACHE_MAX_ENTRIES | 2048 | Integer 1–1000000 |
-| CLI_TOKEN_TTL_MS | 2592000000 | Integer 1–31536000000 |
-| GC_GRACE_PERIOD_DAYS | 7 | Integer 0–36500 |
-| HEALTH_ASSESSMENT_CONCURRENCY | 2 | Integer 1–1024 |
-| HEALTH_ASSESSMENT_INTERVAL_MS | 86400000 | Integer 1–2147483647 |
-| IACT_QUERY_TOKEN_ENABLED | false | true, false, 1, or 0 |
-| INFRACOST_ENABLED | false | true, false, 1, or 0 |
-| LOG_CAPABILITY_TTL_SECONDS | 172800 | Integer 1–604800 |
-| MIGRATION_CHECKPOINT_RETRIES | 15 | Integer 1–100 |
-| MIGRATION_DRAIN_TIMEOUT_MS | 1800000 | Integer 1–2147483647 |
-| MIGRATION_SKIP_DRAIN | false | true, false, 1, or 0 |
-| PORT | 3000 | Integer 1–65535 |
-| RATE_LIMIT_MAX | 60 | Integer 1–1000000 |
-| RATE_LIMIT_METRICS_MAX | 30 | Integer 1–1000000 |
-| RATE_LIMIT_SCIM_MAPPING_MAX | 10 | Integer 1–1000000 |
-| RATE_LIMIT_SCIM_SETTINGS_MAX | 20 | Integer 1–1000000 |
-| RATE_LIMIT_SENSITIVE_MAX | 5 | Integer 1–1000000 |
-| RATE_LIMIT_SSO_GET_MAX | 60 | Integer 1–1000000 |
-| RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS | 60000 | Integer 1–2147483647 |
-| RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX | 120 | Integer 1–1000000 |
-| RUN_TASK_TIMEOUT_MS | 3600000 | Integer 1–2147483647 |
-| SIGNED_URL_TTL_SECONDS | 300 | Integer 1–604800 |
-| SIMULATED_RUNS | false | true, false, 1, or 0 |
-| SIMULATED_STACK_DEFERRED | false | true, false, 1, or 0 |
-| SIMULATED_STACK_PLAN_CHANGES | false | true, false, 1, or 0 |
-| SYSTEM_API_PORT | 8443 | Integer 1–65535 |
-| TERRENCE_ADMIN_PASSWORD_RESET | false | true, false, 1, or 0 |
-| TERRENCE_AGENT_FORWARD_TIMEOUT_MS | 60000 | Integer 1000–300000 |
-| TERRENCE_ALLOW_INSECURE_OAUTH_URLS | false | true, false, 1, or 0 |
-| TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS | false | true, false, 1, or 0 |
-| TERRENCE_ALLOW_PRIVATE_URLS | false | true, false, 1, or 0 |
-| TERRENCE_ALLOW_PRIVATE_VCS_URLS | false | true, false, 1, or 0 |
-| TERRENCE_ASSESSMENT_POLL_MS | 60000 | Integer 5000–2147483647 |
-| TERRENCE_AUTO_DESTROY_POLL_MS | 30000 | Integer 5000–2147483647 |
-| TERRENCE_BINARY_DOWNLOAD_RETRIES | 2 | Integer 0–5 |
-| TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS | 120000 | Integer 1–2147483647 |
-| TERRENCE_BINARY_PROBE_TIMEOUT_MS | 10000 | Integer 1–2147483647 |
-| TERRENCE_CSP_STRICT | false | true, false, 1, or 0 |
-| TERRENCE_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS | 60000 | Integer 0–86400000 |
-| TERRENCE_DB_LOCK_TIMEOUT_MS | 10000 | Integer 0–86400000 |
-| TERRENCE_DB_SLOW_QUERY_MS | 1000 | Integer 1–2147483647 |
-| TERRENCE_DB_STATEMENT_TIMEOUT_MS | 30000 | Integer 0–86400000 |
-| TERRENCE_DISABLE_RESTART | false | true, false, 1, or 0 |
-| TERRENCE_DISABLE_WORKER | false | true, false, 1, or 0 |
-| TERRENCE_DRAIN_GRACE_MS | 6000 | Integer 0–25000 |
-| TERRENCE_ENABLE_LOCAL_SIGNUP | false | true, false, 1, or 0 |
-| TERRENCE_EXPLAIN_TIMEOUT_MS | 60000 | Integer 1–2147483647 |
-| TERRENCE_PASSWORD_DISALLOW_USERNAME | false | true, false, 1, or 0 |
-| TERRENCE_PASSWORD_MIN_LENGTH | 10 | Integer 1–72 |
-| TERRENCE_PASSWORD_REQUIRE_DIGIT | false | true, false, 1, or 0 |
-| TERRENCE_PASSWORD_REQUIRE_LOWER | false | true, false, 1, or 0 |
-| TERRENCE_PASSWORD_REQUIRE_SYMBOL | false | true, false, 1, or 0 |
-| TERRENCE_PASSWORD_REQUIRE_UPPER | false | true, false, 1, or 0 |
-| TERRENCE_QUERY_COUNT | false | true, false, 1, or 0 |
-| TERRENCE_QUERY_LOG | false | true, false, 1, or 0 |
-| TERRENCE_RECOVERY_RETENTION_MS | 604800000 | Integer 0–31536000000 |
-| TERRENCE_RUN_CONCURRENCY | 5 | Integer 1–1024 |
-| TERRENCE_SANDBOX_EXTRA_RW_ALLOWED | false | true, false, 1, or 0 |
-| TERRENCE_SANDBOX_EXTRA_RW_ALLOW_STORAGE | false | true, false, 1, or 0 |
-| TERRENCE_SUPPORT_BUNDLE_MAX_BYTES | 10485760 | Integer 1–104857600 |
-| TERRENCE_SUPPORT_BUNDLE_TTL_MS | 86400000 | Integer 1–2592000000 |
-| TERRENCE_VERSION_CACHE_TTL_MS | 86400000 | Integer 1–31536000000 |
-| TERRENCE_WORKER_POLL_MS | 1500 | Integer 100–2147483647 |
+| Name | Default | Accepted values or type | Restart |
+| --- | --- | --- | --- |
+| AGENT_HEARTBEAT_TIMEOUT_MS | 60000 | Integer 1–2147483647 | yes |
+| ALLOW_TOOL_FALLBACK | false | true, false, 1, or 0 | yes |
+| ALLOW_UNVERIFIED_CHECKSUMS | false | true, false, 1, or 0 | yes |
+| AUDIT_STRICT | false | true, false, 1, or 0 | yes |
+| AVATAR_CACHE_MAX_AGE_MS | 2592000000 | Integer 1–31536000000 | yes |
+| AVATAR_CACHE_MAX_BYTES | 67108864 | Integer 1–10737418240 | yes |
+| AVATAR_CACHE_MAX_ENTRIES | 2048 | Integer 1–1000000 | yes |
+| CLI_TOKEN_TTL_MS | 2592000000 | Integer 1–31536000000 | yes |
+| CORS_ORIGIN | empty | list | yes |
+| ENCRYPTION_PASSWORD | unset | optional | yes |
+| GC_GRACE_PERIOD_DAYS | 7 | Integer 0–36500 | yes |
+| GITHUB_API_URL | https://api.github.com | string | yes |
+| GITHUB_APP_API_URL | https://api.github.com | string | yes |
+| GITHUB_APP_HTTP_URL | unset | optional | yes |
+| HEALTH_ASSESSMENT_CONCURRENCY | 2 | Integer 1–1024 | yes |
+| HEALTH_ASSESSMENT_INTERVAL_MS | 86400000 | Integer 1–2147483647 | yes |
+| IACT_QUERY_TOKEN_ENABLED | false | true, false, 1, or 0 | yes |
+| INFRACOST_ENABLED | false | true, false, 1, or 0 | yes |
+| LOG_CAPABILITY_TTL_SECONDS | 172800 | Integer 1–604800 | yes |
+| LOG_LEVEL | info | string | yes |
+| MIGRATION_CHECKPOINT_RETRIES | 15 | Integer 1–100 | yes |
+| MIGRATION_DRAIN_TIMEOUT_MS | 1800000 | Integer 1–2147483647 | yes |
+| MIGRATION_SKIP_DRAIN | false | true, false, 1, or 0 | yes |
+| PORT | 3000 | Integer 1–65535 | yes |
+| PUBLIC_URL | unset | optional | yes |
+| RATE_LIMIT_MAX | 60 | Integer 1–1000000 | yes |
+| RATE_LIMIT_METRICS_MAX | 30 | Integer 1–1000000 | yes |
+| RATE_LIMIT_SCIM_MAPPING_MAX | 10 | Integer 1–1000000 | yes |
+| RATE_LIMIT_SCIM_SETTINGS_MAX | 20 | Integer 1–1000000 | yes |
+| RATE_LIMIT_SENSITIVE_MAX | 5 | Integer 1–1000000 | yes |
+| RATE_LIMIT_SSO_GET_MAX | 60 | Integer 1–1000000 | yes |
+| RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS | 60000 | Integer 1–2147483647 | yes |
+| RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX | 120 | Integer 1–1000000 | yes |
+| RUN_TASK_TIMEOUT_MS | 3600000 | Integer 1–2147483647 | yes |
+| SIGNED_URL_SECRET | unset | optional | yes |
+| SIGNED_URL_TTL_SECONDS | 300 | Integer 1–604800 | yes |
+| SIMULATED_RUNS | false | true, false, 1, or 0 | yes |
+| SIMULATED_STACK_DEFERRED | false | true, false, 1, or 0 | yes |
+| SIMULATED_STACK_PLAN_CHANGES | false | true, false, 1, or 0 | yes |
+| STORAGE_DIR | <repo>/backend/storage | string | yes |
+| SYSTEM_API_HOST | 127.0.0.1 | string | yes |
+| SYSTEM_API_PORT | 8443 | Integer 1–65535 | yes |
+| SYSTEM_API_TLS_CERT | unset | optional | yes |
+| SYSTEM_API_TLS_KEY | unset | optional | yes |
+| TERRENCE_ADMIN_PASSWORD_RESET | false | true, false, 1, or 0 | yes |
+| TERRENCE_AGENT_FORWARD_TIMEOUT_MS | 60000 | Integer 1000–300000 | yes |
+| TERRENCE_AGENT_UPDATE_SHA256 | unset | optional | yes |
+| TERRENCE_AGENT_UPDATE_URL | unset | optional | yes |
+| TERRENCE_AGENT_UPDATE_VERSION | unset | optional | yes |
+| TERRENCE_ALLOW_INSECURE_OAUTH_URLS | false | true, false, 1, or 0 | yes |
+| TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS | false | true, false, 1, or 0 | yes |
+| TERRENCE_ALLOW_PRIVATE_URLS | false | true, false, 1, or 0 | yes |
+| TERRENCE_ALLOW_PRIVATE_VCS_URLS | false | true, false, 1, or 0 | yes |
+| TERRENCE_ASSESSMENT_POLL_MS | 60000 | Integer 5000–2147483647 | yes |
+| TERRENCE_AUTO_DESTROY_POLL_MS | 30000 | Integer 5000–2147483647 | yes |
+| TERRENCE_BINARY_DOWNLOAD_RETRIES | 2 | Integer 0–5 | yes |
+| TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS | 120000 | Integer 1–2147483647 | yes |
+| TERRENCE_BINARY_PROBE_TIMEOUT_MS | 10000 | Integer 1–2147483647 | yes |
+| TERRENCE_CSP_STRICT | false | true, false, 1, or 0 | yes |
+| TERRENCE_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS | 60000 | Integer 0–86400000 | yes |
+| TERRENCE_DB_LOCK_TIMEOUT_MS | 10000 | Integer 0–86400000 | yes |
+| TERRENCE_DB_SLOW_QUERY_MS | 1000 | Integer 1–2147483647 | yes |
+| TERRENCE_DB_STATEMENT_TIMEOUT_MS | 30000 | Integer 0–86400000 | yes |
+| TERRENCE_DISABLE_RESTART | false | true, false, 1, or 0 | yes |
+| TERRENCE_DISABLE_WORKER | false | true, false, 1, or 0 | yes |
+| TERRENCE_DRAIN_GRACE_MS | 6000 | Integer 0–25000 | yes |
+| TERRENCE_ENABLE_LOCAL_SIGNUP | false | true, false, 1, or 0 | yes |
+| TERRENCE_EXECUTOR_BACKEND | landlock | string | yes |
+| TERRENCE_EXPLAIN_TIMEOUT_MS | 60000 | Integer 1–2147483647 | yes |
+| TERRENCE_NODE_STATUS | active | string | yes |
+| TERRENCE_OUTBOUND_ALLOW_CIDRS | empty | list | yes |
+| TERRENCE_OUTBOUND_ALLOW_HOSTS | empty | list | yes |
+| TERRENCE_PASSWORD_DISALLOW_USERNAME | false | true, false, 1, or 0 | yes |
+| TERRENCE_PASSWORD_MIN_LENGTH | 10 | Integer 1–72 | yes |
+| TERRENCE_PASSWORD_REQUIRE_DIGIT | false | true, false, 1, or 0 | yes |
+| TERRENCE_PASSWORD_REQUIRE_LOWER | false | true, false, 1, or 0 | yes |
+| TERRENCE_PASSWORD_REQUIRE_SYMBOL | false | true, false, 1, or 0 | yes |
+| TERRENCE_PASSWORD_REQUIRE_UPPER | false | true, false, 1, or 0 | yes |
+| TERRENCE_QUERY_COUNT | false | true, false, 1, or 0 | yes |
+| TERRENCE_QUERY_LOG | false | true, false, 1, or 0 | yes |
+| TERRENCE_RECOVERY_RETENTION_MS | 604800000 | Integer 0–31536000000 | yes |
+| TERRENCE_RUN_CONCURRENCY | 5 | Integer 1–1024 | yes |
+| TERRENCE_RUN_NET_POLICY | allow | string | yes |
+| TERRENCE_RUN_SANDBOX | true | boolean | yes |
+| TERRENCE_SANDBOX_EXTRA_RW_ALLOWED | false | true, false, 1, or 0 | yes |
+| TERRENCE_SANDBOX_EXTRA_RW_ALLOW_STORAGE | false | true, false, 1, or 0 | yes |
+| TERRENCE_SANDBOX_EXTRA_RW_PATHS | empty | list | yes |
+| TERRENCE_SANDBOX_MIN_ABI | unset | optional | yes |
+| TERRENCE_SUPPORT_BUNDLE_MAX_BYTES | 10485760 | Integer 1–104857600 | yes |
+| TERRENCE_SUPPORT_BUNDLE_TTL_MS | 86400000 | Integer 1–2592000000 | yes |
+| TERRENCE_SYSLOG_APP | terrence | string | yes |
+| TERRENCE_SYSLOG_FORMAT | rfc5424 | string | yes |
+| TERRENCE_SYSLOG_HOSTNAME | unset | optional | yes |
+| TERRENCE_SYSLOG_LEVEL | info | string | yes |
+| TERRENCE_SYSLOG_TARGETS | empty | list | yes |
+| TERRENCE_TOKEN_HASH_SECRET | unset | optional | yes |
+| TERRENCE_TRUSTED_PROXY_CIDRS | empty | list | yes |
+| TERRENCE_VERSION_CACHE_TTL_MS | 86400000 | Integer 1–31536000000 | yes |
+| TERRENCE_WORKER_POLL_MS | 1500 | Integer 100–2147483647 | yes |
 
 PUBLIC_URL accepts an HTTP(S) URL without credentials, query, or fragment.
 CORS_ORIGIN accepts comma-separated HTTP(S) origins without paths; an empty value

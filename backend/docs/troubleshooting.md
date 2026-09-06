@@ -106,4 +106,6 @@ The shutdown sequence drains the worker, stops HTTP, and checkpoints the databas
 
 - The instance logs: run, worker, and poller messages with structured metadata.
 - `GET /metrics`: worker health, failures, storage state.
-- The [Operations](operations) page: doctor script, health endpoints, backup procedure.
+- The [Operations diagnostics](operations#diagnostics) page section: doctor script and machine-readable checks.
+- The [Operations health endpoints](operations#health-endpoints) section: liveness, readiness, and version context.
+- The [Operations backup procedure](operations#backups) section: complete backup contents and restore rehearsal.

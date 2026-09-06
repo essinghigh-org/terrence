@@ -11,9 +11,10 @@ This page covers the most common operation: moving a Terrence instance to a newe
 
 ## Upgrade steps
 
-1. Back up first. Stop the instance and copy the database plus the whole storage directory (see [Operations](operations)). There is no rollback path: schema migrations are forward-only, so a pre-upgrade backup is the only way back.
+1. Back up first. Stop the instance and copy the database plus the whole storage directory (see the [Operations backup procedure](operations#backups)). There is no rollback path: schema migrations are forward-only, so a pre-upgrade backup is the only way back.
 2. Select the exact `vX.Y.Z@sha256:...` image from the release's redacted build manifest, then pull it and restart (`docker compose pull` and `docker compose up -d`).
 3. Migrations run automatically at startup, forward-only. Watch the first boot log for migration errors before sending traffic.
+4. Check the deployed image before reopening traffic. `GET /healthz` proves liveness, `GET /readyz` proves the local database and storage are ready and includes the applied schema version, and an authenticated `GET /api/v1/metadata` returns the application version and build SHA. Use [Operations health endpoints](operations#health-endpoints) for the exact routes.
 
 ## What is safe
 

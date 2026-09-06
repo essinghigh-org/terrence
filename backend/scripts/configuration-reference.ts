@@ -17,10 +17,27 @@ const settingsExample = { "plan-timeout": 3600, "apply-timeout": 3600, "api-rate
 export function configurationReference(): string {
   parseRuntimeConfiguration(environmentExample, true);
   validateSettings("general", settingsExample, true);
+  const parsedDefaults = parseRuntimeConfiguration({});
+  const parsedNames = new Set([...Object.keys(integerConfiguration), ...Object.keys(booleanConfiguration)]);
+  const displayDefault = (name: string, value: unknown): string => {
+    if (name === "STORAGE_DIR") return "<repo>/backend/storage";
+    if (value === undefined || value === null) return "unset";
+    if (Array.isArray(value)) return value.length === 0 ? "empty" : JSON.stringify(value);
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value.toString();
+    return JSON.stringify(value);
+  };
+  const runtimeType = (value: unknown): string => {
+    if (value === null || value === undefined) return "optional";
+    if (Array.isArray(value)) return "list";
+    return typeof value;
+  };
   const rows = Object.entries(integerConfiguration).map(([name, rule]): string =>
-    `| ${name} | ${String(rule.default)} | Integer ${String(rule.min)}–${String(rule.max)} |`);
+    `| ${name} | ${String(rule.default)} | Integer ${String(rule.min)}–${String(rule.max)} | yes |`);
   rows.push(...Object.entries(booleanConfiguration).map(([name, value]): string =>
-    `| ${name} | ${String(value)} | true, false, 1, or 0 |`));
+    `| ${name} | ${String(value)} | true, false, 1, or 0 | yes |`));
+  rows.push(...Object.entries(parsedDefaults)
+    .filter(([name]) => !parsedNames.has(name))
+    .map(([name, value]): string => `| ${name} | ${displayDefault(name, value)} | ${runtimeType(value)} | yes |`));
   const persistedRows = Object.entries(settingsContract).flatMap(([group, rules]): string[] =>
     Object.entries(rules).map(([key, rule]): string => {
       const range = rule.kind === "integer" ? ` ${String(rule.min)}–${String(rule.max)}` : "";
@@ -41,8 +58,8 @@ a process restart. Millisecond timeouts are bounded to avoid timer overflow.
 Unknown names in application-owned namespaces such as TERRENCE_, SYSTEM_API_, and
 RATE_LIMIT_ fail startup. Unrelated process variables remain available.
 
-| Name | Default | Accepted values |
-| --- | --- | --- |
+| Name | Default | Accepted values or type | Restart |
+| --- | --- | --- | --- |
 ${rows.sort().join("\n")}
 
 PUBLIC_URL accepts an HTTP(S) URL without credentials, query, or fragment.

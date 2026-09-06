@@ -7,7 +7,7 @@ description: Every environment variable, its default, and its purpose.
 
 # Configuration
 
-Terrence runs with no environment variables set. Development defaults apply. The variables below enable specific features.
+Terrence runs with no environment variables set. Development defaults apply. The variables below enable specific features. Names, parsed defaults, accepted values, and restart requirements are generated in the [configuration contract](configuration-contract); use that page as the factual reference when changing deployment settings. This page keeps the operator guidance and examples.
 
 Set variables through the container environment or an `.env` file.
 
@@ -36,7 +36,7 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `DATABASE_URL` | `file:<storage>/terrence.db` | Database connection. PostgreSQL strings select the PostgreSQL backend. `<storage>` is `STORAGE_DIR`, default `<repo>/backend/storage`. |
 | `STORAGE_DIR` | `<repo>/backend/storage` | Directory for archives, state, binaries, and the version cache. `/app/backend/storage` in the container. Must persist. |
 | `CORS_ORIGIN` | dev default | Allowed CORS origin for the web interface. |
-| `ENCRYPTION_PASSWORD` | generated | Password for encryption-at-rest features. |
+| `ENCRYPTION_PASSWORD` | unset | Stable password for encryption-at-rest features. When unset, Terrence uses the installation key stored in `STORAGE_DIR`; keep the password or key and `.encryption-salt` with the database. |
 | `SIGNED_URL_SECRET` | generated | Secret for signed URL tokens (state downloads). |
 | `SIGNED_URL_TTL_SECONDS` | `300` | Lifetime of signed download URLs, excluding run-log capabilities. |
 | `LOG_CAPABILITY_TTL_SECONDS` | `172800` | Run-log URL lifetime in seconds (48h); positive integer, maximum 7 days. Shorter lifetimes can interrupt legacy CLI polling; see operations guidance. |
@@ -63,7 +63,7 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | Variable | Default | Purpose |
 |---|---|---|
 | `TERRENCE_DISABLE_WORKER` | off | When `1`, run without the worker. Pending runs stay queued. |
-| `TERRENCE_WORKER_POLL_MS` | `1500` | Run queue poll interval. Values below 100 ms fall back to the default. |
+| `TERRENCE_WORKER_POLL_MS` | `1500` | Run queue poll interval. Values must be at least 100 ms. |
 | `TERRENCE_AUTO_DESTROY_POLL_MS` | `30000` | Auto-destroy scan interval. Minimum 5000 ms. |
 | `TERRENCE_ASSESSMENT_POLL_MS` | `60000` | Assessment discovery interval. Minimum 5000 ms. |
 | `TERRENCE_DRAIN_GRACE_MS` | `6000` | Shutdown drain wait for in-flight executions. Maximum 25000. |
@@ -87,13 +87,13 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `TERRENCE_SANDBOX_EXTRA_RW_PATHS` | none | Extra read-write paths for the sandbox. |
 | `TERRENCE_SANDBOX_EXTRA_RW_ALLOWED` | off | Allow the extra paths to be specified. |
 | `TERRENCE_BINARY_CACHE_DIR` | storage | Directory for downloaded Terraform and OpenTofu binaries. |
-| `TERRENCE_VERSION_CACHE_TTL_MS` | `86400000` | Lifetime of cached version lists. `0` never reuses. |
+| `TERRENCE_VERSION_CACHE_TTL_MS` | `86400000` | Lifetime of cached version lists. It must be at least 1 ms. |
 | `TERRENCE_VERSION_CACHE_FILE` | storage | Path of the version cache file. |
 | `TERRENCE_ALLOW_PRIVATE_URLS` | off | Allow outbound requests to private network addresses. |
 | `ALLOW_UNVERIFIED_CHECKSUMS` | off | Skip binary checksum verification. For restricted networks only. |
 | `ALLOW_TOOL_FALLBACK` | off | Allow fallback binary sources when the primary mirror is unreachable. |
 | `TERRENCE_RUN_NET_POLICY` | `allow` | Run TCP policy. `deny` blocks TCP bind/connect via Landlock ABI >= 4; it does not block UDP, DNS, or other socket families. Use host/container network isolation for complete network denial. Invalid values fail startup. |
-| `TERRENCE_EXECUTOR_BACKEND` | `landlock` | Executor backend: `landlock`, `container`, `kubernetes`, `agent`, or `microvm`. Unknown values fall back to `landlock`. |
+| `TERRENCE_EXECUTOR_BACKEND` | `landlock` | Executor backend: `landlock`, `container`, `kubernetes`, `agent`, or `microvm`. Unknown values fail startup. |
 | `TERRENCE_SANDBOX_MIN_ABI` | runner minimum | Minimum Landlock ABI the readiness gate requires. Unset means no floor beyond the sandbox-required check; explicit values must be integers from 1 to 255 and invalid values fail startup. |
 | `TERRENCE_AGENT_UPDATE_URL` / `TERRENCE_AGENT_UPDATE_SHA256` / `TERRENCE_AGENT_UPDATE_VERSION` | none | Agent binary self-update source: URL plus expected SHA256 plus version pin. |
 | `TERRAFORM_CONFIG_INSPECT_PATH` | bundled | Path to the config inspector binary. |

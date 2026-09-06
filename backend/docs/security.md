@@ -20,13 +20,13 @@ This page describes the security model and the hardening applied across the inst
 
 ## Run isolation
 
-Runs execute inside a Landlock sandbox:
+When `TERRENCE_RUN_SANDBOX` is enabled (the default), runs execute inside a Landlock sandbox:
 
 - The run process sees only its working directory and the binary directory.
 - Provider plugins and local-exec provisioners inherit the restrictions.
 - The database, encryption keys, and other workspaces are not visible.
 
-The sandbox is required by default. See [Execution](execution).
+When `TERRENCE_RUN_SANDBOX=false`, those filesystem boundaries do not apply: the run executes as the service identity and may be able to read the storage and key files. Use that setting only for trusted development or on hosts with an equivalent isolation boundary. See [Execution](execution).
 
 ## Credential isolation
 
@@ -89,6 +89,12 @@ Outbound requests (notifications, avatars, VCS fetches) follow safe URL rules:
 - Environment secrets are never written to run logs.
 - The secrets module centralizes encryption keys and access.
 - Audit strict mode records sensitive reads. See [Audit trail](audit-trail).
+
+Encryption is artifact-specific. State payloads, sensitive variable values, and
+recovery captures use authenticated encryption; logs, plans, configuration
+archives, generated configuration, and AI explanations remain plaintext private
+artifacts. See the [operations storage table](operations#storage-layout) before
+designing backup or access controls.
 
 ## IP allowlists
 

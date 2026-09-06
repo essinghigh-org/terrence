@@ -108,7 +108,7 @@ The rehearsal endpoint has no corresponding restore endpoint. Replacing a live v
 
 ## Interrupted-apply recovery
 
-When an apply is canceled or the process dies mid-apply, the worker captures the local `terraform.tfstate` (if present) encrypted into `recovery/<run-id>/`. Fetch it before it expires:
+When an apply is canceled or the process dies mid-apply, the worker captures the local `terraform.tfstate` (if present) encrypted into `recovery/<run-id>/`. Fetch it when needed:
 
 - `GET /api/v2/runs/:run_id/recovery-state`
 
@@ -162,8 +162,10 @@ Use `--json` for machine output and `--fail` to exit 1 on any failed check.
 
 ## Health endpoints
 
-- `GET /readyz` reports readiness. A degraded storage state returns 503.
-- `GET /health` reports basic liveness.
+- `GET /healthz` reports basic liveness and returns `ok` without database access.
+- `GET /readyz` reports local readiness, including the applied schema version. A degraded storage or unavailable database returns 503.
+- `GET /api/v1/metadata` reports the application `version` and build `sha`; it uses the system API authentication guard.
+- `GET /api/v1/readiness` reports structured readiness checks and uses the system API authentication guard. `/api/v1/health/readiness` is an equivalent compatibility route.
 
 The container health check uses these endpoints.
 
