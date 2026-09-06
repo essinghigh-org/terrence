@@ -8,6 +8,7 @@ import {
   expireAuthSession,
   extractFieldErrors,
   fetchAllApiPages,
+  MAX_PAGINATED_PAGES,
   fetchApi,
   fetchApiBlob,
   getAuthToken,
@@ -50,6 +51,26 @@ test("collects paginated API data and stops on a repeated page", async () => {
       { id: "run-2" },
     ]);
     expect(calls).toHaveLength(2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fetchAllApiPages respects MAX_PAGINATED_PAGES budget and halts safely", async () => {
+  const originalFetch = globalThis.fetch;
+  let pageCounter = 1;
+  globalThis.fetch = (async (): Promise<Response> => {
+    pageCounter += 1;
+    return Response.json({
+      data: [{ id: `item-${pageCounter}` }],
+      meta: { pagination: { "next-page": pageCounter } },
+    });
+  }) as unknown as typeof fetch;
+
+  try {
+    const results = await fetchAllApiPages<{ id: string }>("/items");
+    expect(results).toHaveLength(MAX_PAGINATED_PAGES);
+    expect(pageCounter).toBe(MAX_PAGINATED_PAGES + 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

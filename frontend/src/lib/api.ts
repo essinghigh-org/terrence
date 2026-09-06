@@ -327,12 +327,14 @@ export async function fetchApiBlob(endpoint: string, options: ReadonlyRequestIni
   return (await requestApi(endpoint, options)).blob();
 }
 
+export const MAX_PAGINATED_PAGES = 100;
+
 export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<AbortSignal>): Promise<T[]> {
   const data: T[] = [];
   const visited = new Set<string>();
   let pageEndpoint: string | null = endpoint;
 
-  while (pageEndpoint !== null && !visited.has(pageEndpoint)) {
+  while (pageEndpoint !== null && !visited.has(pageEndpoint) && visited.size < MAX_PAGINATED_PAGES) {
     visited.add(pageEndpoint);
     // SAFETY: list endpoints return the JSON:API collection envelope; the
     // data array and pagination meta fields are checked below.
