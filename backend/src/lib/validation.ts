@@ -1,3 +1,4 @@
+import { databaseConstraint } from "./database-errors";
 import { decryptSecretSync, encryptSecret, isEncryptedSecret } from "./secrets";
 import { join } from "node:path";
 
@@ -110,6 +111,7 @@ export function validVariableSetAttributes(attributes: unknown, partial = false)
 }
 
 export function isUniqueConstraintError(error: unknown): boolean {
+  if (databaseConstraint(error) === "unique") return true;
   const items: unknown[] = [error, (error as Record<string, unknown> | undefined)?.["cause"]];
   return items.some((item: unknown): boolean => {
     const i = item as Record<string, unknown> | undefined;

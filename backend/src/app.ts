@@ -1,4 +1,5 @@
 import { SettingsValidationError } from "./lib/settings-contract";
+import { databaseConstraint } from "./lib/database-errors";
 import { executionSetting, integerSetting } from "./lib/runtime-config";
 import { Elysia } from "elysia";
 import { staticPlugin } from "@elysiajs/static";
@@ -247,6 +248,8 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
   const { code, error, set, request } = context;
   const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
   const pathname = new URL(request.url).pathname;
+  const constraint = databaseConstraint(error);
+  if (constraint !== null) mutableSet.status = 409;
   if (error instanceof SettingsValidationError) mutableSet.status = error.status;
   // Elysia wraps onParse failures in its own ParseError; the original is
   // preserved as `cause` (elysia/dist/error.js ParseError).
@@ -267,6 +270,10 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
   }
   if (error instanceof SettingsValidationError) {
     return { errors: [{ status: String(error.status), title: error.status === 422 ? "Unprocessable Entity" : "Service Unavailable", detail: error.message }] };
+  }
+  if (constraint !== null) {
+    mutableSet.headers["Content-Type"] = "application/vnd.api+json";
+    return { errors: [{ status: "409", title: "Conflict", detail: constraint === "unique" ? "A resource with these unique attributes already exists" : "The operation conflicts with a related resource" }] };
   }
   if (code === "NOT_FOUND") {
     if (!(pathname === "/api" || pathname.startsWith("/api/"))) {

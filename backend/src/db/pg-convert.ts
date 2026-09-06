@@ -431,39 +431,32 @@ export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<str
       column.references((): unknown => targetColumn, actions);
     }
 
-    const extra: unknown[] = buildExtraConfig(sqliteTable, pg, columns, columnsByDbName);
-    for (const fk of compositeFks) {
-      const local = fk.localColumns.map((c): unknown => {
-        const column = columnsByDbName[c];
-        if (column === undefined) throw new Error(`pg-convert: composite FK column "${c}" not found on "${name}"`);
-        return column;
-      });
-      const isSelfFk = fk.foreignTable === name;
-      const target = (isSelfFk ? (columns as unknown as Record<string, unknown>) : pg[fk.foreignTable]) as Record<string, unknown> | undefined;
-      if (target === undefined) {
-        throw new Error(`pg-convert: composite FK on "${name}" references unknown table "${fk.foreignTable}"`);
+    // Extra-config callbacks receive built columns. Column builders have no
+    // table identity, so using them here loses self-referencing FK targets.
+    const buildExtra = (builtColumns: Readonly<Record<string, unknown>>): unknown[] => {
+      const builtByDbName = Object.fromEntries(Object.entries(sqliteTable[COLS]).map(
+        ([property, column]): [string, unknown] => [columnName(column), builtColumns[property]],
+      ));
+      const extra = buildExtraConfig(sqliteTable, pg, builtColumns, builtByDbName);
+      for (const fk of compositeFks) {
+        const local = fk.localColumns.map((columnName): unknown => {
+          const column = builtByDbName[columnName];
+          if (column === undefined) throw new Error(`pg-convert: composite FK column "${columnName}" not found on "${name}"`);
+          return column;
+        });
+        const foreign = fk.foreignColumns.map((columnName): unknown => {
+          const column = fk.foreignTable === name ? builtByDbName[columnName] : pgColumnByDbName(pg[fk.foreignTable], columnName);
+          if (column === undefined) throw new Error(`pg-convert: composite FK column "${fk.foreignTable}.${columnName}" not found`);
+          return column;
+        });
+        const builder = foreignKey({ columns: local as never, foreignColumns: foreign as never });
+        if (fk.onDelete !== undefined) builder.onDelete(fk.onDelete as never);
+        if (fk.onUpdate !== undefined) builder.onUpdate(fk.onUpdate as never);
+        extra.push(builder);
       }
-      const foreign = fk.foreignColumns.map((c): unknown => {
-        const column = target[c];
-        if (column === undefined) {
-          throw new Error(`pg-convert: composite FK column "${fk.foreignTable}.${c}" not found`);
-        }
-        return column;
-      });
-      const builder = foreignKey({
-        columns: local as never,
-        foreignColumns: foreign as never,
-      });
-      if (fk.onDelete !== undefined) builder.onDelete(fk.onDelete as never);
-      if (fk.onUpdate !== undefined) builder.onUpdate(fk.onUpdate as never);
-      extra.push(builder);
-    }
-
-    const pgTableValue = pgTable(
-      name,
-      columns as never,
-      extra.length > 0 ? ((): unknown[] => extra) as never : undefined,
-    );
+      return extra;
+    };
+    const pgTableValue = pgTable(name, columns as never, buildExtra as never);
     // Drizzle's jsonb mapper stringifies values for drivers such as postgres.js.
     // Bun.SQL accepts objects directly and would stringify that string again,
     // storing a JSON string instead of a JSON object.

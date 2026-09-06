@@ -23,6 +23,7 @@ import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import { count, eq, inArray } from "drizzle-orm";
 import { envFlag } from "../env";
+import { verifyArtifactReferences, type ArtifactReferenceCheck } from "./artifacts";
 import { db } from "../../db";
 import { checkpointWal } from "../../db";
 import { readBundledMigrationJournalRows, type MigrationJournalRow } from "../../db/reconcile";
@@ -94,6 +95,7 @@ export type TableVerifyResult = Readonly<{
 }>;
 
 export type MigrationReport = Readonly<{
+  artifactReferences: readonly ArtifactReferenceCheck[];
   triggersSkipped: number;
   defaultsDropped: readonly string[];
   checksSkipped: readonly string[];
@@ -659,6 +661,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
       // (session_replication_role = replica), so insertion order is free.
       // VALIDATE CONSTRAINT in the verify step is the integrity gate.
       report = {
+        artifactReferences: [],
         triggersSkipped: schema.triggers.length,
         defaultsDropped: schema.tables.flatMap((table): string[] =>
           table.columns.filter((column): boolean => column.defaultDropped)
@@ -810,7 +813,12 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
       }
       const violations = await validateForeignKeys(target, plans.map((plan): CopyTable => plan.copy), fkNames);
       const journalMatch = await verifyJournal(target);
-      report = { ...report, fkViolations: violations, journalMatch };
+      const artifactReferences = await verifyArtifactReferences(sourceSnapshot);
+      report = { ...report, fkViolations: violations, journalMatch, artifactReferences };
+      ctx.setState({ ...ctx.state, report });
+      if (artifactReferences.some((check) => check.unavailable > 0)) {
+        throw new WizardError("Artifact verification failed: restore the referenced files in shared storage before resuming migration. The database was not switched.");
+      }
       const mismatches = verification.filter((row): boolean => !row.countMatch || row.digestMatch === false);
       if (mismatches.length > 0 || violations.length > 0 || !journalMatch) {
         const mismatchDetails = mismatches.map((m): string => `${m.table} (src=${m.sourceCount}, dst=${m.targetCount}, digest=${m.digestMatch})`).join("; ");
@@ -823,7 +831,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
       // completed migration with per-table row counts, so an operator can
       // audit what moved without opening the databases. The source SQLite
       // database is never modified and remains the rollback image.
-      writeMigrationManifest(ctx.state, verification);
+      writeMigrationManifest(ctx.state, verification, artifactReferences);
       // The copy is done and verified; normal operation can resume on the
       // source until the operator decides to switch.
       exitMaintenance();
@@ -989,6 +997,7 @@ async function verifyJournal(target: MigrationSql): Promise<boolean> {
 
 function emptyReport(): MigrationReport {
   return {
+    artifactReferences: [],
     triggersSkipped: 0,
     defaultsDropped: [],
     checksSkipped: [],
@@ -999,13 +1008,14 @@ function emptyReport(): MigrationReport {
 }
 
 /** Write the durable migration manifest: migration-<yyyy-mm-dd>.json. */
-function writeMigrationManifest(state: WizardState, verification: readonly TableVerifyResult[]): void {
+function writeMigrationManifest(state: WizardState, verification: readonly TableVerifyResult[], artifactReferences: readonly ArtifactReferenceCheck[]): void {
   const manifest = {
     source: "sqlite",
     destination: "postgres",
     started_at: state.createdAt,
     completed_at: new Date().toISOString(),
     tables: Object.fromEntries(verification.map((row): [string, number] => [row.table, row.sourceCount])),
+    artifact_references: artifactReferences,
   };
   const name = `migration-${new Date().toISOString().slice(0, 10)}.json`;
   const path = join(storageDir, name);

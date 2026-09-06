@@ -86,6 +86,12 @@ jobs:
         # The backend package script serializes Bun workers because the test
         # suite shares its Elysia app and SQLite connection across files.
         run: cd backend && bun run test
+      - name: Run SQLite to PostgreSQL migration and export contracts
+        env:
+          PG_TEST_ADMIN_URL: postgres://terrence:terrence@localhost:5432/terrence_test
+        # Keep DATABASE_URL absent: the application must start on SQLite so
+        # the actual migration path runs, not the already-PostgreSQL guard.
+        run: cd backend && bun test tests/api/db-migration.test.ts tests/api/db-export.test.ts --max-concurrency=1 --no-orphans
 
   frontend:
     name: Frontend

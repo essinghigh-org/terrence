@@ -103,7 +103,32 @@ Migration point (316): consider PostgreSQL when busy/lock events climb, WAL chec
 
 ## Post-copy verification (317-322)
 
-One-click migration (317) runs a post-copy checksum: row counts (318), aggregate hashes (319), FK verification (320), artifact references (321), and encrypted-blob decryptability (322). The checks fail closed if any aggregate or FK diverges.
+The SQLite-to-PostgreSQL wizard verifies row counts, full ordered content digests for tables with primary keys, foreign keys and the target migration journal. Tables without primary keys report count/FK coverage explicitly. It also checks that non-null archive references in configuration versions, policy-set versions, registry-module versions and module-test configuration versions resolve to regular files. Missing files prevent switching; the report and manifest include per-table checked/unavailable counts without paths or content.
+
+Encrypted database values are copied and included in content digests. This verifies preservation of the stored envelope, not decryptability of every secret. Keep the matching encryption secrets and artifact storage with the database. The round-trip test verifies decryptability of a representative encrypted value using those retained secrets.
+
+After an interruption, the next status read reports `interrupted`. Restore missing artifacts if reported, then resume with the same target connection URL. The wizard replays its idempotent schema/copy steps and repeats verification before allowing a switch. The source remains the active database until the switch. Do not start a second control plane on the target during recovery.
+
+## Portable invariant inventory
+
+CI runs the same domain and upgrade fixtures on both database backends. Test names identify the backend actually used. A separate cross-database step starts the application on SQLite with `PG_TEST_ADMIN_URL` pointing to a disposable PostgreSQL service; explicit PostgreSQL setup failures fail that step.
+
+| Invariant | Executable evidence |
+| --- | --- |
+| Tables, column defaults, uniqueness, indexes and foreign-key endpoints/actions agree | `tests/db/schema-parity.test.ts` |
+| Unique and missing-relationship constraints return redacted conflicts; asynchronous transactions roll back | `tests/db/domain-invariants.test.ts` |
+| Baseline and previous bundled migration upgrades preserve identities and constraints; replay is idempotent | `tests/db/upgrade-invariants.test.ts` |
+| JSON order, booleans, nulls, millisecond timestamps, membership roles, token hashes and sensitive envelopes survive SQLite → PostgreSQL → SQLite export | `tests/api/db-migration.test.ts` |
+| Missing archive references prevent switching; repair and interrupted-state resume repeat verification | `tests/api/db-migration.test.ts`, `tests/unit/migration-artifacts.test.ts` |
+| Export snapshot counts, relationships and declared hash coverage match | `tests/api/db-export.test.ts`, `tests/unit/db-transfer-verify.test.ts` |
+
+Run the cross-database fixture from `backend/` with `PG_TEST_ADMIN_URL` set and `DATABASE_URL` absent:
+
+```sh
+bun test tests/api/db-migration.test.ts tests/api/db-export.test.ts --max-concurrency=1 --no-orphans
+```
+
+The fixture creates and drops disposable target databases. Run `tests/db/domain-invariants.test.ts` and `tests/db/upgrade-invariants.test.ts` once with SQLite defaults and once with a PostgreSQL `DATABASE_URL` to exercise both implementations.
 
 ## Performance
 
