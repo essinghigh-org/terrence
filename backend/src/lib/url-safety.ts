@@ -1,3 +1,4 @@
+import { networkSetting } from "./runtime-config";
 /**
  * URL host safety classification (SSRF hardening).
  *
@@ -74,11 +75,8 @@ type OutboundAllowlist = Readonly<{ hosts: readonly string[]; cidrs: readonly st
 
 function readOutboundAllowlist(): OutboundAllowlist {
   return {
-    hosts: (process.env["TERRENCE_OUTBOUND_ALLOW_HOSTS"] ?? "")
-      .split(",").map((value): string => value.trim().toLowerCase().replace(/\.$/, "")).filter(Boolean),
-    // CIDR entries are deliberately IPv4-only; IPv6 private destinations fail closed.
-    cidrs: (process.env["TERRENCE_OUTBOUND_ALLOW_CIDRS"] ?? "")
-      .split(",").map((value): string => value.trim()).filter(Boolean),
+    hosts: networkSetting("TERRENCE_OUTBOUND_ALLOW_HOSTS"),
+    cidrs: networkSetting("TERRENCE_OUTBOUND_ALLOW_CIDRS"),
   };
 }
 

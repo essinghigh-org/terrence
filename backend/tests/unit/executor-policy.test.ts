@@ -2,13 +2,13 @@ import { describe, expect, it } from "bun:test";
 import { EXECUTOR_BACKENDS, executorBackendFromEnv, executorPolicyAllows, executorPolicyAllowsLocal, hasHardIsolation } from "../../src/worker/executor-policy";
 
 describe("executor policy (35-39)", () => {
-  it("defaults to landlock when env is unset or unknown", () => {
+  it("defaults to landlock only when absent and rejects unknown backends", () => {
     const orig = process.env["TERRENCE_EXECUTOR_BACKEND"];
     try {
       delete process.env["TERRENCE_EXECUTOR_BACKEND"];
       expect(executorBackendFromEnv()).toBe("landlock");
       process.env["TERRENCE_EXECUTOR_BACKEND"] = "nonsense";
-      expect(executorBackendFromEnv()).toBe("landlock");
+      expect(executorBackendFromEnv).toThrow("TERRENCE_EXECUTOR_BACKEND must be");
       process.env["TERRENCE_EXECUTOR_BACKEND"] = "container";
       expect(executorBackendFromEnv()).toBe("container");
     } finally {

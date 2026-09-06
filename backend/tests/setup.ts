@@ -18,7 +18,7 @@ process.env["TERRENCE_RUN_SANDBOX"] ??= "false";
 // dedicated processes, so the background loop must stay off here. Spawns
 // that need it opt back in with TERRENCE_DISABLE_WORKER=0.
 process.env["TERRENCE_DISABLE_WORKER"] ??= "1";
-process.env["TERRENCE_SETUP_RAN"] = "yes";
+process.env["TEST_TERRENCE_SETUP_RAN"] = "yes";
 
 export function makeTestDbName(prefix: string): string {
   const name = `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;

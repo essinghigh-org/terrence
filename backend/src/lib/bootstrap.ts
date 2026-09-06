@@ -7,7 +7,7 @@ import { db } from "../db";
 import { storageDir } from "../db/driver";
 import { organizationMemberships, organizations, samlSettings, users } from "../db/schema";
 import { auditLog } from "./utils";
-import { envEnabled } from "./env";
+import { envFlag } from "./env";
 import { checkPasswordPolicy, loadPasswordPolicy } from "./password-policy";
 import { lockFirstUserElection } from "../db/first-user";
 import { hashPassword } from "./password-hashing";
@@ -110,7 +110,7 @@ export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | 
  * installs, so ordering keeps both paths intact.
  */
 export async function resetAdminPassword(): Promise<"reset" | "disabled"> {
-  if (!envEnabled(process.env["TERRENCE_ADMIN_PASSWORD_RESET"])) return "disabled";
+  if (!envFlag("TERRENCE_ADMIN_PASSWORD_RESET")) return "disabled";
   const password = process.env["ADMIN_PASSWORD"];
   if (password === undefined || password === "") return "disabled";
   const username = (process.env["ADMIN_USERNAME"] ?? "admin").trim();

@@ -982,7 +982,6 @@ describe("admin operations settings surface", () => {
         "log-level": "debug",
         "syslog-level": "warn",
         enabled: false,
-        error: "caller metadata",
         "syslog-targets": ["udp://collector-a.example:514", "tcp://collector-b.example:601"],
         "syslog-hostname": " ops-host ",
         "syslog-app": " terrence-test ",

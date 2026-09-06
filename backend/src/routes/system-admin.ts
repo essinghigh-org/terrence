@@ -11,7 +11,7 @@ import { controlPlaneNodes, workspaces } from "../db/schema";
 import { systemAuthError, systemRateLimited } from "../lib/system-api";
 import { fetchResolvedExternalUrl, privateHostReason, resolveExternalUrl } from "../lib/url-safety";
 import { landlockAccessFlagsForAbi, probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
-import { envEnabled } from "../lib/env";
+import { envFlag } from "../lib/env";
 import { readinessNodeId } from "./health";
 
 type Status = "OK" | "WARNING" | "ERROR";
@@ -182,7 +182,7 @@ async function diagnosticGroups(
   if (selected.get("task-worker")?.has("running") === true) {
     checks.set("task-worker.running", Promise.resolve({
       name: "running",
-      status: envEnabled(process.env["TERRENCE_DISABLE_WORKER"]) ? "WARNING" : "OK",
+      status: envFlag("TERRENCE_DISABLE_WORKER") ? "WARNING" : "OK",
     }));
   }
   if (selected.get("runtime")?.has("version") === true) {
@@ -199,7 +199,7 @@ async function diagnosticGroups(
       data: {
         abi,
         required: runSandboxRequired(),
-        extraRwAllowed: envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"]),
+        extraRwAllowed: envFlag("TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"),
         access: flags,
       },
     }));
@@ -212,7 +212,7 @@ async function diagnosticGroups(
   if (selected.get("security")?.has("extra_rw") === true) {
     // Todo 66: surface TERRENCE_SANDBOX_EXTRA_RW_ALLOWED as a warning so
     // operators (and the UI) notice when the sandbox allow-list is widened.
-    const enabled = envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"]);
+    const enabled = envFlag("TERRENCE_SANDBOX_EXTRA_RW_ALLOWED");
     checks.set("security.extra_rw", Promise.resolve({
       name: "extra_rw",
       status: enabled ? "WARNING" : "OK",

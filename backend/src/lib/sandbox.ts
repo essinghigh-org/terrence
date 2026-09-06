@@ -1,8 +1,9 @@
+import { executionSetting, listenerSetting } from "./runtime-config";
 import { isAbsolute, join, dirname, resolve } from "path";
 import { mkdir, rm } from "fs/promises";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "os";
-import { envEnabled } from "./env";
+import { envFlag } from "./env";
 import type { Subprocess } from "bun";
 
 /**
@@ -31,14 +32,8 @@ import type { Subprocess } from "bun";
  * means sandboxed); disable it explicitly with TERRENCE_RUN_SANDBOX=false.
  */
 
-const SANDBOX_DISABLED = ["false", "0", "none", "no", "off"].includes(
-  (process.env["TERRENCE_RUN_SANDBOX"] ?? "true").toLowerCase(),
-);
-
 export function runNetPolicy(): "allow" | "deny" {
-  const raw = (process.env["TERRENCE_RUN_NET_POLICY"] ?? "allow").toLowerCase().trim();
-  if (raw !== "allow" && raw !== "deny") throw new Error("TERRENCE_RUN_NET_POLICY must be allow or deny");
-  return raw;
+  return executionSetting("TERRENCE_RUN_NET_POLICY");
 }
 export function runNetDenyEnabled(): boolean {
   return runNetPolicy() === "deny";
@@ -61,7 +56,7 @@ export function validateRunSandboxConfig(): void {
  * explicitly set to false (the insecure opt-out).
  */
 export function runSandboxRequired(): boolean {
-  return !SANDBOX_DISABLED;
+  return executionSetting("TERRENCE_RUN_SANDBOX");
 }
 
 /** Candidate locations for the landlock-runner helper binary. */
@@ -246,7 +241,7 @@ export class RunSandbox {
 
   /** True when the sandbox can be used on this host. */
   public static isUsable(): boolean {
-    if (SANDBOX_DISABLED) return false;
+    if (!runSandboxRequired()) return false;
     return probeLandlockAbi() >= 1;
   }
 
@@ -402,13 +397,12 @@ function storageProtectionPrefix(allowStorage: boolean): string | null {
  * only the paths variable.
  */
 function extraRwArgs(): string[] {
-  if (!envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"])) return [];
-  const raw = process.env["TERRENCE_SANDBOX_EXTRA_RW_PATHS"];
-  if (raw === undefined || raw === "") return [];
-  const allowStorage = envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOW_STORAGE"]);
+  if (!envFlag("TERRENCE_SANDBOX_EXTRA_RW_ALLOWED")) return [];
+  const paths = listenerSetting("TERRENCE_SANDBOX_EXTRA_RW_PATHS");
+  const allowStorage = envFlag("TERRENCE_SANDBOX_EXTRA_RW_ALLOW_STORAGE");
   const storagePrefix = storageProtectionPrefix(allowStorage);
   const out: string[] = [];
-  for (const p of raw.split(":")) {
+  for (const p of paths) {
     if (p === "") continue;
     if (!isAbsolute(p)) continue;
     let canon = resolve(p);

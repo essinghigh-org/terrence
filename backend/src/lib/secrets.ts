@@ -1,3 +1,4 @@
+import { deploymentSecret } from "./runtime-config";
 import {
   createCipheriv,
   createDecipheriv,
@@ -171,7 +172,7 @@ async function loadEncryptionKey(): Promise<Buffer> {
   }
   if (cachedKey !== undefined) return cachedKey;
 
-  const password = process.env["ENCRYPTION_PASSWORD"];
+  const password = deploymentSecret("ENCRYPTION_PASSWORD");
   if (password !== undefined && password !== "") {
     cachedKey = scryptSync(password, await loadKdfSalt(), KEY_LENGTH, PASSWORD_KDF_OPTIONS);
     if (saltWasRecreatedOnLoad) {
@@ -242,7 +243,7 @@ async function loadLegacyPasswordKey(): Promise<Buffer> {
   if (cachedLegacyPasswordKey !== undefined && cachedLegacyPasswordKeyStorageDir === currentStorageDir) {
     return cachedLegacyPasswordKey;
   }
-  const password = process.env["ENCRYPTION_PASSWORD"];
+  const password = deploymentSecret("ENCRYPTION_PASSWORD");
   if (password === undefined || password === "") {
     throw new Error("Legacy password-derived key requested without ENCRYPTION_PASSWORD");
   }
@@ -301,7 +302,7 @@ export async function decryptSecret(value: string): Promise<string> {
   try {
     return decrypt(primaryKey);
   } catch (primaryError) {
-    const password = process.env["ENCRYPTION_PASSWORD"];
+    const password = deploymentSecret("ENCRYPTION_PASSWORD");
     if (password === undefined || password === "") throw primaryError;
     try {
       return decrypt(await loadLegacyPasswordKey());
@@ -348,7 +349,7 @@ export function decryptSecretSync(value: string, storageDir: string): string {
   try {
     return decrypt(primaryKey);
   } catch (primaryError) {
-    const password = process.env["ENCRYPTION_PASSWORD"];
+    const password = deploymentSecret("ENCRYPTION_PASSWORD");
     if (password === undefined || password === "") throw primaryError;
     try {
       return decrypt(loadPasswordDerivedKeySync(resolvedDir, password, LEGACY_PASSWORD_KDF_OPTIONS));
@@ -438,7 +439,7 @@ function loadEncryptionKeySync(storageDir: string): Buffer {
     return cachedKey;
   }
 
-  const password = process.env["ENCRYPTION_PASSWORD"];
+  const password = deploymentSecret("ENCRYPTION_PASSWORD");
   const key = password !== undefined && password !== ""
     ? loadPasswordDerivedKeySync(resolvedDir, password)
     : loadFileEncryptionKeySync(resolvedDir);

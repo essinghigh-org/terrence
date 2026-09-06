@@ -1,3 +1,4 @@
+import { booleanSetting, integerSetting } from "./runtime-config";
 // Configurable local password policy (kanban 5.5).
 //
 // The default policy keeps the long-standing minimum of 10 characters, so
@@ -35,16 +36,13 @@ export function boolEnv(name: string, fallback: boolean): boolean {
 }
 
 export function loadPasswordPolicy(): PasswordPolicyRules {
-  const rawMin = process.env["TERRENCE_PASSWORD_MIN_LENGTH"];
-  const parsedMin = rawMin === undefined || rawMin === "" ? NaN : Number(rawMin);
-  const minLength = Number.isFinite(parsedMin) && parsedMin >= 1 ? Math.floor(parsedMin) : 10;
   return {
-    minLength,
-    requireUpper: boolEnv("TERRENCE_PASSWORD_REQUIRE_UPPER", false),
-    requireLower: boolEnv("TERRENCE_PASSWORD_REQUIRE_LOWER", false),
-    requireDigit: boolEnv("TERRENCE_PASSWORD_REQUIRE_DIGIT", false),
-    requireSymbol: boolEnv("TERRENCE_PASSWORD_REQUIRE_SYMBOL", false),
-    disallowUsername: boolEnv("TERRENCE_PASSWORD_DISALLOW_USERNAME", false),
+    minLength: integerSetting("TERRENCE_PASSWORD_MIN_LENGTH"),
+    requireUpper: booleanSetting("TERRENCE_PASSWORD_REQUIRE_UPPER"),
+    requireLower: booleanSetting("TERRENCE_PASSWORD_REQUIRE_LOWER"),
+    requireDigit: booleanSetting("TERRENCE_PASSWORD_REQUIRE_DIGIT"),
+    requireSymbol: booleanSetting("TERRENCE_PASSWORD_REQUIRE_SYMBOL"),
+    disallowUsername: booleanSetting("TERRENCE_PASSWORD_DISALLOW_USERNAME"),
   };
 }
 

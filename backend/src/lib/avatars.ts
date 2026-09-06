@@ -1,3 +1,4 @@
+import { integrationSetting, integerSetting } from "./runtime-config";
 // Same-origin avatar service (fetch + cache + serve under one abstraction).
 //
 // Serializers never hand the browser a remote avatar URL. They call
@@ -46,9 +47,6 @@ const FETCH_TIMEOUT_MS = 6_000;
 const DNS_TIMEOUT_MS = 2_500;
 export const AVATAR_REVALIDATE_MS = 60 * 60 * 1000; // server considers fresh 1h
 export const AVATAR_CLIENT_CACHE = "private, max-age=86400";
-const DEFAULT_CACHE_BYTES = 64 * 1024 * 1024;      // max total avatar disk usage
-const DEFAULT_CACHE_ENTRIES = 2048;                // max entries on disk
-const DEFAULT_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000; // drop untouched after 30d
 // Throttle: sweep at most ~1 in this many successful upstream fetches.
 const SWEEP_EVERY_N_FETCHES = 64;
 
@@ -393,7 +391,7 @@ async function authorizedOriginForProvider(providerId: string): Promise<string |
     return null;
   }
   if (providerId === "github-app") {
-    const httpUrl = process.env["GITHUB_APP_HTTP_URL"];
+    const httpUrl = integrationSetting("GITHUB_APP_HTTP_URL");
     if (typeof httpUrl === "string" && httpUrl !== "") return originOf(httpUrl);
     return null;
   }
@@ -747,10 +745,7 @@ async function readCachedImageBytes(key: string): Promise<Buffer | null> {
 // ---------------------------------------------------------------------------
 // Cache garbage collection (bounded: storage/avatars is not append-only)
 // ---------------------------------------------------------------------------
-function positiveEnv(name: string, fallback: number): number {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-}
+
 
 async function collectAvatarShardNames(dir: string): Promise<string[] | null> {
   try {
@@ -873,9 +868,9 @@ async function removeAvatarEntries(entries: ReadonlyMap<string, { img?: string; 
  */
 async function sweepAvatarCache(): Promise<{ removed: number }> {
   const dir = avatarDir();
-  const maxBytes = positiveEnv("AVATAR_CACHE_MAX_BYTES", DEFAULT_CACHE_BYTES);
-  const maxEntries = positiveEnv("AVATAR_CACHE_MAX_ENTRIES", DEFAULT_CACHE_ENTRIES);
-  const maxAgeMs = positiveEnv("AVATAR_CACHE_MAX_AGE_MS", DEFAULT_CACHE_AGE_MS);
+  const maxBytes = integerSetting("AVATAR_CACHE_MAX_BYTES");
+  const maxEntries = integerSetting("AVATAR_CACHE_MAX_ENTRIES");
+  const maxAgeMs = integerSetting("AVATAR_CACHE_MAX_AGE_MS");
   const now = Date.now();
   const shardNames = await collectAvatarShardNames(dir);
   if (shardNames === null) return { removed: 0 };

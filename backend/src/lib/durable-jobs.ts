@@ -1,6 +1,6 @@
 import { newResourceId } from "./resource-id";
 import { and, asc, eq, inArray, lt, lte } from "drizzle-orm";
-import { envEnabled } from "./env";
+import { envFlag } from "./env";
 import { db } from "../db";
 import { workerQueueDraining } from "../worker";
 import { durableJobs } from "../db/schema";
@@ -258,7 +258,7 @@ async function runJob(job: DurableJob, handler: DurableJobHandler): Promise<void
 export function startDurableJobWorker(
   handlers: Readonly<Partial<Record<DurableJobKind, DurableJobHandler>>>,
 ): void {
-  if (envEnabled(process.env["TERRENCE_DISABLE_WORKER"]) || workerRunning) return;
+  if (envFlag("TERRENCE_DISABLE_WORKER") || workerRunning) return;
   workerRunning = true;
   const workerId = `durable-${process.pid}-${crypto.randomUUID()}`;
   const kinds = Object.keys(handlers) as DurableJobKind[];

@@ -69,14 +69,19 @@ describe("sensitiveOutputSecrets", () => {
 
 describe("explainTimeoutMs", () => {
   it("defaults to the documented constant and accepts valid overrides", () => {
-    delete process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"];
-    expect(explainTimeoutMs()).toBe(EXPLAIN_TIMEOUT_MS);
-    process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"] = "1500";
-    expect(explainTimeoutMs()).toBe(1500);
-    for (const bad of ["0", "-5", "1.5", "soon", "9007199254740993"]) {
-      process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"] = bad;
+    const previous = process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"];
+    try {
+      delete process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"];
       expect(explainTimeoutMs()).toBe(EXPLAIN_TIMEOUT_MS);
+      process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"] = "1500";
+      expect(explainTimeoutMs()).toBe(1500);
+      for (const bad of ["0", "-5", "1.5", "soon", "9007199254740993"]) {
+        process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"] = bad;
+        expect(explainTimeoutMs).toThrow("TERRENCE_EXPLAIN_TIMEOUT_MS must be");
+      }
+    } finally {
+      if (previous === undefined) delete process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"];
+      else process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"] = previous;
     }
-    delete process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"];
   });
 });

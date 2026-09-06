@@ -1,3 +1,4 @@
+import { booleanSetting, type BooleanConfigurationName } from "./runtime-config";
 /** Shared environment-flag helper (todo 838).
  *
  * The codebase historically mixed `=== "1"` and `=== "true"` for boolean env
@@ -16,6 +17,6 @@ export function envEnabled(value: string | undefined): boolean {
 }
 
 /** @public Intentional surface: benchmark/test hook or cross-module API. */
-export function envFlag(name: string): boolean {
-  return envEnabled(process.env[name]);
+export function envFlag(name: BooleanConfigurationName): boolean {
+  return booleanSetting(name);
 }

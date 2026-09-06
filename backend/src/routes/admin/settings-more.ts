@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { authPlugin } from "../../auth";
 import { applyLoggingSettings, isLogLevel, LOG_LEVELS } from "../../lib/log";
-import { getSettings } from "../../lib/settings";
+import { getSettings, getSettingsFresh } from "../../lib/settings";
 import { ldapSettings } from "../../lib/sso";
 import { invalidatePingSsoCache } from "../health";
 import type { ParamCtx } from "./types";
@@ -275,7 +275,7 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const current = await getSettings("oidc");
+    const current = await getSettingsFresh("oidc", false);
     if (attrs["enabled"] !== undefined && typeof attrs["enabled"] !== "boolean") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enabled must be a boolean" }] };
@@ -366,7 +366,7 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
     if (user?.isSiteAdmin !== true) return hidden(set);
     await withAuthSettingsLock(async (): Promise<void> => {
       const now = new Date().toISOString();
-      const current = await getSettings("oidc");
+      const current = await getSettingsFresh("oidc", false);
       const previous = Array.isArray(current["dynamic-provider-signing-key-ids"])
         ? current["dynamic-provider-signing-key-ids"].filter((value): value is string => typeof value === "string")
         : typeof current["dynamic-provider-signing-key-id"] === "string" ? [current["dynamic-provider-signing-key-id"]] : [];
@@ -437,7 +437,7 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const current = await getSettings("ldap");
+    const current = await getSettingsFresh("ldap", false);
     for (const key of ["enabled", "link-by-email"] as const) {
       if (attrs[key] !== undefined && typeof attrs[key] !== "boolean") {
         (set as { status: number }).status = 422;

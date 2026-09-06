@@ -1,3 +1,4 @@
+import { integerSetting } from "./runtime-config";
 /**
  * Lightweight DB pool observation (todos 289, 290, 291).
  *
@@ -149,12 +150,7 @@ export type SlowQuery = Readonly<{
   fingerprint: string;
 }>;
 
-const SLOW_THRESHOLD_MS = (() => {
-  const raw = process.env["TERRENCE_DB_SLOW_QUERY_MS"];
-  if (raw === undefined || raw.trim() === "") return 1000;
-  const n = Number(raw.trim());
-  return Number.isFinite(n) && n > 0 ? n : 1000;
-})();
+const SLOW_THRESHOLD_MS = integerSetting("TERRENCE_DB_SLOW_QUERY_MS");
 
 const slowQueries: SlowQuery[] = [];
 const MAX_SLOW = 64;

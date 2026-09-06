@@ -1,3 +1,4 @@
+import { integerSetting } from "./runtime-config";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db";
 import { runExplanations, auditLogs } from "../db/schema";
@@ -32,8 +33,7 @@ export const EXPLAIN_TIMEOUT_MS = 60_000;
 /** Test seam (issue #687): bound the upstream idle deadline without waiting
  * a minute. Values must be a positive safe integer of milliseconds. */
 export function explainTimeoutMs(): number {
-  const override = Number(process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"] ?? "");
-  return Number.isSafeInteger(override) && override > 0 ? override : EXPLAIN_TIMEOUT_MS;
+  return integerSetting("TERRENCE_EXPLAIN_TIMEOUT_MS");
 }
 
 export type ExplainSource = Readonly<{

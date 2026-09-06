@@ -1,3 +1,4 @@
+import { integrationSetting } from "../lib/runtime-config";
 import { CLIENT_ENCRYPTED_STATE_ERROR, isClientEncryptedState } from "../lib/validation";
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
@@ -622,10 +623,10 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const version = process.env["TERRENCE_AGENT_UPDATE_VERSION"]?.trim() ?? "";
-    const url = process.env["TERRENCE_AGENT_UPDATE_URL"]?.trim() ?? "";
-    const sha256 = process.env["TERRENCE_AGENT_UPDATE_SHA256"]?.trim().toLowerCase() ?? "";
-    if (version === "" || !URL.canParse(url) || !/^[0-9a-f]{64}$/.test(sha256)) {
+    const version = integrationSetting("TERRENCE_AGENT_UPDATE_VERSION");
+    const url = integrationSetting("TERRENCE_AGENT_UPDATE_URL");
+    const sha256 = integrationSetting("TERRENCE_AGENT_UPDATE_SHA256");
+    if (version === null || url === null || sha256 === null) {
       set.status = 204;
       return undefined;
     }

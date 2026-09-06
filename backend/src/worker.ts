@@ -1,9 +1,10 @@
+import { integerSetting } from "./lib/runtime-config";
 import { normalizeRunVariables } from "./lib/run-variables";
 export { normalizeRunVariables } from "./lib/run-variables";
 import { terraformVariableLine } from "./lib/tfvars";
 import { compareCodePoints, compareVariableSets } from "./lib/variable-set-precedence";
 import { newResourceId } from "./lib/resource-id";
-import { envEnabled } from "./lib/env";
+import { envFlag } from "./lib/env";
 import { db } from "./db";
 import {
   runs,
@@ -168,7 +169,7 @@ function assertRunSandboxAvailable(): void {
  * opt-out may run without Landlock; production's default is fail-closed.
  */
 function policyEvaluationSandbox(): RunSandbox | null {
-  if (envEnabled(process.env["SIMULATED_RUNS"]) || !runSandboxRequired()) return null;
+  if (envFlag("SIMULATED_RUNS") || !runSandboxRequired()) return null;
   if (!RunSandbox.isUsable() || !RunSandbox.hasRunner()) {
     throw new Error("Landlock sandbox is required but unavailable for policy evaluation");
   }
@@ -1626,7 +1627,7 @@ type RunTaskExecution = Readonly<{
 }>;
 
 function runTaskTransportError(taskUrl: string, stage: RunTaskStage, isGlobal: boolean): string | undefined {
-  if ((stage !== "pre_apply" && !isGlobal) || envEnabled(process.env["TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS"])) return undefined;
+  if ((stage !== "pre_apply" && !isGlobal) || envFlag("TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS")) return undefined;
   try {
     return new URL(taskUrl).protocol === "https:"
       ? undefined
@@ -1672,8 +1673,7 @@ async function executeRunTasks(
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
   const taskAccessToken = (await runTokenStateFor(runId, workspace)).token;
   let proceed = true;
-  const configuredTimeout = Number(process.env["RUN_TASK_TIMEOUT_MS"] ?? 3_600_000);
-  const timeoutMs = Number.isSafeInteger(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 3_600_000;
+  const timeoutMs = integerSetting("RUN_TASK_TIMEOUT_MS");
 
   // Batch-insert all pending run-task results in one statement instead of
   // issuing one INSERT per binding inside the loop below.
@@ -1753,7 +1753,7 @@ async function executeRunTasks(
     let resultUrl: string | null = null;
     const transportError = runTaskTransportError(task.url, stage, isGlobal);
     const destination = transportError === undefined
-      ? await resolveExternalUrl(task.url, envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_URLS"]))
+      ? await resolveExternalUrl(task.url, envFlag("TERRENCE_ALLOW_PRIVATE_URLS"))
       : { error: transportError };
     if ("error" in destination) {
       status = "failed";
@@ -2164,7 +2164,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     const currentDirFiles = await readdir(executionDir);
     const hasTfFiles = currentDirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
 
-    const isSimulatedAllowed = envEnabled(process.env["SIMULATED_RUNS"]) || Reflect.get(process.env, "NODE_ENV") === "test";
+    const isSimulatedAllowed = envFlag("SIMULATED_RUNS") || Reflect.get(process.env, "NODE_ENV") === "test";
     if (!isSimulatedAllowed) {
       await writeLog(runId, "plan", `[terrence] Resolving binary for ${requestedTool} (version: ${requestedVersion})...`);
     }
@@ -2802,7 +2802,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
     // directory `terraform apply` is about to see.
     dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
     hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
-    const isSimulatedAllowed = envEnabled(process.env["SIMULATED_RUNS"]) || Reflect.get(process.env, "NODE_ENV") === "test";
+    const isSimulatedAllowed = envFlag("SIMULATED_RUNS") || Reflect.get(process.env, "NODE_ENV") === "test";
     let resolved: Awaited<ReturnType<typeof ensureBinary>> | null = null;
     if (!isSimulatedAllowed) {
       try {
@@ -3667,8 +3667,7 @@ async function captureProcess(
 }
 
 function assessmentIntervalMs(): number {
-  const configured = Number(process.env["HEALTH_ASSESSMENT_INTERVAL_MS"] ?? 86_400_000);
-  return Number.isSafeInteger(configured) && configured > 0 ? configured : 86_400_000;
+  return integerSetting("HEALTH_ASSESSMENT_INTERVAL_MS");
 }
 
 function autoDestroyDurationMs(value: string | null): number | undefined {
@@ -4024,7 +4023,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       throw new Error("No successfully applied configuration is available for assessment.");
     }
 
-    const simulated = envEnabled(process.env["SIMULATED_RUNS"]) || Reflect.get(process.env, "NODE_ENV") === "test";
+    const simulated = envFlag("SIMULATED_RUNS") || Reflect.get(process.env, "NODE_ENV") === "test";
     let planJson: JsonObject;
     let providerSchema: JsonObject = {};
 
@@ -4277,8 +4276,7 @@ export async function pollAssessmentQueue(): Promise<string[]> {
   return withQueueGate("assessment", async (): Promise<string[]> => {
   if (isMaintenanceActive()) return [];
   if (workerQueueDraining()) return [];
-  const configured = Number(process.env["HEALTH_ASSESSMENT_CONCURRENCY"] ?? 2);
-  const maximum = Number.isSafeInteger(configured) && configured > 0 ? configured : 2;
+  const maximum = integerSetting("HEALTH_ASSESSMENT_CONCURRENCY");
   const running = await db.query.assessmentResults.findMany({
     where: eq(assessmentResults.status, "running"),
     columns: { id: true },
@@ -4804,18 +4802,13 @@ export function pruneScheduledBlockReasonsForTests(dueIds: ReadonlySet<string>):
  * fall back to the default so a misconfiguration cannot hot-loop the DB
  * (kanban 3.7 pattern).
  */
-function pollIntervalMs(raw: string | undefined, fallback: number, minimum: number): number {
-  if (raw === undefined || raw === "") return fallback;
-  const parsed = Number(raw);
-  return Number.isInteger(parsed) && parsed >= minimum ? parsed : fallback;
-}
 
 /**
  * Run queue poll interval (startWorkerQueue claims pending runs and drains
  * the apply schedule on this cadence). Configurable for low-power homelab
  * installs that want a gentler query load.
  */
-const WORKER_POLL_INTERVAL_MS = pollIntervalMs(process.env["TERRENCE_WORKER_POLL_MS"], 1500, 100);
+const WORKER_POLL_INTERVAL_MS = integerSetting("TERRENCE_WORKER_POLL_MS");
 
 /**
  * Auto-destroy scan cadence, independent of the run-queue poll. The sweep
@@ -4824,14 +4817,14 @@ const WORKER_POLL_INTERVAL_MS = pollIntervalMs(process.env["TERRENCE_WORKER_POLL
  * review: full-table sweep per 1.5s tick is O(all history) even with zero
  * workspaces using auto-destroy).
  */
-const AUTO_DESTROY_POLL_INTERVAL_MS = pollIntervalMs(process.env["TERRENCE_AUTO_DESTROY_POLL_MS"], 30_000, 5_000);
+const AUTO_DESTROY_POLL_INTERVAL_MS = integerSetting("TERRENCE_AUTO_DESTROY_POLL_MS");
 
 /**
  * Health-assessment discovery cadence. Assessments become due in minutes to
  * days; discovering them every 1.5s reloads every workspace and organization
  * for nothing. Default 60s (scratch review).
  */
-const ASSESSMENT_POLL_INTERVAL_MS = pollIntervalMs(process.env["TERRENCE_ASSESSMENT_POLL_MS"], 60_000, 5_000);
+const ASSESSMENT_POLL_INTERVAL_MS = integerSetting("TERRENCE_ASSESSMENT_POLL_MS");
 
 // --- Graceful-drain state (shutdown) ---
 // SIGTERM sets the draining flag: the pollers stop claiming new work while
@@ -4901,8 +4894,7 @@ async function trackLocalExecution<T>(promise: Promise<T>): Promise<T> {
 }
 
 export function localRunConcurrencyLimit(): number {
-  const configured = Number(process.env["TERRENCE_RUN_CONCURRENCY"] ?? 5);
-  return Number.isSafeInteger(configured) && configured > 0 ? configured : 5;
+  return integerSetting("TERRENCE_RUN_CONCURRENCY");
 }
 
 /** Last lock-blocked log per pending run (issue #575): re-log at most every
@@ -5156,9 +5148,7 @@ const ERROR_AFTER_RESTART = new Set([
 ]);
 
 async function pruneInterruptedApplyRecovery(): Promise<void> {
-  const rawRetention = process.env["TERRENCE_RECOVERY_RETENTION_MS"];
-  const parsedRetention = rawRetention === undefined || rawRetention === "" ? 7 * 24 * 60 * 60 * 1000 : Number(rawRetention);
-  const retentionMs = Number.isSafeInteger(parsedRetention) && parsedRetention >= 0 ? parsedRetention : 7 * 24 * 60 * 60 * 1000;
+  const retentionMs = integerSetting("TERRENCE_RECOVERY_RETENTION_MS");
   const cutoff = Date.now() - retentionMs;
   type CleanupEntry = Readonly<{ name: string; isDirectory(): boolean }>;
   const readCleanupEntries = async (root: string, message: string): Promise<readonly CleanupEntry[] | null> => {
@@ -5381,7 +5371,7 @@ export function startWorkerQueue(): void {
   // Off switch for benchmarks/tests that must run in a process with no
   // background DB activity (the polling loop otherwise injects queries
   // and CPU into measurements).
-  if (envEnabled(process.env["TERRENCE_DISABLE_WORKER"])) return;
+  if (envFlag("TERRENCE_DISABLE_WORKER")) return;
   if (isWorkerLoopRunning) return;
   isWorkerLoopRunning = true;
   startDurableJobWorker({

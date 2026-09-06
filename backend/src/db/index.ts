@@ -1,3 +1,4 @@
+import { integerSetting } from "../lib/runtime-config";
 import { Database } from 'bun:sqlite';
 import { drizzle as sqliteDrizzle, SQLiteBunSession, SQLiteBunTransaction, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import type { SQLiteSession, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
@@ -11,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { join } from 'path';
 import * as schema from './schema';
-import { envEnabled } from '../lib/env';
+import { envFlag } from '../lib/env';
 import { databaseUrl, isPostgres, storageDir } from './driver';
 import { poolMetrics, poolQueryEnd, poolQueryStart, poolTransactionEnd, poolTransactionStart, recordSlowQuery } from '../lib/db-pool-metrics';
 import { AGENT_POOL_TOKEN_DEFAULT_TTL_MS } from '../lib/agent-token';
@@ -30,7 +31,7 @@ mkdirSync(storageDir, { recursive: true });
 // alongside it to also capture the SQL text.
 let queryCount = 0;
 const queryLog: string[] = [];
-let queryLogEnabled = envEnabled(process.env["TERRENCE_QUERY_LOG"]);
+let queryLogEnabled = envFlag("TERRENCE_QUERY_LOG");
 
 // ---------------------------------------------------------------------------
 // SQLite backend (default): bun:sqlite keeps a single stable native
@@ -128,7 +129,7 @@ if (!isPostgres) {
   const originalPrepare = client.prepare.bind(client);
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- mirrors bun:sqlite's generic prepare() signature that an explicit return type cannot widen.
   prepareSqliteStatement = (sqlText: string, ...params: unknown[]): unknown => {
-    if (envEnabled(process.env["TERRENCE_QUERY_COUNT"])) {
+    if (envFlag("TERRENCE_QUERY_COUNT")) {
       queryCount += 1;
       if (queryLogEnabled) queryLog.push(sqlText);
     }
@@ -145,13 +146,7 @@ if (!isPostgres) {
 // the test harness (tests/setup.ts) — never here, because the migrator is
 // async and this module must stay synchronous for bun's worker threads.
 // ---------------------------------------------------------------------------
-function parseTimeoutMs(raw: string | undefined, fallback: number): number {
-  if (raw === undefined || raw.trim() === "") return fallback;
-  const n = Number(raw.trim());
-  if (!Number.isFinite(n) || n < 0) return fallback;
-  // Clamp to 24h so a typo (e.g. seconds vs ms) cannot disable the guard.
-  return Math.min(Math.round(n), 86_400_000);
-}
+
 
 const PG_QUERY_DERIVERS = ['execute', 'raw', 'simple', 'values'] as const;
 
@@ -218,9 +213,9 @@ export function wrapPgQuery<T>(queryObj: T, queryText: string): T {
 
 let pgClient: BunSQL | null = null;
 if (isPostgres) {
-  const statementTimeoutMs = parseTimeoutMs(process.env["TERRENCE_DB_STATEMENT_TIMEOUT_MS"], 30_000);
-  const lockTimeoutMs = parseTimeoutMs(process.env["TERRENCE_DB_LOCK_TIMEOUT_MS"], 10_000);
-  const idleInTxTimeoutMs = parseTimeoutMs(process.env["TERRENCE_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS"], 60_000);
+  const statementTimeoutMs = integerSetting("TERRENCE_DB_STATEMENT_TIMEOUT_MS");
+  const lockTimeoutMs = integerSetting("TERRENCE_DB_LOCK_TIMEOUT_MS");
+  const idleInTxTimeoutMs = integerSetting("TERRENCE_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS");
   pgClient = new BunSQL({
     url: databaseUrl,
     max: 10,
@@ -246,7 +241,7 @@ if (isPostgres) {
       return wrapPgQuery(queryObj, queryText);
     }) as typeof pgClient.unsafe;
   }
-  if (envEnabled(process.env["TERRENCE_QUERY_COUNT"])) {
+  if (envFlag("TERRENCE_QUERY_COUNT")) {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
     // eslint-disable-next-line @typescript-eslint/promise-function-async -- mirrors Bun.SQL's non-async unsafe() signature; the cast below is the type boundary.
     pgClient.unsafe = ((queryText: string, values?: unknown[] | Record<string, unknown>): ReturnType<BunSQL['unsafe']> => {

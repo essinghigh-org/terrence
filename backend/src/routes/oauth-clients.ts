@@ -11,7 +11,7 @@ import { authPlugin } from "../auth";
 import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail, type VcsIntegrationUsage } from "../lib/vcs-integration-usage";
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { forwardFetch } from "../lib/agent-forwarding";
-import { envEnabled } from "../lib/env";
+import { envFlag } from "../lib/env";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "../lib/url-safety";
 import {
   pruneExpiredOAuthHandshakeStates,
@@ -41,7 +41,7 @@ async function storedClientSecret(value: string): Promise<string> {
 async function oauthFetch(oc: OcItem, url: string, init?: RequestInit): Promise<Response> {
   if (!oauthUrlProtocolAllowed(url)) return new Response("OAuth endpoints must use HTTPS", { status: 422 });
   if (oc.agentPoolId !== null) return forwardFetch(oc.agentPoolId, url, init);
-  const destination = await resolveExternalUrl(url, envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"]));
+  const destination = await resolveExternalUrl(url, envFlag("TERRENCE_ALLOW_PRIVATE_VCS_URLS"));
   if ("error" in destination) return new Response(destination.error, { status: 422 });
   const headers = Object.fromEntries(new Headers(init?.headers).entries());
   const rawBody = init?.body;
@@ -151,7 +151,7 @@ function endpoint(base: string, suffix: string): URL | null {
 
 function insecureOAuthUrlsAllowed(): boolean {
   return process.env.NODE_ENV === "test"
-    || (process.env.NODE_ENV === "development" && envEnabled(process.env["TERRENCE_ALLOW_INSECURE_OAUTH_URLS"]));
+    || (process.env.NODE_ENV === "development" && envFlag("TERRENCE_ALLOW_INSECURE_OAUTH_URLS"));
 }
 
 function oauthUrlProtocolAllowed(value: string | URL): boolean {
@@ -174,7 +174,7 @@ function configuredExternalUrlError(value: unknown, field: string): string | und
   }
   if (parsed.username !== "" || parsed.password !== "") return `${field} must not contain embedded credentials`;
   if (!oauthUrlProtocolAllowed(parsed)) return `${field} must use HTTPS`;
-  const reason = validateExternalUrl(value, envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"]));
+  const reason = validateExternalUrl(value, envFlag("TERRENCE_ALLOW_PRIVATE_VCS_URLS"));
   return reason === null ? undefined : `${field} is unsafe: ${reason}`;
 }
 

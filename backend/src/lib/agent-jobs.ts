@@ -1,3 +1,4 @@
+import { integerSetting } from "./runtime-config";
 import { newResourceId } from "./resource-id";
 import { tokenHashCandidates } from "./token-service";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
@@ -110,7 +111,6 @@ export type AgentJob = DeepReadonly<typeof agentJobs.$inferSelect>;
 type Workspace = DeepReadonly<typeof workspaces.$inferSelect>;
 type Database = Readonly<typeof db>;
 
-const DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS = 60_000;
 // Agent liveness is persisted at most this often per agent. The offline
 // sweep cutoff (AGENT_HEARTBEAT_TIMEOUT_MS) must stay comfortably above
 // this interval so a throttled agent is never swept as unavailable.
@@ -121,12 +121,7 @@ const MIN_PING_WRITE_INTERVAL_MS = 3_000;
 const MAX_INVALID_COMPLETION_REQUEUES = 3;
 
 export function configuredHeartbeatTimeoutMs(): number {
-  const configured = Number(
-    process.env["AGENT_HEARTBEAT_TIMEOUT_MS"] ?? DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS,
-  );
-  return Number.isFinite(configured) && configured > 0
-    ? configured
-    : DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS;
+  return integerSetting("AGENT_HEARTBEAT_TIMEOUT_MS");
 }
 
 /** Persist-at-most interval derived from the sweep timeout: always stays

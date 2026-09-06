@@ -20,7 +20,7 @@ import { decryptSecret } from "./secrets";
 import { matchesPolicySetWebhook, synchronizeVcsPolicySet } from "./policy-sync";
 import { synchronizeRegistryModule } from "./registry-module-sync";
 import { auditLog, type DeepReadonly } from "./utils";
-import { envEnabled } from "./env";
+import { envFlag } from "./env";
 import { fetchResolvedExternalUrl, fetchResolvedExternalUrlStream, resolveExternalUrl, type ExternalRequestInit, type ResolvedExternalUrl } from "./url-safety";
 import {
   providerForServiceProvider,
@@ -124,7 +124,7 @@ async function fetchVcsUrlWithRedirects(
   init: VcsFetchInit,
   fetcher: VcsResolvedFetcher,
 ): Promise<Response> {
-  const allowPrivate = envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"]);
+  const allowPrivate = envFlag("TERRENCE_ALLOW_PRIVATE_VCS_URLS");
   const requestInit = normalizedVcsFetchInit(init);
   const baseRequestInit = {
     maxResponseBytes: requestInit.maxResponseBytes,

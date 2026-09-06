@@ -1,3 +1,4 @@
+import { deploymentSecret, booleanSetting, executionSetting, integerSetting } from "./runtime-config";
 import { fenceStateWorkspace, pruneStateReservations } from "./state-reservations";
 import { db } from "../db";
 import { isPostgres } from "../db/driver";
@@ -60,7 +61,7 @@ export type DeepReadonly<T> =
             ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
             : T;
 
-const PUBLIC_URL = typeof process.env["PUBLIC_URL"] === "string" && process.env["PUBLIC_URL"] !== "" ? new URL(process.env["PUBLIC_URL"]) : null;
+const PUBLIC_URL = executionSetting("PUBLIC_URL");
 
 /** Minimal Elysia `set` shape shared by JSON:API error helpers. */
 export type ErrorSet = { status?: number | string };
@@ -146,8 +147,7 @@ export async function auditLog(
  * self-hosters on constrained storage are not surprised by extra rows.
  */
 export function strictAuditEnabled(): boolean {
-  const v = process.env["AUDIT_STRICT"];
-  return v === "1" || v === "true";
+  return booleanSetting("AUDIT_STRICT");
 }
 
 function scopeAllowsOrgPermission(
@@ -1307,8 +1307,7 @@ export async function findAuthorizedRun(
 /** The signature lives in the path: go-tfe replaces the query with offset/limit. */
 export function runLogURL(run: Readonly<{ id: string; logToken: string | null; softDeletedAt?: number | null }>, phase: "plan" | "apply", request: RequestWithUrl): string | null {
   if (!run.logToken || run.softDeletedAt != null) return null;
-  const configured = Number(process.env["LOG_CAPABILITY_TTL_SECONDS"] ?? 172800);
-  const ttl = Number.isSafeInteger(configured) && configured > 0 && configured <= 604800 ? configured : 172800;
+  const ttl = integerSetting("LOG_CAPABILITY_TTL_SECONDS");
   const expires = Math.floor(Date.now() / 1000) + ttl;
   const signature = createHmac("sha256", SIGNED_URL_SECRET).update(`${run.id}\n${phase}\n${run.logToken}\n${expires}`).digest("hex");
   return apiURL(request, `/api/v2/runs/${run.id}/${phase}/log/${expires}.${signature}`);
@@ -1424,7 +1423,7 @@ function loadSignedUrlSecret(): string {
   }
 }
 
-const configuredSignedUrlSecret = process.env["SIGNED_URL_SECRET"]?.trim();
+const configuredSignedUrlSecret = deploymentSecret("SIGNED_URL_SECRET")?.trim();
 const SIGNED_URL_SECRET = configuredSignedUrlSecret === undefined || configuredSignedUrlSecret === ""
   ? loadSignedUrlSecret()
   : configuredSignedUrlSecret.length >= 32
@@ -1498,7 +1497,7 @@ function proxyBaseUrl(request: HeaderCarrier): string | null {
 }
 
 export function requestBaseUrl(request: HeaderCarrier): string {
-  if (PUBLIC_URL !== null) return PUBLIC_URL.toString();
+  if (PUBLIC_URL !== null) return PUBLIC_URL;
   // The connection-address fallback is a base URL, so return the origin
   // only: a request-specific pathname must never leak into generated links
   // (CodeRabbit P1-sweep review). Absolute-path callers are unaffected.
@@ -1510,7 +1509,7 @@ export function requestBaseUrl(request: HeaderCarrier): string {
 }
 
 export function signedApiURL(request: RequestWithUrl, path: string, method = "GET", ttlSeconds?: number): string {
-  const configuredTtl = ttlSeconds ?? Number(process.env["SIGNED_URL_TTL_SECONDS"] ?? 300);
+  const configuredTtl = ttlSeconds ?? integerSetting("SIGNED_URL_TTL_SECONDS");
   const ttl = Number.isSafeInteger(configuredTtl) && configuredTtl > 0 ? configuredTtl : 300;
   const expires = Math.floor(Date.now() / 1000) + ttl;
   const signature = createHmac("sha256", SIGNED_URL_SECRET)
@@ -2090,10 +2089,7 @@ async function removeConfigurationArchive(archivePath: string | null): Promise<b
  *   2. Backing data whose grace period elapsed → permanently deleted
  */
 function getGraceCutoff(now: number, gracePeriodMs: number | undefined): number {
-  const configuredGraceDays = Number(process.env["GC_GRACE_PERIOD_DAYS"] ?? 7);
-  const defaultGracePeriodMs = Number.isFinite(configuredGraceDays) && configuredGraceDays >= 0
-    ? configuredGraceDays * 86_400_000
-    : 7 * 86_400_000;
+  const defaultGracePeriodMs = integerSetting("GC_GRACE_PERIOD_DAYS") * 86_400_000;
   return now - (gracePeriodMs ?? defaultGracePeriodMs);
 }
 

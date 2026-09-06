@@ -1,3 +1,4 @@
+import { integerSetting } from "../runtime-config";
 import { newResourceId } from "../resource-id";
 // In-app SQLite → PostgreSQL migration wizard.
 //
@@ -21,7 +22,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import { count, eq, inArray } from "drizzle-orm";
-import { envEnabled } from "../env";
+import { envFlag } from "../env";
 import { db } from "../../db";
 import { checkpointWal } from "../../db";
 import { readBundledMigrationJournalRows, type MigrationJournalRow } from "../../db/reconcile";
@@ -160,7 +161,6 @@ export function wizardFilePath(storageDirOverride?: string): string {
 }
 
 const MIN_POSTGRES_VERSION = 12;
-const DEFAULT_DRAIN_TIMEOUT_MS = 30 * 60_000;
 const DRAIN_POLL_MS = 3_000;
 const ACTIVE_RUN_STATUSES = new Set([
   "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
@@ -185,12 +185,11 @@ export function maskPostgresUrl(url: string): string {
 }
 
 function drainTimeoutMs(): number {
-  const configured = Number(process.env["MIGRATION_DRAIN_TIMEOUT_MS"]);
-  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_DRAIN_TIMEOUT_MS;
+  return integerSetting("MIGRATION_DRAIN_TIMEOUT_MS");
 }
 
 export function restartDisabled(): boolean {
-  return envEnabled(process.env["TERRENCE_DISABLE_RESTART"]);
+  return envFlag("TERRENCE_DISABLE_RESTART");
 }
 
 export function environmentDatabaseUrlWarning(): string | null {
@@ -886,11 +885,7 @@ function closeSourceSnapshot(client: Readonly<Database>): void {
 }
 
 async function checkpointWithRetries(): Promise<void> {
-  const configured = Number(process.env["MIGRATION_CHECKPOINT_RETRIES"]);
-  // Only a positive finite value is honored; anything else (unset, NaN,
-  // zero, negative) falls back to the default so the loop always runs at
-  // least once.
-  const attempts = Number.isFinite(configured) && configured > 0 ? configured : 15;
+  const attempts = integerSetting("MIGRATION_CHECKPOINT_RETRIES");
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       checkpointWal();
@@ -903,7 +898,7 @@ async function checkpointWithRetries(): Promise<void> {
 }
 
 async function waitForDrain(ctx: Readonly<JobContext>): Promise<void> {
-  if (envEnabled(process.env["MIGRATION_SKIP_DRAIN"])) {
+  if (envFlag("MIGRATION_SKIP_DRAIN")) {
     ctx.setState({
       ...ctx.state,
       steps: ctx.state.steps.map((step): WizardStep =>

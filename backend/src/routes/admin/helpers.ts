@@ -1,3 +1,4 @@
+import { oidcSigningAlgorithms, validateSettings } from "../../lib/settings-contract";
 // Shared admin helpers (split from routes/admin.ts).
 import { db, isPostgres } from "../../db";
 import type { users, organizations, workspaces, runs} from "../../db/schema";
@@ -95,12 +96,7 @@ export function versionResource(value: VerItem, type: string): Record<string, un
 }
 export type SamlSettings = Readonly<typeof samlSettings.$inferSelect>;
 export const SAML_SETTINGS_ID = "saml";
-export const OIDC_SIGNING_ALGORITHMS = new Set([
-  "HS256", "HS384", "HS512",
-  "RS256", "RS384", "RS512",
-  "ES256", "ES384", "ES512",
-  "PS256", "PS384", "PS512",
-]);
+export const OIDC_SIGNING_ALGORITHMS: ReadonlySet<string> = new Set(oidcSigningAlgorithms);
 export const SAML_DEFAULTS = {
   id: SAML_SETTINGS_ID,
   enabled: false,
@@ -155,13 +151,14 @@ export async function withAuthSettingsLock<T>(operation: () => Promise<T>): Prom
 
 export async function updateSettings(group: string, attrs: Settings): Promise<Settings> {
   return withSettingsLock(group, async (): Promise<Settings> => {
-    const current = await getSettingsFresh(group);
+    const current = await getSettingsFresh(group, false);
     // A null-prototype target prevents a JSON attribute named `__proto__` from
     // invoking Object.prototype's setter during the read-modify-write merge.
     const values = Object.assign(Object.create(null) as Settings, current);
     for (const key of Object.keys(attrs)) {
       if (attrs[key] !== undefined) values[key] = attrs[key];
     }
+    validateSettings(group, values, true);
     const storedValues = await encryptSettingsValues(group, values);
     await db.insert(adminSettings).values({ id: group, values: storedValues, updatedAt: Date.now() }).onConflictDoUpdate({ target: adminSettings.id, set: { values: storedValues, updatedAt: Date.now() } });
     invalidateSettingsCache();
@@ -246,17 +243,7 @@ export function validHttpsUrl(value: string): boolean {
     return false;
   }
 }
-export function validOidcIssuer(value: string): boolean {
-  try {
-    const url = new URL(value);
-    const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-    const loopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-    return (url.protocol === "https:" || (url.protocol === "http:" && loopback))
-      && url.username === "" && url.password === "" && url.search === "" && url.hash === "";
-  } catch {
-    return false;
-  }
-}
+export { validOidcIssuer } from "../../lib/settings-contract";
 export function normalizeIssuer(value: string): string {
   return value.trim();
 }

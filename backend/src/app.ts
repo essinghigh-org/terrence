@@ -1,9 +1,11 @@
+import { SettingsValidationError } from "./lib/settings-contract";
+import { executionSetting, integerSetting } from "./lib/runtime-config";
 import { Elysia } from "elysia";
 import { staticPlugin } from "@elysiajs/static";
 import { rateLimit, type Context as RateLimitContext } from "elysia-rate-limit";
 import { join } from "path";
 import { readFileSync } from "node:fs";
-import { envEnabled } from "./lib/env";
+import { envFlag } from "./lib/env";
 import { authPlugin, authenticatedRateLimitKey } from "./auth";
 import { distributedFixedWindowContext } from "./lib/distributed-rate-limit";
 import { isPostgres } from "./db/driver";
@@ -245,6 +247,7 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
   const { code, error, set, request } = context;
   const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
   const pathname = new URL(request.url).pathname;
+  if (error instanceof SettingsValidationError) mutableSet.status = error.status;
   // Elysia wraps onParse failures in its own ParseError; the original is
   // preserved as `cause` (elysia/dist/error.js ParseError).
   const bodyTooLarge = error instanceof BodyTooLargeError ? error
@@ -261,6 +264,9 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
           : typeof mutableSet.status === "number" ? mutableSet.status : 500;
     requestFinished(status);
     requestMeta.delete(request as unknown as Request);
+  }
+  if (error instanceof SettingsValidationError) {
+    return { errors: [{ status: String(error.status), title: error.status === 422 ? "Unprocessable Entity" : "Service Unavailable", detail: error.message }] };
   }
   if (code === "NOT_FOUND") {
     if (!(pathname === "/api" || pathname.startsWith("/api/"))) {
@@ -323,24 +329,18 @@ type RateLimitServer = Readonly<{
   readonly requestIP?: (request: Request) => Readonly<{ readonly address?: string }> | null;
 }>;
 
-/** Parse a positive-integer env override, falling back to the default. */
-function envPositiveInt(name: string, fallback: number): number {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
-const RATE_LIMIT_MAX = envPositiveInt("RATE_LIMIT_MAX", 60);
-const SENSITIVE_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SENSITIVE_MAX", 5);
+const RATE_LIMIT_MAX = integerSetting("RATE_LIMIT_MAX");
+const SENSITIVE_RATE_LIMIT = integerSetting("RATE_LIMIT_SENSITIVE_MAX");
 const SENSITIVE_RATE_DURATION_MS = 60_000;
 // SSO initiation and IdP-initiated logout arrive from browsers/IdPs (shared
 // NATs, corporate proxies), so the 5/min credential limiter would break
 // legitimate flows; give them their own, higher-bound limiter.
-const SSO_GET_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SSO_GET_MAX", 60);
+const SSO_GET_RATE_LIMIT = integerSetting("RATE_LIMIT_SSO_GET_MAX");
 // SCIM admin settings endpoints: 20 per 1s window per principal (mirrors the
 // former hand-rolled fixed-window limiter in scim-admin.ts exactly).
-const SCIM_SETTINGS_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SCIM_SETTINGS_MAX", 20);
+const SCIM_SETTINGS_RATE_LIMIT = integerSetting("RATE_LIMIT_SCIM_SETTINGS_MAX");
 // SCIM team-group mapping writes: 10 per 60s per principal.
-const SCIM_MAPPING_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SCIM_MAPPING_MAX", 10);
+const SCIM_MAPPING_RATE_LIMIT = integerSetting("RATE_LIMIT_SCIM_MAPPING_MAX");
 // the reference format protects workspace run-history separately from the general API bucket.
 // Keep the compatibility default deliberately conservative while allowing an
 // operator to tune it for a larger deployment.
@@ -356,8 +356,8 @@ const SCIM_MAPPING_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SCIM_MAPPING_MAX", 10
  *  - scim-mapping (RATE_LIMIT_SCIM_MAPPING_MAX / 60s): SCIM team mappings
  * Exposed via GET /api/v2/capabilities rate-limit docs block; see that route.
  */
-const WORKSPACE_RUN_HISTORY_RATE_LIMIT = envPositiveInt("RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX", 120);
-const WORKSPACE_RUN_HISTORY_DURATION_MS = envPositiveInt("RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS", 60_000);
+const WORKSPACE_RUN_HISTORY_RATE_LIMIT = integerSetting("RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX");
+const WORKSPACE_RUN_HISTORY_DURATION_MS = integerSetting("RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS");
 
 function distributedOrLocal(bucketPrefix: string): ReturnType<typeof fixedWindowContext> {
   return isPostgres ? distributedFixedWindowContext(bucketPrefix) : fixedWindowContext();
@@ -621,7 +621,7 @@ export const app = new Elysia()
     // 488: /metrics gets its own small bucket so scrape storms don't starve the global limiter.
     context: distributedOrLocal("metrics"),
     duration: 60_000,
-    max: envPositiveInt("RATE_LIMIT_METRICS_MAX", 30),
+    max: integerSetting("RATE_LIMIT_METRICS_MAX"),
     generator: (request: Request, server: RateLimitServer | null): string => `metrics:${principalRateLimitKey(request, server)}`,
     errorResponse: RATE_LIMIT_ERROR_RESPONSE,
     skip: (request: CustomRequest): boolean => {
@@ -673,10 +673,7 @@ export const app = new Elysia()
     // Origin that matches it. Otherwise, in non-production builds we reflect a
     // frontend dev Origin explicitly — no origin, no CORS header.
     const origin = request.headers.get("origin");
-    const allowedOrigins = (process.env["CORS_ORIGIN"] ?? "")
-      .split(",")
-      .map((value): string => value.trim())
-      .filter((value): boolean => value !== "");
+    const allowedOrigins = executionSetting("CORS_ORIGIN");
     const isDevBuild = process.env.NODE_ENV !== "production";
     if (origin !== null
       && ((allowedOrigins.length > 0 && allowedOrigins.includes(origin))
@@ -771,7 +768,7 @@ export const app = new Elysia()
     // response MUST advertise that with Vary: Origin or shared caches will
     // serve one origin's CORS decision to everyone.
     const originHeader = request.headers.get("origin");
-    const corsConfigured = (process.env["CORS_ORIGIN"] ?? "").split(",").some((value: string): boolean => value.trim() !== "");
+    const corsConfigured = executionSetting("CORS_ORIGIN").length > 0;
     if (originHeader !== null || corsConfigured) {
       const { Vary: existingVary } = headers;
       headers["Vary"] = existingVary === undefined ? "Origin" : `${String(existingVary)}, Origin`;
@@ -1082,7 +1079,7 @@ setTimeout((): void => {
   // disable both (TERRENCE_DISABLE_WORKER=1 keeps the process timer-free),
   // production runs both. The ring buffer is what turns the /metrics rss
   // growth figure into a leak trend instead of a steady-state snapshot.
-  if (!envEnabled(process.env["TERRENCE_DISABLE_WORKER"])) {
+  if (!envFlag("TERRENCE_DISABLE_WORKER")) {
     import("./lib/process-metrics").then(({ startProcessSampler }: { startProcessSampler: (intervalMs?: number, ringMax?: number) => void }): void => {
       startProcessSampler();
     }).catch((error: unknown): void => {

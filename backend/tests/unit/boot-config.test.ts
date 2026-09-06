@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from "bun:test";
+import { throws } from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import {
   parseBootConfig,
   readBootConfigFile,
   resolveDatabaseConfig,
+  resolveDatabaseConfigWithOrigin,
   resolveStorageSecret,
   storageSecretPath,
   writeBootDatabaseConfig,
@@ -16,6 +18,38 @@ import {
 
 const testDir = mkdtempSync(join(tmpdir(), "boot-config-test-"));
 const env = (values: Record<string, string | undefined> = {}): Record<string, string | undefined> => ({ ...values });
+
+describe("strict database configuration", (): void => {
+  it("reports the source used to resolve the database", (): void => {
+    const directory = mkdtempSync(join(tmpdir(), "database-origin-"));
+    try {
+      expect(resolveDatabaseConfigWithOrigin({}, directory).origin).toBe("default");
+      writeFileSync(bootConfigPath(directory), JSON.stringify({ database: { driver: "sqlite" } }));
+      expect(resolveDatabaseConfigWithOrigin({}, directory).origin).toBe("persisted");
+      expect(resolveDatabaseConfigWithOrigin({ DATABASE_URL: ":memory:" }, directory).origin).toBe("environment");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+  it("rejects invalid explicit URLs rather than falling back to storage defaults", (): void => {
+    for (const url of ["", " ", "file:", "file:/tmp/invalid\u0000.db", "postgres://user:private-marker@", "mysql://user:private-marker@example.com/db"]) {
+      throws((): void => { resolveDatabaseConfig({ DATABASE_URL: url }, testDir); }, (error: unknown): boolean => {
+        return error instanceof BootConfigError && !error.message.includes("private-marker");
+      });
+    }
+  });
+
+  it("rejects mistyped and unknown database fields", (): void => {
+    for (const database of [
+      { driver: "sqlite", url: 123 },
+      { driver: "sqlite", urlSecret: false },
+      { driver: "sqlite", urll: "private-marker" },
+      { driver: "private-marker" },
+    ]) {
+      throws((): void => { parseBootConfig({ database }, "test"); }, (error: unknown): boolean => {
+        return error instanceof BootConfigError && !error.message.includes("private-marker");
+      });
+    }
+  });
+});
 
 afterAll((): void => {
   rmSync(testDir, { recursive: true, force: true });

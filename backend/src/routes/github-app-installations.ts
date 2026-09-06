@@ -1,3 +1,4 @@
+import { integrationSetting } from "../lib/runtime-config";
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { and, eq, sql } from "drizzle-orm";
@@ -85,7 +86,7 @@ function githubAppConfig(): GitHubAppConfig | null {
   const appId = positiveInteger(appIdText);
   const privateKey = process.env["GITHUB_APP_PRIVATE_KEY"]?.replaceAll("\\n", "\n").trim() ?? "";
   const slug = process.env["GITHUB_APP_SLUG"]?.trim() ?? "";
-  const httpUrl = configuredUrl(process.env["GITHUB_APP_HTTP_URL"], "https://github.com");
+  const httpUrl = configuredUrl(integrationSetting("GITHUB_APP_HTTP_URL") ?? undefined, "https://github.com");
   const apiUrl = githubAppApiBase(true);
   if (
     appId === null

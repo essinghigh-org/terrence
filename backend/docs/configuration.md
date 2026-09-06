@@ -94,7 +94,7 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `ALLOW_TOOL_FALLBACK` | off | Allow fallback binary sources when the primary mirror is unreachable. |
 | `TERRENCE_RUN_NET_POLICY` | `allow` | Run TCP policy. `deny` blocks TCP bind/connect via Landlock ABI >= 4; it does not block UDP, DNS, or other socket families. Use host/container network isolation for complete network denial. Invalid values fail startup. |
 | `TERRENCE_EXECUTOR_BACKEND` | `landlock` | Executor backend: `landlock`, `container`, `kubernetes`, `agent`, or `microvm`. Unknown values fall back to `landlock`. |
-| `TERRENCE_SANDBOX_MIN_ABI` | runner minimum | Minimum Landlock ABI the readiness gate requires. Unset means no floor beyond the sandbox-required check; invalid values are ignored. |
+| `TERRENCE_SANDBOX_MIN_ABI` | runner minimum | Minimum Landlock ABI the readiness gate requires. Unset means no floor beyond the sandbox-required check; explicit values must be integers from 1 to 255 and invalid values fail startup. |
 | `TERRENCE_AGENT_UPDATE_URL` / `TERRENCE_AGENT_UPDATE_SHA256` / `TERRENCE_AGENT_UPDATE_VERSION` | none | Agent binary self-update source: URL plus expected SHA256 plus version pin. |
 | `TERRAFORM_CONFIG_INSPECT_PATH` | bundled | Path to the config inspector binary. |
 | `TERRAFORM_TEST_BINARY_PATH` | none | Path for the module test binary. |
@@ -238,3 +238,7 @@ the three-day guard to clear a Renovate warning.
 ## Invalid values
 
 Poll interval variables validate their values. Invalid, empty, or sub-minimum values fall back to the documented default. This rule prevents a misconfiguration from hot-looping the database.
+
+## Validated configuration contract
+
+See the [generated configuration contract](configuration-contract.md) for validated deployment settings, persisted setting types, value origins, and restart behavior. Regenerate it with `bun backend/scripts/configuration-reference.ts --write` from the repository root.

@@ -1,3 +1,4 @@
+import { integerSetting } from "./runtime-config";
 import { newResourceId } from "./resource-id";
 import { and, eq, inArray, lt } from "drizzle-orm";
 import { db } from "../db";
@@ -5,7 +6,6 @@ import { agentForwardedRequests } from "../db/schema";
 import { resolveExternalUrl } from "./url-safety";
 
 const MAX_FORWARD_BODY_BYTES = 10 * 1024 * 1024;
-const DEFAULT_FORWARD_TIMEOUT_MS = 60_000;
 const FORWARDED_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 /** Purge forwarded request rows older than the retention window. Completed
@@ -101,8 +101,7 @@ async function readForwardBody(init: Readonly<RequestInit>): Promise<Buffer | nu
 }
 
 function forwardDeadline(): number {
-  const timeoutMs = Number(process.env["TERRENCE_AGENT_FORWARD_TIMEOUT_MS"] ?? DEFAULT_FORWARD_TIMEOUT_MS);
-  return Date.now() + (Number.isFinite(timeoutMs) ? Math.max(1_000, Math.min(timeoutMs, 300_000)) : DEFAULT_FORWARD_TIMEOUT_MS);
+  return Date.now() + integerSetting("TERRENCE_AGENT_FORWARD_TIMEOUT_MS");
 }
 
 async function pollForwardResponse(id: string, deadline: number): Promise<Response | null> {

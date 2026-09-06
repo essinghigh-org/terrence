@@ -1,9 +1,10 @@
+import { executionSetting, integrationSetting, integerSetting } from "../lib/runtime-config";
 import { localSignupEnabled } from "../lib/settings";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { authPlugin } from "../auth";
 import { probeLandlockAbi, runNetPolicy, runSandboxRequired } from "../lib/sandbox";
-import { envEnabled } from "../lib/env";
+import { envFlag } from "../lib/env";
 import { log } from "../lib/log";
 import { ssoSettingsSnapshot } from "../lib/sso";
 import { isStorageDegraded } from "../lib/storage-health";
@@ -459,16 +460,11 @@ async function readinessResponse(
     if (timer !== undefined) clearTimeout(timer);
   });
   const disk = isStorageDegraded() ? "ERROR" : "OK";
-  const worker = envEnabled(process.env["TERRENCE_DISABLE_WORKER"]) ? "ERROR" : "OK";
+  const worker = envFlag("TERRENCE_DISABLE_WORKER") ? "ERROR" : "OK";
   // Fail readiness when the sandbox is required but the host cannot
   // provide Landlock at all (issue #566); the operator policy floor
   // still applies on top for newer-ABI requirements.
-  const sandboxMinAbi = (() => {
-    const raw = process.env["TERRENCE_SANDBOX_MIN_ABI"];
-    if (raw === undefined || raw.trim() === "") return null;
-    const n = Number.parseInt(raw.trim(), 10);
-    return Number.isSafeInteger(n) && n >= 1 ? n : null;
-  })();
+  const sandboxMinAbi = executionSetting("TERRENCE_SANDBOX_MIN_ABI");
   const hostAbi = probeLandlockAbi();
   const sandboxAbiStatus: "OK" | "ERROR" =
     sandboxMinAbi !== null
@@ -484,7 +480,7 @@ async function readinessResponse(
     netPolicyStatus = "ERROR";
   }
   const maintenance = maintenanceSnapshot();
-  const draining = maintenance.active || ["draining", "maintenance"].includes((process.env["TERRENCE_NODE_STATUS"] ?? "").toLowerCase());
+  const draining = maintenance.active || ["draining", "maintenance"].includes(integrationSetting("TERRENCE_NODE_STATUS"));
   const status =
     database === "ERROR" || disk === "ERROR" || sandboxAbiStatus === "ERROR" || netPolicyStatus === "ERROR"
       ? "ERROR"
@@ -682,12 +678,12 @@ export const healthRoutes = new Elysia({ name: "health" })
     h["TFE-Version"] = COMPATIBILITY_VERSION;
     h["X-TFE-Version"] = COMPATIBILITY_VERSION;
     const rateLimits = {
-      general: { max: Number(process.env["RATE_LIMIT_MAX"] ?? 30), "window-ms": 1_000 },
-      "workspace-run-history": { max: Number(process.env["RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX"] ?? 30), "window-ms": Number(process.env["RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS"] ?? 60_000) },
-      sensitive: { max: Number(process.env["RATE_LIMIT_SENSITIVE_MAX"] ?? 5), "window-ms": 60_000 },
-      "sso-get": { max: Number(process.env["RATE_LIMIT_SSO_GET_MAX"] ?? 60), "window-ms": 60_000 },
-      "scim-settings": { max: Number(process.env["RATE_LIMIT_SCIM_SETTINGS_MAX"] ?? 20), "window-ms": 1_000 },
-      "scim-mapping": { max: Number(process.env["RATE_LIMIT_SCIM_MAPPING_MAX"] ?? 10), "window-ms": 60_000 },
+      general: { max: integerSetting("RATE_LIMIT_MAX"), "window-ms": 1_000 },
+      "workspace-run-history": { max: integerSetting("RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX"), "window-ms": integerSetting("RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS") },
+      sensitive: { max: integerSetting("RATE_LIMIT_SENSITIVE_MAX"), "window-ms": 60_000 },
+      "sso-get": { max: integerSetting("RATE_LIMIT_SSO_GET_MAX"), "window-ms": 60_000 },
+      "scim-settings": { max: integerSetting("RATE_LIMIT_SCIM_SETTINGS_MAX"), "window-ms": 1_000 },
+      "scim-mapping": { max: integerSetting("RATE_LIMIT_SCIM_MAPPING_MAX"), "window-ms": 60_000 },
     };
     return {
       data: {
@@ -787,7 +783,7 @@ export const healthRoutes = new Elysia({ name: "health" })
         ? "landlock-runner missing or Landlock not enabled in the kernel"
         : "Landlock is not available on this kernel (needs Linux >= 5.13 with CONFIG_SECURITY_LANDLOCK)";
     }
-    const extraRwAllowed = envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"]);
+    const extraRwAllowed = envFlag("TERRENCE_SANDBOX_EXTRA_RW_ALLOWED");
     // SEC-10: expose the effective run network policy and its enforcement
     // scope. `deny` restricts TCP bind/connect only (Landlock ABI >= 4);
     // UDP, DNS and other families are unaffected. Never throw here: an

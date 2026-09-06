@@ -121,12 +121,13 @@ describe("runtime logging configuration", () => {
       expect(body["message"]).toBe("json shape");
       expect(body["http"]).toEqual({ status: 201 });
 
-      applyLoggingSettings({ "syslog-format": "bogus" });
-      log.info("fallback shape", { http: { status: 500 } });
+      expect((): void => { applyLoggingSettings({ "syslog-format": "bogus" }); }).toThrow("Invalid logging.syslog-format");
+      log.info("preserved shape", { http: { status: 500 } });
       await Bun.sleep(25);
       expect(collector.received).toHaveLength(3);
-      expect(collector.received[2]).toContain("[terrence@65024");
-      expect(collector.received[2]).toContain('http.status="500"');
+      const preserved = JSON.parse(collector.received[2] ?? "") as Record<string, unknown>;
+      expect(preserved["message"]).toBe("preserved shape");
+      expect(preserved["http"]).toEqual({ status: 500 });
     } finally {
       logSpy.mockRestore();
       collector.socket.close();

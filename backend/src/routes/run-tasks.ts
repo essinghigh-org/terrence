@@ -1,7 +1,7 @@
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { envEnabled } from "../lib/env";
+import { envFlag } from "../lib/env";
 import {
   runTasks,
   workspaceRunTasks,
@@ -120,14 +120,14 @@ function runTaskUrlError(url: string): string | undefined {
     return "Run task URL must be a valid HTTP or HTTPS URL";
   }
   if (parsed.username !== "" || parsed.password !== "") return "Run task URL must not contain embedded credentials";
-  const reason = validateExternalUrl(url, envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_URLS"]));
+  const reason = validateExternalUrl(url, envFlag("TERRENCE_ALLOW_PRIVATE_URLS"));
   return reason === null ? undefined : `Run task URL is unsafe: ${reason}`;
 }
 
 function globalRunTaskUrlError(url: string, configuration: GlobalConfig | null | undefined, taskEnabled = true): string | undefined {
   const urlError = runTaskUrlError(url);
   if (urlError !== undefined) return urlError;
-  if (configuration?.enabled !== true || taskEnabled !== true || envEnabled(process.env["TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS"])) return undefined;
+  if (configuration?.enabled !== true || taskEnabled !== true || envFlag("TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS")) return undefined;
   try {
     return new URL(url).protocol === "https:"
       ? undefined

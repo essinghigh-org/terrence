@@ -1,8 +1,10 @@
+import { loggingSetting, runtimeConfigurationReport } from "./runtime-config";
+import { configurationReportValue, settingsContract, validateSettings } from "./settings-contract";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { adminSettings, organizations } from "../db/schema";
 import { CUSTOM_PROVIDER_ID, getCatalogProviderModels } from "./model-catalog";
-import { envEnabled } from "./env";
+import { envFlag } from "./env";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "./secrets";
 
 export type Settings = Record<string, unknown>;
@@ -77,7 +79,7 @@ export async function encryptSettingsValues(group: string, values: Readonly<Sett
 const SETTINGS_CACHE_TTL_MS = 1_000;
 const settingsCache = new Map<string, { values: Settings; fetchedAt: number }>();
 
-function effectiveSettings(group: string, defaults: Readonly<Settings>, values: Readonly<Settings>): Settings {
+function effectiveSettings(group: string, defaults: Readonly<Settings>, values: Readonly<Settings>, validate = true): Settings {
   const merged = { ...defaults, ...values };
   // Older SMTP rows have no encryption key. Keep port 465's established
   // implicit-TLS behavior while making every other legacy configuration
@@ -85,6 +87,7 @@ function effectiveSettings(group: string, defaults: Readonly<Settings>, values: 
   if (group === "smtp" && (values["encryption"] === undefined || values["encryption"] === null)) {
     merged["encryption"] = merged["port"] === 465 ? "tls" : "starttls";
   }
+  if (validate) validateSettings(group, merged);
   return merged;
 }
 
@@ -103,9 +106,9 @@ export function invalidateSettingsCache(): void {
 }
 
 /** Read the latest persisted settings without using the process-local cache. */
-export async function getSettingsFresh(group: string): Promise<Settings> {
+export async function getSettingsFresh(group: string, validate = true): Promise<Settings> {
   const defaults = settingDefaults[group] ?? {};
-  return effectiveSettings(group, defaults, await readPersistedSettings(group));
+  return effectiveSettings(group, defaults, await readPersistedSettings(group), validate);
 }
 
 export async function getSettings(group: string): Promise<Settings> {
@@ -124,7 +127,7 @@ export async function costEstimationEnabledForOrganization(orgId: string): Promi
   // INFRACOST_ENABLED is the documented operator kill-switch (issue #293):
   // the container image defaults it to false, so cost estimation stays off
   // until the operator opts in AND enables it in settings AND on the org.
-  if (!envEnabled(process.env["INFRACOST_ENABLED"])) return false;
+  if (!envFlag("INFRACOST_ENABLED")) return false;
   const [settings, organization] = await Promise.all([
     getSettings("cost"),
     db.query.organizations.findFirst({ where: eq(organizations.id, orgId), columns: { costEstimationEnabled: true } }),
@@ -214,5 +217,69 @@ export async function localSignupEnabled(): Promise<boolean> {
   const settings = await getSettings("general");
   return typeof settings["local-signup-enabled"] === "boolean"
     ? settings["local-signup-enabled"]
-    : envEnabled(process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"]);
+    : envFlag("TERRENCE_ENABLE_LOCAL_SIGNUP");
+}
+
+/** Validate persisted configuration before accepting requests or starting workers. */
+export async function validatePersistedConfiguration(): Promise<void> {
+  await Promise.all(Object.keys(settingsContract).map(async (group): Promise<void> => {
+    await getSettingsFresh(group);
+  }));
+}
+
+export type PersistedConfigurationEntry = Readonly<{
+  name: string;
+  value: unknown;
+  origin: "environment" | "persisted" | "default";
+  restartRequired: boolean;
+  takesEffect: string;
+}>;
+
+const loggingEnvironmentNames = {
+  "log-level": "LOG_LEVEL",
+  "syslog-level": "TERRENCE_SYSLOG_LEVEL",
+  "syslog-targets": "TERRENCE_SYSLOG_TARGETS",
+  "syslog-hostname": "TERRENCE_SYSLOG_HOSTNAME",
+  "syslog-app": "TERRENCE_SYSLOG_APP",
+  "syslog-format": "TERRENCE_SYSLOG_FORMAT",
+} as const;
+
+function inheritedLoggingValue(key: string, values: Readonly<Settings>): Readonly<{ value: unknown; originName: string | null }> {
+  if (key === "enabled") {
+    const storedTargets = values["syslog-targets"];
+    return Array.isArray(storedTargets)
+      ? { value: storedTargets.length > 0, originName: null }
+      : { value: loggingSetting("TERRENCE_SYSLOG_TARGETS").length > 0, originName: "TERRENCE_SYSLOG_TARGETS" };
+  }
+  const name = loggingEnvironmentNames[key as keyof typeof loggingEnvironmentNames];
+  return { value: loggingSetting(name), originName: name };
+}
+
+export async function persistedConfigurationReport(): Promise<readonly PersistedConfigurationEntry[]> {
+  const origins = new Map(runtimeConfigurationReport().map((entry): [string, "environment" | "default"] => [entry.name, entry.origin]));
+  const groups = await Promise.all(Object.keys(settingsContract).map(async (group): Promise<PersistedConfigurationEntry[]> => {
+    const stored = await readPersistedSettings(group);
+    const values = effectiveSettings(group, settingDefaults[group] ?? {}, stored);
+    return Object.entries(values).map(([key, value]): PersistedConfigurationEntry => {
+      let origin: PersistedConfigurationEntry["origin"] = Object.hasOwn(stored, key) ? "persisted" : "default";
+      let effectiveValue = value;
+      if (group === "general" && key === "local-signup-enabled" && value === null) {
+        origin = origins.get("TERRENCE_ENABLE_LOCAL_SIGNUP") ?? "default";
+        effectiveValue = envFlag("TERRENCE_ENABLE_LOCAL_SIGNUP");
+      }
+      if (group === "logging" && value === null) {
+        const inherited = inheritedLoggingValue(key, values);
+        origin = inherited.originName === null ? "persisted" : origins.get(inherited.originName) ?? "default";
+        effectiveValue = inherited.value;
+      }
+      return {
+        name: `${group}.${key}`,
+        value: configurationReportValue(group, key, effectiveValue),
+        origin,
+        restartRequired: origin === "environment",
+        takesEffect: origin === "environment" ? "Environment changes require a process restart" : "Next settings read; cache lifetime is at most one second",
+      };
+    });
+  }));
+  return groups.flat();
 }
