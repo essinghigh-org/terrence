@@ -3,6 +3,7 @@ import { mkdir, exists, chmod, unlink, readdir, rm, readFile, writeFile } from "
 import { spawn } from "bun";
 import { envEnabled } from "./lib/env";
 import { log } from "./lib/log";
+import { sha256File } from "./lib/file-hash";
 import { isVersionCacheFresh, loadVersionCacheFile, saveVersionCacheFile } from "./lib/version-cache";
 
 const STORAGE_DIR = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../storage"));
@@ -108,8 +109,7 @@ export async function verifyBinaryIntegrity(
   integrity: BinaryIntegrity,
 ): Promise<boolean> {
   try {
-    const buffer = await Bun.file(binaryPath).arrayBuffer();
-    return await calculateSha256(buffer) === integrity.binarySha256.toLowerCase();
+    return await sha256File(binaryPath) === integrity.binarySha256.toLowerCase();
   } catch {
     return false;
   }
@@ -939,11 +939,10 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
         await chmod(binaryPath, 0o755);
         // Record the on-disk digest so future runs can re-validate the cache
         // without re-downloading (kanban 6.5).
-        const binaryBuffer = await Bun.file(binaryPath).arrayBuffer();
         await writeBinaryIntegrity(targetDir, {
           tool,
           version,
-          binarySha256: await calculateSha256(binaryBuffer),
+          binarySha256: await sha256File(binaryPath),
         });
         log.info(`Successfully installed ${tool} v${version} to ${binaryPath}`);
         return { binaryPath, tool, version };

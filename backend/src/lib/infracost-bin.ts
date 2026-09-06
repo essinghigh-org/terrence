@@ -1,6 +1,7 @@
 import { join, resolve } from "path";
 import { chmod, exists, mkdir, rename, rm, stat, writeFile } from "fs/promises";
 import { log } from "./log";
+import { sha256File } from "./file-hash";
 
 // ---------------------------------------------------------------------------
 // On-demand, versioned Infracost binary management (storage-backed).
@@ -87,8 +88,7 @@ async function readIntegrity(targetDir: string): Promise<IntegrityRead> {
 
 async function verifyBinary(targetPath: string, integrity: InfracostIntegrity): Promise<boolean> {
   try {
-    const buffer = await Bun.file(targetPath).arrayBuffer();
-    return (await calculateSha256(buffer)) === integrity.binarySha256.toLowerCase();
+    return (await sha256File(targetPath)) === integrity.binarySha256.toLowerCase();
   } catch {
     return false;
   }
@@ -311,7 +311,7 @@ export async function resolveInfracostBinary(): Promise<{ binaryPath: string; ve
     await downloadAndVerify(version, stagingDir);
     const installedPath = await extractVerified(stagingDir);
 
-    const digest = await calculateSha256(await Bun.file(installedPath).arrayBuffer());
+    const digest = await sha256File(installedPath);
     await writeIntegrity(stagingDir, { tool: "infracost", version, binarySha256: digest });
     await rename(stagingDir, targetDir);
     stagingDir = "";

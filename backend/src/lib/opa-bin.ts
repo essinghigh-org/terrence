@@ -1,6 +1,7 @@
 import { join, resolve } from "path";
 import { chmod, exists, mkdir, rename, rm, stat, writeFile } from "fs/promises";
 import { log } from "./log";
+import { sha256File } from "./file-hash";
 
 // ---------------------------------------------------------------------------
 // On-demand, versioned OPA binary management (storage-backed, issue #596).
@@ -86,8 +87,7 @@ async function readIntegrity(targetDir: string): Promise<IntegrityRead> {
 
 async function verifyBinary(targetPath: string, integrity: Readonly<OpaIntegrity>): Promise<boolean> {
   try {
-    const buffer = await Bun.file(targetPath).arrayBuffer();
-    return (await calculateSha256(buffer)) === integrity.binarySha256.toLowerCase();
+    return (await sha256File(targetPath)) === integrity.binarySha256.toLowerCase();
   } catch {
     return false;
   }
@@ -299,7 +299,7 @@ export async function resolveManagedOpaBinary(): Promise<{ binaryPath: string; v
     stagingDir = stagingDirFor(version);
     await downloadAndVerify(version, asset, stagingDir);
 
-    const digest = await calculateSha256(await Bun.file(join(stagingDir, "opa")).arrayBuffer());
+    const digest = await sha256File(join(stagingDir, "opa"));
     await writeIntegrity(stagingDir, { tool: "opa", version, binarySha256: digest });
     await rename(stagingDir, targetDir);
     stagingDir = "";
