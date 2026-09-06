@@ -324,6 +324,7 @@ export type ExternalRequestInit = Readonly<{
   body?: string;
   timeoutMs: number;
   maxResponseBytes?: number;
+  signal?: Readonly<AbortSignal>;
 }>;
 
 export type ExternalUrlTransportForTests = (target: ResolvedExternalUrl, init: ExternalRequestInit) => Promise<Response>;
@@ -363,7 +364,7 @@ function pinnedRequestOptions(target: ResolvedExternalUrl, init: ExternalRequest
       // Defense-in-depth with the resolveExternalUrl userinfo rejection:
       // credentials must arrive as explicit headers, not URL components.
       auth: undefined,
-      signal: AbortSignal.timeout(init.timeoutMs),
+      signal: AbortSignal.any([AbortSignal.timeout(init.timeoutMs), ...(init.signal === undefined ? [] : [init.signal])]),
     },
   };
 }

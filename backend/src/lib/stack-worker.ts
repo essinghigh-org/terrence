@@ -26,6 +26,7 @@ import { validateExternalUrl, type DeepReadonly } from "./utils";
 import { ensureBinary } from "../binaryManager";
 import { extractValidatedModuleArchive } from "./registry-module-archive";
 import { enqueueDurableJob, type DurableJobContext } from "./durable-jobs";
+import { runBoundedProcess } from "./bounded-process";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./sandbox";
 import {
   captureProcessOutput,
@@ -106,7 +107,7 @@ function checkedUrl(value: string): string {
   return value;
 }
 
-async function fetchArchive(url: string, headers: Readonly<Record<string, string>>): Promise<Response> {
+async function fetchArchive(url: string, headers: Readonly<Record<string, string>>, signal: Readonly<AbortSignal>): Promise<Response> {
   const allowPrivate = envFlag("TERRENCE_ALLOW_PRIVATE_VCS_URLS");
   let nextUrl = url;
   let requestHeaders: Readonly<Record<string, string>> = headers;
@@ -118,6 +119,7 @@ async function fetchArchive(url: string, headers: Readonly<Record<string, string
       headers: requestHeaders,
       timeoutMs: 30_000,
       maxResponseBytes: MAX_STACK_ARCHIVE_BYTES,
+      signal,
     });
     if (![301, 302, 303, 307, 308].includes(response.status)) return response;
     const location = response.headers.get("location");
@@ -137,7 +139,7 @@ async function fetchArchive(url: string, headers: Readonly<Record<string, string
   throw new Error("The Stack source download exceeded the redirect limit");
 }
 
-async function writeResponseArchive(response: DeepReadonly<Response>, destination: string): Promise<void> {
+async function writeResponseArchive(response: DeepReadonly<Response>, destination: string, signal: Readonly<AbortSignal>): Promise<void> {
   if (!response.ok || response.body === null) throw new Error(`The Stack source download failed with HTTP ${response.status}`);
   const contentLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > MAX_STACK_ARCHIVE_BYTES) throw new Error("The Stack source download is too large");
@@ -149,6 +151,7 @@ async function writeResponseArchive(response: DeepReadonly<Response>, destinatio
   try {
     const reader = response.body.getReader();
     while (true) {
+      signal.throwIfAborted();
       const next = await reader.read();
       if (next.done) break;
       total += next.value.byteLength;
@@ -163,7 +166,7 @@ async function writeResponseArchive(response: DeepReadonly<Response>, destinatio
   }
 }
 
-async function fetchHttpArchive(stack: Stack, destination: string): Promise<void> {
+async function fetchHttpArchive(stack: Stack, destination: string, signal: Readonly<AbortSignal>): Promise<void> {
   const credentials = await credentialsFor(stack);
   const identifier = stack.vcsIdentifier ?? "";
   if (identifier === "") throw new Error("The Stack VCS repository identifier is empty");
@@ -175,10 +178,10 @@ async function fetchHttpArchive(stack: Stack, destination: string): Promise<void
     : `${api ?? "https://gitlab.com/api/v4"}/projects/${encodeURIComponent(identifier)}/repository/archive.tar.gz?sha=${encodeURIComponent(branch)}`;
   const headers: Record<string, string> = { "User-Agent": "Terrence", Accept: "application/octet-stream" };
   if (credentials.token !== null) headers["Authorization"] = `Bearer ${credentials.token}`;
-  await writeResponseArchive(await fetchArchive(url, headers), destination);
+  await writeResponseArchive(await fetchArchive(url, headers, signal), destination, signal);
 }
 
-async function fetchGitArchive(stack: Stack, destination: string): Promise<void> {
+async function fetchGitArchive(stack: Stack, destination: string, signal: Readonly<AbortSignal>): Promise<void> {
   const credentials = await credentialsFor(stack);
   const family = providerFamily(credentials.provider);
   const repository = stack.vcsRepositoryHttpUrl ?? `https://${family === "ado" ? "dev.azure.com" : family === "gitlab" ? "gitlab.com" : "github.com"}/${stack.vcsIdentifier ?? ""}.git`;
@@ -195,33 +198,30 @@ async function fetchGitArchive(stack: Stack, destination: string): Promise<void>
     env["GIT_CONFIG_VALUE_0"] = `Authorization: ${auth}`;
   }
   try {
-    const child = spawn(args, { env, stdout: "pipe", stderr: "pipe" });
-    const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-    if (exitCode !== 0) throw new Error(stderr.trim() || "git clone failed");
+    await runBoundedProcess(args, { signal, timeoutMs: 120_000, maxStdoutBytes: 64 * 1024, maxStderrBytes: 256 * 1024, env });
     await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
-    const archive = spawn(["tar", "-czf", destination, "--exclude=.git", "-C", cloneDirectory, "."], { stdout: "pipe", stderr: "pipe" });
-    const [archiveExit, archiveError] = await Promise.all([archive.exited, new Response(archive.stderr).text()]);
-    if (archiveExit !== 0) throw new Error(archiveError.trim() || "The Stack source archive could not be created");
+    await runBoundedProcess(["tar", "-czf", destination, "--exclude=.git", "-C", cloneDirectory, "."], { signal, timeoutMs: 120_000, maxStdoutBytes: 64 * 1024, maxStderrBytes: 256 * 1024 });
     if ((await stat(destination)).size > MAX_STACK_ARCHIVE_BYTES) throw new Error("The Stack source archive is too large");
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
 }
 
-async function fetchStackArchive(stack: Stack, destination: string): Promise<void> {
+async function fetchStackArchive(stack: Stack, destination: string, signal: Readonly<AbortSignal>): Promise<void> {
   const family = providerFamily(stack.vcsServiceProvider ?? "github");
   let httpError: unknown;
   if (family === "github" || family === "gitlab") {
     try {
-      await fetchHttpArchive(stack, destination);
+      await fetchHttpArchive(stack, destination, signal);
       return;
     } catch (error: unknown) {
+      signal.throwIfAborted();
       if (stack.vcsRepositoryHttpUrl === null) throw error;
       httpError = error;
     }
   }
   try {
-    await fetchGitArchive(stack, destination);
+    await fetchGitArchive(stack, destination, signal);
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : String(error);
     const cause = httpError instanceof Error ? ` (archive download failed first: ${httpError.message})` : "";
@@ -366,6 +366,7 @@ async function command(
   sandbox: DeepReadonly<RunSandbox> | null,
   heartbeat: (() => Promise<boolean>) | undefined,
   outputDirectory: string,
+  signal: Readonly<AbortSignal>,
 ): Promise<Readonly<{ code: number; output: string; capturedOutput: CapturedProcessOutput; heartbeatLost: boolean }>> {
   const env = { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "", LANG: "C" };
   const operation = args[1] === "apply" ? "apply" : "plan";
@@ -384,7 +385,10 @@ async function command(
       }
     }).catch((): void => { heartbeatLost = true; try { if ((child as unknown as { pid?: number }).pid) process.kill(-(child as unknown as { pid: number }).pid, "SIGTERM"); else child.kill(); } catch { try { child.kill(); } catch {} } });
   }, 10_000);
-  const outputPromise = captureProcessOutput(child.stdout, child.stderr, outputDirectory, `stack-${operation}`);
+  const onAbort = (): void => { try { child.kill("SIGKILL"); } catch { /* already exited */ } };
+  signal.addEventListener("abort", onAbort, { once: true });
+  if (signal.aborted) onAbort();
+  const outputPromise = captureProcessOutput(child.stdout, child.stderr, outputDirectory, `stack-${operation}`, { signal });
   const completed = Promise.all([child.exited, outputPromise]);
   const timeout = new Promise<never>((_, reject): void => {
     timer = setTimeout((): void => {
@@ -407,6 +411,7 @@ async function command(
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     if (interval !== undefined) clearInterval(interval);
+    signal.removeEventListener("abort", onAbort);
   }
 }
 
@@ -600,12 +605,13 @@ async function runTerraformComponentOperation(
   sandbox: DeepReadonly<RunSandbox> | null,
   heartbeat: () => Promise<boolean>,
   binaryPath: string,
+  signal: Readonly<AbortSignal>,
 ): Promise<TerraformCommandResult> {
-  if (operation === "plan") return command(planArgs, executionDirectory, sandbox, heartbeat, workDirectory);
+  if (operation === "plan") return command(planArgs, executionDirectory, sandbox, heartbeat, workDirectory, signal);
   if (planArtifactPath === null || !(await Bun.file(planArtifactPath).exists())) throw new Error("The approved Stack plan artifact is unavailable");
   const planPath = join(workDirectory, "tfplan");
   await copyFile(planArtifactPath, planPath);
-  return command([binaryPath, "apply", "-no-color", "-input=false", planPath], executionDirectory, sandbox, heartbeat, workDirectory);
+  return command([binaryPath, "apply", "-no-color", "-input=false", planPath], executionDirectory, sandbox, heartbeat, workDirectory, signal);
 }
 
 type ComponentExecutionRequest = DeepReadonly<{
@@ -651,13 +657,13 @@ async function startTerraformComponentExecution(request: ComponentExecutionReque
     if (!await context.heartbeat()) return false;
     return fencingToken === null || await refreshStackStateLock(stackId, deployment, runId, fencingToken);
   };
-  const init = await command([resolved.binaryPath, "init", "-backend=false", "-no-color", "-input=false"], executionDirectory, sandbox, heartbeat, workDirectory);
+  const init = await command([resolved.binaryPath, "init", "-backend=false", "-no-color", "-input=false"], executionDirectory, sandbox, heartbeat, workDirectory, context.signal);
   if (init.heartbeatLost || !await heartbeat()) throw new Error(`Stack ${operation} lost its execution lease during initialization`);
   const planPath = join(workDirectory, "tfplan");
   const stateExists = await Bun.file(statePath).exists();
   if (stateExists) await copyFile(statePath, join(executionDirectory, "terraform.tfstate"));
   const planArgs = [resolved.binaryPath, "plan", "-detailed-exitcode", "-no-color", "-input=false", ...(destroy ? ["-destroy"] : []), "-out", planPath];
-  const commandResult = await runTerraformComponentOperation(operation, planArgs, planArtifactPath, executionDirectory, workDirectory, sandbox, heartbeat, resolved.binaryPath);
+  const commandResult = await runTerraformComponentOperation(operation, planArgs, planArtifactPath, executionDirectory, workDirectory, sandbox, heartbeat, resolved.binaryPath, context.signal);
   if (await context.canceled()) return { hasChanges: false, deferredChanges: false, output: "", statePath: null };
   if (commandResult.heartbeatLost || !await heartbeat()) throw new Error(`Stack ${operation} lost its execution lease`);
   return { executionDirectory, planPath, init, commandResult, heartbeat };
@@ -1108,7 +1114,7 @@ async function executeStackComponentFromArchive(
 ): Promise<StackExecutionResult> {
   const staging = await mkdtemp(join(tmpdir(), "terrence-stack-step-"));
   try {
-    await extractValidatedModuleArchive(archivePath, staging);
+    await extractValidatedModuleArchive(archivePath, staging, context.signal);
     const root = await findArchiveRoot(staging);
     const directory = resolve(root, component.directory);
     const relativeDirectory = relative(root, directory);
@@ -1274,11 +1280,11 @@ async function prepareStackConfiguration(
   context: DurableJobContext,
 ): Promise<PreparedStackConfiguration | undefined> {
   if (!isStackStoragePath(archivePath)) throw new Error("The Stack configuration archive path is invalid");
-  if (initialPayload["source"] === "fetch") await fetchStackArchive(stack, archivePath);
+  if (initialPayload["source"] === "fetch") await fetchStackArchive(stack, archivePath, context.signal);
   if (!(await Bun.file(archivePath).exists())) throw new Error("The Stack configuration archive is unavailable");
   const staging = await mkdtemp(join(tmpdir(), "terrence-stack-config-"));
   try {
-    await extractValidatedModuleArchive(archivePath, staging);
+    await extractValidatedModuleArchive(archivePath, staging, context.signal);
     const root = await findArchiveRoot(staging);
     const components = orderComponents(await componentDirectories(root));
     const deployments = await deploymentDefinitions(root);

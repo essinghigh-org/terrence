@@ -47,7 +47,7 @@ export async function runPlanExplanationJob(job: DurableJob, context: DurableJob
   const model = resolved["model"] as string;
 
   let content: string;
-  const parts = await fetchUpstream(resolved, source.prompt, false, undefined, async (upstream, tick) => {
+  const parts = await fetchUpstream(resolved, source.prompt, false, context.signal, async (upstream, tick) => {
     tick();
     await context.heartbeat();
     if (await context.canceled()) throw new Error("Job canceled");

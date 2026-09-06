@@ -1,5 +1,6 @@
 export type BoundedProcessOptions = Readonly<{
   signal?: AbortSignal;
+  env?: Readonly<Record<string, string | undefined>>;
   timeoutMs?: number;
   maxStdoutBytes?: number;
   maxStderrBytes?: number;
@@ -18,7 +19,7 @@ export async function runBoundedProcess(
   ]);
   signal.throwIfAborted();
   const child = Bun.spawn([...command], {
-    env: { ...process.env, LC_ALL: "C", TAR_OPTIONS: undefined },
+    env: { ...process.env, ...(options.env ?? {}), LC_ALL: "C", TAR_OPTIONS: undefined },
     stdin: "ignore", stdout: "pipe", stderr: "pipe",
   });
   const stdoutReader = child.stdout.getReader();

@@ -80,6 +80,10 @@ When an apply is canceled or the process dies mid-apply, the worker captures the
 
 Unrecovered copies are kept until recovery consumes them; they are never time-pruned because they may be the only record of changed infrastructure. `TERRENCE_RECOVERY_RETENTION_MS` (default 7 days) controls saved-plan expiry only. Markerless client-encrypted copies are also retained for manual investigation; see [state encryption and recovery](state#client-encrypted-opentofu-state).
 
+## Cancellation and deadlines
+
+Request cancellation is carried through plan explanations, Stack source downloads, archive validation and Stack Terraform subprocesses. A canceled or lease-lost durable job aborts its transport, stops its child process, and releases its spooled output; the durable lease remains the authority for finalization. Each operation keeps its own deadline, so a metadata request, archive inspection, plan, and apply do not share one generic timeout. Apply cancellation remains cooperative first so the worker can capture recovery state, then escalates to a forced process-group/cgroup stop when the grace period expires. A run is not reported complete until the process and ownership checks have settled.
+
 ## Database export
 
 The Postgres-to-SQLite export runs as a background job for the migration wizard:

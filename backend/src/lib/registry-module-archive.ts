@@ -35,11 +35,12 @@ export async function validateModuleArchive(path: string): Promise<void> {
   });
 }
 
-export async function extractValidatedModuleArchive(path: string, destination: string): Promise<void> {
+export async function extractValidatedModuleArchive(path: string, destination: string, signal?: Readonly<AbortSignal>): Promise<void> {
   await mkdir(destination, { recursive: true, mode: 0o700 });
   await extractSafeTarArchive(path, destination, {
     maxCompressedBytes: MAX_MODULE_ARCHIVE_BYTES,
     maxFileBytes: MAX_MODULE_FILE_BYTES,
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 

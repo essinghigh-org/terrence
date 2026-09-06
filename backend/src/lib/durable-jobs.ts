@@ -12,6 +12,7 @@ export type DurableJob = Readonly<typeof durableJobs.$inferSelect>;
 export type DurableJobContext = Readonly<{
   heartbeat: () => Promise<boolean>;
   canceled: () => Promise<boolean>;
+  signal: Readonly<AbortSignal>;
 }>;
 export type DurableJobHandler = (job: DurableJob, context: DurableJobContext) => Promise<void>;
 type EnqueueDurableJobOptions = Readonly<{
@@ -222,10 +223,14 @@ async function finishDurableJob(job: DurableJob, status: "succeeded" | "failed" 
 }
 
 async function runJob(job: DurableJob, handler: DurableJobHandler): Promise<void> {
+  const cancellation = new AbortController();
   let heartbeatFailures = 0;
   const heartbeatTimer = setInterval((): void => {
     void heartbeatDurableJob(job).then((ok): void => {
-      if (!ok) heartbeatFailures += 1;
+      if (!ok) {
+        heartbeatFailures += 1;
+        cancellation.abort(new Error("Durable job lease was lost"));
+      }
       else heartbeatFailures = 0;
       if (heartbeatFailures >= 3) {
         log.warn("Durable job heartbeat repeatedly failed, stopping heartbeat", { jobId: job.id });
@@ -239,8 +244,17 @@ async function runJob(job: DurableJob, handler: DurableJobHandler): Promise<void
   }, LEASE_MS / 3);
   try {
     await handler(job, {
-      heartbeat: async (): Promise<boolean> => heartbeatDurableJob(job),
-      canceled: async (): Promise<boolean> => isDurableJobStopped(job),
+      signal: cancellation.signal,
+      heartbeat: async (): Promise<boolean> => {
+        const owned = await heartbeatDurableJob(job);
+        if (!owned) cancellation.abort(new Error("Durable job lease was lost"));
+        return owned;
+      },
+      canceled: async (): Promise<boolean> => {
+        const stopped = await isDurableJobStopped(job);
+        if (stopped) cancellation.abort(new Error("Durable job was canceled or ownership expired"));
+        return stopped;
+      },
     });
     await finishDurableJob(job, "succeeded");
   } catch (error: unknown) {

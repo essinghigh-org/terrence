@@ -76,7 +76,7 @@ function tarVerboseMemberName(line: string): string | undefined {
 export type ArchiveOptions = Readonly<{
   maxCompressedBytes?: number;
   maxFileBytes?: number;
-  signal?: AbortSignal;
+  signal?: Readonly<AbortSignal>;
 }>;
 
 /** Validate every safety property before a tar archive is extracted. */

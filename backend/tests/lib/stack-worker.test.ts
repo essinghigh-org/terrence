@@ -12,7 +12,7 @@ import { deferredChangesFromCapturedOutput, removeStackState, runStackDeployment
 import { captureProcessOutput, PROCESS_OUTPUT_PREVIEW_CHARS } from "../../src/lib/process-output";
 import type { DurableJob } from "../../src/lib/durable-jobs";
 
-const context = { heartbeat: async (): Promise<boolean> => true, canceled: async (): Promise<boolean> => false };
+const context = { signal: new AbortController().signal, heartbeat: async (): Promise<boolean> => true, canceled: async (): Promise<boolean> => false };
 
 async function archive(): Promise<{ directory: string; path: string }> {
   const directory = await mkdtemp(join(tmpdir(), "terrence-stack-test-"));
