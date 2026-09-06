@@ -1,11 +1,11 @@
 import { newResourceId } from "./resource-id";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { hashAuthenticationToken } from "./token-service";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db } from "../db";
-import { runTokens } from "../db/schema";
+import { runs, runTokens, workspaces } from "../db/schema";
 
 /** Run tokens are valid for at most 24h, even if the run never finishes. */
 export const RUN_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
@@ -41,6 +41,33 @@ export async function mintRunToken(
 /** Explicitly revoke all tokens for a run (called on terminal state). */
 export async function revokeRunTokens(runId: string): Promise<void> {
   await db.update(runTokens).set({ revokedAt: Date.now() }).where(eq(runTokens.runId, runId));
+}
+
+/**
+ * Rotate every live run-log capability in an organization (issue #699).
+ * Log links are HMACs over the run's logToken, so replacing it invalidates
+ * all outstanding links immediately; authorized clients fetch fresh links
+ * from the plan/apply responses. Soft-deleted runs are skipped: they can
+ * neither issue nor honor links. Returns the rotated run count.
+ */
+export async function rotateOrgRunLogTokens(orgId: string): Promise<number> {
+  const orgWorkspaces = await db.query.workspaces.findMany({
+    where: eq(workspaces.orgId, orgId),
+    columns: { id: true },
+  });
+  if (orgWorkspaces.length === 0) return 0;
+  const live = await db.query.runs.findMany({
+    where: and(
+      inArray(runs.workspaceId, orgWorkspaces.map((row): string => row.id)),
+      isNotNull(runs.logToken),
+      isNull(runs.softDeletedAt),
+    ),
+    columns: { id: true },
+  });
+  for (const run of live) {
+    await db.update(runs).set({ logToken: randomUUID() }).where(eq(runs.id, run.id));
+  }
+  return live.length;
 }
 
 export function hashRunToken(token: string): string {
