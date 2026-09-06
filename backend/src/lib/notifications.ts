@@ -20,7 +20,7 @@ import {
 import type { DeepReadonly } from "./utils";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./url-safety";
 import { decryptSecret } from "./secrets";
-import { resetSharedDeliveryStateForTests as resetSharedStateImpl, sharedBreakerRecordFailure, sharedBreakerRecordSuccess, sharedDedupRecord, sharedDedupSuppressed } from "./notification-state";
+import { notificationSnoozedForTrigger, resetSharedDeliveryStateForTests as resetSharedStateImpl, sharedBreakerRecordFailure, sharedBreakerRecordSuccess, sharedDedupRecord, sharedDedupSuppressed } from "./notification-state";
 import { getSettings } from "./settings";
 import { isSmtpEncryption, sendEmail } from "./smtp";
 import {
@@ -894,8 +894,15 @@ export async function deliverRunNotifications(
     }),
   ]);
 
-  const matching = (await withoutProjectExclusions(configurations, workspace.id)).filter((configuration: NotificationConfiguration): boolean =>
+  const candidates = (await withoutProjectExclusions(configurations, workspace.id)).filter((configuration: NotificationConfiguration): boolean =>
     configuration.enabled === true && configuration.triggers.includes(trigger));
+  // Snoozes suppress repetitive low-priority events at the destination, while
+  // critical failures remain visible. The state is shared across replicas and
+  // expires automatically, so a muted endpoint cannot hide a later incident.
+  const matching = (await Promise.all(candidates.map(async (configuration): Promise<NotificationConfiguration | null> =>
+    await notificationSnoozedForTrigger(configuration.id, trigger) ? null : configuration))).filter(
+      (configuration): configuration is NotificationConfiguration => configuration !== null,
+    );
   const baseUrl = process.env["PUBLIC_URL"] ?? "http://localhost";
   const runUrl = new URL(
     `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/workspaces/${encodeURIComponent(workspace.name)}/runs/${encodeURIComponent(run.id)}`,
@@ -1035,8 +1042,12 @@ export async function deliverAssessmentNotifications(
     }),
   ]);
 
-  const matching = (await withoutProjectExclusions(configurations, workspace.id)).filter((configuration: NotificationConfiguration): boolean =>
+  const candidates = (await withoutProjectExclusions(configurations, workspace.id)).filter((configuration: NotificationConfiguration): boolean =>
     configuration.enabled === true && configuration.triggers.includes(trigger));
+  const matching = (await Promise.all(candidates.map(async (configuration): Promise<NotificationConfiguration | null> =>
+    await notificationSnoozedForTrigger(configuration.id, trigger) ? null : configuration))).filter(
+      (configuration): configuration is NotificationConfiguration => configuration !== null,
+    );
   const baseUrl = process.env["PUBLIC_URL"] ?? "http://localhost";
   const messages = {
     "assessment:drifted": "Drift Detected",

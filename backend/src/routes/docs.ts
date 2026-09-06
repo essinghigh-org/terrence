@@ -1,4 +1,5 @@
 import { Elysia } from "elysia";
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { authPlugin } from "../auth";
@@ -68,6 +69,35 @@ function loadDocs(): DocEntry[] {
 
 const DOCS: readonly DocEntry[] = loadDocs();
 const DOCS_BY_SLUG: ReadonlyMap<string, DocEntry> = new Map(DOCS.map((entry): [string, DocEntry] => [entry.slug, entry]));
+
+/** Small, deterministic documentation search used by the operations surfaces. */
+export function documentationMatches(query: string, limit = 8): readonly Readonly<{
+  slug: string;
+  title: string;
+  category: string;
+  description: string;
+  version: string;
+}>[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (needle === "") return [];
+  return [...DOCS]
+    .map((entry) => {
+      const haystack = `${entry.title}\n${entry.category}\n${entry.description}\n${entry.markdown}`.toLocaleLowerCase();
+      const index = haystack.indexOf(needle);
+      return index < 0 ? null : {
+        slug: entry.slug,
+        title: entry.title,
+        category: entry.category,
+        description: entry.description,
+        version: createHash("sha256").update(entry.markdown, "utf8").digest("hex").slice(0, 16),
+        index,
+      };
+    })
+    .filter((entry): entry is Exclude<typeof entry, null> => entry !== null)
+    .sort((a, b): number => a.index - b.index || a.slug.localeCompare(b.slug))
+    .slice(0, Math.max(1, Math.min(limit, 20)))
+    .map(({ index: _index, ...entry }) => entry);
+}
 
 function docResource(entry: DocEntry, includeMarkdown: boolean): Record<string, unknown> {
   return {

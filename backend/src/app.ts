@@ -61,6 +61,7 @@ try {
 import { healthRoutes } from "./routes/health";
 import { systemHealthRoutes } from "./routes/health";
 import { operationsRoutes } from "./routes/operations";
+import { operationsIntelligenceRoutes } from "./routes/operations-intelligence";
 import { accountRoutes } from "./routes/accounts";
 import { userRoutes } from "./routes/users";
 import { organizationRoutes } from "./routes/organizations";
@@ -1030,6 +1031,7 @@ export const app = new Elysia()
   .use(systemHealthRoutes)
   .use(healthRoutes)
   .use(operationsRoutes)
+  .use(operationsIntelligenceRoutes)
   .use(accountRoutes)
   .use(userRoutes)
   .use(organizationRoutes)
