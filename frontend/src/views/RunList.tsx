@@ -10,7 +10,6 @@ import {
 import { Avatar, AvatarImage } from "../components/ui/avatar";
 import { DegradedBanner } from "../components/DegradedBanner";
 import { EmptyState } from "../components/EmptyState";
-import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
@@ -23,6 +22,7 @@ import {
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { StatusBadge } from "../components/ui/status-badge";
+import { RelativeTime } from "../components/ui/time";
 import { toast } from "../components/ui/toast";
 import { fetchApi } from "../lib/api";
 import { runHistoryPageUrl } from "../lib/run-history";
@@ -577,9 +577,7 @@ export function RunList({
                         </span>
                       </span>
                       <div className="text-right text-xs text-muted-foreground min-w-[5.5rem]">
-                        <time dateTime={run.attributes["created-at"]} title={formatDateTime(run.attributes["created-at"])}>
-                          {formatRelativeTime(run.attributes["created-at"])}
-                        </time>
+                        <RelativeTime value={run.attributes["created-at"]} />
                       </div>
                       {canStartRun && (
                         <Button

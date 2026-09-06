@@ -16,6 +16,7 @@ export type WorkspaceVisit = Readonly<{
 
 const LEGACY_RECENT_KEY = "terrence-recent-workspaces";
 const LEGACY_PINNED_KEY = "terrence-pinned-workspaces";
+const SINGLE_KEY_SHORTCUTS_KEY = "terrence-single-key-shortcuts";
 const MAX_RECENT = 8;
 
 type ShortcutListener = () => void;
@@ -31,6 +32,25 @@ export function subscribeWorkspaceShortcuts(listener: ShortcutListener): () => v
 
 function notifyShortcutChange(): void {
   for (const listener of listeners) listener();
+}
+
+/** Optional one-key navigation is enabled by default and can be disabled for
+ * operators who use assistive technology or type non-US keyboard layouts. */
+export function getSingleKeyShortcutsEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+export function setSingleKeyShortcutsEnabled(enabled: boolean): void {
+  try {
+    window.localStorage.setItem(SINGLE_KEY_SHORTCUTS_KEY, String(enabled));
+  } catch {
+    // The preference remains at its default for this session when storage is unavailable.
+  }
+  notifyShortcutChange();
 }
 
 // Re-notify shortcut listeners whenever the active user identity changes (e.g. login/logout).

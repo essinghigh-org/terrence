@@ -1,4 +1,4 @@
-import type { JSX } from "react";
+import { useState, type JSX } from "react";
 import { Keyboard } from "lucide-react";
 import {
   Dialog,
@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "./ui/dialog";
+import { getSingleKeyShortcutsEnabled, setSingleKeyShortcutsEnabled } from "../lib/workspace-shortcuts";
 
 type Shortcut = Readonly<{
   keys: string;
@@ -61,6 +62,13 @@ export function ShortcutsHelpModal({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }>): JSX.Element {
+  const [singleKeyShortcutsEnabled, setSingleKeyShortcutsEnabledState] = useState(getSingleKeyShortcutsEnabled);
+
+  const updateSingleKeyShortcuts = (enabled: boolean): void => {
+    setSingleKeyShortcutsEnabledState(enabled);
+    setSingleKeyShortcutsEnabled(enabled);
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
@@ -96,6 +104,21 @@ export function ShortcutsHelpModal({
             </section>
           ))}
         </div>
+
+        <label className="flex items-start gap-3 rounded-md border px-3 py-2.5 text-sm">
+          <input
+            type="checkbox"
+            checked={singleKeyShortcutsEnabled}
+            onChange={(event): void => { updateSingleKeyShortcuts(event.currentTarget.checked); }}
+            className="mt-0.5 size-4 accent-primary"
+          />
+          <span>
+            <span className="block font-medium text-foreground">Enable single-key navigation</span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              Disable <kbd className="rounded border bg-muted px-1 font-mono text-2xs">g</kbd>, <kbd className="rounded border bg-muted px-1 font-mono text-2xs">/</kbd>, <kbd className="rounded border bg-muted px-1 font-mono text-2xs">?</kbd> and sidebar shortcuts while typing or using assistive technology.
+            </span>
+          </span>
+        </label>
 
         <p className="pt-1 text-xs text-muted-foreground">
           Shortcut hints also appear as tooltips when the sidebar is collapsed.

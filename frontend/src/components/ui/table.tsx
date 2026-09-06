@@ -6,12 +6,16 @@ export type TableDensity = "comfortable" | "dense"
 
 const TableDensityContext = React.createContext<TableDensity>("comfortable")
 
-function Table({ className, density = "comfortable", ...props }: Readonly<React.ComponentProps<"table"> & { readonly density?: TableDensity }>): React.JSX.Element {
+function Table({ className, density = "comfortable", scrollLabel = "Data table; scroll horizontally to view more columns.", ...props }: Readonly<React.ComponentProps<"table"> & { readonly density?: TableDensity; readonly scrollLabel?: string }>): React.JSX.Element {
   return (
     <TableDensityContext.Provider value={density}>
       <div
         data-slot="table-container"
-        className="relative w-full overflow-x-auto"
+        data-scrollable="true"
+        role="region"
+        aria-label={scrollLabel}
+        tabIndex={0}
+        className="relative w-full overflow-x-auto overscroll-x-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         <table
           data-slot="table"

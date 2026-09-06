@@ -82,7 +82,13 @@ import { applyTheme, applyThemeIfUnchanged, getThemeRevision } from "../lib/them
 import { usePageTitle } from "../lib/usePageTitle";
 import { setLastOrganization } from "../lib/lastOrganization";
 import { registerOrganizationScope, setActiveUserId } from "../lib/storage-identity";
-import { getPinnedWorkspaces, getRecentWorkspaces, recordWorkspaceVisit, subscribeWorkspaceShortcuts } from "../lib/workspace-shortcuts";
+import {
+  getPinnedWorkspaces,
+  getRecentWorkspaces,
+  getSingleKeyShortcutsEnabled,
+  recordWorkspaceVisit,
+  subscribeWorkspaceShortcuts,
+} from "../lib/workspace-shortcuts";
 import { cn } from "../lib/utils";
 import { CapabilitiesProvider, DEFAULT_CAPABILITIES, type Capabilities } from "../lib/capabilities";
 import { useDocsIndex } from "../lib/docs-index";
@@ -162,6 +168,7 @@ export function Layout({
   const [workspacePermissionPath, setWorkspacePermissionPath] = useState("");
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
+  const [singleKeyShortcutsEnabled, setSingleKeyShortcutsEnabled] = useState(getSingleKeyShortcutsEnabled);
   const [visitsRevision, setVisitsRevision] = useState(0);
   // Tracks the pending "g" of a g-then-key sequence (gg / gh / gw). Cleared
   // after 1500ms, on a non-matching key, or when an overlay is open.
@@ -312,6 +319,9 @@ export function Layout({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
+      // Key repeat should never retrigger navigation or toggle an overlay
+      // while a key is held down. Text-entry targets are handled below.
+      if (e.repeat) return;
       // Never intercept typing inside form controls or contenteditable.
       const target = e.target;
       const inTextField = target instanceof HTMLInputElement
@@ -324,7 +334,7 @@ export function Layout({
         setCommandPaletteOpen((prev) => !prev);
         return;
       }
-      if (e.key === "?" && !inTextField) {
+      if (e.key === "?" && !inTextField && singleKeyShortcutsEnabled) {
         e.preventDefault();
         setShortcutsModalOpen((prev) => !prev);
         return;
@@ -340,6 +350,7 @@ export function Layout({
         }
         return;
       }
+      if (!singleKeyShortcutsEnabled) return;
       if (pendingGRef.current !== null && (e.key === "h" || e.key === "w")) {
         window.clearTimeout(pendingGRef.current);
         pendingGRef.current = null;
@@ -390,7 +401,7 @@ export function Layout({
       window.removeEventListener("keydown", handleKeyDown);
     };
     // hasOrg/orgPath are stable per-route values used by the g-sequences.
-  }, [navigate, commandPaletteOpen, shortcutsModalOpen, mobileNavigationOpen, hasOrg, orgPath, toggleSidebar]);
+  }, [navigate, commandPaletteOpen, shortcutsModalOpen, mobileNavigationOpen, hasOrg, orgPath, singleKeyShortcutsEnabled, toggleSidebar]);
 
   // Remember the last organization the operator worked in so a fresh page
   // load (or the next visit) can resume there instead of the org picker.
@@ -406,6 +417,7 @@ export function Layout({
   // are captured; recordWorkspaceVisit notifies synchronously.
   useEffect((): (() => void) => subscribeWorkspaceShortcuts((): void => {
     setVisitsRevision((value: number): number => value + 1);
+    setSingleKeyShortcutsEnabled(getSingleKeyShortcutsEnabled());
   }), []);
 
   // Record workspace visits for the sidebar "Recent" section (kanban 26.11).
