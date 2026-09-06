@@ -55,8 +55,8 @@ export function configurationVersionResource(
     source: cv.source,
     "ingress-attributes": cv.ingressAttributes,
     "status-timestamps": {
-      "uploaded-at": statusTimestamps?.uploadedAt ?? null,
-      "archived-at": statusTimestamps?.archivedAt ?? null,
+      "uploaded-at": statusTimestamps?.["uploadedAt"] ?? null,
+      "archived-at": statusTimestamps?.["archivedAt"] ?? null,
     },
     error: cv.error,
     "error-message": cv.errorMessage,
@@ -186,6 +186,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
       source,
       ingressAttributes: null,
       statusTimestamps: null,
+      statusMetadataSchemaVersion: 0,
       uploadClaimExpiresAt: null,
       uploadClaimToken: null,
       error: null,
