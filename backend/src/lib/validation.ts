@@ -160,7 +160,7 @@ export function parsePersistedStatusMetadata(
   nullable = true,
 ): PersistedStatusMetadata | null {
   const version = persistedVersion(schemaVersion, "statusTimestamps", rowId);
-  if (raw === null && nullable) return null;
+  if ((raw === null || raw === undefined) && nullable) return null;
   const record = persistedRecord(raw, persistedContext("statusTimestamps", rowId, version));
   for (const [key, value] of Object.entries(record)) {
     if (key === "extensions") continue;

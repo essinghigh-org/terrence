@@ -14,6 +14,7 @@
     "runs": ["core", "provider", "cli"],
     "state-versions": ["core", "provider", "cli"],
     "configuration-versions": ["core", "provider", "cli"],
+    "credential-doctor": ["core", "internal"],
     "teams": ["core", "provider"],
     "projects": ["core", "provider"],
     "gpg-keys": ["core", "provider", "cli"],
