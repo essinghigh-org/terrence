@@ -17,6 +17,7 @@ export type TerraformVariableMetadata = Readonly<{
 export const TERRAFORM_VARIABLE_PARSER_LIMITS = Object.freeze({
   maxSourceCharacters: 4_000_000,
   maxVariables: 10_000,
+  maxDiagnostics: 10_000,
 });
 
 export type TerraformVariableParseErrorCode = "input-too-large" | "output-too-large" | "invalid-json";
@@ -240,6 +241,12 @@ export function parseTerraformVariablesWithDiagnostics(source: string): Readonly
     const openingBrace = source.indexOf("{", match.index + match[0].length - 1);
     const closingBrace = matchingBrace(source, openingBrace);
     if (name === undefined || closingBrace === undefined) {
+      if (skipped.length >= TERRAFORM_VARIABLE_PARSER_LIMITS.maxDiagnostics) {
+        throw new TerraformVariableParseError(
+          "output-too-large",
+          `Terraform variable metadata diagnostics exceed ${TERRAFORM_VARIABLE_PARSER_LIMITS.maxDiagnostics} entries`,
+        );
+      }
       skipped.push({ name: name ?? null, reason: name === undefined ? "invalid-name" : "unbalanced-braces" });
       continue;
     }
@@ -331,7 +338,14 @@ export async function scanTerraformModuleVariablesWithDiagnostics(directory: str
     return { variables: result.variables, skipped: result.skipped.map((skip): TerraformVariableFileSkip => ({ ...skip, file: entry.name })) };
   }));
   const variables = new Map<string, TerraformVariableMetadata>();
+  const skipped = parsed.flatMap((entry) => entry.skipped);
+  if (skipped.length > TERRAFORM_VARIABLE_PARSER_LIMITS.maxDiagnostics) {
+    throw new TerraformVariableParseError(
+      "output-too-large",
+      `Terraform variable metadata diagnostics exceed ${TERRAFORM_VARIABLE_PARSER_LIMITS.maxDiagnostics} entries`,
+    );
+  }
   for (const metadata of parsed.flatMap((entry) => entry.variables)) variables.set(metadata.name, metadata);
   const sorted = [...variables.values()].sort((left, right): number => left.name.localeCompare(right.name));
-  return { variables: sorted, skipped: parsed.flatMap((entry) => entry.skipped) };
+  return { variables: sorted, skipped };
 }

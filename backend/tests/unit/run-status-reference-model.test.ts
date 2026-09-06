@@ -54,6 +54,12 @@ function applyReference(state: Readonly<{ status: RunStatus; sequence: number; o
   return { status: event.status, sequence: event.sequence, owner: state.owner };
 }
 
+function applyImplementation(state: Readonly<{ status: RunStatus; sequence: number; owner: string }>, event: Event) {
+  if (event.owner !== state.owner || event.sequence <= state.sequence) return state;
+  if (!canTransitionRunStatus(state.status, event.status)) return state;
+  return { status: event.status, sequence: event.sequence, owner: state.owner };
+}
+
 describe("independent run lifecycle model", () => {
   it("matches the implementation for every ordered pair", () => {
     for (const from of RUN_STATUSES) {
@@ -75,7 +81,11 @@ describe("independent run lifecycle model", () => {
         const status = statuses[Math.floor(random() * statuses.length)]!;
         const owner = random() < 0.15 ? `other-${seed}` : state.owner;
         const before = state;
-        state = applyReference(state, { sequence, status, owner });
+        const event = { sequence, status, owner };
+        const expected = applyReference(state, event);
+        const implemented = applyImplementation(state, event);
+        expect(implemented).toEqual(expected);
+        state = expected;
         expect(state.sequence).toBeGreaterThanOrEqual(before.sequence);
         expect(isTerminalRunStatus(state.status)).toBe(REFERENCE_EDGES[state.status].length === 0);
         if (state.status !== before.status) expect(sequence).toBeGreaterThan(before.sequence);

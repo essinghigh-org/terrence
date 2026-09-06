@@ -1,0 +1,14 @@
+[
+  {
+    "name": "nested-expression-truncation",
+    "source": "variable \"service\" {\n  type = object({ name = string tags = optional(map(string), {}) })\n  default = { name = \"api\", tags = {} }\n}\n"
+  },
+  {
+    "name": "heredoc-and-comment-truncation",
+    "source": "locals {\n  fake = <<-END\nvariable \"fake\" {}\nEND\n  /* variable \"comment\" {} */\n}\nvariable \"real\" {\n  description = \"kept\"\n}\n"
+  },
+  {
+    "name": "json-prefix",
+    "source": "{\"variable\":{\"region\":{\"type\":\"string\",\"default\":\"eu-west-2\"},\"count\":{\"type\":\"number\"}}}"
+  }
+]
