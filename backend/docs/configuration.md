@@ -171,6 +171,7 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `TERRENCE_OUTBOUND_ALLOW_CIDRS` | none | Extra CIDRs permitted the same outbound traffic. |
 | `TERRENCE_TRUSTED_PROXY_CIDRS` | none | Comma-separated CIDRs trusted as proxies: their `X-Forwarded-For` is used for client-IP resolution and their `X-Forwarded-Host`/`X-Forwarded-Proto` for generated links. Forwarded host headers from other peers are ignored. |
 | `TERRENCE_CSP_STRICT` | off | When `1`, serve the UI with a strict Content-Security-Policy. |
+| `TERRENCE_EXPLAIN_TIMEOUT_MS` | `60000` | Idle deadline in milliseconds for one AI explainer upstream exchange. Lower values abort slow models sooner. |
 
 ## Rate limits
 
@@ -207,7 +208,6 @@ Simulation hooks for the test suite. They bypass real IaC execution and must nev
 | `SIMULATED_ASSESSMENT_SCHEMA` | `{}` | Injected provider schema for simulated health assessments. |
 | `SIMULATED_STACK_PLAN_CHANGES` | off | Simulated stack plans report changes. |
 | `SIMULATED_STACK_DEFERRED` | off | Simulated stack plans report deferred changes. |
-| `TERRENCE_EXPLAIN_TIMEOUT_MS` | `60000` | Idle deadline for one AI explainer upstream exchange. Primarily a test seam for the timeout path; lowering it in production aborts slow models. |
 
 ## Operator scripts
 

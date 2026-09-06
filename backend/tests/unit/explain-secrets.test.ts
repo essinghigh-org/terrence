@@ -48,11 +48,22 @@ describe("sensitiveOutputSecrets", () => {
   it("stringifies sensitive composite outputs and rejects malformed payloads", () => {
     const payload = JSON.stringify({ outputs: { config: { value: { user: "u", pass: "p4ssw0rd!" }, sensitive: true } } });
     const secrets = sensitiveOutputSecrets(payload);
-    expect(secrets).toHaveLength(1);
-    expect(JSON.parse(secrets[0] ?? "{}")).toEqual({ user: "u", pass: "p4ssw0rd!" });
+    expect(secrets).toHaveLength(3);
+    expect(secrets).toContain(JSON.stringify({ user: "u", pass: "p4ssw0rd!" }));
+    expect(secrets).toContain("p4ssw0rd!");
     expect(sensitiveOutputSecrets(null)).toEqual([]);
     expect(sensitiveOutputSecrets("not json")).toEqual([]);
     expect(sensitiveOutputSecrets(JSON.stringify({ outputs: [] }))).toEqual([]);
+  });
+
+  it("collects nested leaves so a lone leaf echoed in a log is redacted", () => {
+    const leaf = "nested-leaf-canary-12345";
+    const payload = JSON.stringify({
+      outputs: { config: { value: { db: { password: leaf }, user: "admin-user" }, sensitive: true } },
+    });
+    const secrets = sensitiveOutputSecrets(payload);
+    expect(secrets).toContain(leaf);
+    expect(redactKnownSecrets(`login failed for password ${leaf} retrying`, secrets).text).not.toContain(leaf);
   });
 });
 

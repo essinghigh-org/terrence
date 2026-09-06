@@ -336,7 +336,10 @@ export const operationsRoutes = new Elysia({ name: "operations" })
               }
               const parts = parseCompletionBody(parsed);
               if (parts.content === "") throw new Error("Plan explainer returned no explanation");
-              if (parts.thinking !== "") send(controller, "thinking", { text: parts.thinking });
+              if (parts.thinking !== "") {
+                const scrubbedThinking = scrubExplanationContent(parts.thinking, source.secrets);
+                send(controller, "thinking", { text: scrubbedThinking.content });
+              }
               const scrubbed = scrubExplanationContent(parts.content, source.secrets);
               send(controller, "content", { text: scrubbed.content });
               if (clientSignal.aborted) return;
@@ -363,7 +366,12 @@ export const operationsRoutes = new Elysia({ name: "operations" })
               (channel, text) => {
                 if (clientSignal.aborted) return;
                 if (channel === "thinking") {
-                  send(controller, channel, { text });
+                  // Thinking is transient and never persisted, but it is
+                  // still served: scrub whole occurrences live. A secret
+                  // split across two thinking deltas is a documented
+                  // residual (content has the joined scrub + reset).
+                  const scrubbedThinking = scrubExplanationContent(text, source.secrets);
+                  send(controller, channel, { text: scrubbedThinking.content });
                   return;
                 }
                 // Scrub each delta live; a secret split across two deltas is
@@ -385,7 +393,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
             if (split.thinking !== "") {
               contentText = split.content;
               send(controller, "content-reset", { text: contentText });
-              send(controller, "thinking", { text: split.thinking });
+              send(controller, "thinking", { text: scrubExplanationContent(split.thinking, source.secrets).content });
             }
             if (!clientSignal.aborted) {
               await finalizeStreamedContent(controller, contentText, scrubbedDeltas);

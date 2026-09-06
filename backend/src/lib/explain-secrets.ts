@@ -24,6 +24,15 @@ import { variableValueForRead } from "./variable-crypto";
  * never leave this module except inside the redacted output; only counts
  * are reported to logs and audit records.
  */
+/**
+ * Minimum secret length for value matching. Shorter values are skipped
+ * deliberately, not overlooked: redacting every short match would shred
+ * ordinary prose with false positives (and corrupt the prompt envelope
+ * the model relies on), while such short values carry little entropy on
+ * their own. Structural redaction through sensitive flags still covers
+ * short values wherever shape is available (plan projection, outputs
+ * index); value matching is the backstop for shapeless text.
+ */
 export const EXPLAIN_SECRET_MIN_LENGTH = 8;
 
 export const EXPLAIN_REDACTED_MARKER = "[redacted]";
@@ -68,16 +77,24 @@ export async function collectExplainSecrets(runId: string): Promise<readonly str
   return [...new Set(values.filter((value) => value.length >= EXPLAIN_SECRET_MIN_LENGTH))];
 }
 
-/** Candidate secret strings from one sensitive output value. */
+/** Candidate secret strings from one sensitive output value: every nested
+ * scalar representation plus the complete serialization, so a leaf echoed
+ * alone in a log is redacted as well as the whole document. */
 function secretStrings(value: unknown): string[] {
   if (typeof value === "string") return [value];
+  if (typeof value === "number" || typeof value === "boolean") return [String(value)];
   if (value === null || value === undefined) return [];
-  try {
-    const encoded = JSON.stringify(value) ?? "";
-    return encoded === "" ? [] : [encoded];
-  } catch {
-    return [];
+  if (Array.isArray(value)) return value.flatMap(secretStrings);
+  if (typeof value === "object") {
+    const leaves = Object.values(value as Record<string, unknown>).flatMap(secretStrings);
+    try {
+      const encoded = JSON.stringify(value) ?? "";
+      return encoded === "" ? leaves : [encoded, ...leaves];
+    } catch {
+      return leaves;
+    }
   }
+  return [];
 }
 
 /** Scalar (and stringified composite) values of outputs flagged sensitive. Takes the decoded state document. */

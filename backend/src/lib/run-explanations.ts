@@ -71,22 +71,26 @@ export async function buildExplainSource(runId: string, kind: ExplainKind): Prom
     const planJson = await readPlanJsonArtifact(runId);
     if (planJson === undefined) return undefined;
     const serialized = JSON.stringify(sanitizePlanJson(planJson));
-    const truncated = serialized.length > EXPLAIN_MAX_PROMPT_CHARS
-      ? `${serialized.slice(0, EXPLAIN_MAX_PROMPT_CHARS)}\n... (truncated)`
-      : serialized;
+    // Redact before truncating (issue #687): a secret spanning the cut
+    // would otherwise leave an unredacted fragment in the prompt.
+    const redactedBody = redactKnownSecrets(serialized, secrets);
+    const truncated = redactedBody.text.length > EXPLAIN_MAX_PROMPT_CHARS
+      ? `${redactedBody.text.slice(0, EXPLAIN_MAX_PROMPT_CHARS)}\n... (truncated)`
+      : redactedBody.text;
     const prompt = `Explain the following Terraform plan in plain language for a reviewer. Provide a brief overview of what will be added, changed, or destroyed, and flag anything risky. Use concise bullets where helpful; do not reproduce the full plan or your internal reasoning.\n\n${truncated}`;
     const scrubbedPrompt = redactKnownSecrets(prompt, secrets);
-    return { prompt: scrubbedPrompt.text, secrets, redactedInputSecrets: scrubbedPrompt.hits };
+    return { prompt: scrubbedPrompt.text, secrets, redactedInputSecrets: redactedBody.hits + scrubbedPrompt.hits };
   }
   const logEntries = await readRunLogs(runId, "apply");
   if (logEntries.length === 0) return undefined;
   const fullLog = logEntries.map((entry) => entry.outputText).join("\n");
-  const tail = fullLog.length > EXPLAIN_APPLY_LOG_TAIL_CHARS
-    ? `... (earlier output omitted)\n${fullLog.slice(-EXPLAIN_APPLY_LOG_TAIL_CHARS)}`
-    : fullLog;
+  const redactedLog = redactKnownSecrets(fullLog, secrets);
+  const tail = redactedLog.text.length > EXPLAIN_APPLY_LOG_TAIL_CHARS
+    ? `... (earlier output omitted)\n${redactedLog.text.slice(-EXPLAIN_APPLY_LOG_TAIL_CHARS)}`
+    : redactedLog.text;
   const prompt = `A Terraform apply failed. Provide a brief overview of what went wrong, quote the key error, and give 2–3 recommended troubleshooting steps. Focus on practical next actions; do not reproduce the full log or your internal reasoning.\n\n${tail}`;
   const scrubbedPrompt = redactKnownSecrets(prompt, secrets);
-  return { prompt: scrubbedPrompt.text, secrets, redactedInputSecrets: scrubbedPrompt.hits };
+  return { prompt: scrubbedPrompt.text, secrets, redactedInputSecrets: redactedLog.hits + scrubbedPrompt.hits };
 }
 
 /**

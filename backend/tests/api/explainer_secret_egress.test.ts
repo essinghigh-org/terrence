@@ -21,7 +21,8 @@ import {
 } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { invalidateSettingsCache } from "../../src/lib/settings";
-import { deletePlanJsonArtifact, writePlanJsonArtifact } from "../../src/lib/plan-json";
+import { deletePlanJsonArtifact, writePlanJsonArtifact, sanitizePlanJson, type PlanJson } from "../../src/lib/plan-json";
+import { buildExplainSource, EXPLAIN_MAX_PROMPT_CHARS } from "../../src/lib/run-explanations";
 import { variableValueForWrite } from "../../src/lib/variable-crypto";
 import { encryptStatePayload } from "../../src/lib/validation";
 
@@ -49,9 +50,12 @@ describe("explainer secret egress (SEC-04)", () => {
   const evilRunId = `run-expl-evil-${suffix}`;
   const timeoutRunId = `run-expl-timeout-${suffix}`;
   const cancelRunId = `run-expl-cancel-${suffix}`;
+  const thinkRunId = `run-expl-think-${suffix}`;
+  const splitRunId = `run-expl-split-${suffix}`;
+  const boundaryRunId = `run-expl-boundary-${suffix}`;
 
   let upstream: ReturnType<typeof Bun.serve> | undefined;
-  let upstreamMode: "ok" | "echo" | "hang" = "ok";
+  let upstreamMode: "ok" | "echo" | "hang" | "sse-think" | "sse-split" = "ok";
   let prompts: string[] = [];
   let endpointUrl = "";
 
@@ -91,6 +95,7 @@ describe("explainer secret egress (SEC-04)", () => {
     for (const [id, status] of [
       [planRunId, "planned"], [applyRunId, "errored"], [echoRunId, "planned"],
       [permRunId, "planned"], [evilRunId, "planned"], [timeoutRunId, "planned"], [cancelRunId, "planned"],
+      [thinkRunId, "planned"], [splitRunId, "planned"], [boundaryRunId, "planned"],
     ] as const) {
       await db.insert(runs).values({ id, workspaceId: wsId, status, createdAt: Date.now() });
     }
@@ -139,7 +144,7 @@ describe("explainer secret egress (SEC-04)", () => {
         change: { actions: ["create"], after: { ami: "ami-123" } },
       }],
     });
-    for (const runId of [permRunId, timeoutRunId, cancelRunId]) {
+    for (const runId of [permRunId, timeoutRunId, cancelRunId, thinkRunId, splitRunId]) {
       await writePlanJsonArtifact(runId, {
         format_version: "1.2",
         resource_changes: [{
@@ -187,6 +192,30 @@ describe("explainer secret egress (SEC-04)", () => {
           });
           return new Response(null, { status: 500 });
         }
+        if (upstreamMode === "sse-think" || upstreamMode === "sse-split") {
+          const encoder = new TextEncoder();
+          const half = Math.floor(wsCanary.length / 2);
+          const deltas = upstreamMode === "sse-think"
+            ? [
+              { choices: [{ delta: { reasoning_content: `Checking ${wsCanary} first. ` } }] },
+              { choices: [{ delta: { content: "The plan adds one instance. " } }] },
+              { choices: [{ delta: { content: `Secret ${outCanary} noted.` } }] },
+            ]
+            : [
+              { choices: [{ delta: { content: `Value ${wsCanary.slice(0, half)}` } }] },
+              { choices: [{ delta: { content: `${wsCanary.slice(half)} end.` } }] },
+            ];
+          const sse = new ReadableStream<Uint8Array>({
+            start(controller: ReadableStreamDefaultController<Uint8Array>) {
+              for (const chunk of deltas) {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+              }
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+            },
+          });
+          return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+        }
         const content = upstreamMode === "echo"
           ? `The secrets are ${wsCanary} and ${outCanary}.`
           : "The plan adds one instance and leaves existing resources untouched.";
@@ -200,16 +229,14 @@ describe("explainer secret egress (SEC-04)", () => {
   afterAll(async () => {
     await upstream?.stop(true);
     delete process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"];
-    for (const runId of [planRunId, echoRunId, evilRunId, permRunId, timeoutRunId, cancelRunId]) {
-      try {
-        await deletePlanJsonArtifact(runId);
-      } catch {
-        // Artifact already removed; nothing to clean.
-      }
+    for (const runId of [planRunId, echoRunId, evilRunId, permRunId, timeoutRunId, cancelRunId, thinkRunId, splitRunId]) {
+      await deletePlanJsonArtifact(runId).catch((): void => {
+        return;
+      });
     }
     await db.delete(stateVersions).where(eq(stateVersions.workspaceId, wsId));
     await db.delete(logs).where(eq(logs.runId, applyRunId));
-    for (const runId of [planRunId, applyRunId, echoRunId, permRunId, evilRunId, timeoutRunId, cancelRunId]) {
+    for (const runId of [planRunId, applyRunId, echoRunId, permRunId, evilRunId, timeoutRunId, cancelRunId, thinkRunId, splitRunId, boundaryRunId]) {
       await db.delete(runExplanations).where(eq(runExplanations.runId, runId));
       await db.delete(auditLogs).where(eq(auditLogs.resourceId, runId));
     }
@@ -347,5 +374,65 @@ describe("explainer secret egress (SEC-04)", () => {
       signal: AbortSignal.abort(),
     }));
     expect(preAborted.status).toBe(499);
+  });
+
+  it("scrubs thinking output before serving it", async () => {
+    upstreamMode = "sse-think";
+    const text = await streamText(await explain(thinkRunId, "plan"));
+    expect(text).toContain("event: thinking");
+    expect(text).toContain("event: done");
+    expect(text).not.toContain(wsCanary);
+    expect(text).not.toContain(outCanary);
+    expect(text).toContain("[redacted]");
+  });
+
+  it("catches a secret split across SSE deltas with a joined scrub and reset", async () => {
+    upstreamMode = "sse-split";
+    const text = await streamText(await explain(splitRunId, "plan"));
+    expect(text).toContain("event: done");
+    expect(text).not.toContain(wsCanary);
+    expect(text).toContain("content-reset");
+  });
+
+  it("redacts before truncating so no fragment straddles the cut", async () => {
+    const addressOf = (filler: string): PlanJson => ({
+      format_version: "1.2",
+      resource_changes: [{
+        address: `${filler}${wsCanary}`, mode: "managed",
+        change: { actions: ["create"], after: { ami: "ami-123" } },
+      }],
+    });
+    const canaryAt = (fillerLength: number): number =>
+      JSON.stringify(sanitizePlanJson(addressOf("P".repeat(fillerLength)))).indexOf(wsCanary);
+    // The canary offset is monotonic in the filler: binary-search a start
+    // inside the final canary-length window before the cut.
+    let lo = 90000;
+    let hi = 110000;
+    let fillerLength = 100000;
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const at = canaryAt(mid);
+      if (at < EXPLAIN_MAX_PROMPT_CHARS - wsCanary.length) lo = mid + 1;
+      else if (at >= EXPLAIN_MAX_PROMPT_CHARS) hi = mid - 1;
+      else {
+        fillerLength = mid;
+        break;
+      }
+      fillerLength = mid;
+    }
+    expect(canaryAt(fillerLength)).toBeGreaterThanOrEqual(EXPLAIN_MAX_PROMPT_CHARS - wsCanary.length);
+    expect(canaryAt(fillerLength)).toBeLessThan(EXPLAIN_MAX_PROMPT_CHARS);
+    await writePlanJsonArtifact(boundaryRunId, addressOf("P".repeat(fillerLength)));
+    try {
+      const source = await buildExplainSource(boundaryRunId, "plan");
+      expect(source).toBeDefined();
+      expect(source?.prompt ?? "").not.toContain(wsCanary);
+      expect(source?.prompt ?? "").toContain("... (truncated)");
+      expect(source?.redactedInputSecrets ?? 0).toBeGreaterThan(0);
+    } finally {
+      await deletePlanJsonArtifact(boundaryRunId).catch((): void => {
+        return;
+      });
+    }
   });
 });
