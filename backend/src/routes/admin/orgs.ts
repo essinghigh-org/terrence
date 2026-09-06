@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { cachedOrgByName, invalidateOrgLookup } from "../../lib/cached-lookups";
 import { invalidateOrganizationName } from "../../lib/metadata-cache";
 import { publish } from "../../lib/event-bus";
-import { deleteOrganization } from "../../lib/utils";
+import { deleteOrganization } from "../../lib/lifecycle";
 import type { ParamCtx } from "./types";
 import { adminOrganizationResource, clearSpecificRegistrySharing } from "./helpers";
 export const orgsRoutes = new Elysia({ name: "admin-orgs" })

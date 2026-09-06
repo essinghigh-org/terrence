@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { applyResource, planResource, userResource, variableSetVariableResource, workspaceVariableResource } from "../../src/lib/response";
+import { applyResource, planResource, stateVersionResource, userResource, variableSetVariableResource, workspaceVariableResource } from "../../src/lib/response";
+import { authorizedRunCapability, authorizedStateAccess } from "../../src/lib/authorized-resources";
 
 describe("userResource", () => {
   it("serializes a full user", () => {
@@ -104,6 +105,49 @@ describe("userResource", () => {
 });
 
 describe("run phase resources", () => {
+  it("does not issue a log capability without an authorized run context", () => {
+    const request = { url: "http://terrence.test/api/v2/runs/run-capability/plan" };
+    const run = {
+      id: "run-capability",
+      status: "planned",
+      logToken: "log-secret",
+      softDeletedAt: null,
+    } as unknown as Parameters<typeof planResource>[0];
+
+    expect((planResource(run, request)["attributes"] as Record<string, unknown>)["log-read-url"]).toBeNull();
+    expect((planResource(run, request, authorizedRunCapability(run, "run-read"))["attributes"] as Record<string, unknown>)["log-read-url"])
+      .toMatch(/\/api\/v2\/runs\/run-capability\/plan\/log\/\d+\.[a-f0-9]{64}$/);
+  });
+
+  it("only issues state download URLs for matching state-read capability", () => {
+    const request = { url: "http://terrence.test/api/v2/state-versions/state-capability" };
+    const state = {
+      id: "state-capability",
+      workspaceId: "workspace-capability",
+      serial: 1,
+      status: "finalized",
+      intermediate: false,
+      statePayload: '{"version":4,"serial":1,"lineage":"lineage"}',
+      jsonState: '{"version":4,"serial":1,"lineage":"lineage"}',
+      jsonStateOutputs: null,
+      createdAt: Date.now(),
+      vcsCommitSha: null,
+      vcsCommitUrl: null,
+      createdBy: null,
+      runId: null,
+    } as unknown as Parameters<typeof stateVersionResource>[0];
+
+    const withoutCapability = stateVersionResource(state, request)["attributes"] as Record<string, unknown>;
+    const runRead = stateVersionResource(state, request, false, undefined, authorizedStateAccess("workspace-capability", "state-outputs"))["attributes"] as Record<string, unknown>;
+    const stateRead = stateVersionResource(state, request, false, undefined, authorizedStateAccess("workspace-capability", "state-read"))["attributes"] as Record<string, unknown>;
+    const wrongWorkspace = stateVersionResource(state, request, false, undefined, authorizedStateAccess("other-workspace", "state-read"))["attributes"] as Record<string, unknown>;
+
+    expect(withoutCapability["hosted-state-download-url"]).toBeNull();
+    expect(runRead["hosted-state-download-url"]).toBeNull();
+    expect(wrongWorkspace["hosted-state-download-url"]).toBeNull();
+    expect(stateRead["hosted-state-download-url"]).toMatch(/\/api\/v2\/state-versions\/state-capability\/download\?/);
+  });
+
   it("keeps resource counts unknown until a phase reports them", () => {
     const request = { url: "http://terrence.test/api/v2/runs/run-pending/plan" };
     const pending = {

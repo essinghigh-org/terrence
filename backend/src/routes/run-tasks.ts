@@ -11,7 +11,11 @@ import {
   type workspaces,
 } from "../db/schema";
 import { eq, and, inArray, or, asc, count } from "drizzle-orm";
-import { checkOrganizationPermission, findAuthorizedRun, findAuthorizedWorkspace, pageRequest, pagination, validSignedApiURL, validateExternalUrl } from "../lib/utils";
+import { checkOrganizationPermission } from "../lib/authorization";
+import { findAuthorizedRun, findAuthorizedWorkspace } from "../lib/authorized-resources";
+import { pageRequest, pagination } from "../lib/pagination";
+import { validSignedApiURL } from "../lib/capabilities";
+import { validateExternalUrl } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { organizationName } from "../lib/response";
 import { cachedOrgByName } from "../lib/cached-lookups";

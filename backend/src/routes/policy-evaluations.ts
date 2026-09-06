@@ -3,7 +3,7 @@ import { db } from "../db";
 import { policyEvaluations, policySetOutcomes, taskStages, type users } from "../db/schema";
 import { and, count, eq, inArray } from "drizzle-orm";
 import { authPlugin } from "../auth";
-import { findAuthorizedRun } from "../lib/utils";
+import { findAuthorizedRun } from "../lib/authorized-resources";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 

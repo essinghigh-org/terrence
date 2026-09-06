@@ -1,7 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../../db";
 import { assessmentResults, stateVersions } from "../../db/schema";
-import { findAuthorizedWorkspace } from "../utils";
+import { findAuthorizedWorkspace } from "../authorized-resources";
 import { CLIENT_ENCRYPTED_STATE_ERROR, decodeStatePayload, isClientEncryptedState } from "../validation";
 import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
 

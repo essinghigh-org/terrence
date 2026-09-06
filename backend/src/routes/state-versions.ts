@@ -8,21 +8,10 @@ import { auditLogs, stateOutputIndex, stateVersions, workspaces, runs, organizat
 import { eq, and, desc, count, inArray, ne, or, isNull, sql } from "drizzle-orm";
 import { stateVersionResource, stateOutputResources, stateVersionSummaryResource } from "../lib/response";
 import { encryptStatePayload, isClientEncryptedState, parseTerraformStatePayload, statePayloadError, statePayloadWithSerial } from "../lib/validation";
-import {
-  checkWorkspacePermission,
-  checkRunStateAccess,
-  findAuthorizedWorkspace,
-  findRemoteStateReadableWorkspace,
-  pageRequest,
-  pagination,
-  decodeStatePayload,
-  parseStatePayload,
-  validSignedApiURL,
-  auditLog,
-  workspaceIdsForPermission,
-  lockPrincipal,
-  ownsWorkspaceLock,
-} from "../lib/utils";
+import { checkWorkspacePermission, checkRunStateAccess, workspaceIdsForPermission } from "../lib/authorization";
+import { findAuthorizedWorkspace, findRemoteStateReadableWorkspace } from "../lib/authorized-resources";
+import { decodeStatePayload, parseStatePayload, auditLog, lockPrincipal, ownsWorkspaceLock } from "../lib/utils";
+import { validSignedApiURL } from "../lib/capabilities";
 import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
 import { scheduleExplorerInventory } from "../lib/explorer-inventory";
@@ -30,6 +19,9 @@ import { insertStateOutputIndex, replaceStateOutputIndex } from "../lib/state-ou
 import { persistUploadBody } from "../lib/upload-body";
 import { storageDir } from "../db/driver";
 import { auditLogValues } from "../lib/audit-trail";
+<<<<<<< HEAD
+import { authorizedStateAccess } from "../lib/authorized-resources";
+import { pageRequest, pagination } from "../lib/pagination";
 import { commitStateVersion } from "../lib/commands/state-version";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -44,6 +36,22 @@ type ParamCtx = Readonly<{
   request: Request;
   set: SetObj;
 }>;
+
+/**
+ * State-write callers may be write-only team principals. Keep the serializer
+ * honest by carrying both capabilities only when the read decision was also
+ * made for this exact workspace.
+ */
+async function stateResponseAccess(
+  workspace: Readonly<typeof workspaces.$inferSelect>,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+): Promise<ReturnType<typeof authorizedStateAccess>> {
+  const capabilities: ("state-read" | "state-write")[] = ["state-write"];
+  if (await checkWorkspacePermission(workspace, userId, orgId, teamId, "state-read")) capabilities.push("state-read");
+  return authorizedStateAccess(workspace.id, capabilities);
+}
 
 const MAX_IMPORTED_STATE_BYTES = 100 * 1024 * 1024;
 export const MAX_LEGACY_STATE_OUTPUT_CANDIDATES = 100;
@@ -205,7 +213,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const runRows = runIds.length === 0 ? [] : await db.query.runs.findMany({ where: inArray(runs.id, runIds), columns: { id: true, status: true, message: true } });
     const runMap = new Map(runRows.map((run): [string, { status: string; message: string | null }] => [run.id, { status: run.status, message: run.message }]));
     return {
-      data: versions.map((version): Record<string, unknown> => stateVersionSummaryResource(version, request, version.runId === null ? null : runMap.get(version.runId) ?? null)),
+      data: versions.map((version): Record<string, unknown> => stateVersionSummaryResource(version, request, version.runId === null ? null : runMap.get(version.runId) ?? null, authorizedStateAccess(version.workspaceId, "state-read"))),
       ...pagination(request, number, size, countRows[0]?.total ?? 0),
     };
   })
@@ -243,7 +251,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     return {
       data: versions.map((sv): Record<string, unknown> =>
-        stateVersionSummaryResource(sv, request, sv.runId !== null ? (runMap.get(sv.runId) ?? null) : null),
+        stateVersionSummaryResource(sv, request, sv.runId !== null ? (runMap.get(sv.runId) ?? null) : null, authorizedStateAccess(sv.workspaceId, "state-read")),
       ),
       ...pagination(request, number, size, totalCount),
     };
@@ -272,7 +280,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const runData = sv.runId !== null
       ? await db.query.runs.findFirst({ where: eq(runs.id, sv.runId), columns: { status: true, message: true } })
       : null;
-    return { data: stateVersionResource(sv, request, true, runData ?? null) };
+    return { data: stateVersionResource(sv, request, true, runData ?? null, authorizedStateAccess(resolvedWs.id, "state-read")) };
   })
   .get("/api/v2/workspaces/:workspace_id/current-state-version-outputs", async ({ params, user, orgId, teamId, run, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
@@ -358,7 +366,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const created = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
     if (created === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
     (set as { status: number }).status = 201;
-    return { data: stateVersionResource(created, request) };
+    return { data: stateVersionResource(created, request, false, undefined, await stateResponseAccess(workspace, user?.id, orgId, teamId)) };
   })
   .get("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
@@ -373,7 +381,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const runData = sv.runId !== null
       ? await db.query.runs.findFirst({ where: eq(runs.id, sv.runId), columns: { status: true, message: true } })
       : null;
-    return { data: stateVersionResource(sv, request, true, runData ?? null) };
+    return { data: stateVersionResource(sv, request, true, runData ?? null, authorizedStateAccess(ws?.id ?? sv.workspaceId, "state-read")) };
   })
   .get("/api/v2/state-versions/:state_version_id/state-version-outputs", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     if ((user === undefined || user === null) && orgId === null && teamId === null && run === null) {
@@ -762,7 +770,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const newSv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, newId) });
     if (newSv === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
     (set as { status: number }).status = 201;
-    return { data: stateVersionResource(newSv, request) };
+    return { data: stateVersionResource(newSv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
   })
   .post("/api/v2/state-versions/:state_version_id/actions/soft_delete_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
@@ -786,7 +794,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     const softDeletedAt = Date.now();
     await db.update(stateVersions).set({ status: "backing_data_soft_deleted", softDeletedAt }).where(eq(stateVersions.id, sv.id));
-    return { data: stateVersionResource({ ...sv, status: "backing_data_soft_deleted", softDeletedAt }, request) };
+    return { data: stateVersionResource({ ...sv, status: "backing_data_soft_deleted", softDeletedAt }, request, false, undefined, authorizedStateAccess(ws.id, "admin")) };
   })
   .post("/api/v2/state-versions/:state_version_id/actions/restore_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
@@ -801,7 +809,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     await db.update(stateVersions).set({ status: "finalized", softDeletedAt: null }).where(eq(stateVersions.id, sv.id));
     scheduleExplorerInventory(sv.workspaceId);
-    return { data: stateVersionResource({ ...sv, status: "finalized", softDeletedAt: null }, request) };
+    return { data: stateVersionResource({ ...sv, status: "finalized", softDeletedAt: null }, request, false, undefined, authorizedStateAccess(ws.id, "admin")) };
   })
   .post("/api/v2/state-versions/:state_version_id/actions/permanently_delete_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
@@ -833,7 +841,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         statePayload: null,
         jsonState: null,
         jsonStateOutputs: null,
-      }, request),
+      }, request, false, undefined, authorizedStateAccess(ws.id, "admin")),
     };
   })
   .get("/api/v2/runs/:run_id/recovery-state", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -960,7 +968,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     scheduleExplorerInventory(workspace.id);
     (set as { status: number }).status = 201;
-    return { data: stateVersionResource(stateVersion, request) };
+    return { data: stateVersionResource(stateVersion, request, false, undefined, authorizedStateAccess(workspace.id, "admin")) };
   })
   .post("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
@@ -1130,7 +1138,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     (set as { status: number }).status = 201;
-    return { data: stateVersionResource(sv, request) };
+    return { data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
   })
   .post("/api/v2/workspaces/:workspace_id/state-versions/upload", async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
@@ -1253,5 +1261,5 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (sv === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
     scheduleExplorerInventory(sv.workspaceId);
     (set as { status: number }).status = 201;
-    return { data: stateVersionResource(sv, request) };
+    return { data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
   });

@@ -4,7 +4,8 @@ import { db } from "../db";
 import { planExports, type users } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { authPlugin } from "../auth";
-import { findAuthorizedRun, checkWorkspacePermission } from "../lib/utils";
+import { findAuthorizedRun } from "../lib/authorized-resources";
+import { checkWorkspacePermission } from "../lib/authorization";
 import { readPlanJsonArtifact } from "../lib/plan-json";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;

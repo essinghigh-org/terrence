@@ -10,7 +10,9 @@ import { organizations, workspaceTags, variableSetWorkspaces,
   variableSetProjects, variableSetVariables, stackVariableSets, organizationDataRetentionPolicies, dataRetentionPolicies
 } from "../db/schema";
 import { eq, asc } from "drizzle-orm";
-import { runLogURL, signedApiURL , type DeepReadonly } from "./utils";
+import { issueRunLogCapability, signedApiURL, type RunLogCapability } from "./capabilities";
+import type { AuthorizedRunCapability, AuthorizedStateAccess } from "./authorized-resources";
+import type { DeepReadonly } from "./types";
 import { CLIENT_ENCRYPTED_STATE_ERROR, decodeStatePayload, isClientEncryptedState, parseStatePayload } from "./validation";
 import { cachedOrganizationName, cacheOrganizationName } from "./metadata-cache";
 import { vcsRepoResource } from "./vcs-repo";
@@ -952,7 +954,11 @@ export function planStatusForRun(run: Readonly<{ status: string; statusTimestamp
   return resolvePlanStatus(run, planStarted, planFinished);
 }
 
-export function planResource(run: RunParam, request: RequestParam): Record<string, unknown> {
+export function planResource(
+  run: RunParam,
+  request: RequestParam,
+  authorized?: AuthorizedRunCapability<RunLogCapability>,
+): Record<string, unknown> {
   const status = planStatusForRun(run);
   return {
     id: `plan-${run.id}`,
@@ -966,7 +972,7 @@ export function planResource(run: RunParam, request: RequestParam): Record<strin
       "resource-imports": run.planResourceImports ?? null,
       "generated-configuration": run.generatedConfiguration === true,
       "execution-details": { mode: run.executionMode ?? "remote" },
-      "log-read-url": runLogURL(run, "plan", request),
+      "log-read-url": authorized === undefined ? null : issueRunLogCapability(authorized, "plan", request),
       "status-timestamps": run.statusTimestamps ?? null,
     },
     relationships: {
@@ -978,7 +984,11 @@ export function planResource(run: RunParam, request: RequestParam): Record<strin
   };
 }
 
-export function applyResource(run: RunParam, request: RequestParam): Record<string, unknown> {
+export function applyResource(
+  run: RunParam,
+  request: RequestParam,
+  authorized?: AuthorizedRunCapability<RunLogCapability>,
+): Record<string, unknown> {
   const timestamps = run.statusTimestamps ?? {};
   const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
     .some((key: string): boolean => typeof timestamps[key] === "string");
@@ -992,7 +1002,7 @@ export function applyResource(run: RunParam, request: RequestParam): Record<stri
       "resource-changes": run.applyResourceChanges ?? null,
       "resource-destructions": run.applyResourceDestructions ?? null,
       "resource-imports": run.applyResourceImports ?? null,
-      "log-read-url": runLogURL(run, "apply", request),
+      "log-read-url": authorized === undefined ? null : issueRunLogCapability(authorized, "apply", request),
       "status-timestamps": run.statusTimestamps ?? null,
     },
     relationships: {
@@ -1156,12 +1166,38 @@ function buildStateCoreAttributes(
   };
 }
 
-function buildStateUrlAttributes(state: Readonly<{ id: string }>, flags: { rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }, request: Readonly<{ url: string }>): Record<string, unknown> {
+function stateAuthorizationWorkspaceId(authorization: AuthorizedStateAccess | undefined): string | undefined {
+  if (authorization === undefined) return undefined;
+  return "workspace" in authorization ? authorization.workspace.id : authorization.workspaceId;
+}
+
+function stateCapabilityAllows(
+  authorization: AuthorizedStateAccess | undefined,
+  workspaceId: string,
+  required: "read" | "write",
+): boolean {
+  if (stateAuthorizationWorkspaceId(authorization) !== workspaceId || authorization === undefined) return false;
+  const granted: readonly string[] = Array.isArray(authorization.capability)
+    ? authorization.capability
+    : [authorization.capability];
+  if (granted.includes("admin")) return true;
+  if (required === "read") return granted.includes("state-read");
+  return granted.includes("state-write");
+}
+
+function buildStateUrlAttributes(
+  state: Readonly<{ id: string; workspaceId: string }>,
+  flags: { rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean },
+  request: Readonly<{ url: string }>,
+  authorization?: AuthorizedStateAccess,
+): Record<string, unknown> {
+  const canRead = stateCapabilityAllows(authorization, state.workspaceId, "read");
+  const canWrite = stateCapabilityAllows(authorization, state.workspaceId, "write");
   return {
-    "hosted-state-download-url": flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/download`) : null,
-    "hosted-state-upload-url": flags.pending && !flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/upload`, "PUT") : null,
-    "hosted-json-state-download-url": flags.jsonStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-download`) : null,
-    "hosted-json-state-upload-url": flags.pending && !flags.jsonStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-upload`, "PUT") : null,
+    "hosted-state-download-url": canRead && flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/download`) : null,
+    "hosted-state-upload-url": canWrite && flags.pending && !flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/upload`, "PUT") : null,
+    "hosted-json-state-download-url": canRead && flags.jsonStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-download`) : null,
+    "hosted-json-state-upload-url": canWrite && flags.pending && !flags.jsonStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-upload`, "PUT") : null,
   };
 }
 
@@ -1172,10 +1208,10 @@ function buildStateRunAttributes(run?: Readonly<{ status: string; message: strin
   };
 }
 
-function buildStateVersionAttributes(state: StateParam, parsed: Readonly<Record<string, unknown> | null>, resources: readonly StateResource[], aggregates: StateAggregates, payload: string, flags: DeepReadonly<{ rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }>, request: Readonly<{ url: string }>, includeState: boolean, run?: Readonly<{ status: string; message: string | null }> | null): Record<string, unknown> {
+function buildStateVersionAttributes(state: StateParam, parsed: Readonly<Record<string, unknown> | null>, resources: readonly StateResource[], aggregates: StateAggregates, payload: string, flags: DeepReadonly<{ rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }>, request: Readonly<{ url: string }>, includeState: boolean, run?: Readonly<{ status: string; message: string | null }> | null, authorization?: AuthorizedStateAccess): Record<string, unknown> {
   return {
     ...buildStateCoreAttributes(state, parsed, resources, aggregates, payload, flags.rawStateAvailable, includeState),
-    ...buildStateUrlAttributes(state, flags, request),
+    ...buildStateUrlAttributes(state, flags, request, authorization),
     ...buildStateRunAttributes(run),
   };
 }
@@ -1197,6 +1233,7 @@ export function stateVersionResource(
   request: Readonly<{ url: string }>,
   includeState = false,
   run?: Readonly<{ status: string; message: string | null }> | null,
+  authorization?: AuthorizedStateAccess,
 ): Record<string, unknown> {
   const parsed = parseStatePayload(state.statePayload);
   const resources = extractStateResources(parsed);
@@ -1209,7 +1246,7 @@ export function stateVersionResource(
     id: state.id,
     type: "state-versions",
     attributes: {
-      ...buildStateVersionAttributes(state, parsed, resources, aggregates, payload, flags, request, includeState, run),
+      ...buildStateVersionAttributes(state, parsed, resources, aggregates, payload, flags, request, includeState, run, authorization),
       ...(encrypted ? {
         "state-representation": "opentofu-encrypted",
         "structured-state-unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR,
@@ -1229,6 +1266,7 @@ export function stateVersionSummaryResource(
   state: Readonly<Omit<StateParam, "statePayload" | "jsonState" | "jsonStateOutputs"> & { hasRawState: boolean; hasJsonState: boolean }>,
   request: Readonly<{ url: string }>,
   run?: Readonly<{ status: string; message: string | null }> | null,
+  authorization?: AuthorizedStateAccess,
 ): Record<string, unknown> {
   const summary = readStateSummary(state.stateSummary, state.uploadSha256);
   const available = !["backing_data_soft_deleted", "backing_data_permanently_deleted", "discarded"].includes(state.status ?? "");
@@ -1261,7 +1299,7 @@ export function stateVersionSummaryResource(
         rawStateAvailable,
         jsonStateAvailable: available && state.hasJsonState && summary?.status !== "opaque",
         pending: state.status === "pending",
-      }, request),
+      }, request, authorization),
       ...buildStateRunAttributes(run),
     },
     relationships: {

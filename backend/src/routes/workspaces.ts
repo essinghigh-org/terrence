@@ -14,7 +14,9 @@ import {
 } from "../lib/response";
 import { CLIENT_ENCRYPTED_STATE_ERROR, decodeStatePayload, isClientEncryptedState, isUniqueConstraintError, validVariableAttributes } from "../lib/validation";
 import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
-import { validateVersion, caseInsensitiveLike, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, parseStatePayload, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspace, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly } from "../lib/utils";
+import { validateVersion, caseInsensitiveLike, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, parseTagBindings, parseStatePayload, auditLog, strictAuditEnabled, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly } from "../lib/utils";
+import { pageRequest, pagination } from "../lib/pagination";
+import { applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspace } from "../lib/lifecycle";
 
 import { archiveContainsWorkingDir, invalidTriggerPatternIndexes, invalidTriggerPrefixIndexes, listArchiveMembers, MAX_ARCHIVE_METADATA_BYTES, normalizeWorkingDirectory, readBoundedProcessOutput, summarizeTopLevelEntries } from "../workspace";
 import { authPlugin } from "../auth";

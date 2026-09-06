@@ -14,7 +14,7 @@ import { runResource, planResource, applyResource, userResource, taskStageResour
 import { tfPolicyEvaluationResource, tfStageTypesForEvaluations } from "./policy-evaluations";
 import { configurationVersionResource, configurationVersionIngressResource } from "./configuration-versions";
 import { costEstimateResource } from "./misc";
-import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, runLogURL, pageRequest, pagination, cursorPagination, workspaceIdsForPermission, workspaceRunHistoryWhere, organizationRunHistoryWhere, signedApiURL, FINAL_RUN_STATUSES, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, DISCARDABLE_RUN_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
+import { validateVersion, auditLog } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, parseLogSliceParams, readRunLogSlice, readRunLogsPage } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../lib/plan-json";
@@ -39,6 +39,15 @@ import { auditLogValues } from "../lib/audit-trail";
 import { decryptSecret } from "../lib/secrets";
 import { effectiveWorkspaceVariables } from "../lib/effective-variables";
 import { buildRunProvenanceCapsule, canonicalJson, sha256Hex } from "../lib/run-provenance";
+import { issueRunLogCapability, findLogCapability, signedApiURL } from "../lib/capabilities";
+import { authorizedRunCapability, authorizedStateAccess } from "../lib/authorized-resources";
+import { pageRequest, pagination, cursorPagination } from "../lib/pagination";
+import type { RequestWithUrl } from "../lib/types";
+import { checkOrgPermission, checkWorkspacePermission, workspaceIdsForPermission } from "../lib/authorization";
+import { findAuthorizedWorkspace, findAuthorizedRun } from "../lib/authorized-resources";
+import { workspaceRunHistoryWhere, organizationRunHistoryWhere, FINAL_RUN_STATUSES, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, DISCARDABLE_RUN_STATUSES } from "../lib/run-history";
+import type { WorkspacePermission } from "../lib/authorization";
+import type { DeepReadonly } from "../lib/types";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
 
@@ -528,8 +537,8 @@ async function includedRunResources(
       ? includedTFPolicyEvaluationsForRuns(runList)
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
-  const plans = includes.has("plan") ? runList.map((run): Record<string, unknown> => planResource(run, request)) : [];
-  const applies = includes.has("apply") ? runList.map((run): Record<string, unknown> => applyResource(run, request)) : [];
+  const plans = includes.has("plan") ? runList.map((run): Record<string, unknown> => planResource(run, request, authorizedRunCapability(run, "run-read"))) : [];
+  const applies = includes.has("apply") ? runList.map((run): Record<string, unknown> => applyResource(run, request, authorizedRunCapability(run, "run-read"))) : [];
   const workspacesIncluded = includes.has("workspace")
     ? runList.flatMap((run): Record<string, unknown>[] => {
       const workspace = workspaceList.find((candidate): boolean => candidate.id === run.workspaceId);
@@ -1465,21 +1474,21 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: planResource(authorized.run, request) };
+    return { data: planResource(authorized.run, request, authorizedRunCapability(authorized.run, "run-read")) };
   })
   .get("/api/v2/plans/:plan_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const rawPlanId = params["plan_id"] ?? "";
     const runId = rawPlanId.replace(/^plan-/, "");
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: planResource(authorized.run, request) };
+    return { data: planResource(authorized.run, request, authorizedRunCapability(authorized.run, "run-read")) };
   })
   .get("/api/v2/applies/:apply_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const rawApplyId = params["apply_id"] ?? "";
     const runId = rawApplyId.replace(/^apply-/, "");
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: applyResource(authorized.run, request) };
+    return { data: applyResource(authorized.run, request, authorizedRunCapability(authorized.run, "run-read")) };
   })
   .get("/api/v2/applies/:apply_id/errored-state", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = (params["apply_id"] ?? "").replace(/^apply-/, "");
@@ -1603,7 +1612,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     });
     if (currentSV === undefined) return { data: null };
     const { stateVersionResource } = await import("../lib/response");
-    return { data: stateVersionResource(currentSV, request) };
+    return { data: stateVersionResource(currentSV, request, false, undefined, authorizedStateAccess(authorized.workspace.id, "state-read")) };
   })
   .post("/api/v2/runs/:run_id/actions/revoke-log-links", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
@@ -1655,7 +1664,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: `apply-${runId}`, type: "applies", attributes: { "log-read-url": runLogURL(authorized.run, "apply", request) } } };
+    return { data: { id: `apply-${runId}`, type: "applies", attributes: { "log-read-url": issueRunLogCapability(authorizedRunCapability(authorized.run, "run-read"), "apply", request) } } };
   })
   .post("/api/v2/runs/:run_id/actions/apply", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";

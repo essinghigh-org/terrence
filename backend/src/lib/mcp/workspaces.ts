@@ -16,8 +16,8 @@ import {
   workspaceIdsForPermission,
   lockPrincipal,
   ownsWorkspaceLock,
-  promoteIntermediateStateVersion,
 } from "../utils";
+import { promoteIntermediateStateVersion } from "../lifecycle";
 import { validateVersion } from "../utils";
 import { isExecutionMode } from "../constants";
 import { ensureDefaultProject } from "../../routes/projects";
