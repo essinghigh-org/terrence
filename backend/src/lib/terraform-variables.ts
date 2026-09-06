@@ -189,8 +189,18 @@ function attributeExpression(block: string, attribute: string): string | undefin
   return scanAttributeExpression(block, start);
 }
 
-export function parseTerraformVariables(source: string): readonly TerraformVariableMetadata[] {
+export type TerraformVariableSkip = Readonly<{
+  /** Block name when the declaration could be identified, else null. */
+  name: string | null;
+  reason: "invalid-name" | "unbalanced-braces";
+}>;
+
+export function parseTerraformVariablesWithDiagnostics(source: string): Readonly<{
+  variables: TerraformVariableMetadata[];
+  skipped: TerraformVariableSkip[];
+}> {
   const variables = new Map<string, TerraformVariableMetadata>();
+  const skipped: TerraformVariableSkip[] = [];
   const pattern = /\bvariable\s+("(?:\\.|[^"\\])*")\s*\{/y;
   for (const match of topLevelMatches(source, pattern)) {
     const rawName = match[1];
@@ -198,7 +208,10 @@ export function parseTerraformVariables(source: string): readonly TerraformVaria
     const name = quotedValue(rawName);
     const openingBrace = source.indexOf("{", match.index + match[0].length - 1);
     const closingBrace = matchingBrace(source, openingBrace);
-    if (name === undefined || closingBrace === undefined) continue;
+    if (name === undefined || closingBrace === undefined) {
+      skipped.push({ name: name ?? null, reason: name === undefined ? "invalid-name" : "unbalanced-braces" });
+      continue;
+    }
     const body = source.slice(openingBrace + 1, closingBrace);
     const typeExpression = attributeExpression(body, "type")?.replace(/\s+/g, " ").trim();
     const type = typeExpression === undefined || typeExpression === "" ? "any" : typeExpression;
@@ -214,7 +227,13 @@ export function parseTerraformVariables(source: string): readonly TerraformVaria
       nullable: attributeExpression(body, "nullable")?.trim() !== "false",
     });
   }
-  return [...variables.values()].sort((left, right): number => left.name.localeCompare(right.name));
+  const sorted = [...variables.values()].sort((left, right): number => left.name.localeCompare(right.name));
+  return { variables: sorted, skipped };
+}
+
+/** Backwards-compatible parse without diagnostics (existing callers). */
+export function parseTerraformVariables(source: string): readonly TerraformVariableMetadata[] {
+  return parseTerraformVariablesWithDiagnostics(source).variables;
 }
 
 function jsonType(value: unknown): string {
@@ -244,14 +263,26 @@ export function parseTerraformVariablesJson(source: string): readonly TerraformV
     .sort((left, right): number => left.name.localeCompare(right.name));
 }
 
-export async function scanTerraformModuleVariables(directory: string): Promise<readonly TerraformVariableMetadata[]> {
+export type TerraformVariableFileSkip = TerraformVariableSkip & Readonly<{ file: string }>;
+
+export async function scanTerraformModuleVariablesWithDiagnostics(directory: string): Promise<Readonly<{
+  variables: readonly TerraformVariableMetadata[];
+  skipped: TerraformVariableFileSkip[];
+}>> {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = entries.filter((entry): boolean => entry.isFile() && (entry.name.endsWith(".tf") || entry.name.endsWith(".tf.json")));
-  const parsed = await Promise.all(files.map(async (entry): Promise<readonly TerraformVariableMetadata[]> => {
+  const parsed = await Promise.all(files.map(async (entry) => {
     const source = await readFile(join(directory, entry.name), "utf8");
-    return entry.name.endsWith(".tf.json") ? parseTerraformVariablesJson(source) : parseTerraformVariables(source);
+    if (entry.name.endsWith(".tf.json")) return { variables: parseTerraformVariablesJson(source), skipped: [] as TerraformVariableFileSkip[] };
+    const result = parseTerraformVariablesWithDiagnostics(source);
+    return { variables: result.variables, skipped: result.skipped.map((skip): TerraformVariableFileSkip => ({ ...skip, file: entry.name })) };
   }));
   const variables = new Map<string, TerraformVariableMetadata>();
-  for (const metadata of parsed.flat()) variables.set(metadata.name, metadata);
-  return [...variables.values()].sort((left, right): number => left.name.localeCompare(right.name));
+  for (const metadata of parsed.flatMap((entry) => entry.variables)) variables.set(metadata.name, metadata);
+  const sorted = [...variables.values()].sort((left, right): number => left.name.localeCompare(right.name));
+  return { variables: sorted, skipped: parsed.flatMap((entry) => entry.skipped) };
+}
+
+export async function scanTerraformModuleVariables(directory: string): Promise<readonly TerraformVariableMetadata[]> {
+  return (await scanTerraformModuleVariablesWithDiagnostics(directory)).variables;
 }
