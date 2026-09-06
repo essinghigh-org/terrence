@@ -109,6 +109,7 @@ import { emailVerificationRoutes } from "./routes/email-verification";
 import { samlRoutes } from "./routes/saml";
 import { oidcRoutes } from "./routes/oidc";
 import { workloadIdentityRoutes } from "./routes/workload-identity";
+import { credentialDoctorRoutes } from "./routes/credential-doctor";
 import { providerIconRoutes } from "./routes/provider-icons";
 import { actionsRoutes } from "./routes/actions";
 import { registryComponentsRoutes } from "./routes/registry-components";
@@ -1054,6 +1055,7 @@ export const app = new Elysia()
   .use(samlRoutes)
   .use(oidcRoutes)
   .use(workloadIdentityRoutes)
+  .use(credentialDoctorRoutes)
   .use(providerIconRoutes)
   .use(policyEvaluationRoutes)
   .use(docsRoutes)

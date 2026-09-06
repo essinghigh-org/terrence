@@ -123,6 +123,7 @@ export async function forwardFetch(
   agentPoolId: string,
   input: string | Readonly<URL>,
   init: Readonly<RequestInit> = {},
+  options: Readonly<{ sensitive?: boolean }> = {},
 ): Promise<Response> {
   const url = validateForwardUrl(input);
   const destination = await resolveExternalUrl(url.toString(), false);
@@ -137,7 +138,31 @@ export async function forwardFetch(
   });
   const deadline = forwardDeadline();
   const response = await pollForwardResponse(id, deadline);
-  if (response !== null) return response;
-  await db.update(agentForwardedRequests).set({ status: "errored", errorMessage: "Forwarded request timed out", completedAt: Date.now() }).where(and(eq(agentForwardedRequests.id, id), inArray(agentForwardedRequests.status, ["queued", "claimed"])));
+  if (response !== null) {
+    if (options.sensitive === true) {
+      // Provider exchanges can return temporary access credentials. The
+      // caller receives the response in memory, but the durable forwarding
+      // row must not retain request bearer material or that response beyond
+      // the immediate handoff.
+      await db.update(agentForwardedRequests).set({
+        headers: {},
+        body: null,
+        responseHeaders: null,
+        responseBody: null,
+      }).where(eq(agentForwardedRequests.id, id));
+    }
+    return response;
+  }
+  // A timeout can happen before an agent acknowledges the request. Clear the
+  // queued headers/body here as well as in the normal completion path so a
+  // short-lived provider token cannot remain in the database until retention
+  // cleanup runs.
+  await db.update(agentForwardedRequests).set({
+    status: "errored",
+    errorMessage: "Forwarded request timed out",
+    completedAt: Date.now(),
+    headers: {},
+    body: null,
+  }).where(and(eq(agentForwardedRequests.id, id), inArray(agentForwardedRequests.status, ["queued", "claimed"])));
   throw new Error("Forwarded request timed out");
 }
