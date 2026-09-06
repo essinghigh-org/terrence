@@ -517,7 +517,7 @@ test("keeps state removal and unsupported operations visible, and counts real de
       { address: "test.future", type: "test", change: { actions: ["unsupported"], before: {}, after: {} } },
       { address: "test.deleted", type: "test", action_reason: "delete_because_no_resource_config", change: { actions: ["delete"], before: {}, after: null } },
     ],
-  })) as typeof fetch;
+  })) as unknown as typeof fetch;
   const view = render(<PlanOutput runId="run-operation-contract" status="planned" />);
   await waitFor((): void => {
     expect(view.getByLabelText("1 to remove from state")).toBeTruthy();
