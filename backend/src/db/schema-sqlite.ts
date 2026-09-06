@@ -711,6 +711,7 @@ export const stateVersions = sqliteTable("state_versions", {
   expectedLineage: text("expected_lineage"),
   uploadExpiresAt: integer("upload_expires_at"),
   uploadLock: text("upload_lock"),
+  uploadSha256: text("upload_sha256"),
   statePayload: text("state_payload"),
   status: text("status").default("finalized"),
   jsonState: text("json_state"),

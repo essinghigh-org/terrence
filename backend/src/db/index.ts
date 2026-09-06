@@ -465,6 +465,12 @@ if (!isPostgres) {
   if (!stateVersionColumns.has("created_by")) {
     client.run("ALTER TABLE state_versions ADD COLUMN created_by TEXT REFERENCES users(id) ON DELETE SET NULL");
   }
+  // Deferred-upload artifact identity (issues #690/#703) is additive. The
+  // generated migration covers fresh databases, while this idempotent repair
+  // keeps sparse-journal installs convergent without replaying the journal.
+  if (!stateVersionColumns.has("upload_sha256")) {
+    client.run("ALTER TABLE state_versions ADD COLUMN upload_sha256 TEXT");
+  }
 
   // Agent claim fencing is an additive compatibility column. Keep it in the
   // boot repair path rather than a generated migration because the historical
@@ -854,6 +860,8 @@ export async function applyPgMigrations(): Promise<void> {
     // fresh databases; this repair also converges installs with sparse
     // migration journals.
     await pg.unsafe("ALTER TABLE state_versions ADD COLUMN IF NOT EXISTS created_by text REFERENCES users(id) ON DELETE SET NULL");
+    // Deferred-upload artifact identity (issues #690/#703): additive, idempotent.
+    await pg.unsafe("ALTER TABLE state_versions ADD COLUMN IF NOT EXISTS upload_sha256 text");
     // Agent claim fencing is additive and intentionally kept idempotent here;
     // the generated journal also carries the additive fencing-column change.
     await pg.unsafe("ALTER TABLE agent_jobs ADD COLUMN IF NOT EXISTS fencing_token bigint NOT NULL DEFAULT 0");

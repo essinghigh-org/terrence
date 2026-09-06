@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { exists, mkdir, readFile, rm } from "node:fs/promises";
 import { db } from "../db";
 import { stateOutputIndex, stateVersions, workspaces, runs, organizationMemberships, teams, type users } from "../db/schema";
-import { eq, and, desc, count, inArray, or, isNull } from "drizzle-orm";
+import { eq, and, desc, count, inArray, ne, or, isNull } from "drizzle-orm";
 import { stateVersionResource, stateOutputResources } from "../lib/response";
 import { encryptStatePayload, isClientEncryptedState, parseTerraformStatePayload, statePayloadError, statePayloadWithSerial } from "../lib/validation";
 import {
@@ -181,7 +181,11 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       const { number, size } = pageRequest(request);
       return { data: [], ...pagination(request, number, size, 0) };
     }
-    const conditions = [inArray(stateVersions.workspaceId, [...allowedWorkspaceIds])];
+    // Issue #703: reservations are upload-in-progress handles, not history.
+    // They stay reachable through the direct show endpoint the uploader
+    // polls, but listings only ever return committed versions. The NULL arm
+    // preserves legacy rows that predate the status column default.
+    const conditions = [inArray(stateVersions.workspaceId, [...allowedWorkspaceIds]), or(isNull(stateVersions.status), ne(stateVersions.status, "pending"))];
     if (workspaceFilter !== null) conditions.push(eq(stateVersions.workspaceId, workspaceFilter));
     if (runFilter !== null) conditions.push(eq(stateVersions.runId, runFilter));
     const where = and(...conditions);
@@ -205,7 +209,9 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-read");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const { number, size } = pageRequest(request);
-    const where = eq(stateVersions.workspaceId, workspaceId);
+    // Issue #703: see the index endpoint above; listings exclude pending
+    // upload reservations (NULL statuses predate the default and stay listed).
+    const where = and(eq(stateVersions.workspaceId, workspaceId), or(isNull(stateVersions.status), ne(stateVersions.status, "pending")));
     const [versions, countRows] = await Promise.all([
       db.query.stateVersions.findMany({ where, orderBy: [desc(stateVersions.serial)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(stateVersions).where(where),
@@ -315,6 +321,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
           id,
           workspaceId,
           serial,
+          uploadSha256: createHash("sha256").update(promoted).digest("hex"),
           statePayload: await encryptStatePayload(promoted),
           jsonState: await encryptStatePayload(promoted),
           jsonStateOutputs: await encryptStatePayload(JSON.stringify(parsedSource["outputs"] ?? {})),
@@ -535,14 +542,23 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     // A lost success response must not force a client to reserve another serial.
     // Authenticate first, then accept only exactly the committed bytes; this
-    // branch never republishes outputs or changes the current state.
+    // branch never republishes outputs or changes the current state. Identity
+    // is the persisted SHA-256 recorded at finalize time (issue #690); rows
+    // finalized before that column existed fall back to hashing the stored
+    // payload, which is byte-identical to what finalize compared.
     if (sv.status === "finalized" && typeof sv.statePayload === "string" && sv.statePayload !== "") {
       const retry = await requestBodyText(body, request);
       if (!retry.ok) {
         (set as { status: number }).status = retry.reason === "too-large" ? 413 : 400;
         return { errors: [{ status: String(set.status), title: "Invalid state upload body" }] };
       }
-      if (createHash("sha256").update(retry.text).digest("hex") === createHash("sha256").update(decodeStatePayload(sv.statePayload)).digest("hex")) {
+      const committedSha256 = sv.uploadSha256
+        ?? createHash("sha256").update(decodeStatePayload(sv.statePayload)).digest("hex");
+      if (createHash("sha256").update(retry.text).digest("hex") === committedSha256) {
+        // Converge rows finalized before the digest column existed.
+        if (sv.uploadSha256 === null) {
+          await db.update(stateVersions).set({ uploadSha256: committedSha256 }).where(eq(stateVersions.id, stateVersionId));
+        }
         (set as { status: number }).status = 200;
         return {};
       }
@@ -607,7 +623,11 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
           orderBy: [desc(stateVersions.serial)],
         });
         if (current !== undefined && (current.serial >= sv.serial || stateLineageError(current, parsedTerraformState) !== null)) return false;
-        const won = await tx.update(stateVersions).set({ statePayload: encrypted, status: "finalized" }).where(and(
+        const won = await tx.update(stateVersions).set({
+          statePayload: encrypted,
+          status: "finalized",
+          uploadSha256: createHash("sha256").update(rawState).digest("hex"),
+        }).where(and(
           eq(stateVersions.id, stateVersionId),
           eq(stateVersions.status, "pending"),
           or(isNull(stateVersions.statePayload), eq(stateVersions.statePayload, "")),
@@ -775,6 +795,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
           serial,
           runId: null,
           createdBy: user?.id ?? null,
+          uploadSha256: createHash("sha256").update(promoted).digest("hex"),
           statePayload: await encryptStatePayload(promoted),
           jsonState: await encryptStatePayload(promoted),
           jsonStateOutputs: await encryptStatePayload(JSON.stringify(parsedSource["outputs"] ?? {})),
@@ -953,6 +974,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
           workspaceId: workspace.id,
           serial,
           runId,
+          uploadSha256: createHash("sha256").update(promoted).digest("hex"),
           statePayload: await encryptStatePayload(promoted),
           jsonState: await encryptStatePayload(promoted),
           jsonStateOutputs: await encryptStatePayload(parsed["outputs"] === undefined ? null : JSON.stringify(parsed["outputs"])),
@@ -1110,6 +1132,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
           expectedLineage: expectedLineage ?? null,
           uploadExpiresAt: statePayload === null ? Date.now() + STATE_UPLOAD_TTL_MS : null,
           uploadLock: statePayload === null ? stateUploadLock(ws) : null,
+          uploadSha256: statePayload === null ? null : createHash("sha256").update(statePayload).digest("hex"),
           runId,
           statePayload: await encryptStatePayload(statePayload),
           jsonState: await encryptStatePayload(jsonState ?? statePayload),
@@ -1215,6 +1238,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
           id,
           workspaceId,
           serial,
+          uploadSha256: createHash("sha256").update(rawState).digest("hex"),
           statePayload: await encryptStatePayload(rawState),
           jsonState: await encryptStatePayload(rawState),
           jsonStateOutputs: await encryptStatePayload(parsed["outputs"] === undefined ? null : JSON.stringify(parsed["outputs"])),

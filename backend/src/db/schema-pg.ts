@@ -1551,6 +1551,7 @@ export const stateVersions = pgTable("state_versions", {
     expectedLineage: text("expected_lineage"),
     uploadExpiresAt: bigint("upload_expires_at", { mode: "number" }),
     uploadLock: text("upload_lock"),
+    uploadSha256: text("upload_sha256"),
     statePayload: text("state_payload"),
     status: text("status").default("finalized"),
     jsonState: text("json_state"),
