@@ -215,6 +215,89 @@ export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
         ? "/api/v2/workspaces/*/runs"
         : undefined,
   },
+  {
+    id: "state-secret-read",
+    description: "Raw state, outputs and unredacted plan reads. Responses may embed sensitive values (COMP-11 matrix: state, raw-plan).",
+    rateLimit: "global",
+    bodyLimit: "api",
+    auth: "authenticated",
+    audit: "run",
+    secretResponse: true,
+    match: (request): string | undefined => {
+      if (request.method !== "GET") return undefined;
+      const path = pathnameOf(request);
+      if (/^\/api\/v2\/state-versions\/[^/]+\/(download|json-download)$/.test(path)) return "/api/v2/state-versions/*/download";
+      if (/^\/api\/v2\/state-version-outputs\/[^/]+$/.test(path)) return "/api/v2/state-version-outputs/*";
+      if (/^\/api\/v2\/plans\/[^/]+\/json-output$/.test(path)) return "/api/v2/plans/*/json-output";
+      return undefined;
+    },
+  },
+  {
+    id: "state-safe-read",
+    description: "Redacted plan and state-reference reads. Responses are scrubbed by construction (COMP-11 matrix: public-plan, state-link).",
+    rateLimit: "global",
+    bodyLimit: "api",
+    auth: "authenticated",
+    audit: "run",
+    secretResponse: false,
+    match: (request): string | undefined => {
+      if (request.method !== "GET") return undefined;
+      const path = pathnameOf(request);
+      if (/^\/api\/v2\/plans\/[^/]+\/(json-output-redacted|sanitized-plan)$/.test(path)) return "/api/v2/plans/*/redacted";
+      if (/^\/api\/v2\/runs\/[^/]+\/input-state-version$/.test(path)) return "/api/v2/runs/*/input-state-version";
+      return undefined;
+    },
+  },
+  {
+    id: "workspace-vars",
+    description: "Workspace variable reads and writes. Values may be sensitive (COMP-11 matrix: variables).",
+    rateLimit: "global",
+    bodyLimit: "api",
+    auth: "authenticated",
+    audit: "workspace",
+    secretResponse: true,
+    match: (request): string | undefined =>
+      /^\/api\/v2\/workspaces\/[^/]+\/vars(\/[^/]+)?$/.test(pathnameOf(request))
+        ? "/api/v2/workspaces/*/vars"
+        : undefined,
+  },
+  {
+    id: "run-mutations",
+    description: "Run creation and lifecycle actions (plan, apply, cancel, discard).",
+    rateLimit: "global",
+    bodyLimit: "api",
+    auth: "authenticated",
+    audit: "run",
+    secretResponse: false,
+    match: (request): string | undefined => {
+      if (request.method !== "POST") return undefined;
+      const path = pathnameOf(request);
+      if (path === "/api/v2/runs") return path;
+      return /^\/api\/v2\/runs\/[^/]+\/actions\/[^/]+$/.test(path) ? "/api/v2/runs/*/actions/*" : undefined;
+    },
+  },
+  {
+    id: "admin",
+    description: "Site administration surface. Site-admin credential class only; responses may include exports and key material.",
+    rateLimit: "global",
+    bodyLimit: "api",
+    auth: "admin",
+    audit: "admin",
+    secretResponse: true,
+    match: (request): string | undefined =>
+      pathnameOf(request).startsWith("/api/v2/admin/") ? "/api/v2/admin/*" : undefined,
+  },
+  {
+    id: "mcp-state",
+    description: "MCP tool transport. State reads through tools enforce the same principal boundaries as the REST surface (COMP-11 matrix).",
+    rateLimit: "global",
+    bodyLimit: "api",
+    auth: "authenticated",
+    audit: "workspace",
+    secretResponse: true,
+    match: (request): string | undefined =>
+      request.method === "POST" && pathnameOf(request) === "/mcp" ? "/mcp" : undefined,
+  },
 ] as const;
 
 // ---------------------------------------------------------------------------
