@@ -407,6 +407,13 @@
       "when": 1788669486649,
       "tag": "0057_melodic_jubilee",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "6",
+      "when": 1788694902761,
+      "tag": "0058_state_summary",
+      "breakpoints": true
     }
   ]
 }

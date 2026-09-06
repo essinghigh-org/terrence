@@ -1,3 +1,4 @@
+import { buildStateSummary } from "../../src/lib/state-summary";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { createHash } from "node:crypto";
@@ -163,6 +164,8 @@ describe("workspace run history and state metadata", () => {
       workspaceId,
       serial: state.serial,
       statePayload,
+      stateSummary: JSON.stringify(buildStateSummary(statePayload)),
+      uploadSha256: buildStateSummary(statePayload).digest,
     });
   });
 
@@ -258,6 +261,65 @@ describe("workspace run history and state metadata", () => {
     expect((await opResponse.json()).data.map((run: any) => run.id)).toContain(runIds.speculative);
   });
 
+  it.skipIf(process.env["STATE_SUMMARY_LOAD"] !== "1")("keeps large-state history responses bounded", async () => {
+    const payload = JSON.stringify({ ...state, resources: [{ ...state.resources[0], instances: [{ attributes: { padding: "x".repeat(5 * 1024 * 1024) } }] }] });
+    const summary = buildStateSummary(payload);
+    const ids = Array.from({ length: 20 }, (_, index) => `large-${index}-${suffix}`);
+    try {
+      for (const [index, id] of ids.entries()) {
+        await db.insert(stateVersions).values({ id, workspaceId: otherWorkspaceId, serial: index + 1, statePayload: payload,
+          stateSummary: JSON.stringify(summary), uploadSha256: summary.digest });
+      }
+      Bun.gc(true);
+      const before = process.memoryUsage();
+      const started = performance.now();
+      const response = await request(`/api/v2/workspaces/${otherWorkspaceId}/state-versions?page[size]=20`);
+      const text = await response.text();
+      const elapsedMs = performance.now() - started;
+      const after = process.memoryUsage();
+      expect(response.status).toBe(200);
+      expect(JSON.parse(text).data).toHaveLength(20);
+      expect(text.length).toBeLessThan(100_000);
+      expect(text).not.toContain("padding");
+      console.log("STATE_SUMMARY_LOAD", JSON.stringify({ storedBytes: Buffer.byteLength(payload) * ids.length,
+        responseBytes: Buffer.byteLength(text), elapsedMs, heapDelta: after.heapUsed - before.heapUsed, rssDelta: after.rss - before.rss }));
+    } finally {
+      for (const id of ids) await db.delete(stateVersions).where(eq(stateVersions.id, id));
+    }
+  });
+
+  it("reports missing and stale summaries without falling back to state payloads", async () => {
+    const ids = [`legacy-${suffix}`, `stale-${suffix}`];
+    const summary = buildStateSummary(statePayload);
+    await db.insert(stateVersions).values(ids.map((id, index) => ({
+      id, workspaceId: otherWorkspaceId, serial: index + 1,
+      statePayload,
+      stateSummary: index === 0 ? null : JSON.stringify({ ...summary, version: 99 }),
+      uploadSha256: summary.digest,
+    })));
+    try {
+      for (const path of [
+        `/api/v2/workspaces/${otherWorkspaceId}/state-versions`,
+        `/api/v2/state-versions?filter[workspace][id]=${otherWorkspaceId}`,
+      ]) {
+        const response = await request(path);
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        for (const [index, id] of ids.entries()) {
+          const item = body.data.find((entry: { id: string }) => entry.id === id);
+          expect(item.attributes).toMatchObject({
+            "summary-status": index === 0 ? "unindexed" : "outdated",
+            "resources-processed": false, "resource-count": null, lineage: null, size: null,
+          });
+          expect(item.attributes["hosted-state-download-url"]).toBeTruthy();
+        }
+        expect(JSON.stringify(body)).not.toContain("swordfish");
+      }
+    } finally {
+      for (const id of ids) await db.delete(stateVersions).where(eq(stateVersions.id, id));
+    }
+  });
+
   it("returns derived state metadata and authenticated paginated outputs", async () => {
     const listResponse = await request(`/api/v2/workspaces/${workspaceId}/state-versions`);
     expect(listResponse.status).toBe(200);
@@ -271,19 +333,14 @@ describe("workspace run history and state metadata", () => {
       "state-version": 4,
       status: "finalized",
     });
-    expect(listed.attributes.resources).toContainEqual({
-      name: "shared",
-      type: "data.terraform_remote_state",
-      count: 2,
-      module: "module.child",
-      provider: 'provider["terraform.io/builtin/terraform"]',
+    expect(listed.attributes).toMatchObject({
+      "summary-status": "ready", "resource-count": 3, "managed-resource-count": 1,
+      "data-resource-count": 2, "module-count": 2, "provider-count": 2, "output-count": 2,
     });
-    expect(listed.attributes.modules).toEqual({
-      root: { "null-resource": 1 },
-      "module.child": { "data.terraform-remote-state": 2 },
-    });
+    expect(listed.attributes.resources).toBeUndefined();
+    expect(JSON.stringify(listed)).not.toContain("swordfish");
     expect(listed.relationships.workspace.data.id).toBe(workspaceId);
-    expect(listed.relationships.outputs.data).toHaveLength(2);
+    expect(listed.relationships.outputs.links.related).toBe(`/api/v2/state-versions/${stateId}/outputs`);
     expect(listed.links.self).toBe(`/api/v2/state-versions/${stateId}`);
 
     const resourcesResponse = await request(`/api/v2/workspaces/${workspaceId}/resources`);

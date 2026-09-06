@@ -1552,6 +1552,7 @@ export const stateVersions = pgTable("state_versions", {
     uploadExpiresAt: bigint("upload_expires_at", { mode: "number" }),
     uploadLock: text("upload_lock"),
     uploadSha256: text("upload_sha256"),
+    stateSummary: text("state_summary"),
     statePayload: text("state_payload"),
     status: text("status").default("finalized"),
     jsonState: text("json_state"),
@@ -1869,8 +1870,6 @@ export const workspaces = pgTable("workspaces", {
     lockedReason: text("locked_reason"),
     lockOwnerType: text("lock_owner_type"),
     lockOwnerId: text("lock_owner_id"),
-    // Issue #568: when the current lock was taken (ms epoch). Converges via
-    // applyPgMigrations on installs with sparse journals.
     lockedAt: bigint("locked_at", { mode: "number" }),
     trustedExecution: boolean("trusted_execution").notNull().default(true),
     ownedByType: text("owned_by_type"),

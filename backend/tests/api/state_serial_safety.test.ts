@@ -1,8 +1,10 @@
+import { buildStateSummary } from "../../src/lib/state-summary";
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import { desc, eq } from "drizzle-orm";
 import { db } from "../../src/db";
-import { auditLogs, runs, stateVersions, workspaces } from "../../src/db/schema";
+import { auditLogs, runs, stateOutputIndex, stateVersions, workspaces } from "../../src/db/schema";
+import { stateOutputIndexRows } from "../../src/lib/state-output-index";
 import {
   cleanupSeed,
   expectSuccessResponse,
@@ -23,6 +25,7 @@ describe("state-version serial safety", () => {
     serial,
     lineage: "serial-safety-lineage",
     resources: [],
+    outputs: { restored: { value: serial, type: "number", sensitive: false } },
     large_number: "9007199254740993",
   }).replace('"9007199254740993"', "9007199254740993");
 
@@ -110,6 +113,11 @@ describe("state-version serial safety", () => {
       const downloaded = await request(`/api/v2/state-versions/${resource.id}/download`, { headers });
       const downloadedText = await downloaded.text();
       expect(downloadedText).toContain('"large_number":9007199254740993');
+      const committed = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, resource.id) });
+      expect(JSON.parse(committed!.stateSummary!)).toEqual(buildStateSummary(downloadedText));
+      expect(committed!.uploadSha256).toBe(buildStateSummary(downloadedText).digest);
+      const index = await db.query.stateOutputIndex.findMany({ where: eq(stateOutputIndex.stateVersionId, resource.id) });
+      expect(index.map(({ createdAt: _, ...row }) => row)).toEqual(stateOutputIndexRows(resource.id, workspaceId, null, downloadedText).map(({ createdAt: _, ...row }) => row));
       const raw = JSON.parse(downloadedText);
       expect(raw.serial).toBe(resource.attributes.serial);
       expect(raw.serial).toBeGreaterThan(3);
@@ -153,6 +161,11 @@ describe("state-version serial safety", () => {
     expect(resource.attributes.serial).toBe(7);
     const download = await request(`/api/v2/state-versions/${resource.id}/download`, { headers });
     const text = await download.text();
+    const committed = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, resource.id) });
+    expect(JSON.parse(committed!.stateSummary!)).toEqual(buildStateSummary(text));
+    expect(committed!.uploadSha256).toBe(buildStateSummary(text).digest);
+    const index = await db.query.stateOutputIndex.findMany({ where: eq(stateOutputIndex.stateVersionId, resource.id) });
+    expect(index.map(({ createdAt: _, ...row }) => row)).toEqual(stateOutputIndexRows(resource.id, workspaceId, null, text).map(({ createdAt: _, ...row }) => row));
     expect(JSON.parse(text).serial).toBe(7);
     expect(text).toContain('"large_number":9007199254740993');
   });

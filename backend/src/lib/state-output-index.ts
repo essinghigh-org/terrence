@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { db } from "../db";
-import { stateOutputIndex } from "../db/schema";
+import { stateOutputIndex, stateVersions } from "../db/schema";
+import { buildStateSummary } from "./state-summary";
 import { parseStatePayload } from "./validation";
 
 export function stateOutputIndexRows(
@@ -31,6 +32,11 @@ export async function insertStateOutputIndex(
   jsonState: string | null,
   statePayload: string | null,
 ): Promise<void> {
+  const summary = statePayload === null ? null : buildStateSummary(statePayload);
+  await (tx as typeof db).update(stateVersions).set({
+    stateSummary: summary === null ? null : JSON.stringify(summary),
+    ...(summary === null ? {} : { uploadSha256: summary.digest }),
+  }).where(eq(stateVersions.id, stateVersionId));
   const rows = stateOutputIndexRows(stateVersionId, workspaceId, jsonState, statePayload);
   if (rows.length === 0) return;
   await (tx as typeof db).insert(stateOutputIndex).values(rows).onConflictDoNothing();
@@ -51,7 +57,5 @@ export async function replaceStateOutputIndex(
 ): Promise<void> {
   const store = tx as typeof db;
   await store.delete(stateOutputIndex).where(eq(stateOutputIndex.stateVersionId, stateVersionId));
-  const rows = stateOutputIndexRows(stateVersionId, workspaceId, jsonState, statePayload);
-  if (rows.length === 0) return;
-  await store.insert(stateOutputIndex).values(rows);
+  await insertStateOutputIndex(tx, stateVersionId, workspaceId, jsonState, statePayload);
 }

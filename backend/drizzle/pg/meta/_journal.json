@@ -379,6 +379,13 @@
       "when": 1788669488826,
       "tag": "0053_luxuriant_santa_claus",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1788694902977,
+      "tag": "0054_state_summary",
+      "breakpoints": true
     }
   ]
 }

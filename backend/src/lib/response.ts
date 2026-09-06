@@ -1,3 +1,4 @@
+import { readStateSummary } from "./state-summary";
 import { createHash } from "node:crypto";
 import { db } from "../db";
 import { AvatarService } from "./avatars";
@@ -1155,7 +1156,7 @@ function buildStateCoreAttributes(
   };
 }
 
-function buildStateUrlAttributes(state: StateParam, flags: { rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }, request: Readonly<{ url: string }>): Record<string, unknown> {
+function buildStateUrlAttributes(state: Readonly<{ id: string }>, flags: { rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }, request: Readonly<{ url: string }>): Record<string, unknown> {
   return {
     "hosted-state-download-url": flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/download`) : null,
     "hosted-state-upload-url": flags.pending && !flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/upload`, "PUT") : null,
@@ -1218,6 +1219,56 @@ export function stateVersionResource(
     relationships: {
       ...buildStateVersionRelationships(state),
       ...(encrypted ? { outputs: { data: null, meta: { "unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR } } } : {}),
+    },
+    links: { self: `/api/v2/state-versions/${state.id}` },
+  };
+}
+
+/** History must never load, decrypt or parse state blobs. Details remain lazy. */
+export function stateVersionSummaryResource(
+  state: Readonly<Omit<StateParam, "statePayload" | "jsonState" | "jsonStateOutputs"> & { hasRawState: boolean; hasJsonState: boolean }>,
+  request: Readonly<{ url: string }>,
+  run?: Readonly<{ status: string; message: string | null }> | null,
+): Record<string, unknown> {
+  const summary = readStateSummary(state.stateSummary, state.uploadSha256);
+  const available = !["backing_data_soft_deleted", "backing_data_permanently_deleted", "discarded"].includes(state.status ?? "");
+  const rawStateAvailable = available && state.hasRawState;
+  const ready = summary?.status === "ready";
+  return {
+    id: state.id, type: "state-versions",
+    attributes: {
+      serial: state.serial, status: state.status ?? "finalized", intermediate: state.intermediate,
+      "created-at": new Date(state.createdAt).toISOString(),
+      "vcs-commit-sha": state.vcsCommitSha, "vcs-commit-url": state.vcsCommitUrl,
+      md5: rawStateAvailable ? summary?.md5 ?? null : null,
+      size: rawStateAvailable ? summary?.size ?? null : null,
+      lineage: summary?.lineage ?? null, "terraform-version": summary?.terraformVersion ?? null,
+      "state-version": summary?.stateVersion ?? null,
+      "resources-processed": ready,
+      "summary-status": summary?.status ?? (state.stateSummary === null ? "unindexed" : "outdated"),
+      ...(summary?.status === "opaque" ? {
+        "state-representation": "opentofu-encrypted",
+        "structured-state-unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR,
+      } : {}),
+      "index-generation": summary?.generation ?? null,
+      "resource-count": ready ? summary.resourceCount : null,
+      "managed-resource-count": ready ? summary.managedCount : null,
+      "data-resource-count": ready ? summary.dataCount : null,
+      "module-count": ready ? summary.moduleCount : null,
+      "provider-count": ready ? summary.providerCount : null,
+      "output-count": ready ? summary.outputCount : null,
+      ...buildStateUrlAttributes(state, {
+        rawStateAvailable,
+        jsonStateAvailable: available && state.hasJsonState && summary?.status !== "opaque",
+        pending: state.status === "pending",
+      }, request),
+      ...buildStateRunAttributes(run),
+    },
+    relationships: {
+      outputs: { links: { related: `/api/v2/state-versions/${state.id}/outputs` }, meta: { count: ready ? summary.outputCount : null } },
+      workspace: { data: { id: state.workspaceId, type: "workspaces" } },
+      run: { data: state.runId === null ? null : { id: state.runId, type: "runs" } },
+      "created-by": { data: state.createdBy === null ? null : { id: state.createdBy, type: "users" } },
     },
     links: { self: `/api/v2/state-versions/${state.id}` },
   };

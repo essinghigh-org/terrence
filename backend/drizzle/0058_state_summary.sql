@@ -1,0 +1,1 @@
+ALTER TABLE `state_versions` ADD `state_summary` text;

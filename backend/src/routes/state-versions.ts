@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { exists, mkdir, readFile, rm } from "node:fs/promises";
 import { db } from "../db";
 import { stateOutputIndex, stateVersions, workspaces, runs, organizationMemberships, teams, type users } from "../db/schema";
-import { eq, and, desc, count, inArray, ne, or, isNull } from "drizzle-orm";
-import { stateVersionResource, stateOutputResources } from "../lib/response";
+import { eq, and, desc, count, inArray, ne, or, isNull, sql } from "drizzle-orm";
+import { stateVersionResource, stateOutputResources, stateVersionSummaryResource } from "../lib/response";
 import { encryptStatePayload, isClientEncryptedState, parseTerraformStatePayload, statePayloadError, statePayloadWithSerial } from "../lib/validation";
 import {
   checkWorkspacePermission,
@@ -191,14 +191,19 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const where = and(...conditions);
     const { number, size } = pageRequest(request);
     const [versions, countRows] = await Promise.all([
-      db.query.stateVersions.findMany({ where, orderBy: [desc(stateVersions.serial), desc(stateVersions.createdAt)], limit: size, offset: (number - 1) * size }),
+      db.query.stateVersions.findMany({ where,
+        columns: { statePayload: false, jsonState: false, jsonStateOutputs: false },
+        extras: {
+          hasRawState: sql<boolean>`${stateVersions.statePayload} IS NOT NULL AND ${stateVersions.statePayload} <> ''`.mapWith(Boolean).as("has_raw_state"),
+          hasJsonState: sql<boolean>`${stateVersions.jsonState} IS NOT NULL AND ${stateVersions.jsonState} <> ''`.mapWith(Boolean).as("has_json_state"),
+        }, orderBy: [desc(stateVersions.serial), desc(stateVersions.createdAt)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(stateVersions).where(where),
     ]);
     const runIds = [...new Set(versions.map((version): string | null => version.runId).filter((id): id is string => id !== null))];
     const runRows = runIds.length === 0 ? [] : await db.query.runs.findMany({ where: inArray(runs.id, runIds), columns: { id: true, status: true, message: true } });
     const runMap = new Map(runRows.map((run): [string, { status: string; message: string | null }] => [run.id, { status: run.status, message: run.message }]));
     return {
-      data: versions.map((version): Record<string, unknown> => stateVersionResource(version, request, false, version.runId === null ? null : runMap.get(version.runId) ?? null)),
+      data: versions.map((version): Record<string, unknown> => stateVersionSummaryResource(version, request, version.runId === null ? null : runMap.get(version.runId) ?? null)),
       ...pagination(request, number, size, countRows[0]?.total ?? 0),
     };
   })
@@ -213,7 +218,12 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     // upload reservations (NULL statuses predate the default and stay listed).
     const where = and(eq(stateVersions.workspaceId, workspaceId), or(isNull(stateVersions.status), ne(stateVersions.status, "pending")));
     const [versions, countRows] = await Promise.all([
-      db.query.stateVersions.findMany({ where, orderBy: [desc(stateVersions.serial)], limit: size, offset: (number - 1) * size }),
+      db.query.stateVersions.findMany({ where,
+        columns: { statePayload: false, jsonState: false, jsonStateOutputs: false },
+        extras: {
+          hasRawState: sql<boolean>`${stateVersions.statePayload} IS NOT NULL AND ${stateVersions.statePayload} <> ''`.mapWith(Boolean).as("has_raw_state"),
+          hasJsonState: sql<boolean>`${stateVersions.jsonState} IS NOT NULL AND ${stateVersions.jsonState} <> ''`.mapWith(Boolean).as("has_json_state"),
+        }, orderBy: [desc(stateVersions.serial)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(stateVersions).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
@@ -230,8 +240,8 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       }
     }
     return {
-      data: versions.map((sv: Readonly<typeof stateVersions.$inferSelect>): Record<string, unknown> =>
-        stateVersionResource(sv, request, false, sv.runId !== null ? (runMap.get(sv.runId) ?? null) : null),
+      data: versions.map((sv): Record<string, unknown> =>
+        stateVersionSummaryResource(sv, request, sv.runId !== null ? (runMap.get(sv.runId) ?? null) : null),
       ),
       ...pagination(request, number, size, totalCount),
     };
