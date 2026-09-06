@@ -76,7 +76,7 @@ export class ApiError extends Error {
   /** Field-level 422 details, keyed as `{ "data.attributes.<field>": msg }`. */
   public readonly fieldErrors: Readonly<Record<string, string>>;
 
-  public constructor(status: number, message: string, fieldErrors: Readonly<Record<string, string>> = {}) {
+  public constructor(status: number, message: string, fieldErrors: Readonly<Record<string, string>> = {}, public readonly retryAfter: string | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
@@ -311,6 +311,7 @@ async function requestApi(endpoint: string, options: ReadonlyRequestInit = {}): 
       response.status,
       detail ?? title ?? `API request failed (${response.status})`,
       extractFieldErrors(errors),
+      response.headers.get("Retry-After"),
     );
   }
 
@@ -328,35 +329,69 @@ export async function fetchApiBlob(endpoint: string, options: ReadonlyRequestIni
 }
 
 export const MAX_PAGINATED_PAGES = 100;
+export const MAX_PAGINATED_RECORDS = 10_000;
 
-export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<AbortSignal>): Promise<T[]> {
+/** Explicit traversal only: ordinary list views should request a single page. */
+export async function fetchAllApiPages<T>(
+  endpoint: string,
+  signal?: Readonly<AbortSignal>,
+  options: Readonly<{
+    maxPages?: number;
+    maxRecords?: number;
+    onProgress?: (records: number) => void;
+  }> = {},
+): Promise<T[]> {
+  const maxPages = options.maxPages ?? MAX_PAGINATED_PAGES;
+  const maxRecords = options.maxRecords ?? MAX_PAGINATED_RECORDS;
+  if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > MAX_PAGINATED_PAGES
+    || !Number.isSafeInteger(maxRecords) || maxRecords < 1 || maxRecords > MAX_PAGINATED_RECORDS) {
+    throw new Error("Invalid pagination budget.");
+  }
   const data: T[] = [];
   const visited = new Set<string>();
-  let pageEndpoint: string | null = endpoint;
-
-  while (pageEndpoint !== null && !visited.has(pageEndpoint) && visited.size < MAX_PAGINATED_PAGES) {
+  let pageEndpoint = endpoint;
+  for (;;) {
+    signal?.throwIfAborted();
+    if (visited.has(pageEndpoint)) throw new Error("The server repeated a page; the result is incomplete.");
+    if (visited.size >= maxPages) throw new Error(`The result exceeds ${maxPages} pages. Narrow the query and try again.`);
     visited.add(pageEndpoint);
-    // SAFETY: list endpoints return the JSON:API collection envelope; the
-    // data array and pagination meta fields are checked below.
-    const response = await fetchApi<{
+    let retries = 0;
+    let response: {
       data?: T[];
       meta?: { pagination?: JsonObject };
-    }>(
-      pageEndpoint,
-      signal === undefined ? {} : { signal },
-    );
-    if (Array.isArray(response.data)) data.push(...response.data);
-
-    const nextPage = response.meta?.pagination?.["next-page"];
-    if (!isNumber(nextPage) || !Number.isSafeInteger(nextPage) || nextPage < 1) {
-      pageEndpoint = null;
-      continue;
+    };
+    for (;;) {
+      try {
+        response = await fetchApi(pageEndpoint, signal === undefined ? {} : { signal });
+        break;
+      } catch (error: unknown) {
+        if (!(error instanceof ApiError) || ![429, 503].includes(error.status) || retries++ >= 3) throw error;
+        const value = error.retryAfter;
+        const delay = value === null ? 1000 : /^\d+$/.test(value)
+          ? Number(value) * 1000 : Math.max(0, Date.parse(value) - Date.now());
+        // Long maintenance windows need a later user retry, not an export held in memory.
+        if (!Number.isFinite(delay) || delay > 30_000) throw error;
+        signal?.throwIfAborted();
+        await new Promise<void>((resolve, reject): void => {
+          const abort = (): void => { clearTimeout(timer); reject(new DOMException("Export cancelled", "AbortError")); };
+          const timer = setTimeout((): void => { signal?.removeEventListener("abort", abort); resolve(); }, delay);
+          signal?.addEventListener("abort", abort, { once: true });
+        });
+        signal?.throwIfAborted();
+      }
     }
+    signal?.throwIfAborted();
+    if (!Array.isArray(response.data)) throw new Error("The server returned an invalid collection.");
+    if (data.length + response.data.length > maxRecords) throw new Error(`The result exceeds ${maxRecords} records. Narrow the query and try again.`);
+    data.push(...response.data);
+    options.onProgress?.(data.length);
+    const nextPage = response.meta?.pagination?.["next-page"];
+    if (nextPage === undefined || nextPage === null) break;
+    if (!isNumber(nextPage) || !Number.isSafeInteger(nextPage) || nextPage < 1) throw new Error("The server returned invalid pagination metadata.");
     const nextUrl: URL = new globalThis.URL(pageEndpoint, "http://terrence.local");
     nextUrl.searchParams.set("page[number]", String(nextPage));
     pageEndpoint = `${nextUrl.pathname}${nextUrl.search}`;
   }
-
   return data;
 }
 

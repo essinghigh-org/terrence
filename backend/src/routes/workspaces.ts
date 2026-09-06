@@ -384,6 +384,27 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         ? inArray(workspaces.id, [...allowedWorkspaceIds])
         : eq(workspaces.id, "__no_authorized_workspace__"));
     }
+    const authorizedWhere = and(...(conditions as Parameters<typeof and>));
+    const latestRunStatus = sql<string | null>`(
+      SELECT status FROM runs WHERE workspace_id = ${workspaces.id}
+      ORDER BY created_at DESC, id ASC LIMIT 1
+    )`;
+    const sort = searchParams.get("sort") ?? "name";
+    const locked = searchParams.get("filter[locked]");
+    if (!["name", "-name"].includes(sort) || (locked !== null && locked !== "true" && locked !== "false")) {
+      (set as { status: number }).status = 400;
+      return { errors: [{ status: "400", title: "Bad Request", detail: "sort must be name or -name; filter[locked] must be true or false." }] };
+    }
+    if (locked !== null) conditions.push(eq(workspaces.locked, locked === "true"));
+    const query = searchParams.get("search[query]")?.trim();
+    if (query !== undefined && query !== "") {
+      // An escaped literal substring matches the same names/tags as the list UI.
+      const pattern = `%${query.replace(/[!%_]/g, "!$&")}%`;
+      const match = isPostgres ? sql`ILIKE` : sql`LIKE`;
+      conditions.push(sql`(${workspaces.name} ${match} ${pattern} ESCAPE '!'
+        OR EXISTS (SELECT 1 FROM workspace_tags WHERE workspace_id = ${workspaces.id}
+          AND key ${match} ${pattern} ESCAPE '!'))`);
+    }
     const search = searchParams.get("search[name]")?.trim() ?? searchParams.get("q")?.trim();
     if (search !== undefined && search !== "") conditions.push(caseInsensitiveLike(workspaces.name, `%${search}%`));
     const tags = csv("search[tags]");
@@ -457,45 +478,20 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         : eq(workspaces.id, "__no_matching_workspace__"));
     }
     const currentRunStatuses = csv("filter[current-run][status]");
-    if (currentRunStatuses.length > 0) {
-      // Latest run per workspace selected IN SQL (ROW_NUMBER window), scoped
-      // to this org's workspaces, so a deep org run history never transfers
-      // every run to the app (the runs(workspace_id, created_at) index from
-      // migration 0059 serves the partition). id ASC tie-break is
-      // deterministic on both backends (rowid is sqlite-only).
-      // When the access set is explicit we reuse it instead of re-reading the
-      // same workspace ids via a separate org-scoped query.
-      const orgWorkspaceIdRows = allowedWorkspaceIds === null
-        ? await db.query.workspaces.findMany({
-          where: eq(workspaces.orgId, org.id),
-          columns: { id: true },
-        })
-        : [...allowedWorkspaceIds].map((id: string): Readonly<{ id: string }> => ({ id }));
-      const latestRunRows = orgWorkspaceIdRows.length === 0
-        ? []
-        : await rawQueryAll<{ workspaceId: string; status: string }>(sql`
-          SELECT workspace_id AS "workspaceId", status
-          FROM (
-            SELECT workspace_id, status,
-              ROW_NUMBER() OVER (
-                PARTITION BY workspace_id ORDER BY created_at DESC, id ASC
-              ) AS rn
-            FROM runs
-            WHERE ${inArray(runs.workspaceId, orgWorkspaceIdRows.map((row): string => row.id))}
-          )
-          WHERE rn = 1
-        `);
-      const matchingWsIds = latestRunRows
-        .filter((row): boolean => currentRunStatuses.includes(row.status))
-        .map((row): string => row.workspaceId);
-      conditions.push(matchingWsIds.length > 0
-        ? inArray(workspaces.id, matchingWsIds)
-        : eq(workspaces.id, "__no_matching_workspace__"));
-    }
+    if (currentRunStatuses.length > 0) conditions.push(inArray(latestRunStatus, currentRunStatuses));
+    const includeSummary = (searchParams.get("include") ?? "").split(",").includes("workspace_summary");
     const where = and(...(conditions as Parameters<typeof and>));
-    const [wsList, countRows] = await Promise.all([
-      db.query.workspaces.findMany({ where, orderBy: [asc(workspaces.name)], limit: size, offset: (number - 1) * size }),
+    const [wsList, countRows, summaryRows] = await Promise.all([
+      db.query.workspaces.findMany({ where, orderBy: [sort === "-name" ? desc(workspaces.name) : asc(workspaces.name), asc(workspaces.id)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(workspaces).where(where),
+      includeSummary
+        ? rawQueryAll<{ locked: boolean | number; status: string | null; total: number | string }>(sql`
+            SELECT locked, status, COUNT(*) AS total FROM (
+              SELECT ${workspaces.locked} AS locked, ${latestRunStatus} AS status
+              FROM workspaces WHERE ${authorizedWhere}
+            ) AS visible_workspaces GROUP BY locked, status
+          `)
+        : Promise.resolve([]),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
     const canManageOrgRunTasks = await checkOrganizationPermission(org.id, user?.id, principalOrgId ?? null, teamId ?? null, "manage-run-tasks");
@@ -590,7 +586,18 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
           },
         }))
       : undefined;
-    return { data, ...(included === undefined ? {} : { included }), ...pagination(request, number, size, totalCount) };
+    const page = pagination(request, number, size, totalCount);
+    const summary = { total: 0, locked: 0, "run-statuses": {} as Record<string, number> };
+    for (const row of summaryRows) {
+      const total = Number(row.total);
+      summary.total += total;
+      if (row.locked === true || row.locked === 1) summary.locked += total;
+      if (row.status !== null) summary["run-statuses"][row.status] = (summary["run-statuses"][row.status] ?? 0) + total;
+    }
+    return {
+      data, ...(included === undefined ? {} : { included }), ...page,
+      meta: { ...page.meta, ...(includeSummary ? { "workspace-summary": summary } : {}) },
+    };
   })
   .post("/api/v2/organizations/:org_name/workspaces", async ({ params, body, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
