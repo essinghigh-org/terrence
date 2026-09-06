@@ -1,12 +1,18 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, openSync, closeSync } from "node:fs";
-import { createServer } from "node:net";
+import { openSync, closeSync } from "node:fs";
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
 import { makeRegistryModuleArchive } from "../registry-module-helpers";
 import cliMatrix from "./cli_matrix.json";
+import {
+  createOperationalTestDirectory,
+  freeOperationalTestPort,
+  managedCommand,
+  normalizeOperationalTestSeed,
+  operationalFixtureSuffix,
+  terminateManagedProcess,
+} from "../../src/lib/operational-test-profile";
 
 /**
  * Genuine registry installation (COMP-10, issue #720).
@@ -37,17 +43,6 @@ if (E2E_CLI_FILTER !== null && !["terraform", "tofu"].includes(E2E_CLI_FILTER)) 
 type Cli = { tool: "terraform" | "tofu"; bin: string };
 type CliResult = { code: number; out: string; err: string };
 
-function freePort(): Promise<number> {
-  return new Promise((resolveFn, rejectFn) => {
-    const srv = createServer();
-    srv.once("error", rejectFn);
-    srv.listen(0, "127.0.0.1", () => {
-      const port = (srv.address() as { port: number }).port;
-      srv.close(() => { resolveFn(port); });
-    });
-  });
-}
-
 async function cli(bin: string, args: string[], cwd: string, env: Record<string, string>): Promise<CliResult> {
   const proc = Bun.spawn([bin, ...args], { cwd, env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
   const [code, out, err] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
@@ -71,14 +66,21 @@ async function api(port: number, method: string, path: string, body?: unknown, t
 type Backend = { port: number; proc: Bun.Subprocess; dbDir: string; logPath: string };
 
 async function startBackend(workDir: string): Promise<Backend> {
-  const dbDir = mkdtempSync(join(tmpdir(), "terrence-registry-e2e-"));
+  const dbDir = createOperationalTestDirectory("terrence-registry-e2e-", process.env["TERRENCE_E2E_ROOT"]);
   const databaseUrl = `file:${join(dbDir, "test.db")}`;
-  const port = await freePort();
+  const port = await freeOperationalTestPort();
   const logPath = join(workDir, "server.log");
+  await writeFile(join(workDir, "profile.json"), JSON.stringify({
+    profile: process.env["TERRENCE_E2E_PROFILE"] ?? "direct-e2e",
+    seed: fixtureSeed,
+    mode: "real-cli",
+    database: "sqlite",
+    sandbox: "disabled",
+  }, null, 2), { mode: 0o600 });
   const logFd = openSync(logPath, "w", 0o600);
   let proc: Bun.Subprocess | undefined;
   try {
-    proc = Bun.spawn(["bun", "run", "index.ts"], {
+    proc = Bun.spawn(managedCommand(["bun", "run", "index.ts"]), {
       cwd: BACKEND_DIR,
       env: {
         ...process.env,
@@ -108,11 +110,13 @@ async function startBackend(workDir: string): Promise<Backend> {
     await sleep(200);
   }
   const tail = (await readFile(logPath, "utf8").catch(() => "")).split("\n").slice(-60).join("\n");
+  if (proc !== undefined) await terminateManagedProcess(proc);
+  await rm(dbDir, { recursive: true, force: true });
   throw new Error(`backend failed to start within 60s\n${tail}`);
 }
 
 async function startTlsProxy(backendPort: number, workDir: string): Promise<{ server: Awaited<ReturnType<typeof Bun.serve>>; port: number; certPath: string }> {
-  const port = await freePort();
+  const port = await freeOperationalTestPort();
   // Self-signed loopback CA with real CA extensions: both engines must
   // accept it as an authority (a bare -x509 cert fails Go verification).
   // The identity covers both loopback addresses so a second proxy can serve
@@ -171,7 +175,7 @@ async function tryStartPortlessProxy(backendPort: number, workDir: string): Prom
 
 /** Static file origin for the provider fixture archive, over the same TLS identity. */
 async function startFixtureOrigin(workDir: string, files: Readonly<Record<string, Uint8Array>>): Promise<{ server: Awaited<ReturnType<typeof Bun.serve>>; port: number }> {
-  const port = await freePort();
+  const port = await freeOperationalTestPort();
   const cert = await Bun.file(join(workDir, "cert.pem")).arrayBuffer();
   const key = await Bun.file(join(workDir, "key.pem")).arrayBuffer();
   const server = Bun.serve({
@@ -188,7 +192,8 @@ async function startFixtureOrigin(workDir: string, files: Readonly<Record<string
   return { server, port };
 }
 
-const suffix = randomUUID().slice(0, 8);
+const fixtureSeed = normalizeOperationalTestSeed(process.env["TERRENCE_E2E_SEED"]);
+const suffix = operationalFixtureSuffix(fixtureSeed);
 const orgName = `rege2e-org-${suffix}`;
 const moduleName = "demo";
 const moduleProvider = "aws";
@@ -217,7 +222,7 @@ describe("genuine registry installation", () => {
       clis.push({ tool, bin: await ensureCli(tool) });
     }
     expect(clis.length).toBeGreaterThan(0);
-    workDir = mkdtempSync(join(tmpdir(), "terrence-registry-install-"));
+    workDir = createOperationalTestDirectory("terrence-registry-install-", process.env["TERRENCE_E2E_ROOT"]);
     backend = await startBackend(workDir);
     proxy = await startTlsProxy(backend.port, workDir);
     portless = await tryStartPortlessProxy(backend.port, workDir);
@@ -289,8 +294,7 @@ describe("genuine registry installation", () => {
     await portless?.server.stop(true);
     await fixtureOrigin?.server.stop(true);
     if (backend !== undefined) {
-      backend.proc.kill();
-      await backend.proc.exited;
+      await terminateManagedProcess(backend.proc);
       await rm(backend.dbDir, { recursive: true, force: true });
     }
     await rm(workDir, { recursive: true, force: true });

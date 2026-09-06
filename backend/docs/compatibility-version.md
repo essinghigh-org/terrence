@@ -63,7 +63,7 @@ Import coverage for other families and optional/null transitions beyond variable
 
 ## Pinned CLI matrix and canaries
 
-[The generated CLI results page](cli-compatibility-results) lists the tested floor/current combinations and binary digests. Pins live in `backend/tests/e2e/cli_matrix.json`; the provider stays at the version in the tracked provider catalog. Set `TERRENCE_E2E_CLI=terraform|tofu` and `TERRENCE_E2E_TIER=floor|current` to reproduce a row. An exact `TERRENCE_E2E_TERRAFORM_VERSION` or `TERRENCE_E2E_TOFU_VERSION` overrides the selected pin for local investigation.
+[The generated CLI results page](cli-compatibility-results) lists the tested floor/current combinations and binary digests. Pins live in `backend/tests/e2e/cli_matrix.json`; the provider stays at the version in the tracked provider catalog. Set `TERRENCE_E2E_CLI=terraform|tofu` and `TERRENCE_E2E_TIER=floor|current` to reproduce a row. An exact `TERRENCE_E2E_TERRAFORM_VERSION` or `TERRENCE_E2E_TOFU_VERSION` overrides the selected pin for local investigation. The named `sqlite-cli`, `postgres-cli`, and `sandbox` profiles reject simulated execution and record the selected pin and `TERRENCE_E2E_SEED` in their redacted profile artifact.
 
 CI runs all four pinned combinations and publishes `cli-compatibility-report` only after the complete matrix succeeds. The generated Markdown and underlying successful JSON reports are the publication inputs; refresh the checked-in release snapshot with `bun backend/scripts/report-cli-compatibility.ts RESULTS_DIR backend/docs/cli-compatibility-results.md` after downloading that artifact. Never regenerate a support claim from only the passing subset of a failed matrix.
 

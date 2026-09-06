@@ -13,7 +13,8 @@
     "typecheck": "tsc6 -b tsconfig.app.json && tsc6 --noEmit -p tsconfig.tools.json",
     "preview": "bun run scripts/preview.ts",
     "test:browser": "cd tests/browser && xvfb-run --auto-servernum bun test .",
-    "test:browser:axe": "cd tests/browser && xvfb-run --auto-servernum bun test ./accessibility-*.test.ts"
+    "test:browser:axe": "cd tests/browser && xvfb-run --auto-servernum bun test ./accessibility-*.test.ts",
+    "test:profile:browser": "bun run ../backend/scripts/test-profile.ts browser"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

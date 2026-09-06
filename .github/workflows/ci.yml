@@ -296,7 +296,7 @@ jobs:
       - name: Build static frontend
         run: cd frontend && bun run build
       - name: Run browser E2E & accessibility suite (Bun.WebView)
-        run: cd frontend && bun run test:browser
+        run: bun run test:profile -- browser
 
   provider-compatibility:
     name: Provider and CLI (${{ matrix.engine }}, ${{ matrix.tier }})
@@ -308,6 +308,7 @@ jobs:
     env:
       TERRENCE_E2E_CLI: ${{ matrix.engine }}
       TERRENCE_E2E_TIER: ${{ matrix.tier }}
+      TERRENCE_E2E_SEED: eng21-${{ matrix.engine }}-${{ matrix.tier }}
       TERRENCE_E2E_RESULTS_DIR: ${{ github.workspace }}/provider-lifecycle-results
     runs-on: ubuntu-latest
     permissions:
@@ -358,7 +359,7 @@ jobs:
       - name: Run pinned provider and remote CLI journeys
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bun test --bail=5 --max-concurrency=1 --no-orphans backend/tests/e2e/provider_e2e.test.ts
+        run: bun run test:profile -- sqlite-cli
       - name: Build the production Landlock helper
         if: matrix.engine == 'terraform' && matrix.tier == 'current'
         run: backend/bin/build-landlock-runner.sh
@@ -368,14 +369,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TERRENCE_E2E_CLI: terraform
           TERRENCE_E2E_SECURITY_PROFILE: required
-        run: bun test --bail=5 --max-concurrency=1 --no-orphans backend/tests/e2e/provider_e2e.test.ts
+        run: bun run test:profile -- sandbox
 
       - name: Upload successful provider lifecycle evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: provider-lifecycle-results-${{ matrix.engine }}-${{ matrix.tier }}
-          path: provider-lifecycle-results/*.json
+          path: provider-lifecycle-results/*
           if-no-files-found: ignore
           retention-days: 30
 

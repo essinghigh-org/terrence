@@ -28,6 +28,7 @@ ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
 ### Testing
 
 - All code changes must maintain or improve test coverage.
+- For deterministic local reproduction, see [named test profiles](backend/docs/testing-profiles.md).
 - Run **all tests** before opening a PR:
   ```bash
   cd backend && bun test
