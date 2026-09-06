@@ -8,6 +8,14 @@ import { makeRegistryModuleArchive } from "../registry-module-helpers";
 import cliMatrix from "./cli_matrix.json";
 import { safeJsonStringify } from "../../src/lib/log";
 import providerSurface from "./provider_surface.json";
+import lifecycleContract from "../../src/data/provider_lifecycle_contract.json" with { type: "json" };
+import {
+  assertLifecycleEvidence,
+  normalizedStateDigest,
+  normalizedStatesEqual,
+  type LifecycleContract,
+  type LifecycleFixtureEvidence,
+} from "../../src/lib/provider-lifecycle";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const BACKEND_DIR = join(REPO_ROOT, "backend");
@@ -29,6 +37,7 @@ const matrixTier = process.env["TERRENCE_E2E_TIER"] ?? "current";
 if (!["floor", "current", "canary"].includes(matrixTier)) throw new Error("TERRENCE_E2E_TIER must be floor, current or canary");
 const providerVersion = /v(\d+\.\d+\.\d+)/.exec(providerSurface.provider)?.[1];
 if (providerVersion === undefined) throw new Error("The provider catalog must name an exact version");
+const providerLifecycleContract = lifecycleContract as LifecycleContract;
 
 // Iteration aid: TERRENCE_E2E_CLI=terraform (or tofu) runs only that CLI;
 // unset runs both.
@@ -39,6 +48,13 @@ if (e2eCliFilter !== null && !["terraform", "tofu"].includes(e2eCliFilter)) {
 
 type CliResult = { code: number; out: string; err: string };
 type ApiResult = { status: number; json: Record<string, any>; text: string };
+const CLI_DIAGNOSTIC_LIMIT = 20_000;
+
+function boundedCliDiagnostic(value: string): string {
+  if (value.length <= CLI_DIAGNOSTIC_LIMIT) return value;
+  const half = Math.floor((CLI_DIAGNOSTIC_LIMIT - 64) / 2);
+  return `${value.slice(0, half)}\n...[diagnostic truncated; tail follows]...\n${value.slice(-half)}`;
+}
 
 const EXPECTED_STATE_ADDRESSES = [
   "tfe_organization.org",
@@ -152,15 +168,17 @@ async function startBackend(workDir: string, engine: "terraform" | "tofu"): Prom
     console.log(`[e2e] database=${databaseKind} sandbox=${securityProfile}`);
     const logFd = openSync(logPath, "w", 0o600);
     try {
+      // TERRENCE_E2E_* controls the harness and is not backend runtime
+      // configuration. Do not pass it through startup validation.
+      const backendEnv = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && !entry[0].startsWith("TERRENCE_E2E_")));
       proc = Bun.spawn(["bun", "run", "index.ts"], {
         cwd: BACKEND_DIR,
         env: {
-          ...process.env,
+          ...backendEnv,
           NODE_ENV: "production",
           PORT: String(port),
           DATABASE_URL: databaseUrl,
           STORAGE_DIR: dbDir,
-          TERRENCE_JWT_SECRET: "provider-e2e-secret",
           ADMIN_PASSWORD: "pe2e-admin-password-123",
           TERRENCE_RUN_SANDBOX: securityProfile === "required" ? "true" : "false",
           TERRENCE_ENABLE_LOCAL_SIGNUP: "true",
@@ -314,10 +332,98 @@ function cliOk(result: CliResult, what: string): void {
     const directory = process.env["TERRENCE_E2E_RESULTS_DIR"];
     if (directory !== undefined) {
       mkdirSync(directory, { recursive: true });
-      writeFileSync(join(directory, `failure-${Date.now()}-${crypto.randomUUID()}.json`), JSON.stringify({ command: what, ...safe }, null, 2), { mode: 0o600 });
+      writeFileSync(join(directory, `failure-${Date.now()}-${crypto.randomUUID()}.json`), JSON.stringify({
+        command: what,
+        code: safe.code,
+        out: boundedCliDiagnostic(safe.out),
+        err: boundedCliDiagnostic(safe.err),
+      }, null, 2), { mode: 0o600 });
     }
     throw new Error(`${what} failed (exit ${safe.code}):\n--- stdout ---\n${safe.out}\n--- stderr ---\n${safe.err}`);
   }
+}
+
+type LifecycleFailure = Readonly<{
+  engine: string;
+  stage: string;
+  contract_version: number;
+  completedAt: string;
+  error: { name: string; message: string };
+}>;
+
+function lifecycleError(error: unknown): { name: string; message: string } {
+  if (error instanceof Error) {
+    const command = error.message.split("\n--- stdout ---", 1)[0] ?? error.message;
+    const stderr = error.message.includes("\n--- stderr ---")
+      ? error.message.split("\n--- stderr ---", 2)[1]?.split("\n", 2).find((line): boolean => line.trim() !== "")
+      : undefined;
+    return { name: error.name, message: [command, stderr].filter((part): part is string => part !== undefined && part !== "").join(": ").slice(0, 2_000) };
+  }
+  return { name: "UnknownError", message: safeJsonStringify(error) };
+}
+
+function writeLifecycleFailureEvidence(directory: string, failure: LifecycleFailure): void {
+  mkdirSync(directory, { recursive: true });
+  const safeEngine = failure.engine.replace(/[^a-z0-9_-]/gi, "-");
+  writeFileSync(join(directory, `failure-${safeEngine}-${Date.now()}-${crypto.randomUUID()}.json`), JSON.stringify(failure, null, 2), { mode: 0o600 });
+}
+
+async function normalizedCliState(bin: string, cwd: string, env: Record<string, string>, label: string): Promise<unknown> {
+  const shown = await cli(bin, ["show", "-json", "-no-color"], cwd, env);
+  cliOk(shown, `${label} state snapshot`);
+  try {
+    return JSON.parse(shown.out) as unknown;
+  } catch (error) {
+    throw new Error(`${label} state snapshot was not JSON: ${lifecycleError(error).message}`);
+  }
+}
+
+type FamilyProbe = Readonly<{ fixture: string; path: string }>;
+
+function listData(body: Record<string, any>, label: string): Record<string, any>[] {
+  const data = body["data"];
+  if (!Array.isArray(data)) throw new Error(`${label} pagination response did not contain a data array`);
+  return data as Record<string, any>[];
+}
+
+function firstResourceId(rows: readonly Record<string, any>[], name: string, label: string): string {
+  const match = rows.find((row): boolean => row["attributes"]?.name === name);
+  const id = match?.["id"];
+  if (typeof id !== "string" || id === "") throw new Error(`${label} did not return ${name}`);
+  return id;
+}
+
+/** Probe the family list contracts with a bounded page and an invalid token. */
+async function runFamilyProbes(port: number, token: string, orgName: string, workspaceName: string, projectName: string): Promise<Set<string>> {
+  const workspaceList = await api(port, "GET", `/api/v2/organizations/${orgName}/workspaces?search[name]=${encodeURIComponent(workspaceName)}&page[number]=1&page[size]=1`, undefined, token);
+  expect(workspaceList.status, "workspace family list probe").toBe(200);
+  firstResourceId(listData(workspaceList.json, "workspace family list probe"), workspaceName, "workspace family list probe");
+  const projectList = await api(port, "GET", `/api/v2/organizations/${orgName}/projects?filter[names]=${encodeURIComponent(projectName)}&page[number]=1&page[size]=1`, undefined, token);
+  expect(projectList.status, "project family list probe").toBe(200);
+  const projectId = firstResourceId(listData(projectList.json, "project family list probe"), projectName, "project family list probe");
+  const probes: FamilyProbe[] = [
+    { fixture: "workspace-lifecycle", path: `/api/v2/organizations/${orgName}/workspaces?page[number]=1&page[size]=1` },
+    { fixture: "variables-and-sets-lifecycle", path: `/api/v2/organizations/${orgName}/varsets?page[number]=1&page[size]=1` },
+    { fixture: "teams-and-projects-lifecycle", path: `/api/v2/organizations/${orgName}/teams?page[number]=1&page[size]=1` },
+    { fixture: "teams-and-projects-lifecycle", path: `/api/v2/organizations/${orgName}/projects?page[number]=1&page[size]=1` },
+    { fixture: "policies-lifecycle", path: `/api/v2/organizations/${orgName}/policy-sets?page[number]=1&page[size]=1` },
+    { fixture: "notifications-lifecycle", path: `/api/v2/projects/${projectId}/notification-configurations?page[number]=1&page[size]=1` },
+    { fixture: "registry-lifecycle", path: `/api/v2/organizations/${orgName}/registry-modules?page[number]=1&page[size]=1` },
+  ];
+  const passed = new Set<string>();
+  for (const probe of probes) {
+    const allowed = await api(port, "GET", probe.path, undefined, token);
+    expect(allowed.status, `${probe.fixture} pagination probe`).toBe(200);
+    const rows = listData(allowed.json, `${probe.fixture} pagination probe`);
+    expect(rows.length, `${probe.fixture} page size`).toBeLessThanOrEqual(1);
+    const pagination = allowed.json["meta"]?.["pagination"] as Record<string, unknown> | undefined;
+    expect(pagination?.["page-size"], `${probe.fixture} page metadata`).toBe(1);
+
+    const denied = await api(port, "GET", probe.path, undefined, "invalid-provider-compatibility-token");
+    expect([401, 403, 404], `${probe.fixture} permission probe`).toContain(denied.status);
+    passed.add(probe.fixture);
+  }
+  return passed;
 }
 
 function providerTf(proxyPort: number, token: string): string {
@@ -1231,6 +1337,8 @@ describe("tfe provider e2e", () => {
       };
 
       const backend = await startBackend(workDir, cliName);
+      let lifecycleStage = "backend started";
+      let lifecycleFailed = false;
       try {
         const proxy = await startTlsProxy(backend.port, workDir);
         try {
@@ -1250,6 +1358,7 @@ describe("tfe provider e2e", () => {
           await writeFile(join(cfgDir, "main.tf"), mainTf(suffix, auth.username));
           await writeFile(join(cfgDir, "outputs.tf"), outputsTf());
 
+          lifecycleStage = "initial provider apply";
           cliOk(await cli(bin, ["init", "-input=false", "-no-color"], cfgDir, cliEnv), "init");
           cliOk(await cli(bin, ["plan", "-input=false", "-no-color"], cfgDir, cliEnv), "plan");
           const apply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
@@ -1263,15 +1372,26 @@ describe("tfe provider e2e", () => {
           const repeatedApply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(repeatedApply, "unchanged apply");
           expect(repeatedApply.out).toContain("Resources: 0 added, 0 changed, 0 destroyed.");
+          // Capture the baseline only after the explicit refresh/no-op cycle.
+          // The first apply can leave computed collections unknown until the
+          // provider has completed a read; comparing it to a later refreshed
+          // state would report false lifecycle drift.
+          const baselineState = await normalizedCliState(bin, cfgDir, cliEnv, "baseline");
+          lifecycleStage = "family pagination and permission probes";
+          const familyProbeFixtures = await runFamilyProbes(backend.port, auth.token, `pe2e-org-${suffix}`, `pe2e-ws-${suffix}`, `pe2e-proj-${suffix}`);
 
+          lifecycleStage = "optional-value transitions";
           for (const description of ["updated description", "", "provider e2e variable set"]) {
             await writeFile(join(cfgDir, "main.tf"), mainTf(suffix, auth.username).replace('description  = "provider e2e variable set"', `description  = "${description}"`));
             cliOk(await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv), "variable set description update");
             cliOk(await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], cfgDir, cliEnv), "variable set description convergence");
           }
+          const restoredState = await normalizedCliState(bin, cfgDir, cliEnv, "restored");
+          expect(normalizedStatesEqual(baselineState, restoredState), "normalized provider state drifted after optional value clear/restore").toBe(true);
 
           // Import into a minimal, separate state: no generated IDs or timestamps
           // in configuration, and never destroy the imported shared object here.
+          lifecycleStage = "minimal team import";
           const importDir = mkdtempSync(join(workDir, "import-"));
           await writeFile(join(importDir, "providers.tf"), providerTf(proxy.port!, auth.token));
           await writeFile(join(importDir, "main.tf"), `resource "tfe_team" "imported" {
@@ -1598,6 +1718,7 @@ data "tfe_no_code_module" "d_ncm" {
           }
           await rm(join(cfgDir, "build-outputs.tf"), { force: true });
 
+          lifecycleStage = "destroy and lifecycle evidence publication";
           const destroy = await cli(bin, ["destroy", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(destroy, "destroy");
           expect(destroy.out).toContain("Destroy complete");
@@ -1611,6 +1732,34 @@ data "tfe_no_code_module" "d_ncm" {
           const tier = matrixTier === "canary" ? "experimental" : versionInfo.terraform_version === cliMatrix[cliName].floor ? "floor" : versionInfo.terraform_version === cliMatrix[cliName].current ? "current" : "experimental";
           const resultsDir = process.env["TERRENCE_E2E_RESULTS_DIR"] ?? workDir;
           await mkdir(resultsDir, { recursive: true });
+          const stateResources = stateList.out.trim().split("\n").filter((address) => address !== "" && !address.startsWith("data."));
+          const resourcesFor = (type: string): string[] => stateResources.filter((address): boolean => address.startsWith(`${type}.`));
+          const baseBehaviors = ["create", "read", "refresh-twice", "no-op-plan", "second-apply-noop", "destroy", "normalized-state-convergence"];
+          const familyEvidence = (id: string, extra: readonly string[] = []): LifecycleFixtureEvidence => ({
+            id,
+            status: "passed",
+            resources: providerLifecycleContract.fixtures.find((fixture): boolean => fixture.id === id)?.resources.flatMap(resourcesFor) ?? [],
+            behaviors: [...baseBehaviors, ...(familyProbeFixtures.has(id) ? ["pagination", "permission-denied"] : []), ...extra],
+            normalized_state: {
+              baseline_sha256: normalizedStateDigest(baselineState),
+              restored_sha256: normalizedStateDigest(restoredState),
+              equivalent: normalizedStatesEqual(baselineState, restoredState),
+            },
+          });
+          const lifecycleEvidence = {
+            contract_version: providerLifecycleContract.version,
+            fixtures: [
+              familyEvidence("workspace-lifecycle"),
+              familyEvidence("variables-and-sets-lifecycle"),
+              familyEvidence("variable-set-optional-transitions", ["update", "clear-optional", "restore-optional"]),
+              familyEvidence("teams-and-projects-lifecycle"),
+              familyEvidence("team-import-minimal", ["import-minimal", "no-op-plan-after-import"]),
+              familyEvidence("policies-lifecycle"),
+              familyEvidence("notifications-lifecycle"),
+              familyEvidence("registry-lifecycle"),
+            ],
+          };
+          assertLifecycleEvidence(providerLifecycleContract, lifecycleEvidence);
           await writeFile(join(resultsDir, `${cliName}-${versionInfo.terraform_version}-${backend.databaseKind}-${backend.securityProfile}-lifecycle.json`), JSON.stringify({
             fixture: "backend/tests/e2e/provider_e2e.test.ts",
             completedAt: new Date().toISOString(),
@@ -1620,13 +1769,30 @@ data "tfe_no_code_module" "d_ncm" {
             binarySha256: binaryDigests.get(bin),
             database: backend.databaseKind,
             sandbox: backend.securityProfile,
+            lifecycle_contract: lifecycleEvidence,
             claims: [
-              { resources: stateList.out.trim().split("\n").filter((address) => !address.startsWith("data.")), behaviors: ["create", "read", "two-unchanged-plans", "unchanged-apply", "destroy"] },
+              { resources: stateResources, behaviors: ["create", "read", "two-unchanged-plans", "unchanged-apply", "destroy", "normalized-state-convergence"] },
               { resources: ["tfe_variable_set.vs"], behaviors: ["set-description", "clear-description", "restore-description", "unchanged-plan-after-each-update"] },
               { resources: ["tfe_team.team"], behaviors: ["import-minimal-config", "unchanged-plan-after-import"] },
+              ...lifecycleEvidence.fixtures.map((fixture): { resources: readonly string[]; behaviors: readonly string[] } => ({ resources: fixture.resources, behaviors: fixture.behaviors })),
               ...(backend.securityProfile === "disabled" ? [{ resources: ["terraform_data.probe"], behaviors: ["remote-init", "remote-plan", "interactive-apply-approval", "remote-state-pull", "remote-unchanged-plan"] }] : []),
             ],
           }, null, 2), { mode: 0o600 });
+        } catch (error) {
+          lifecycleFailed = true;
+          const evidenceDir = process.env["TERRENCE_E2E_RESULTS_DIR"] ?? workDir;
+          try {
+            writeLifecycleFailureEvidence(evidenceDir, {
+              engine: cliName,
+              stage: lifecycleStage,
+              contract_version: providerLifecycleContract.version,
+              completedAt: new Date().toISOString(),
+              error: lifecycleError(error),
+            });
+          } catch (evidenceError) {
+            console.error(`[e2e] could not write lifecycle failure evidence: ${lifecycleError(evidenceError).message}`);
+          }
+          throw error;
         } finally {
           await proxy.stop(true);
         }
@@ -1644,7 +1810,7 @@ data "tfe_no_code_module" "d_ncm" {
         } else {
           await rm(backend.storageDir, { recursive: true, force: true }).catch(() => undefined);
         }
-        if (process.env["TERRENCE_E2E_KEEP_WORKDIR"] === "1") {
+        if (process.env["TERRENCE_E2E_KEEP_WORKDIR"] === "1" || lifecycleFailed) {
           console.log(`[e2e] workdir kept: ${workDir}`);
         } else {
           await rm(workDir, { recursive: true, force: true }).catch(() => undefined);

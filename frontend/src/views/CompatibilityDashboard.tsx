@@ -13,11 +13,14 @@ import { isNumber } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 
 type SurfaceEntry = Readonly<{ name: string; status: string }>;
+type LifecycleFixture = Readonly<{ id: string; label: string; resources?: string[]; required_behaviors?: string[] }>;
+type LifecycleContract = Readonly<{ version?: number; fixtures?: LifecycleFixture[] }>;
 
 type ProviderSurface = Readonly<JsonObject & {
   provider?: string;
   resources?: SurfaceEntry[];
   "latest-available"?: string | null;
+  lifecycle_contract?: LifecycleContract;
 }>;
 
 const STATUS_STYLES = {
@@ -106,6 +109,7 @@ export function CompatibilityDashboard(): React.JSX.Element {
   const dataSources = Array.isArray(data?.["data_sources"])
     ? data["data_sources"] as SurfaceEntry[]
     : [];
+  const lifecycleFixtures = data?.lifecycle_contract?.fixtures ?? [];
   const coveredResources = resources.filter((entry): boolean => entry.status === "covered").length;
   const coveredDataSources = dataSources.filter((entry): boolean => entry.status === "covered").length;
 
@@ -162,14 +166,28 @@ export function CompatibilityDashboard(): React.JSX.Element {
               </CardContent>
             </Card>
             <Card>
-              <CardHeader variant="section"><CardTitle className="text-sm">Covered resources</CardTitle></CardHeader>
+              <CardHeader variant="section"><CardTitle className="text-sm">Schema-covered resources</CardTitle></CardHeader>
               <CardContent className="tabular-nums text-2xl font-bold text-success">{coveredResources}</CardContent>
             </Card>
             <Card>
-              <CardHeader variant="section"><CardTitle className="text-sm">Covered data sources</CardTitle></CardHeader>
+              <CardHeader variant="section"><CardTitle className="text-sm">Schema-covered data sources</CardTitle></CardHeader>
               <CardContent className="tabular-nums text-2xl font-bold text-success">{coveredDataSources}</CardContent>
             </Card>
           </div>
+
+          <Card>
+            <CardHeader variant="section"><CardTitle className="text-lg">Behavioral lifecycle contract</CardTitle></CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              {lifecycleFixtures.length === 0 ? (
+                <p className="text-muted-foreground">No named lifecycle fixtures are reported.</p>
+              ) : (
+                <>
+                  <p>{lifecycleFixtures.length} named fixture{lifecycleFixtures.length === 1 ? "" : "s"} define the measured provider behavior.</p>
+                  <p className="text-muted-foreground">A schema-covered resource is fully exercised only when its named fixture passes create, refresh, convergence, and the applicable import, update, pagination, and permission checks.</p>
+                </>
+              )}
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

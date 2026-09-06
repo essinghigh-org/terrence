@@ -53,11 +53,13 @@ Terrence-native extensions must not change the default behavior of supported rem
 
 ## Provider lifecycle evidence
 
-The provider catalog records fixture inclusion, not complete behavioral proof for every resource. A green provider job emits `provider-lifecycle-results` JSON artifacts with the actual CLI/provider versions, database, sandbox profile and named fixture claims. A failed workflow emits no success record for that combination.
+The provider catalog records schema inventory separately from behavioral proof. The checked-in `backend/src/data/provider_lifecycle_contract.json` names the priority-family fixtures and their required behaviors. A family is fully exercised only when its evidence reports every required behavior as passed; a schema entry cannot promote itself to that status.
 
-The initial fixture resources currently verify create/read, two consecutive unchanged plans, an unchanged apply and an empty state after destroy. Additional named checks cover setting, clearing and restoring a variable-set description with convergence after each change, and importing a team into minimal configuration with no planned changes. These checks run with Terraform and OpenTofu; CI also runs the Terraform fixture with required production sandboxing, and the PostgreSQL backend job runs the same provider journeys against isolated PostgreSQL databases.
+A green provider job emits `provider-lifecycle-results` JSON artifacts with the actual CLI/provider versions, database, sandbox profile, normalized state digests and named fixture claims. A failed workflow emits a redacted failure artifact with the contract version and failed stage, while no success record is published for that combination. State comparisons remove generated IDs, serials and timestamps and redact sensitive-looking values before hashing.
 
-Import coverage for other families, optional/null transitions beyond variable-set descriptions, and resource-specific negative permission contracts remain incomplete. Schema coverage alone does not establish those behaviors. Headless API/provider resources remain valid without a dedicated UI editor.
+The priority fixtures verify create/read, two consecutive unchanged plans, an unchanged apply and an empty state after destroy. Named checks cover setting, clearing and restoring a variable-set description with convergence after each change, importing a team into minimal configuration with no planned changes, bounded list pagination and denied-token behavior for workspaces, variables/sets, teams/projects, policies, notifications and registry objects. These checks run with Terraform and OpenTofu; CI also runs the Terraform fixture with required production sandboxing, and the PostgreSQL backend job runs the same provider journeys against isolated PostgreSQL databases.
+
+Import coverage for other families and optional/null transitions beyond variable-set descriptions remain incomplete. Schema coverage alone does not establish those behaviors. Headless API/provider resources remain valid without a dedicated UI editor.
 
 ## Pinned CLI matrix and canaries
 

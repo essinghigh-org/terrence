@@ -9,6 +9,7 @@ import { runResource } from "../../lib/response";
 import { linkageForRuns } from "../runs";
 import { FINAL_RUN_STATUSES } from "../../lib/utils";
 import providerSurface from "../../data/provider_surface.json";
+import providerLifecycleContract from "../../data/provider_lifecycle_contract.json" with { type: "json" };
 import { getLatestTfeProviderVersion } from "../../lib/provider-version";
 import type { ParamCtx } from "./types";
 import type { RunItem } from "./helpers";
@@ -41,6 +42,10 @@ export const runsRoutes = new Elysia({ name: "admin-runs" })
     return {
       data: {
         ...providerSurface,
+        // Schema coverage and lifecycle evidence are separate contracts. The
+        // checked-in contract tells the dashboard which named fixtures must
+        // pass before a family can be called fully exercised.
+        lifecycle_contract: providerLifecycleContract,
         // Latest stable hashicorp/tfe release (cached, 24h TTL). Null when
         // the upstream lookup fails; the dashboard hides the chip then.
         "latest-available": await getLatestTfeProviderVersion(),

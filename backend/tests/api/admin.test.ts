@@ -496,11 +496,18 @@ describe("Admin Operations API contract", () => {
       const smtpAttributes = (await smtpPatch.json()).data.attributes as Record<string, unknown>;
       expect(smtpAttributes["password"]).toBeUndefined();
       expect(smtpAttributes["password-set"]).toBeTrue();
+      const providerSmtpPatch = await request("/api/v2/admin/smtp-settings", "PATCH", {
+        data: { attributes: { sender: "provider@example.com" } },
+      });
+      expect(providerSmtpPatch.status).toBe(200);
+      const providerSmtpAttributes = (await providerSmtpPatch.json()).data.attributes as Record<string, unknown>;
+      expect(providerSmtpAttributes["sender"]).toBe("provider@example.com");
       const storedSmtp = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "smtp") });
       const storedSmtpPassword = storedSmtp?.values["password"];
       expect(typeof storedSmtpPassword).toBe("string");
       expect(isEncryptedSecret(storedSmtpPassword as string)).toBeTrue();
       expect(await decryptSecret(storedSmtpPassword as string)).toBe("secret-smtp");
+      expect(storedSmtp?.values["sender-email"]).toBe("provider@example.com");
     } finally {
       if (originalCost === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "cost"));
       else await db.update(adminSettings).set({ values: originalCost.values, updatedAt: originalCost.updatedAt }).where(eq(adminSettings.id, "cost"));

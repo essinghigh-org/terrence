@@ -32,6 +32,10 @@ test("renders the provider surface catalog with counts and filters", async () =>
     data_sources: [
       { name: "tfe_workspace", status: "covered" },
     ],
+    lifecycle_contract: {
+      version: 1,
+      fixtures: [{ id: "workspace-lifecycle", label: "Workspaces", resources: ["tfe_workspace"], required_behaviors: ["create", "read"] }],
+    },
   };
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
@@ -55,6 +59,7 @@ test("renders the provider surface catalog with counts and filters", async () =>
   expect(view.getAllByText("Covered").length).toBeGreaterThanOrEqual(1);
   expect(view.getAllByText("Admin only").length).toBeGreaterThanOrEqual(1);
   expect(view.getByText("tfe_workspace")).toBeTruthy();
+  expect(view.getByText(/1 named fixture define the measured provider behavior/)).toBeTruthy();
   // Counts cards.
   expect(view.getByText("2", { selector: ".text-2xl" })).toBeTruthy();
   expect(view.getAllByText("1", { selector: ".text-2xl" }).length).toBeGreaterThanOrEqual(1);

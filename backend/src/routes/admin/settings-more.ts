@@ -25,6 +25,10 @@ function smtpSettingsResource(values: Readonly<Record<string, unknown>>): Record
   const password = safe["password"];
   delete safe["password"];
   safe["password-set"] = typeof password === "string" && password !== "";
+  // The official tfe provider calls this field `sender`; Terrence's product
+  // settings use the more explicit `sender-email`. Keep both read aliases so
+  // provider refreshes and the admin UI observe the same stored value.
+  if (safe["sender"] === undefined) safe["sender"] = safe["sender-email"] ?? null;
   return settingResource("smtp-settings", safe);
 }
 
@@ -157,6 +161,11 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "encryption must be one of starttls, tls, plain" }] };
     }
     const updated = { ...attrs };
+    // Translate the provider's wire attribute into the canonical product
+    // setting before validation. Leaving `sender` in the object makes the
+    // settings contract reject an otherwise valid provider lifecycle apply.
+    if (updated["sender"] !== undefined && updated["sender-email"] === undefined) updated["sender-email"] = updated["sender"];
+    delete updated["sender"];
     delete updated["test-email-address"];
     return smtpSettingsResource(await updateSettings("smtp", updated));
   })
