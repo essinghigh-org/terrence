@@ -107,6 +107,7 @@ import { costEstimationEnabledForOrganization, getSettings } from "./lib/setting
 import { storageDir } from "./db/driver";
 import { insertStateVersionWithSerialRetry } from "./lib/state-serial";
 import { jitteredPollDelay } from "./lib/poll-jitter";
+import { LocalExecutionLifecycle } from "./worker/local-execution";
 
 
 // --- Run sandbox (Landlock isolation for tofu/terraform) ---
@@ -119,6 +120,9 @@ import { jitteredPollDelay } from "./lib/poll-jitter";
 // TERRENCE_RUN_SANDBOX=false.
 const RUN_SANDBOX_REQUIRED = runSandboxRequired();
 const runSandbox = RUN_SANDBOX_REQUIRED && RunSandbox.isUsable() ? new RunSandbox() : null;
+const localExecutionLifecycle = new LocalExecutionLifecycle({
+  concurrencyLimit: (): number => integerSetting("TERRENCE_RUN_CONCURRENCY"),
+});
 const POLICY_EVALUATION_TIMEOUT_MS = 30_000;
 if (RUN_SANDBOX_REQUIRED && runSandbox === null) {
   log.error(
@@ -631,7 +635,7 @@ function terminateProcessGroup(pid: number | null, signal: "SIGINT" | "SIGKILL")
 
 /** Deletion must wait for local process exit, including cancellation escalation. */
 export function hasActiveRunExecution(runId: string): boolean {
-  return localRunReservations.has(runId) || activeLocalRunExecutions.has(runId)
+  return localExecutionLifecycle.hasRunExecution(runId)
     || activeRunProcesses.has(runId) || activeRunCgroups.has(runId) || cancellationEscalationTimers.has(runId);
 }
 
@@ -4764,7 +4768,7 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
       });
       applied.push(run.id);
     } catch (error: unknown) {
-      if (localRunReservations.has(run.id)) releaseLocalRunReservation(run.id);
+      if (localExecutionLifecycle.hasReservation(run.id)) releaseLocalRunReservation(run.id);
       log.error("Scheduled apply failed", { runId: run.id, error });
       // Keep the run confirmed so a transient failure retries next poll.
       try {
@@ -4832,23 +4836,16 @@ const ASSESSMENT_POLL_INTERVAL_MS = integerSetting("TERRENCE_ASSESSMENT_POLL_MS"
 // naturally, then the shutdown path checkpoints the DB once idle (or after a
 // bounded grace). Startup reconciliation (reconcileInterruptedLocalRuns) is
 // the safety net for executions that could NOT finish (SIGKILL, power loss).
-let draining = false;
-let activeLocalExecutions = 0;
-const activeLocalRunExecutions = new Map<string, number>();
-const localRunReservations = new Set<string>();
-const localRunWaiters: (() => void)[] = [];
-let executionIdleCallback: (() => void) | null = null;
-
 /** Stop the background scheduler from claiming new work (graceful shutdown).
  * Terminal for the process: poll cycles stop re-arming and startWorkerQueue
  * cannot be restarted (isWorkerLoopRunning stays set), which is the intended
  * contract for the shutdown path in index.ts. */
 export function stopWorkerQueue(): void {
-  draining = true;
+  localExecutionLifecycle.stop();
 }
 
 export function workerQueueDraining(): boolean {
-  return draining;
+  return localExecutionLifecycle.isDraining();
 }
 
 /**
@@ -4857,44 +4854,16 @@ export function workerQueueDraining(): boolean {
  * the DB so no execution can write after the checkpoint.
  */
 export async function waitForWorkerDrain(graceMs: number): Promise<boolean> {
-  if (activeLocalExecutions === 0) return Promise.resolve(true);
-  return new Promise((resolve): void => {
-    const timer = setTimeout((): void => {
-      executionIdleCallback = null;
-      resolve(false);
-    }, graceMs);
-    executionIdleCallback = (): void => {
-      clearTimeout(timer);
-      resolve(true);
-    };
-  });
+  return localExecutionLifecycle.waitForDrain(graceMs);
 }
 
 /** Count a local execution so shutdown can wait for it (drain mode). */
 async function trackLocalExecution<T>(promise: Promise<T>): Promise<T> {
-  activeLocalExecutions += 1;
-  const settle = (): void => {
-    activeLocalExecutions -= 1;
-    if (activeLocalExecutions === 0 && executionIdleCallback !== null) {
-      const callback = executionIdleCallback;
-      executionIdleCallback = null;
-      callback();
-    }
-  };
-  return promise.then(
-    (value: T): T => {
-      settle();
-      return value;
-    },
-    (error: unknown): never => {
-      settle();
-      throw error;
-    },
-  );
+  return localExecutionLifecycle.trackExecution(promise);
 }
 
 export function localRunConcurrencyLimit(): number {
-  return integerSetting("TERRENCE_RUN_CONCURRENCY");
+  return localExecutionLifecycle.concurrencyLimit();
 }
 
 /** Last lock-blocked log per pending run (issue #575): re-log at most every
@@ -4937,65 +4906,20 @@ export async function localRunQueueDepth(): Promise<number | null> {
     return null;
   }
 }
-function localRunCapacityUsed(): number {
-  return activeLocalRunExecutions.size + localRunReservations.size;
-}
-
 function reserveLocalRunExecution(runId: string): boolean {
-  if (activeLocalRunExecutions.has(runId) || localRunReservations.has(runId)) return true;
-  if (localRunCapacityUsed() >= localRunConcurrencyLimit()) return false;
-  localRunReservations.add(runId);
-  return true;
+  return localExecutionLifecycle.reserveRun(runId);
 }
 
 function releaseLocalRunReservation(runId: string): void {
-  if (!localRunReservations.delete(runId)) return;
-  localRunWaiters.shift()?.();
-}
-
-function acquireLocalRunExecutionSlot(runId: string): Promise<void> {
-  const activeCount = activeLocalRunExecutions.get(runId);
-  if (activeCount !== undefined) {
-    activeLocalRunExecutions.set(runId, activeCount + 1);
-    return Promise.resolve();
-  }
-  if (!localRunReservations.has(runId)) {
-    return (async (): Promise<void> => {
-      while (localRunCapacityUsed() >= localRunConcurrencyLimit()) {
-        await new Promise<void>((resolve): void => { localRunWaiters.push(resolve); });
-      }
-      // Capacity was awaited above; the reservation was never taken on this
-      // path, so there is nothing to convert: mark the slot active directly.
-      activeLocalRunExecutions.set(runId, 1);
-    })();
-  }
-  localRunReservations.delete(runId);
-  activeLocalRunExecutions.set(runId, 1);
-  return Promise.resolve();
-}
-
-function releaseLocalRunExecutionSlot(runId: string): void {
-  const activeCount = activeLocalRunExecutions.get(runId);
-  if (activeCount === undefined) return;
-  if (activeCount > 1) {
-    activeLocalRunExecutions.set(runId, activeCount - 1);
-    return;
-  }
-  activeLocalRunExecutions.delete(runId);
-  localRunWaiters.shift()?.();
+  localExecutionLifecycle.releaseReservation(runId);
 }
 
 async function trackLocalRunExecution<T>(runId: string, work: () => Promise<T>): Promise<T> {
-  await acquireLocalRunExecutionSlot(runId);
-  try {
-    return await work();
-  } finally {
-    releaseLocalRunExecutionSlot(runId);
-  }
+  return localExecutionLifecycle.trackRun(runId, work);
 }
 
 export function activeLocalRunExecutionCount(): number {
-  return activeLocalRunExecutions.size;
+  return localExecutionLifecycle.activeRunExecutionCount();
 }
 
 /**
