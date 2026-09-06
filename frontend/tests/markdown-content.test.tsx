@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { render } from "@testing-library/react";
-import { MarkdownContent } from "../src/components/MarkdownContent";
+import { MARKDOWN_PARSER_LIMITS, MarkdownContent, MarkdownParseError, parseMarkdown } from "../src/components/MarkdownContent";
 
 test("renders tables from pipe-delimited markdown", () => {
   const view = render(
@@ -71,4 +71,17 @@ test("renders malformed and streamed table prefixes without hanging", () => {
     view.rerender(<MarkdownContent markdown={document.slice(0, end)} />);
   }
   expect(view.container.querySelector("table")).not.toBeNull();
+});
+
+test("every deterministic truncated prefix parses or returns a typed failure", () => {
+  const source = "# heading\n\n```hcl\nvariable \\\"x\\\" {\n  type = string\n}\n```\n\n- item";
+  for (let end = 0; end <= source.length; end += 1) {
+    expect(() => parseMarkdown(source.slice(0, end))).not.toThrow();
+  }
+  expect(() => parseMarkdown("x".repeat(MARKDOWN_PARSER_LIMITS.maxSourceCharacters + 1)))
+    .toThrow(MarkdownParseError);
+  const manyBlocks = Array.from({ length: MARKDOWN_PARSER_LIMITS.maxBlocks + 1 }, () => "x").join("\n\n");
+  expect(() => parseMarkdown(manyBlocks)).toThrow(MarkdownParseError);
+  const view = render(<MarkdownContent markdown={"x".repeat(MARKDOWN_PARSER_LIMITS.maxSourceCharacters + 1)} />);
+  expect(view.getByText("This document is too large to display.")).toBeDefined();
 });

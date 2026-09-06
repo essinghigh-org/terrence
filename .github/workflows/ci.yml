@@ -41,6 +41,9 @@ jobs:
           # Raises the tofu release-lookup ceiling from 60/hr (per shared
           # runner IP) to 5000/hr when both matrix jobs run e2e downloads.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Keep pull requests fast and deterministic; the scheduled run
+          # expands the independent lifecycle model's seed corpus.
+          TERRENCE_PROPERTY_CASES: ${{ github.event_name == 'schedule' && '2000' || '256' }}
         # The backend package script serializes Bun workers because the test
         # suite shares its Elysia app and SQLite connection across files.
         run: cd backend && bun run test

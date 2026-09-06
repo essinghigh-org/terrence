@@ -11,6 +11,35 @@ export type TerraformVariableMetadata = Readonly<{
   nullable: boolean;
 }>;
 
+/** Resource limits for the metadata scanner.  This scanner is an advisory
+ * lexer, so refusing an oversized document is safer than spending unbounded
+ * CPU/memory trying to recover metadata from it. */
+export const TERRAFORM_VARIABLE_PARSER_LIMITS = Object.freeze({
+  maxSourceCharacters: 4_000_000,
+  maxVariables: 10_000,
+});
+
+export type TerraformVariableParseErrorCode = "input-too-large" | "output-too-large" | "invalid-json";
+
+export class TerraformVariableParseError extends Error {
+  public readonly code: TerraformVariableParseErrorCode;
+
+  constructor(code: TerraformVariableParseErrorCode, message: string) {
+    super(message);
+    this.name = "TerraformVariableParseError";
+    this.code = code;
+  }
+}
+
+function assertSourceBudget(source: string): void {
+  if (source.length > TERRAFORM_VARIABLE_PARSER_LIMITS.maxSourceCharacters) {
+    throw new TerraformVariableParseError(
+      "input-too-large",
+      `Terraform variable metadata input exceeds ${TERRAFORM_VARIABLE_PARSER_LIMITS.maxSourceCharacters} characters`,
+    );
+  }
+}
+
 function quotedValue(value: string): string | undefined {
   try {
     const parsed: unknown = JSON.parse(value);
@@ -162,7 +191,8 @@ function scanAttributeExpression(block: string, start: number): string | undefin
 
 /** Metadata assistance only: tokenize lexical boundaries, not arbitrary HCL expressions.
  * ponytail: this is not an HCL validator; use the engine for authoritative diagnostics. */
-function* topLevelMatches(input: string, pattern: RegExp): Generator<RegExpExecArray> {
+function* topLevelMatches(input: string, pattern: Readonly<RegExp>): Generator<RegExpExecArray> {
+  const matcher = new RegExp(pattern.source, pattern.flags);
   let nesting: AttributeNesting = { round: 0, square: 0, curly: 0 };
   for (let index = 0; index < input.length;) {
     if (input.startsWith("//", index) || input[index] === "#") { index = skipLineComment(input, index); continue; }
@@ -170,8 +200,8 @@ function* topLevelMatches(input: string, pattern: RegExp): Generator<RegExpExecA
     if (input.startsWith("<<", index)) { index = skipHeredoc(input, index); continue; }
     if (input[index] === '\"') { index = skipQuoted(input, index); continue; }
     if (nesting.round === 0 && nesting.square === 0 && nesting.curly === 0) {
-      pattern.lastIndex = index;
-      const match = pattern.exec(input);
+      matcher.lastIndex = index;
+      const match = matcher.exec(input);
       if (match !== null) yield match;
     }
     nesting = advanceAttributeNesting(nesting, input[index]);
@@ -199,6 +229,7 @@ export function parseTerraformVariablesWithDiagnostics(source: string): Readonly
   variables: TerraformVariableMetadata[];
   skipped: TerraformVariableSkip[];
 }> {
+  assertSourceBudget(source);
   const variables = new Map<string, TerraformVariableMetadata>();
   const skipped: TerraformVariableSkip[] = [];
   const pattern = /\bvariable\s+("(?:\\.|[^"\\])*")\s*\{/y;
@@ -211,6 +242,12 @@ export function parseTerraformVariablesWithDiagnostics(source: string): Readonly
     if (name === undefined || closingBrace === undefined) {
       skipped.push({ name: name ?? null, reason: name === undefined ? "invalid-name" : "unbalanced-braces" });
       continue;
+    }
+    if (!variables.has(name) && variables.size >= TERRAFORM_VARIABLE_PARSER_LIMITS.maxVariables) {
+      throw new TerraformVariableParseError(
+        "output-too-large",
+        `Terraform variable metadata output exceeds ${TERRAFORM_VARIABLE_PARSER_LIMITS.maxVariables} variables`,
+      );
     }
     const body = source.slice(openingBrace + 1, closingBrace);
     const typeExpression = attributeExpression(body, "type")?.replace(/\s+/g, " ").trim();
@@ -242,11 +279,27 @@ function jsonType(value: unknown): string {
 }
 
 export function parseTerraformVariablesJson(source: string): readonly TerraformVariableMetadata[] {
-  const parsed: unknown = JSON.parse(source);
+  assertSourceBudget(source);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch (error: unknown) {
+    throw new TerraformVariableParseError(
+      "invalid-json",
+      `Terraform JSON variable metadata is invalid${error instanceof SyntaxError ? `: ${error.message}` : ""}`,
+    );
+  }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return [];
   const rawVariables = (parsed as Record<string, unknown>)["variable"];
   if (rawVariables === null || typeof rawVariables !== "object" || Array.isArray(rawVariables)) return [];
-  return Object.entries(rawVariables as Record<string, unknown>)
+  const entries = Object.entries(rawVariables as Record<string, unknown>);
+  if (entries.length > TERRAFORM_VARIABLE_PARSER_LIMITS.maxVariables) {
+    throw new TerraformVariableParseError(
+      "output-too-large",
+      `Terraform variable metadata output exceeds ${TERRAFORM_VARIABLE_PARSER_LIMITS.maxVariables} variables`,
+    );
+  }
+  return entries
     .flatMap(([name, rawConfig]): TerraformVariableMetadata[] => {
       if (rawConfig === null || typeof rawConfig !== "object" || Array.isArray(rawConfig)) return [];
       const config = rawConfig as Record<string, unknown>;

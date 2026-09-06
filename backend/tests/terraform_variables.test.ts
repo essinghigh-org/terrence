@@ -7,6 +7,8 @@ import {
   parseTerraformVariablesJson,
   parseTerraformVariablesWithDiagnostics,
   scanTerraformModuleVariablesWithDiagnostics,
+  TERRAFORM_VARIABLE_PARSER_LIMITS,
+  TerraformVariableParseError,
 } from "../src/lib/terraform-variables";
 
 describe("Terraform module variable metadata", () => {
@@ -141,6 +143,38 @@ test("directory scan names the file behind every skipped block (issue #706)", as
     expect(result.skipped).toEqual([{ file: "broken.tf", name: "lost", reason: "unbalanced-braces" }]);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("bounded scanner handles deterministic arbitrary truncation and reports typed limits", () => {
+  const source = `variable "region" {\n  type = string\n  description = "safe"\n}\nvariable "nested" {\n  type = object({ name = string })\n  default = { name = "x" }\n}`;
+  // Every prefix is either a useful partial result or a bounded diagnostic;
+  // none may escape as a parser implementation error.
+  for (let end = 0; end <= source.length; end += 1) {
+    expect(() => parseTerraformVariablesWithDiagnostics(source.slice(0, end))).not.toThrow();
+  }
+  expect(() => parseTerraformVariables("x".repeat(TERRAFORM_VARIABLE_PARSER_LIMITS.maxSourceCharacters + 1)))
+    .toThrow(TerraformVariableParseError);
+  const tooMany = Array.from({ length: TERRAFORM_VARIABLE_PARSER_LIMITS.maxVariables + 1 }, (_, index) => `variable "x${index}" {}`).join("\n");
+  expect(() => parseTerraformVariables(tooMany))
+    .toThrow(TerraformVariableParseError);
+  try {
+    parseTerraformVariables("x".repeat(TERRAFORM_VARIABLE_PARSER_LIMITS.maxSourceCharacters + 1));
+  } catch (error: unknown) {
+    expect(error).toBeInstanceOf(TerraformVariableParseError);
+    expect((error as TerraformVariableParseError).code).toBe("input-too-large");
+  }
+});
+
+test("JSON scanner turns truncated input into a typed failure without echoing source", () => {
+  for (const end of [0, 1, 7, 15, 31, 63]) {
+    try {
+      parseTerraformVariablesJson('{"variable":{"name":{"type":"string"}}}'.slice(0, end));
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(TerraformVariableParseError);
+      expect((error as Error).message).not.toContain('"variable"');
+      expect((error as TerraformVariableParseError).code).toBe("invalid-json");
+    }
   }
 });
 

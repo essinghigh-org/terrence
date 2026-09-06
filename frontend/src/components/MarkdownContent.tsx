@@ -7,6 +7,22 @@ type MarkdownBlock =
   | Readonly<{ kind: "list"; ordered: boolean; items: readonly { text: string; children: string[] }[] }>
   | Readonly<{ kind: "table"; headers: string[]; rows: string[][] }>;
 
+export const MARKDOWN_PARSER_LIMITS = Object.freeze({
+  maxSourceCharacters: 1_000_000,
+  maxLines: 50_000,
+  maxBlocks: 10_000,
+});
+
+export class MarkdownParseError extends Error {
+  public readonly code: "input-too-large" | "output-too-large";
+
+  constructor(code: "input-too-large" | "output-too-large", message: string) {
+    super(message);
+    this.name = "MarkdownParseError";
+    this.code = code;
+  }
+}
+
 function semanticKeys<T>(values: readonly T[], identity: (value: T) => string): string[] {
   const occurrences = new Map<string, number>();
   return values.map((value): string => {
@@ -58,10 +74,22 @@ function splitTableRow(line: string): string[] {
   return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell): string => cell.trim());
 }
 
-function parseMarkdown(markdown: string): MarkdownBlock[] {
+export function parseMarkdown(markdown: string): MarkdownBlock[] {
+  if (markdown.length > MARKDOWN_PARSER_LIMITS.maxSourceCharacters) {
+    throw new MarkdownParseError(
+      "input-too-large",
+      `Markdown input exceeds ${MARKDOWN_PARSER_LIMITS.maxSourceCharacters} characters`,
+    );
+  }
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  if (lines.length > MARKDOWN_PARSER_LIMITS.maxLines) {
+    throw new MarkdownParseError("input-too-large", `Markdown input exceeds ${MARKDOWN_PARSER_LIMITS.maxLines} lines`);
+  }
   const blocks: MarkdownBlock[] = [];
   for (let index = 0; index < lines.length;) {
+    if (blocks.length >= MARKDOWN_PARSER_LIMITS.maxBlocks) {
+      throw new MarkdownParseError("output-too-large", `Markdown output exceeds ${MARKDOWN_PARSER_LIMITS.maxBlocks} blocks`);
+    }
     const line = lines[index] ?? "";
     if (line.trim() === "") {
       index += 1;
@@ -142,7 +170,7 @@ function parseMarkdown(markdown: string): MarkdownBlock[] {
       const current = lines[index] ?? "";
       if (current.trim() === ""
         || current.trim().startsWith("```")
-        || /^(#{1,6})\s+/.test(current)
+        || /^(#{1,6})\s+.+$/.test(current)
         || /^\s*(?:[-*+]|\d+\.)\s+/.test(current)
         || current.startsWith("> ")
         || (current.trim().startsWith("|") && isTableSeparator(lines[index + 1] ?? ""))) break;
@@ -172,7 +200,13 @@ function renderListItems(items: readonly { text: string; children: string[] }[],
 }
 
 export function MarkdownContent({ markdown, className }: Readonly<{ markdown: string; className?: string }>): JSX.Element {
-  const blocks = parseMarkdown(markdown);
+  let blocks: MarkdownBlock[];
+  try {
+    blocks = parseMarkdown(markdown);
+  } catch (error: unknown) {
+    if (!(error instanceof MarkdownParseError)) throw error;
+    blocks = [{ kind: "paragraph", text: "This document is too large to display." }];
+  }
   const blockKeys = semanticKeys(blocks, markdownBlockIdentity);
   return (
     <div className={cn("space-y-4", className)}>
