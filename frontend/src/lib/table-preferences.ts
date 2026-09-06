@@ -1,27 +1,37 @@
 import type { TableDensity } from "@/components/ui/table";
 import { isRecord, isString } from "../lib/type-guards";
+import { getActiveUserId } from "./storage-identity";
 
 /**
- * Per-view table preferences (kanban 14.22). Column visibility and density
+ * Per-view table preferences (kanban 14.22, UI-30). Column visibility and density
  * choices are stored per view id so operators do not have to reset their
- * layout on every visit. Local-only, same as the other UI preferences
- * (theme, timezone, sidebar collapse); there is deliberately no server-side
- * settings table for this.
+ * layout on every visit. Preferences are namespaced by the active user identity
+ * with fallback to device-local preferences.
  */
 export type TablePreferences = Readonly<{
   density: TableDensity;
   visibleColumns: readonly string[];
 }>;
 
-const TABLE_PREFS_PREFIX = "terrence-table-prefs:";
+export const TABLE_PREFS_PREFIX = "terrence-table-prefs:";
 
 function storeKey(viewId: string): string {
-  return `${TABLE_PREFS_PREFIX}${viewId}`;
+  const userId = getActiveUserId();
+  return userId !== null ? `${TABLE_PREFS_PREFIX}${userId}:${viewId}` : `${TABLE_PREFS_PREFIX}${viewId}`;
 }
 
 export function getTablePreferences(viewId: string): TablePreferences | null {
   try {
-    const raw = window.localStorage.getItem(storeKey(viewId));
+    const key = storeKey(viewId);
+    let raw = window.localStorage.getItem(key);
+    if ((raw === null || raw === "") && key !== `${TABLE_PREFS_PREFIX}${viewId}`) {
+      const legacyRaw = window.localStorage.getItem(`${TABLE_PREFS_PREFIX}${viewId}`);
+      if (legacyRaw !== null && legacyRaw !== "") {
+        window.localStorage.setItem(key, legacyRaw);
+        window.localStorage.removeItem(`${TABLE_PREFS_PREFIX}${viewId}`);
+        raw = legacyRaw;
+      }
+    }
     if (raw === null || raw === "") return null;
     // SAFETY: localStorage content is untrusted; the parsed object is
     // field-validated below before any value is used.

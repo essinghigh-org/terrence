@@ -1,11 +1,13 @@
 import { isRecord, isString } from "../lib/type-guards";
+import { getActiveUserId, resolveOrgId } from "./storage-identity";
+
 /**
- * Named saved views for the workspace explorer (kanban 14.10).
+ * Named saved views for the workspace explorer (kanban 14.10, UI-30).
  *
  * Operators can pin useful filter combinations as named views (e.g.
- * "Production attention", "Errored infra"). Views are org-scoped and kept
- * locally, mirroring the other UI preferences (theme, timezone, table
- * density); there is deliberately no server-side settings table.
+ * "Production attention", "Errored infra"). Views are scoped by user identity
+ * and stable organization ID so organization renames preserve views and
+ * different user accounts on the same browser do not collide.
  */
 export type SavedView = Readonly<{
   name: string;
@@ -16,8 +18,10 @@ export type SavedView = Readonly<{
 
 const SAVED_VIEWS_PREFIX = "terrence-saved-views:";
 
-function storeKey(orgName: string): string {
-  return `${SAVED_VIEWS_PREFIX}${orgName}`;
+function storeKey(orgIdentifier: string): string {
+  const orgId = resolveOrgId(orgIdentifier) || orgIdentifier;
+  const userId = getActiveUserId();
+  return userId !== null ? `${SAVED_VIEWS_PREFIX}${userId}:${orgId}` : `${SAVED_VIEWS_PREFIX}${orgId}`;
 }
 
 /** True when the localStorage entry carries the SavedView fields. */
@@ -32,12 +36,9 @@ function isSavedView(view: unknown): view is SavedView {
     && isString(candidate.projectFilter);
 }
 
-export function getSavedViews(orgName: string): SavedView[] {
+function parseViews(raw: string | null): SavedView[] {
+  if (raw === null || raw === "") return [];
   try {
-    const raw = window.localStorage.getItem(storeKey(orgName));
-    if (raw === null || raw === "") return [];
-    // SAFETY: localStorage content is untrusted; Array.isArray plus
-    // isSavedView validate the shape before any field is used.
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isSavedView);
@@ -46,20 +47,51 @@ export function getSavedViews(orgName: string): SavedView[] {
   }
 }
 
-export function saveView(orgName: string, view: SavedView): SavedView[] {
-  const views = [...getSavedViews(orgName).filter((existing): boolean => existing.name !== view.name), view];
+export function getSavedViews(orgIdentifier: string): SavedView[] {
   try {
-    window.localStorage.setItem(storeKey(orgName), JSON.stringify(views));
+    const key = storeKey(orgIdentifier);
+    let raw = window.localStorage.getItem(key);
+    if (raw === null || raw === "") {
+      // Legacy migration checks:
+      // 1. Un-namespaced key with resolved orgId
+      // 2. Un-namespaced key with orgIdentifier (legacy orgName key)
+      const orgId = resolveOrgId(orgIdentifier) || orgIdentifier;
+      const candidates = [
+        `${SAVED_VIEWS_PREFIX}${orgId}`,
+        `${SAVED_VIEWS_PREFIX}${orgIdentifier}`,
+      ];
+      for (const legacyKey of candidates) {
+        if (legacyKey !== key) {
+          const legacyRaw = window.localStorage.getItem(legacyKey);
+          if (legacyRaw !== null && legacyRaw !== "") {
+            window.localStorage.setItem(key, legacyRaw);
+            window.localStorage.removeItem(legacyKey);
+            raw = legacyRaw;
+            break;
+          }
+        }
+      }
+    }
+    return parseViews(raw);
+  } catch {
+    return [];
+  }
+}
+
+export function saveView(orgIdentifier: string, view: SavedView): SavedView[] {
+  const views = [...getSavedViews(orgIdentifier).filter((existing): boolean => existing.name !== view.name), view];
+  try {
+    window.localStorage.setItem(storeKey(orgIdentifier), JSON.stringify(views));
   } catch {
     // localStorage unavailable; views are a convenience.
   }
   return views;
 }
 
-export function deleteView(orgName: string, name: string): SavedView[] {
-  const views = getSavedViews(orgName).filter((view): boolean => view.name !== name);
+export function deleteView(orgIdentifier: string, name: string): SavedView[] {
+  const views = getSavedViews(orgIdentifier).filter((view): boolean => view.name !== name);
   try {
-    window.localStorage.setItem(storeKey(orgName), JSON.stringify(views));
+    window.localStorage.setItem(storeKey(orgIdentifier), JSON.stringify(views));
   } catch {
     // localStorage unavailable; views are a convenience.
   }

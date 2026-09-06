@@ -348,7 +348,10 @@ export function CommandPalette({
   ];
 
   const query = search.trim().toLowerCase();
-  const recentItems: CommandItemType[] = getRecentWorkspaces().map((visit): CommandItemType => ({
+  const authorizedOrgSet = new Set(orgs.map((o) => o.name));
+  const recentItems: CommandItemType[] = getRecentWorkspaces()
+    .filter((visit): boolean => orgs.length === 0 || authorizedOrgSet.has(visit.orgName))
+    .map((visit): CommandItemType => ({
     id: `recent-${visit.orgName}-${visit.workspaceName}`,
     category: "Recent",
     icon: History,

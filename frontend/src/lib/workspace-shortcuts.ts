@@ -1,11 +1,12 @@
 import { isNumber, isRecord, isString } from "../lib/type-guards";
+import { getActiveUserId, subscribeStorageIdentity } from "./storage-identity";
+
 /**
- * Recent and pinned workspace shortcuts (kanban 26.11, 26.12).
+ * Recent and pinned workspace shortcuts (kanban 26.11, 26.12, UI-30).
  *
- * Both are operator-local conveniences (like theme/timezone preferences):
- * recent visits and pinned workspaces are kept in localStorage so the
- * sidebar can offer one-click navigation. They are deliberately not
- * server-side: there is no per-user settings table for cross-device sync.
+ * Recent visits and pinned workspaces are scoped to the active signed-in user
+ * identity so multi-tenant/shared browsers do not leak workspace names across
+ * accounts. When logged out, shortcuts default to empty.
  */
 export type WorkspaceVisit = Readonly<{
   orgName: string;
@@ -13,8 +14,8 @@ export type WorkspaceVisit = Readonly<{
   visitedAt: number;
 }>;
 
-const RECENT_KEY = "terrence-recent-workspaces";
-const PINNED_KEY = "terrence-pinned-workspaces";
+const LEGACY_RECENT_KEY = "terrence-recent-workspaces";
+const LEGACY_PINNED_KEY = "terrence-pinned-workspaces";
 const MAX_RECENT = 8;
 
 type ShortcutListener = () => void;
@@ -32,6 +33,21 @@ function notifyShortcutChange(): void {
   for (const listener of listeners) listener();
 }
 
+// Re-notify shortcut listeners whenever the active user identity changes (e.g. login/logout).
+subscribeStorageIdentity((): void => {
+  notifyShortcutChange();
+});
+
+function getRecentKey(): string {
+  const userId = getActiveUserId();
+  return userId !== null ? `${LEGACY_RECENT_KEY}:${userId}` : LEGACY_RECENT_KEY;
+}
+
+function getPinnedKey(): string {
+  const userId = getActiveUserId();
+  return userId !== null ? `${LEGACY_PINNED_KEY}:${userId}` : LEGACY_PINNED_KEY;
+}
+
 /** True when the localStorage entry carries the three WorkspaceVisit fields. */
 function isWorkspaceVisit(entry: unknown): entry is WorkspaceVisit {
   if (!isRecord(entry)) return false;
@@ -43,17 +59,32 @@ function isWorkspaceVisit(entry: unknown): entry is WorkspaceVisit {
     && isNumber(visit.visitedAt);
 }
 
-export function getRecentWorkspaces(): WorkspaceVisit[] {
+function parseVisits(raw: string | null): WorkspaceVisit[] {
+  if (raw === null || raw === "") return [];
   try {
-    const raw = window.localStorage.getItem(RECENT_KEY);
-    if (raw === null || raw === "") return [];
-    // SAFETY: localStorage content is untrusted; Array.isArray plus
-    // isWorkspaceVisit validate the shape before any field is used.
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(isWorkspaceVisit)
-      .slice(0, MAX_RECENT);
+    return parsed.filter(isWorkspaceVisit);
+  } catch {
+    return [];
+  }
+}
+
+export function getRecentWorkspaces(): WorkspaceVisit[] {
+  try {
+    const key = getRecentKey();
+    let raw = window.localStorage.getItem(key);
+    if ((raw === null || raw === "") && key !== LEGACY_RECENT_KEY) {
+      // Legacy migration: if user is active but no user-scoped recents exist yet,
+      // migrate from legacy un-namespaced key once.
+      const legacyRaw = window.localStorage.getItem(LEGACY_RECENT_KEY);
+      if (legacyRaw !== null && legacyRaw !== "") {
+        window.localStorage.setItem(key, legacyRaw);
+        window.localStorage.removeItem(LEGACY_RECENT_KEY);
+        raw = legacyRaw;
+      }
+    }
+    return parseVisits(raw).slice(0, MAX_RECENT);
   } catch {
     return [];
   }
@@ -66,7 +97,7 @@ export function recordWorkspaceVisit(orgName: string, workspaceName: string): vo
       (entry): boolean => entry.orgName !== orgName || entry.workspaceName !== workspaceName,
     );
     entries.unshift({ orgName, workspaceName, visitedAt: Date.now() });
-    window.localStorage.setItem(RECENT_KEY, JSON.stringify(entries.slice(0, MAX_RECENT)));
+    window.localStorage.setItem(getRecentKey(), JSON.stringify(entries.slice(0, MAX_RECENT)));
     notifyShortcutChange();
   } catch {
     // localStorage unavailable; shortcuts are a convenience.
@@ -75,15 +106,17 @@ export function recordWorkspaceVisit(orgName: string, workspaceName: string): vo
 
 export function getPinnedWorkspaces(): WorkspaceVisit[] {
   try {
-    const raw = window.localStorage.getItem(PINNED_KEY);
-    if (raw === null || raw === "") return [];
-    // SAFETY: localStorage content is untrusted; Array.isArray plus
-    // isWorkspaceVisit validate the shape before any field is used.
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(isWorkspaceVisit)
-      .map((entry): WorkspaceVisit => ({ ...entry, visitedAt: 0 }));
+    const key = getPinnedKey();
+    let raw = window.localStorage.getItem(key);
+    if ((raw === null || raw === "") && key !== LEGACY_PINNED_KEY) {
+      const legacyRaw = window.localStorage.getItem(LEGACY_PINNED_KEY);
+      if (legacyRaw !== null && legacyRaw !== "") {
+        window.localStorage.setItem(key, legacyRaw);
+        window.localStorage.removeItem(LEGACY_PINNED_KEY);
+        raw = legacyRaw;
+      }
+    }
+    return parseVisits(raw).map((entry): WorkspaceVisit => ({ ...entry, visitedAt: 0 }));
   } catch {
     return [];
   }
@@ -97,11 +130,12 @@ export function isWorkspacePinned(orgName: string, workspaceName: string): boole
 
 export function setWorkspacePinned(orgName: string, workspaceName: string, pinned: boolean): void {
   try {
+    const key = getPinnedKey();
     const entries = getPinnedWorkspaces().filter(
       (entry): boolean => entry.orgName !== orgName || entry.workspaceName !== workspaceName,
     );
     if (pinned) entries.push({ orgName, workspaceName, visitedAt: 0 });
-    window.localStorage.setItem(PINNED_KEY, JSON.stringify(entries));
+    window.localStorage.setItem(key, JSON.stringify(entries));
     notifyShortcutChange();
   } catch {
     // localStorage unavailable; shortcuts are a convenience.
