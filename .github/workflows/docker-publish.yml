@@ -111,8 +111,8 @@ jobs:
         run: |
           set -euo pipefail
           # Release tags must be pushed only after CI greens the release
-          # merge: pushing early guarantees this failure, because no
-          # successful run exists for the commit yet.
+          # merge: pushing early can fail until a successful run
+          # exists for the commit.
           run_id="$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
           if [[ -z "$run_id" ]]; then
             echo "No successful CI run found for stable release commit $GITHUB_SHA" >&2
