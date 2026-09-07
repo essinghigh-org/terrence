@@ -8,7 +8,7 @@
   "description": "Self-hosted platform for OpenTofu and Terraform remote workflows",
   "license": "MIT",
   "devDependencies": {
-    "eslint": "^10.9.1",
+    "eslint": "^10.10.0",
     "knip": "^6.34.0",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "typescript-eslint": "^8.69.0"
