@@ -87,9 +87,14 @@ export type SparseJournalPlanEntry = {
  *     executing nothing, the caller just stamps the journal row,
  *   - partially present                    -> existing-object statements are
  *     marked skip, the rest still run (statement-level repair),
- *   - nothing present                      -> NOT planned; scanning STOPS so
- *     no later entry is ever stamped past an unapplied one (drizzle compares
- *     against max(created_at), which would permanently skip it).
+ *   - nothing present                      -> all statements run, then the
+ *     row is stamped, exactly as drizzle would have done. The scan never
+ *     stops early: stamping advances contiguously through the whole
+ *     replayable window, so drizzle's max(created_at) comparison stays
+ *     consistent and no later partial entry is ever stranded past an
+ *     unapplied one (2026-09-06 prod incident: the scan used to stop at
+ *     the first fully-absent entry, leaving 0062's pre-existing columns
+ *     to crash drizzle's replay).
  *
  * Statement classification covers what generated migrations emit: ADD COLUMN,
  * CREATE TABLE, CREATE [UNIQUE] INDEX, and retired-table DROP TABLE. Anything
@@ -132,7 +137,6 @@ export function sparseJournalReconcilePlan(
       .map((sql: string): string => sql.trim())
       .filter((sql: string): boolean => sql !== "");
     const planned: PlannedMigrationStatement[] = [];
-    let anyPresent = false;
 
     for (const sql of statements) {
       // DROP TABLE is the one destructive migration emitted for a retired
@@ -142,7 +146,6 @@ export function sparseJournalReconcilePlan(
       if (dropTable?.[1] !== undefined) {
         const present = facts.tables.has(dropTable[1]);
         planned.push({ sql, skip: !present });
-        anyPresent = true;
         continue;
       }
       // ADD COLUMN: skip exactly when the live column already exists.
@@ -152,7 +155,6 @@ export function sparseJournalReconcilePlan(
         const column = addColumn[2];
         const present = table !== undefined && column !== undefined && facts.columns.has(`${table}.${column}`);
         planned.push({ sql, skip: present });
-        if (present) anyPresent = true;
         continue;
       }
       // CREATE TABLE: skip when the table already exists.
@@ -160,7 +162,6 @@ export function sparseJournalReconcilePlan(
       if (createTable?.[1] !== undefined) {
         const present = facts.tables.has(createTable[1]);
         planned.push({ sql, skip: present });
-        if (present) anyPresent = true;
         continue;
       }
       // CREATE [UNIQUE] INDEX: skip when the named index already exists.
@@ -168,21 +169,19 @@ export function sparseJournalReconcilePlan(
       if (createIndex?.[1] !== undefined) {
         const present = facts.indexes.has(createIndex[1]);
         planned.push({ sql, skip: present });
-        if (present) anyPresent = true;
         continue;
       }
       // Anything else: cannot be classified, must run as-is.
       planned.push({ sql, skip: false });
     }
 
-    // A migration with nothing present is left to drizzle entirely — including
-    // its batch transactionality. STOP the scan here: drizzle replays by
-    // max(created_at) comparison, so stamping any later entry would make it
-    // consider this earlier one applied and skip it forever. Journal rows may
-    // only advance contiguously. When the journal is forward-dated we are
-    // already ignoring the timestamp guard, so continue scanning every entry
-    // to reconcile all missing objects rather than stopping at the first gap.
-    if (!anyPresent && !journalForwardDated) break;
+    // Every replayable entry is planned — including fully-absent ones, whose
+    // statements run exactly as drizzle would have run them. Stamps advance
+    // contiguously through the replayable window, so drizzle's
+    // max(created_at) comparison stays consistent. Stopping at the first
+    // fully-absent entry strands later partial entries past an unstamped
+    // gap, and drizzle replays those stranded entries natively and crashes
+    // on their pre-existing objects.
     plan.push({ tag: entry.tag, hash, when: entry.when, statements: planned });
   }
   return plan;
