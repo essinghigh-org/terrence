@@ -110,6 +110,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # Release tags must be pushed only after CI greens the release
+          # merge: pushing early can fail until a successful run
+          # exists for the commit.
           run_id="$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
           if [[ -z "$run_id" ]]; then
             echo "No successful CI run found for stable release commit $GITHUB_SHA" >&2
@@ -186,5 +189,16 @@ jobs:
             echo
             cat build-manifest.json
           } > release-notes.md
-          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Terrence $GITHUB_REF_NAME" --generate-notes --notes-file release-notes.md \
-            build-manifest.json dependency-manifest.json dependency-sbom.spdx.json dependency-change-summary.md supply-chain/dependency-exceptions.json
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "Terrence $GITHUB_REF_NAME" --generate-notes --notes-file release-notes.md \
+              build-manifest.json dependency-manifest.json dependency-sbom.spdx.json dependency-change-summary.md supply-chain/dependency-exceptions.json
+          else
+            # A previous attempt already created the release (e.g. the tag
+            # was pushed before CI finished, then the run was retried):
+            # refresh notes and assets in place instead of failing. Image
+            # tags stay immutable via the guard above; this only converges
+            # the release object and its attachments.
+            gh release edit "$GITHUB_REF_NAME" --title "Terrence $GITHUB_REF_NAME" --notes-file release-notes.md
+            gh release upload "$GITHUB_REF_NAME" --clobber \
+              build-manifest.json dependency-manifest.json dependency-sbom.spdx.json dependency-change-summary.md supply-chain/dependency-exceptions.json
+          fi
