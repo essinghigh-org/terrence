@@ -164,11 +164,19 @@ test("plan classifier: skips existing objects, runs missing ones, leaves untouch
   expect(plan26?.statements[0]).toEqual({ sql: expect.stringContaining("ADD `legacy`"), skip: true });
   expect(plan26?.statements.find((statement) => statement.sql.includes("is_provisional"))?.skip).toBe(false);
   expect(plan26?.statements.every((statement) => statement.sql.length > 0)).toBe(true);
-  // 0027 creates identity_links which is missing -> NOT planned, and the scan
-  // stops so no later entry can be stamped past an unapplied migration.
-  expect(plan.find((entry) => entry.tag === entry27.tag)).toBeUndefined();
-  // 0028 likewise untouched (also excluded by the contiguous-stamp rule).
-  expect(plan.find((entry) => entry.tag === entry28.tag)).toBeUndefined();
+  // 0027 creates identity_links which is missing -> planned with every
+  // statement running: stamps must advance contiguously through the whole
+  // replayable window, because drizzle replays everything newer than the
+  // journal max anyway. Stopping at the first fully-absent entry strands
+  // later partial entries past an unstamped gap (2026-09-06 prod incident:
+  // 0062's pre-existing columns crashed drizzle's replay).
+  const plan27 = plan.find((entry) => entry.tag === entry27.tag);
+  expect(plan27, "journal entry 0027 must be planned").toBeDefined();
+  expect(plan27?.statements.length).toBeGreaterThan(0);
+  expect(plan27?.statements.every((statement) => !statement.skip)).toBe(true);
+  const plan28 = plan.find((entry) => entry.tag === entry28.tag);
+  expect(plan28, "journal entry 0028 must be planned").toBeDefined();
+  expect(plan28?.statements.every((statement) => !statement.skip)).toBe(true);
 
   // Fully-present migration -> planned with every statement skipped (stamp-only).
   // Columns mirror exactly what 0026/0027 create, so every statement classifies
@@ -353,6 +361,65 @@ test("reconciles a retired table that was already removed before boot", async ()
     await rm(dir, { recursive: true, force: true });
   }
 }, 60_000);
+
+test("boots past a partially applied migration stranded past fully-absent ones (2026-09-06 prod incident)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "terrence-sparse-stranded-"));
+  try {
+    // Prod journal stopped at 0053 while agents already carried 0062's
+    // first two columns outside the journal. The reconciler used to stop
+    // scanning at the first fully-absent entry (0054), so drizzle
+    // replayed 0062 natively and aborted on
+    // `duplicate column name: protocol_version`, crash-looping every boot.
+    const dbPath = await buildSparseDatabase(dir, 53);
+    const seed = new Database(dbPath);
+    seed.run("ALTER TABLE agents ADD COLUMN protocol_version text DEFAULT '1' NOT NULL");
+    seed.run("ALTER TABLE agents ADD COLUMN capabilities text NOT NULL DEFAULT '[]'");
+    seed.close();
+
+    const script = `
+      await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/db/index.ts")).href)});
+      const { Database } = await import("bun:sqlite");
+      const raw = new Database(${JSON.stringify(dbPath)});
+      console.log(JSON.stringify({
+        journalCount: (raw.query("SELECT COUNT(*) c FROM __drizzle_migrations").get()).c,
+        artifactFormats: !!raw.query("SELECT 1 FROM pragma_table_info('agents') WHERE name='artifact_formats'").get(),
+        agentProtocolVersion: !!raw.query("SELECT 1 FROM pragma_table_info('runs') WHERE name='agent_protocol_version'").get(),
+        fencingToken: !!raw.query("SELECT 1 FROM pragma_table_info('stack_agent_jobs') WHERE name='fencing_token'").get(),
+        outboxEvents: !!raw.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='outbox_events'").get(),
+      }));
+      raw.close();
+    `;
+    const process = Bun.spawn([Bun.which("bun")!, "-e", script], {
+      cwd: join(import.meta.dir, "../.."),
+      env: { ...Bun.env, DATABASE_URL: `file:${dbPath}`, STORAGE_DIR: join(dir, "storage") },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+    if (exitCode !== 0) console.error(stderr);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout.trim().split("\n").pop()!);
+    const bundled = JSON.parse(readFileSync(join(DRIZZLE_DIR, "meta/_journal.json"), "utf8")) as { entries: unknown[] };
+    expect(result.journalCount).toBe(bundled.entries.length);
+    expect(result.artifactFormats, "0062 remainder must apply").toBe(true);
+    expect(result.agentProtocolVersion, "0062 remainder must apply").toBe(true);
+    expect(result.fencingToken, "0062 remainder must apply").toBe(true);
+    expect(result.outboxEvents, "0063 must apply").toBe(true);
+
+    // Re-boot is a no-op: journal stable, process exits cleanly.
+    const reboot = Bun.spawn([Bun.which("bun")!, "-e", script], {
+      cwd: join(import.meta.dir, "../.."),
+      env: { ...Bun.env, DATABASE_URL: `file:${dbPath}`, STORAGE_DIR: join(dir, "storage") },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [rebootCode, rebootStdout] = await Promise.all([reboot.exited, new Response(reboot.stdout).text()]);
+    expect(rebootCode).toBe(0);
+    expect(JSON.parse(rebootStdout.trim().split("\n").pop()!).journalCount).toBe(bundled.entries.length);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 120_000);
 
 // Guard the helper imports used above so tree-shaking never drops them silently.
 void tableExists;
