@@ -29,12 +29,13 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const MODULE_STORAGE_DIR = join(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "modules");
 
 type RegistryModule = Readonly<typeof registryModules.$inferSelect>;
+type RegistryModuleSource = Pick<RegistryModule, "orgId" | "vcsConnectionType" | "vcsConnectionId" | "repositoryIdentifier">;
 type Credentials = Readonly<{ apiUrl: string; token: string }>;
 export type RegistryModuleCandidate = Readonly<{ version: string; ref: string; sha: string; branch: string | null }>;
 export const REGISTRY_VERSION_IMPORT_BATCH_SIZE = 100;
 
 
-async function credentialsFor(mod: RegistryModule): Promise<Credentials> {
+async function credentialsFor(mod: RegistryModuleSource): Promise<Credentials> {
   if (mod.vcsConnectionType === "github-app" && mod.vcsConnectionId !== null) {
     const installation = await db.query.githubAppInstallations.findFirst({
       where: and(
@@ -80,6 +81,15 @@ async function githubJson<T>(credentials: Credentials, path: string): Promise<T>
   });
   if (!response.ok) throw new Error(`The VCS request failed with HTTP ${response.status}`);
   return response.json() as Promise<T>;
+}
+
+/** Validate registration independently of release tags and Terraform content. */
+export async function validateRegistryModuleRepository(mod: RegistryModuleSource): Promise<void> {
+  const repository = mod.repositoryIdentifier ?? "";
+  if (!REPOSITORY_PATTERN.test(repository)) throw new Error("Repository identifier must use owner/repository format");
+  const credentials = await credentialsFor(mod);
+  const encodedRepository = repository.split("/").map(encodeURIComponent).join("/");
+  await githubJson(credentials, `/repos/${encodedRepository}`);
 }
 
 function tagVersion(tag: string, prefix: string): string | undefined {
@@ -239,9 +249,6 @@ async function synchronizeRegistryModuleOnce(
   try {
     const credentials = await credentialsFor(mod);
     const candidates = await candidatesFor(mod, credentials, branchVersion);
-    if (mod.publishingWorkflow === "tag" && candidates.length === 0) {
-      throw new Error("The repository has no matching semantic version tags");
-    }
     const existing = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, mod.id) });
     const existingVersions = new Set(existing.map((version): string => version.version));
     const outstanding = selectRegistryModuleVersionBatch(candidates, existingVersions, Number.MAX_SAFE_INTEGER);
@@ -280,7 +287,7 @@ async function synchronizeRegistryModuleOnce(
       if (prepared.length > 0) await tx.insert(registryModuleVersions).values(prepared);
       const description = prepared.at(-1)?.metadata;
       await tx.update(registryModules).set({
-        status: "setup_complete",
+        status: prepared.length > 0 || existing.some((version): boolean => version.status === "ok") ? "setup_complete" : "pending",
         description: typeof description?.["description"] === "string" ? description["description"] : mod.description,
         lastSuccessfulSyncAt: completedAt,
         lastSyncAttemptAt: attemptedAt,
