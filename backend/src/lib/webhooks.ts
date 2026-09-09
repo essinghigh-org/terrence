@@ -1656,6 +1656,11 @@ export async function createConfigurationVersionFromVcs(
     }
   }
 
+  const identity = await configuredVcsSource(workspace);
+  const repositoryPath = vcs.identifier.split("/").map(encodeURIComponent).join("/");
+  const commitPath = identity?.provider === "gitlab" ? "-/commit" : identity?.provider === "bitbucket" ? "commits" : "commit";
+  const commitUrl = identity === undefined ? undefined : `https://${identity.host}/${repositoryPath}/${commitPath}/${encodeURIComponent(sha)}`;
+
   const cvId = newResourceId("cv");
   await db.insert(configurationVersions).values({
     id: cvId,
@@ -1663,7 +1668,7 @@ export async function createConfigurationVersionFromVcs(
     status: "pending",
     speculative: false,
     source,
-    ingressAttributes: { commitSha: sha, branch, manualTrigger: true } as typeof configurationVersions.$inferInsert["ingressAttributes"],
+    ingressAttributes: { commitSha: sha, commitUrl, branch, manualTrigger: true } as typeof configurationVersions.$inferInsert["ingressAttributes"],
     statusTimestamps: {},
     statusMetadataSchemaVersion: 1,
   });

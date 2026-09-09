@@ -31,7 +31,6 @@ import { isNumber, isString } from "../lib/type-guards";
 import { safeHttpUrl } from "../lib/safe-url";
 import type { JsonObject } from "@/lib/json";
 import { formatRunSource, isVcsRunSource } from "../lib/run-labels";
-import { resolveRunDisplay } from "../lib/run-status";
 
 type RunItem = {
   id: string;
@@ -511,7 +510,6 @@ export function RunList({
                 const sourceLabel = formatRunSource(run.attributes.source, run.attributes["trigger-reason"]);
 // SAFETY: the fixed source list matches the VCS source union the UI renders.
                 const externalSource = isVcsSource;
-                const display = resolveRunDisplay(run.attributes);
                 return (
                   <article
                     key={run.id}
@@ -572,9 +570,6 @@ export function RunList({
                           Run {shortRunId(run.id)} ({run.attributes.message ?? "Triggered via UI"}): {" "}
                         </span>
                         <StatusBadge status={run.attributes.status} />
-                        <span className="text-right text-2xs text-muted-foreground">
-                          {display.waitingLabel ?? display.outcomeLabel}
-                        </span>
                       </span>
                       <div className="text-right text-xs text-muted-foreground min-w-[5.5rem]">
                         <RelativeTime value={run.attributes["created-at"]} />

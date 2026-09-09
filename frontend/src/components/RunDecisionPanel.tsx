@@ -176,7 +176,7 @@ export function RunDecisionPanel({
     responsible?: string | null;
     staleWarning?: string | null | undefined;
   }>;
-  /** Use the sticky decision rail layout on the run page. */
+  /** Use the decision rail layout on the run page. */
   rail?: boolean;
 }>): React.JSX.Element | null {
   const [requested, setRequested] = useState<RunActionKind | null>(null);
@@ -232,8 +232,8 @@ export function RunDecisionPanel({
     >
       <div className="flex items-start gap-3">
         {decision.kind !== "waiting" && <ToneIcon decision={decision} />}
-        <div className="grid min-w-0 flex-1 items-center gap-x-6 sm:grid-cols-[minmax(0,1fr)_auto]">
-          {rail && <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground sm:col-span-2">Decision</p>}
+        <div className={cn("grid min-w-0 flex-1 items-center gap-x-6", !rail && "sm:grid-cols-[minmax(0,1fr)_auto]")}>
+          {rail && <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground col-span-full">Decision</p>}
           <h2 id="run-decision-heading" className={decision.kind === "waiting" && !rail ? "sr-only" : "text-sm font-semibold text-foreground"}>
             {decision.headline}
           </h2>
@@ -241,7 +241,7 @@ export function RunDecisionPanel({
             <p className="mt-1 max-w-prose text-sm text-muted-foreground sm:col-start-1">{decision.detail}</p>
           )}
           {decision.offers.length > 0 && (
-            <div className="mt-3 flex flex-wrap items-center gap-2 sm:col-start-2 sm:row-span-2 sm:row-start-1 sm:mt-0">
+            <div className={cn("mt-3 flex flex-wrap items-center gap-2", !rail && "sm:col-start-2 sm:row-span-2 sm:row-start-1 sm:mt-0")}>
               {decision.offers.map((item: RunActionOffer): React.JSX.Element => (
                 <Button
                   key={item.kind}
@@ -270,12 +270,12 @@ export function RunDecisionPanel({
             </ul>
           )}
           {rail && context?.staleWarning !== undefined && context.staleWarning !== null && context.staleWarning !== "" && (
-            <p role="status" className="mt-4 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning sm:col-span-2">
+            <p role="status" className="mt-4 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning col-span-full">
               {context.staleWarning}
             </p>
           )}
           {rail && context !== undefined && (
-            <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-current/10 pt-4 text-xs sm:col-span-2">
+            <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-current/10 pt-4 text-xs col-span-full">
               {context.planId !== undefined && (
                 <div className="col-span-2 min-w-0">
                   <dt className="text-muted-foreground">Plan</dt>

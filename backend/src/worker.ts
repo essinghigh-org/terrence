@@ -2229,6 +2229,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     if (!isSimulatedAllowed) {
       await writeLog(runId, "plan", `[terrence] Resolving binary for ${requestedTool} (version: ${requestedVersion})...`);
     }
+    let planHasChanges = true;
     const resolved = isSimulatedAllowed ? null : await ensureBinary(requestedTool, requestedVersion);
 
     const planTimeoutMs = await executionTimeoutMs("plan");
@@ -2268,7 +2269,7 @@ async function executeRunImpl(runId: string): Promise<void> {
       // 2. Run plan
       if (await returnIfRunCanceled(runId)) return;
       await writeLog(runId, "plan", `\n--- Executing ${resolved.tool} plan ---`);
-      const planArgs = [binary, "plan", "-no-color", "-input=false"];
+      const planArgs = [binary, "plan", "-no-color", "-input=false", "-detailed-exitcode"];
       if (!run.refresh) planArgs.push("-refresh=false");
       if (run.refreshOnly || run.operation === "action_only") planArgs.push("-refresh-only");
       if (run.isDestroy === true) planArgs.push("-destroy");
@@ -2298,7 +2299,8 @@ async function executeRunImpl(runId: string): Promise<void> {
       const [planExit] = await waitForTrackedProcess(runId, "plan", planProc, planOutput, planTimeoutMs);
 
       if (await returnIfRunCanceled(runId)) return;
-      if (planExit !== 0) {
+      planHasChanges = planExit === 2;
+      if (planExit !== 0 && planExit !== 2) {
         throw new Error(`${resolved.tool} plan failed with exit code ${planExit}`);
       }
     } else if (isSimulatedAllowed) {
@@ -2410,15 +2412,8 @@ async function executeRunImpl(runId: string): Promise<void> {
       await updateRunStatus(runId, "post_plan_completed");
       if (await returnIfRunCanceled(runId)) return;
 
-      const hasNoResourceChanges = resourceCounts.additions === 0
-        && resourceCounts.changes === 0
-        && resourceCounts.destructions === 0;
-
-      // Check if the plan has drift that needs to be applied to state
-      const hasDrift = planJson !== undefined
-        && Array.isArray((planJson as Record<string, unknown>)["resource_drift"])
-        && ((planJson as Record<string, unknown>)["resource_drift"] as unknown[]).length > 0;
-
+      // Terraform's detailed exit code includes output/import/move changes,
+      // while observed drift alone does not imply there is anything to apply.
       if (run.operation === "action_only") {
         // Action-only runs still need the run-cancellation check and the
         // site-wide apply gates. Without them, a maintenance window or an
@@ -2459,14 +2454,14 @@ async function executeRunImpl(runId: string): Promise<void> {
           await writeLog(
             runId,
             "plan",
-            hasNoResourceChanges && !hasDrift
-              ? `[terrence] Plan has no resource changes and no drift. Automatically applying to update workspace state.`
+            !planHasChanges
+              ? `[terrence] Plan has no changes. Automatically applying to update workspace state.`
               : `[terrence] Cost estimate, policies, and run tasks passed. Proceeding to apply.`,
           );
           await executeApply(runId);
         }
-      } else if (hasNoResourceChanges && !hasDrift && !run.allowEmptyApply) {
-        await writeLog(runId, "plan", `[terrence] Plan has no resource changes or drift. Run finished.`);
+      } else if (!planHasChanges && !run.allowEmptyApply) {
+        await writeLog(runId, "plan", `[terrence] Plan has no changes. Run finished.`);
         await updateRunStatus(runId, "planned_and_finished");
       } else {
         await updateRunStatus(runId, "planned");

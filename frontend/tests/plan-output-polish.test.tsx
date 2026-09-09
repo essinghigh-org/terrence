@@ -284,6 +284,7 @@ test("keeps moves, imports, drift, and output values visible", async () => {
       },
     }],
     output_changes: {
+      unchanged: { actions: ["no-op"], before: "same", after: "same" },
       endpoint: {
         actions: ["update"],
         before: "old.example",
@@ -317,6 +318,7 @@ test("keeps moves, imports, drift, and output values visible", async () => {
   fireEvent.click(view.getByText("Resource drift"));
   expect(view.getByText("aws_instance.drifted")).toBeTruthy();
   fireEvent.click(view.getByText("Output changes"));
+  expect(view.queryByText("unchanged")).toBeNull();
   fireEvent.click(view.getByText("endpoint"));
   expect(view.getByText(JSON.stringify("old.example"))).toBeTruthy();
   expect(view.getByText(JSON.stringify("new.example"))).toBeTruthy();

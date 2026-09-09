@@ -137,7 +137,7 @@ function waitingLabelFor(reason: RunWaitingReason | null, input: RunDisplayInput
   }
   if (reason === "agent-capacity") return "Waiting for an available agent";
   if (reason === "scheduled-start") return "Scheduled to start";
-  if (reason === "human-approval") return "Waiting for a human decision";
+  if (reason === "human-approval") return "Needs confirmation";
   if (reason === "policy-override") return "Waiting for a policy decision";
   return null;
 }

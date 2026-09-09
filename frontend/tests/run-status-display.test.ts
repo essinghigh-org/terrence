@@ -70,7 +70,7 @@ test("policy rejection and execution failure remain distinct", () => {
 
 test("human and policy waits identify the responsible actor", () => {
   const approval = resolveRunDisplay({ status: "needs_confirmation", "status-timestamps": {} });
-  expect(approval.waitingLabel).toBe("Waiting for a human decision");
+  expect(approval.waitingLabel).toBe("Needs confirmation");
   expect(approval.responsible).toContain("authorized reviewer");
 
   const policy = resolveRunDisplay({ status: "policy_soft_failed", "status-timestamps": {} });

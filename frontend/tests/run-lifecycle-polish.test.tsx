@@ -275,7 +275,7 @@ test("separates phase logs and only renders backend-authorized run actions", asy
   expect(view.getByText("Resources changed", { selector: "dt" })).toBeTruthy();
   // One decision surface, stating what the run wants rather than four
   // separately-derived claims about it.
-  expect(view.getByRole("heading", { name: "This run is waiting for you to apply it" }))
+  expect(view.getByRole("heading", { name: "Needs confirmation" }))
     .toBeTruthy();
 // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(planSection as HTMLElement).queryByText("&2 to import")).toBeNull();

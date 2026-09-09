@@ -220,7 +220,7 @@ test("renders before the latest run finishes and ignores an aborted run response
     }));
   });
   await waitFor((): void => {
-    expect(view.getByRole("link", { name: "Latest run: Planned and finished" })).toBeTruthy();
+    expect(view.getByRole("link", { name: "run-staging" })).toBeTruthy();
   });
   const latestRunTime = view.getByText("5 minutes ago");
   expect(latestRunTime.getAttribute("dateTime")).toBe(createdAt);
@@ -232,8 +232,8 @@ test("renders before the latest run finishes and ignores an aborted run response
     }));
     await new Promise<void>((resolve): void => { window.setTimeout(resolve, 0); });
   });
-  expect(view.getByRole("link", { name: "Latest run: Planned and finished" })).toBeTruthy();
-  expect(view.queryByRole("link", { name: "Latest run: applied" })).toBeNull();
+  expect(view.getByRole("link", { name: "run-staging" })).toBeTruthy();
+  expect(view.queryByRole("link", { name: "run-production" })).toBeNull();
 });
 
 test("blocks update-only settings when can-update is false", async () => {

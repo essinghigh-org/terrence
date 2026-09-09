@@ -74,3 +74,47 @@ test("plan counts fall back to the log summary line when plan JSON has no counts
   expect(result.status).toBe("planned_and_finished");
   expect(result).toMatchObject({ additions: 1, changes: 0, destructions: 0, imports: 0 });
 });
+
+for (const [name, exitCode, expectedStatus, change] of [
+  ["observed drift with no planned changes", 0, "planned_and_finished", { actions: ["no-op"] }],
+  ["output-only changes", 2, "planned", { actions: ["no-op"] }],
+  ["import-only changes", 2, "planned", { actions: ["no-op"], importing: { id: "existing" } }],
+] as const) {
+  test(`plan completion respects the CLI change result for ${name}`, async () => {
+    const planJson = {
+      format_version: "1.2",
+      resource_changes: [{ address: "test_resource.example", mode: "managed", change }],
+      resource_drift: [{ address: "test_resource.example", change: { actions: ["update"] } }],
+      output_changes: { value: { actions: [name === "output-only changes" ? "update" : "no-op"], before: "a", after: name === "output-only changes" ? "b" : "a" } },
+    };
+    const result = await runWorkerScript(`
+      const { mkdir, writeFile, chmod } = await import("fs/promises");
+      const { join } = await import("path");
+      const { db } = await import("./src/db/index.ts");
+      const { organizations, workspaces, configurationVersions, runs } = await import("./src/db/schema.ts");
+      const { executeRun } = await import("./src/worker.ts");
+      const binaryDir = join(process.env.STORAGE_DIR, "binaries", "tofu", "1.2.3");
+      await mkdir(binaryDir, { recursive: true });
+      const binary = join(binaryDir, "tofu");
+      await writeFile(binary, process.env.TEST_BINARY);
+      await chmod(binary, 0o755);
+      const configDir = join(process.env.TEST_DIR, "config");
+      await mkdir(configDir);
+      await writeFile(join(configDir, "main.tf"), "terraform {}");
+      const archive = join(process.env.TEST_DIR, "config.tar.gz");
+      const tar = Bun.spawn(["tar", "-czf", archive, "-C", configDir, "."]);
+      if (await tar.exited !== 0) throw new Error("tar failed");
+      await db.insert(organizations).values({ id: "org", name: "org" });
+      await db.insert(workspaces).values({ id: "ws", name: "ws", orgId: "org", iacBinary: "tofu" });
+      await db.insert(configurationVersions).values({ id: "cv", workspaceId: "ws", status: "uploaded", archivePath: archive });
+      await db.insert(runs).values({ id: "run", workspaceId: "ws", configurationVersionId: "cv", status: "pending", terraformVersion: "1.2.3", createdAt: Date.now() });
+      await executeRun("run");
+      const run = await db.query.runs.findFirst({ where: (row, { eq }) => eq(row.id, "run") });
+      console.log(JSON.stringify({ status: run?.status }));
+    `, {
+      NODE_ENV: "production", SIMULATED_RUNS: "false",
+      TEST_BINARY: `#!/bin/sh\ncase "$1" in\ninit) exit 0 ;;\nplan) case " $* " in *" -detailed-exitcode "*) : ;; *) exit 1 ;; esac; touch tfplan; exit ${exitCode} ;;\nshow) echo '${JSON.stringify(planJson)}' ;;\n*) exit 1 ;;\nesac\n`,
+    });
+    expect(result.status).toBe(expectedStatus);
+  });
+}
