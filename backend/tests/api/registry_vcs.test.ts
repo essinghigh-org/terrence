@@ -19,6 +19,8 @@ import {
 import { encryptSecret } from "../../src/lib/secrets";
 import { setExternalUrlTransportForTests } from "../../src/lib/url-safety";
 import { makeRegistryModuleArchive } from "../registry-module-helpers";
+import { syncRegistryModulesForTag } from "../../src/lib/webhooks";
+import { vcsSourceIdentity } from "../../src/lib/vcs-source";
 
 describe("VCS-backed registry modules", () => {
   type VcsPayload = { data: { type: string; attributes: Record<string, unknown> } };
@@ -35,6 +37,7 @@ describe("VCS-backed registry modules", () => {
 
   let directory = "";
   let archiveBytes = new Uint8Array();
+  let repositoryStatus = 200;
   let tags = [
     { name: "networking-v1.2.3", commit: { sha: "sha-123" } },
     { name: "networking-v1.2", commit: { sha: "bad-short" } },
@@ -107,6 +110,9 @@ describe("VCS-backed registry modules", () => {
 
     setExternalUrlTransportForTests(async (target): Promise<Response> => {
       const url = new URL(target.url);
+      if (url.pathname === "/api/v3/repos/acme/terraform-aws-networking") {
+        return Response.json({ full_name: "acme/terraform-aws-networking" }, { status: repositoryStatus });
+      }
       if (url.pathname.endsWith("/tags")) return Response.json(tags);
       if (url.pathname.includes("/branches/")) return Response.json({ commit: { sha: "sha-branch" } });
       if (url.pathname.includes("/tarball/")) {
@@ -231,7 +237,7 @@ describe("VCS-backed registry modules", () => {
     } finally {
       archiveBytes = goodArchive;
     }
-    expect(failed?.status).toBe(422);
+    expect(failed?.status).toBe(201);
     const oversized = await db.query.registryModules.findFirst({ where: eq(registryModules.name, "oversized-download") });
     expect(oversized?.lastSyncError).toContain("too large");
   });
@@ -243,7 +249,7 @@ describe("VCS-backed registry modules", () => {
       "tag-prefix": "networking-",
     }));
     archiveBytes = goodArchive;
-    expect(failed.status).toBe(422);
+    expect(failed.status).toBe(201);
     const broken = await db.query.registryModules.findFirst({ where: eq(registryModules.name, "broken") });
     expect(broken).toMatchObject({ status: "errored" });
     expect(broken?.lastSyncError).toMatch(/gzip|archive|header/i);
@@ -251,5 +257,75 @@ describe("VCS-backed registry modules", () => {
     const protocol = await request(`/api/registry/v1/modules/${orgName}/broken/aws/versions`);
     expect(protocol.status).toBe(200);
     expect((await protocol.json()).modules[0].versions).toEqual([]);
+
+    const recovered = await request(`/api/v2/registry-modules/${broken!.id}/actions/resync`, "POST");
+    expect(recovered.status).toBe(200);
+    expect(await db.query.registryModules.findFirst({ where: eq(registryModules.id, broken!.id) })).toMatchObject({ status: "setup_complete", lastSyncError: null });
+  });
+
+  test("inaccessible repositories leave no row and creation can be retried", async () => {
+    const payload = vcsPayload(`retry-${suffix}`, { "tag-prefix": "networking-" });
+    for (const status of [401, 403, 404]) {
+      repositoryStatus = status;
+      try {
+        const failed = await request(`/api/v2/organizations/${orgName}/registry-modules/vcs`, "POST", payload);
+        expect(failed.status).toBe(422);
+        expect((await failed.json()).errors[0].detail).toContain(`HTTP ${status}`);
+        expect(await db.query.registryModules.findFirst({ where: eq(registryModules.name, `retry-${suffix}`) })).toBeUndefined();
+      } finally {
+        repositoryStatus = 200;
+      }
+    }
+    expect((await request(`/api/v2/organizations/${orgName}/registry-modules/vcs`, "POST", payload)).status).toBe(201);
+    const duplicate = await request(`/api/v2/organizations/${orgName}/registry-modules/vcs`, "POST", payload);
+    expect(duplicate.status).toBe(422);
+    expect((await duplicate.json()).errors[0].detail).toContain("already exists");
+  });
+
+  test("registers an empty repo and ingests its first valid tag after content is fixed", async () => {
+    const originalTags = tags;
+    const goodArchive = archiveBytes;
+    try {
+      tags = [];
+      const created = await request(`/api/v2/organizations/${orgName}/registry-modules/vcs`, "POST", vcsPayload("bootstrap", { "tag-prefix": "bootstrap-" }));
+      expect(created.status).toBe(201);
+      const document = await created.json();
+      const moduleId = document.data.id as string;
+      expect(document.data.attributes.status).toBe("pending");
+      const read = await request(`/api/v2/organizations/${orgName}/registry-modules/private/${orgName}/bootstrap/aws`);
+      expect(read.status).toBe(200);
+      expect((await read.json()).data.id).toBe(moduleId);
+      const emptySync = await request(`/api/v2/registry-modules/${moduleId}/actions/resync`, "POST");
+      expect(emptySync.status).toBe(200);
+      expect((await emptySync.json()).meta.imported).toBe(0);
+      expect(await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, moduleId) })).toHaveLength(0);
+
+      const source = vcsSourceIdentity("github", "https://github.example/acme/terraform-aws-networking");
+      if (source === undefined) throw new Error("Expected valid source identity");
+      tags = [{ name: "bootstrap-v0.1.0", commit: { sha: "empty-commit" } }];
+      const emptyArchive = join(directory, "empty.tar.gz");
+      const emptyDirectory = await mkdtemp(join(directory, "empty-"));
+      await Bun.write(join(emptyDirectory, "README.md"), "Module coming soon");
+      const tar = Bun.spawn(["tar", "-czf", emptyArchive, "-C", emptyDirectory, "."], { stdout: "pipe", stderr: "pipe" });
+      expect(await tar.exited).toBe(0);
+      archiveBytes = new Uint8Array(await Bun.file(emptyArchive).arrayBuffer());
+      await syncRegistryModulesForTag("acme/terraform-aws-networking", "bootstrap-v0.1.0", source);
+      expect(await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) })).toMatchObject({ status: "errored", lastSyncError: "Selected source directory does not contain a Terraform module" });
+      expect(await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, moduleId) })).toHaveLength(0);
+
+      archiveBytes = goodArchive;
+      tags = [{ name: "bootstrap-v0.1.0", commit: { sha: "module-commit" } }];
+      await syncRegistryModulesForTag("acme/terraform-aws-networking", "bootstrap-v0.1.0", source);
+      await syncRegistryModulesForTag("acme/terraform-aws-networking", "bootstrap-v0.1.0", source);
+      expect(await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) })).toMatchObject({ status: "setup_complete", lastSyncError: null });
+      const versions = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, moduleId) });
+      expect(versions).toHaveLength(1);
+      expect(versions[0]).toMatchObject({ version: "0.1.0", commitSha: "module-commit", status: "ok" });
+      const protocol = await request(`/api/registry/v1/modules/${orgName}/bootstrap/aws/versions`);
+      expect((await protocol.json()).modules[0].versions).toEqual([{ version: "0.1.0" }]);
+    } finally {
+      tags = originalTags;
+      archiveBytes = goodArchive;
+    }
   });
 });

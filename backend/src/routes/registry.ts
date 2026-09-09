@@ -45,7 +45,7 @@ import {
   MAX_MODULE_ARCHIVE_BYTES,
 } from "../lib/registry-module-archive";
 import { inspectRegistryModule } from "../lib/registry-module-metadata";
-import { synchronizeRegistryModule } from "../lib/registry-module-sync";
+import { synchronizeRegistryModule, validateRegistryModuleRepository } from "../lib/registry-module-sync";
 import { highestUsableModuleVersion, isModuleVersion, sortModuleVersionsDescending } from "../lib/registry-version";
 import {
   moduleTestConfiguration,
@@ -1417,6 +1417,17 @@ export const registryRoutes = new Elysia({ name: "registry" })
       }
     }
     try {
+      await validateRegistryModuleRepository({
+        orgId: org.id,
+        vcsConnectionType: typeof githubAppInstallationId === "string" ? "github-app" : "oauth-token",
+        vcsConnectionId: typeof githubAppInstallationId === "string" ? githubAppInstallationId : oauthTokenId as string,
+        repositoryIdentifier: identifier,
+      });
+    } catch (error: unknown) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Repository validation failed" }] };
+    }
+    try {
       await db.insert(registryModules).values({
         id,
         orgId: org.id,
@@ -1444,18 +1455,18 @@ export const registryRoutes = new Elysia({ name: "registry" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "This private module already exists" }] };
     }
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
+    if (mod === undefined) throw new Error("Registry module could not be created");
     try {
-      const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
-      if (mod === undefined) throw new Error("Registry module could not be created");
       await synchronizeRegistryModule(mod, branch === null ? undefined : initialVersion);
-      const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
-      if (updated === undefined) throw new Error("Registry module could not be created");
-      (set as { status: number }).status = 201;
-      return { data: await registryModuleResource(updated, org.name, true) };
-    } catch (error: unknown) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Registry module ingestion failed" }] };
+    } catch {
+      // Registration succeeded. Sync records its error on the module, and a
+      // later tag webhook or explicit resync can retry version publication.
     }
+    const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
+    if (updated === undefined) throw new Error("Registry module could not be created");
+    (set as { status: number }).status = 201;
+    return { data: await registryModuleResource(updated, org.name, true) };
   })
   .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
