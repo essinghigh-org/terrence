@@ -1121,7 +1121,8 @@ export function PlanOutput({
       .filter((resource): boolean => resource.change.importing !== undefined).length;
     const moveCount = changedResources
       .filter((resource): boolean => resource.previous_address !== undefined).length;
-    const outputs = Object.entries(planJson.output_changes ?? {});
+    const outputs = Object.entries(planJson.output_changes ?? {})
+      .filter(([, change]): boolean => change.actions.some((action): boolean => action !== "no-op"));
     const actionInvocations = planJson.action_invocations ?? [];
     const removeCount = changedResources.filter((resource): boolean => operationForResource(resource) === "remove").length;
     const unsupportedCount = changedResources.filter((resource): boolean => operationForResource(resource) === "unsupported").length;

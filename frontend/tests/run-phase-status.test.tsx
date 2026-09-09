@@ -55,7 +55,7 @@ test("approval waits attach to the apply stage instead of animating the finished
     hasPolicyChecks: false,
   }).find(stage => stage.id === "apply");
   expect(apply?.state).toBe("waiting");
-  expect(apply?.waitingReason).toBe("Waiting for a human decision");
+  expect(apply?.waitingReason).toBe("Needs confirmation");
 });
 
 test("terminal stages retain completed work and identify the stage that stopped", () => {

@@ -1773,7 +1773,7 @@ export function RunDetail({
 
       </div>
       <aside aria-label="Run decision and context" className="order-1 min-w-0 space-y-5 xl:order-2">
-      <div className="xl:sticky xl:top-4">
+      <div>
         <RunDecisionPanel
           decision={decision}
           status={status}

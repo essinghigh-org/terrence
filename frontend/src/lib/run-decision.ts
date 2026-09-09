@@ -283,8 +283,8 @@ export function resolveRunDecision(
   if (actions?.["is-confirmable"] === true) {
     return {
       kind: "decide",
-      headline: "This run is waiting for you to apply it",
-      detail: "Review the planned changes below, then apply them or discard the plan.",
+      headline: "Needs confirmation",
+      detail: "Review the plan, then apply or discard it.",
       offers: [
         offer("apply", "Apply changes", "primary", applyBlocker(attributes, fresh)),
         ...discardOffer(attributes, fresh, "Discard plan"),
