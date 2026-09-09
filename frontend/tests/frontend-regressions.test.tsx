@@ -210,7 +210,7 @@ test("does not poll WorkspaceDetail while hidden and resumes on visibility", asy
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await waitFor((): void => { expect(runRequests).toBe(1); });
-  expect(view.getByText("Latest run: Planning")).toBeTruthy();
+  expect(view.getByRole("link", { name: "Regression fixture" })).toBeTruthy();
 
   act((): void => {
     setDocumentHidden(true);
@@ -258,11 +258,11 @@ test("stops WorkspaceDetail polling after a terminal run but refreshes on run st
   const resolveInitial = runResolvers[0];
   if (resolveInitial === undefined) throw new Error("Expected the initial latest-run request");
   act((): void => { resolveInitial(json(runDocument("applied"))); });
-  await waitFor((): void => { expect(view.getByText("Latest run: Applied")).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getByRole("link", { name: "Regression fixture" })).toBeTruthy(); });
   expect(runRequests).toBe(1);
   expect(scheduledDelays).toHaveLength(0);
   const liveRegion = view.container.querySelector('[aria-live="polite"]');
-  expect(liveRegion?.textContent).toContain("Latest run: Applied");
+  expect(liveRegion?.textContent).toContain("Applied");
 
   const emit = emitRunStatus;
   if (emit === undefined) throw new Error("Expected the SSE stream to be connected");
@@ -298,8 +298,8 @@ test("stops WorkspaceDetail polling after a terminal run but refreshes on run st
     resolveNewest(json(runDocument("planning")));
     resolveOlder(json(runDocument("errored")));
   });
-  await waitFor((): void => { expect(view.getByText("Latest run: Planning")).toBeTruthy(); });
-  expect(view.queryByText("Latest run: Errored")).toBeNull();
+  await waitFor((): void => { expect(view.getByText("Planning")).toBeTruthy(); });
+  expect(view.queryByText("Errored")).toBeNull();
   expect(scheduledDelays).toHaveLength(1);
 
   act((): void => {
