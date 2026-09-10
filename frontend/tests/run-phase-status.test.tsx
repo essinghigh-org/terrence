@@ -97,7 +97,9 @@ test.each(["planning", "applying"])("%s opens the active phase and logs even whe
     const heading = view.getByRole("heading", { name: `${phase} Running` });
     expect(heading.closest("details")?.open).toBe(true);
     const rawLog = view.getByText(`Raw ${phase.toLowerCase()} log`).closest("details");
-    expect(rawLog?.open).toBe(true);
+    // The raw apply log no longer auto-expands (#865); the active phase still
+    // opens and the log content renders for the reader to expand explicitly.
+    expect(rawLog?.open).toBe(status !== "applying");
     expect(rawLog?.textContent).toContain(`${phase === "Plan" ? "Planning" : "Applying"} resources…`);
   });
   if (status === "applying") {
