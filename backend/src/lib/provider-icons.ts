@@ -11,13 +11,16 @@
 //
 // Flow: parse the provider source (two-part sources use Terraform's documented
 // default registry; explicit hostnames are retained) -> Terraform Registry v2
-// API (4s timeout, 24h memo) -> exact provider's absolute logo URL ->
+// API (4s timeout, persistent one-year memo) -> exact provider's absolute logo URL ->
 // AvatarService cache. The provider-icon image handler delegates to that cache
 // without changing the public route identity.
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, writeFile, rename, unlink } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { discover } from "./discovery-queue";
 import { readTextWithLimit } from "./body-limit";
-import { AvatarService } from "./avatars";
+import { AvatarService, metaPath } from "./avatars";
 import {
   DEFAULT_PROVIDER_REGISTRY_HOST,
   normalizeProviderSource,
@@ -27,7 +30,7 @@ import {
 
 const REGISTRY = `https://${DEFAULT_PROVIDER_REGISTRY_HOST}`;
 const FETCH_TIMEOUT_MS = 4_000;
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const CACHE_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const NEGATIVE_TTL_MS = 30 * 1000; // transient fetch failures: retry soon
 const MAX_CACHE_ENTRIES = 512;
 type CacheEntry = Readonly<{ url: string | null; expiresAt: number }>;
@@ -45,6 +48,39 @@ function setCache(key: string, url: string | null, ttlMs: number): void {
     if (first !== undefined) target.delete(first);
   }
   target.set(key, { url, expiresAt: Date.now() + ttlMs });
+}
+
+function providerCachePath(key: string): string {
+  const directory = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "provider-icons");
+  return join(directory, `${createHash("sha256").update(key).digest("hex")}.json`);
+}
+
+async function persistProviderCache(key: string, url: string, expiresAt: number): Promise<void> {
+  const path = providerCachePath(key);
+  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
+  try {
+    await mkdir(resolve(path, ".."), { recursive: true, mode: 0o700 });
+    await writeFile(temporary, JSON.stringify({ url, expiresAt }), { mode: 0o600 });
+    await rename(temporary, path);
+  } catch {
+    await unlink(temporary).catch((): void => undefined);
+    // A read-only or unavailable cache must not prevent icon discovery.
+  }
+}
+
+function readPersistedProviderCache(key: string): CacheEntry | undefined {
+  try {
+    const entry = JSON.parse(readFileSync(providerCachePath(key), "utf8")) as Partial<CacheEntry>;
+    const version = providerIconVersion(entry.url);
+    if (version === null || typeof entry.expiresAt !== "number" || Date.now() >= entry.expiresAt) return undefined;
+    // Metadata may have been evicted independently; rediscover in that case.
+    if (!existsSync(metaPath(version))) return undefined;
+    const hit = { url: entry.url ?? null, expiresAt: entry.expiresAt };
+    setCache(key, hit.url, hit.expiresAt - Date.now());
+    return hit;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Public compatibility name retained for the provider-icons route/tests. */
@@ -67,7 +103,7 @@ export function providerIconPath(providerName: string | null | undefined, versio
 }
 
 function readProviderCache(key: string): CacheEntry | undefined {
-  const hit = cache.get(key) ?? negativeCache.get(key);
+  const hit = cache.get(key) ?? negativeCache.get(key) ?? readPersistedProviderCache(key);
   if (hit === undefined) return undefined;
   if (Date.now() < hit.expiresAt) return hit;
   cache.delete(key);
@@ -258,7 +294,7 @@ export async function resolveProviderIconUrl(providerName: string | null | undef
   if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
   const key = providerCacheKey(source);
   const now = Date.now();
-  const hit = cache.get(key) ?? negativeCache.get(key);
+  const hit = cache.get(key) ?? negativeCache.get(key) ?? readPersistedProviderCache(key);
   if (hit !== undefined && now < hit.expiresAt) {
     return hit.url;
   }
@@ -273,6 +309,11 @@ export async function resolveProviderIconUrl(providerName: string | null | undef
     // Transient miss (fetch failed / no logo) gets a short TTL so we retry soon.
     const ttl = avatarUrl === null ? NEGATIVE_TTL_MS : CACHE_TTL_MS;
     setCache(key, avatarUrl, ttl);
+    if (avatarUrl !== null) {
+      const version = providerIconVersion(avatarUrl);
+      if (version !== null) await AvatarService.readMeta(version);
+      await persistProviderCache(key, avatarUrl, Date.now() + ttl);
+    }
     return avatarUrl;
   })();
   inflightByKey.set(key, run);

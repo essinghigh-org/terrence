@@ -1,11 +1,14 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { RunDetail } from "../src/views/RunDetail";
 import { RunList } from "../src/views/RunList";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
 import { anyPhaseLog, phaseLogResponse } from "./support/run-log-fixture";
+
+import { EventProvider, type EventStreamFactory } from "../src/lib/event-provider";
+import type { SseEvent } from "../src/lib/events";
 
 const originalFetch = globalThis.fetch;
 
@@ -291,3 +294,45 @@ test("destroy runs from the dialog confirm and pin auto-apply false (issue #586)
     data: { attributes: { "auto-apply": false, "is-destroy": true } },
   });
 }, 15000);
+
+
+test("starting apply opens its section while leaving the raw log collapsed", async () => {
+  let status = "planned";
+  let emit: ((event: SseEvent) => void) | undefined;
+  const streamFactory: EventStreamFactory = (listener) => {
+    emit = listener;
+    return { close: (): void => undefined };
+  };
+  globalThis.fetch = mock(baseMock("run-expand", runFixture({ id: "run-expand" }), (url) => {
+    if (url === "/api/v2/runs/run-expand") return json(runFixture({ id: "run-expand", status }));
+    if (url === "/api/v2/applies/apply-run-expand") return json({ data: { attributes: { status: status === "applying" ? "running" : "pending" } } });
+    return null;
+  }, [])) as unknown as typeof fetch;
+  const view = render(
+    <EventProvider streamFactory={streamFactory}>
+      <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-expand"]}>
+        <Routes><Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<RunDetail />} /></Routes>
+      </MemoryRouter>
+    </EventProvider>,
+  );
+  const section = await waitFor((): HTMLDetailsElement => {
+    const element = view.container.querySelector<HTMLDetailsElement>('details[aria-labelledby="apply-heading"]');
+    expect(element).not.toBeNull();
+    return element!;
+  });
+  const summary = section.querySelector("summary")!;
+  fireEvent.click(summary);
+  await waitFor((): void => { expect(section.open).toBe(true); });
+  const raw = view.getByText("Raw apply log").closest("details")!;
+  expect(raw.open).toBe(false);
+  fireEvent.click(summary);
+  await waitFor((): void => { expect(section.open).toBe(false); });
+  act((): void => {
+    status = "applying";
+    emit?.({ name: "run.status", data: { "run-id": "run-expand", status } });
+  });
+  await waitFor((): void => { expect(section.open).toBe(true); });
+  expect(raw.open).toBe(false);
+  fireEvent.click(summary);
+  await waitFor((): void => { expect(section.open).toBe(false); });
+});

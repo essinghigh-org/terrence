@@ -712,13 +712,8 @@ function resourceIdentity(resource: ResourceChange): string {
   return `${resource.address}:${resource.deposed ?? ""}`;
 }
 
-function ResourceRow({ resource, identity, open, onSelect, onRegister }: Readonly<{
-  resource: ResourceChange;
-  identity: string;
-  open: boolean;
-  onSelect: (address: string | null) => void;
-  onRegister: (address: string, element: HTMLElement | null) => void;
-}>): React.JSX.Element {
+function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): React.JSX.Element {
+  const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const copiedResetTimerRef = useRef<number | undefined>(undefined);
   const mountedRef = useRef(true);
@@ -753,16 +748,10 @@ function ResourceRow({ resource, identity, open, onSelect, onRegister }: Readonl
   return (
     <details
       className="group/resource border-b border-border last:border-b-0"
-      open={open}
-      ref={(element): void => { onRegister(identity, element); }}
-      onToggle={(event): void => { onSelect(event.currentTarget.open ? identity : null); }}
+      onToggle={(event): void => { setOpen(event.currentTarget.open); }}
     >
       <summary
         className="flex cursor-pointer list-none items-center gap-2.5 px-4 py-3 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden"
-        onClick={(event): void => {
-          if ((event.target as HTMLElement).closest("button") !== null) return;
-          onSelect(open ? null : identity);
-        }}
       >
         <ChevronRight className="size-4 shrink-0 rotate-0 text-muted-foreground/70 transition-transform group-open/resource:rotate-90" aria-hidden="true" />
         <span className={`inline-flex shrink-0 items-center justify-center text-sm font-bold leading-none ${config.className}`}>
@@ -980,11 +969,9 @@ export function PlanOutput({
   const [retry, setRetry] = useState(0);
   const [search, setSearch] = useState("");
   const [selectedOps, setSelectedOps] = useState<ReadonlySet<Operation>>(new Set(DEFAULT_SELECTED_OPS));
-  const [selectedResource, setSelectedResource] = useState<string | null>(null);
   const [summaryCopied, setSummaryCopied] = useState(false);
   const summaryCopiedResetTimerRef = useRef<number | undefined>(undefined);
   const mountedRef = useRef(true);
-  const resourceRefs = useRef<Map<string, HTMLElement>>(new Map());
   const activeRunId = useRef(runId);
   const readyRunId = useRef<string | null>(null);
   const degradedTimerRef = useRef<number | undefined>(undefined);
@@ -1011,7 +998,6 @@ export function PlanOutput({
       setLoadState({ kind: "loading" });
       setSearch("");
       setSelectedOps(new Set(DEFAULT_SELECTED_OPS));
-      setSelectedResource(null);
     }
 
     const scheduleDegraded = (): void => {
@@ -1166,13 +1152,6 @@ export function PlanOutput({
       remove: removeCount,
       unsupported: unsupportedCount,
     };
-    const groupedResources = new Map<string, ResourceChange[]>();
-    for (const resource of filteredResources) {
-      const group = resource.module_address ?? "root module";
-      const existing = groupedResources.get(group) ?? [];
-      existing.push(resource);
-      groupedResources.set(group, existing);
-    }
     return {
       planJson,
       changedResources,
@@ -1186,38 +1165,8 @@ export function PlanOutput({
       actionInvocations,
       operationSummary,
       opCounts,
-      groupedResources,
     };
   }, [loadState, search, selectedOps]);
-  const focusNextResource = (): void => {
-    if (derived === null || derived.filteredResources.length === 0) return;
-    const currentIndex = selectedResource === null
-      ? -1
-      : derived.filteredResources.findIndex((resource): boolean => resourceIdentity(resource) === selectedResource);
-    const next = derived.filteredResources[(currentIndex + 1) % derived.filteredResources.length];
-    if (next === undefined) return;
-    const nextAddress = resourceIdentity(next);
-    setSelectedResource(nextAddress);
-    window.setTimeout((): void => {
-      resourceRefs.current.get(nextAddress)?.querySelector<HTMLElement>("summary")?.focus();
-    }, 0);
-  };
-
-  useEffect((): (() => void) | undefined => {
-    if (derived === null) return undefined;
-    const onKeyDown = (event: KeyboardEvent): void => {
-      const target = event.target;
-      if (!(target instanceof HTMLElement)
-        || target.isContentEditable
-        || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
-      if (event.key.toLocaleLowerCase() !== "n") return;
-      event.preventDefault();
-      focusNextResource();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return (): void => { window.removeEventListener("keydown", onKeyDown); };
-  }, [derived, selectedResource]);
-
   if (activeRunId.current !== runId || loadState.kind === "loading") {
     if (planStatus === "running") return <></>;
     return (
@@ -1283,7 +1232,6 @@ export function PlanOutput({
     actionInvocations,
     operationSummary,
     opCounts,
-    groupedResources,
   } = derived;
 
   return (
@@ -1393,16 +1341,6 @@ export function PlanOutput({
             onChange={setSelectedOps}
             opCounts={opCounts}
           />
-          <button
-            type="button"
-            aria-label="Focus next change"
-            aria-keyshortcuts="N"
-            title="Focus next change (N)"
-            onClick={focusNextResource}
-            className="h-8 rounded-md border border-input bg-background px-2.5 text-xs font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Next change
-          </button>
         </div>
         <span aria-live="polite" className="text-xs text-muted-foreground">
           Showing {filteredResources.length} of {changedResources.length}
@@ -1421,56 +1359,8 @@ export function PlanOutput({
         </div>
       ) : (
         <div id="plan-resource-list" aria-label={`Resource list, ${filteredResources.length} items`}>
-          <div className="border-b border-border bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">Resource outline</span>
-            <span className="ml-2">Grouped by module · press N to focus the next change</span>
-          </div>
-          <nav aria-label="Plan resource outline" className="flex flex-wrap gap-2 border-b border-border px-4 py-3">
-            {[...groupedResources.entries()].map(([module, resources]): React.JSX.Element => {
-              const first = resources[0];
-              return (
-                <button
-                  type="button"
-                  key={module}
-                  aria-label={`Show ${module} resources`}
-                  onClick={(): void => {
-                    if (first === undefined) return;
-                    const identity = resourceIdentity(first);
-                    setSelectedResource(identity);
-                    window.setTimeout((): void => {
-                      resourceRefs.current.get(identity)?.scrollIntoView({ behavior: "smooth", block: "center" });
-                    }, 0);
-                  }}
-                  className="rounded border border-input bg-background px-2 py-1 text-xs text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <code className="font-mono">{module}</code>
-                  <span className="ml-1 text-muted-foreground">({resources.length})</span>
-                </button>
-              );
-            })}
-          </nav>
-          {[...groupedResources.entries()].map(([module, resources]): React.JSX.Element => (
-            <section key={module} aria-labelledby={`plan-module-${module.replace(/[^a-zA-Z0-9]+/g, "-")}`}>
-              <h3 id={`plan-module-${module.replace(/[^a-zA-Z0-9]+/g, "-")}`} className="border-b border-border bg-muted/20 px-4 py-2 text-xs font-semibold text-muted-foreground">
-                {module} <span className="font-normal">({resources.length})</span>
-              </h3>
-              {resources.map((resource): React.JSX.Element => {
-                const identity = resourceIdentity(resource);
-                return (
-                  <ResourceRow
-                    key={identity}
-                    resource={resource}
-                    identity={identity}
-                    open={selectedResource === identity}
-                    onSelect={setSelectedResource}
-                    onRegister={(address, element): void => {
-                      if (element === null) resourceRefs.current.delete(address);
-                      else resourceRefs.current.set(address, element);
-                    }}
-                  />
-                );
-              })}
-            </section>
+          {filteredResources.map((resource): React.JSX.Element => (
+            <ResourceRow key={resourceIdentity(resource)} resource={resource} />
           ))}
         </div>
       )}
@@ -1486,22 +1376,9 @@ export function PlanOutput({
             </p>
           ) : (
             <div className="border-t border-border/60">
-              {filteredDrift.map((resource): React.JSX.Element => {
-                const identity = resourceIdentity(resource);
-                return (
-                  <ResourceRow
-                    key={identity}
-                    resource={resource}
-                    identity={`drift:${identity}`}
-                    open={selectedResource === `drift:${identity}`}
-                    onSelect={setSelectedResource}
-                    onRegister={(address, element): void => {
-                      if (element === null) resourceRefs.current.delete(address);
-                      else resourceRefs.current.set(address, element);
-                    }}
-                  />
-                );
-              })}
+              {filteredDrift.map((resource): React.JSX.Element => (
+                <ResourceRow key={resourceIdentity(resource)} resource={resource} />
+              ))}
             </div>
           )}
         </details>
