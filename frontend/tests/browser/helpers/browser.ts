@@ -173,6 +173,28 @@ export class BrowserPage {
     this.runtimeCaptureEnabled = true;
   }
 
+  /**
+   * Navigate, tolerating a still-committing initial navigation. Fresh WebView
+   * instances occasionally report ERR_INVALID_STATE ("a navigation is already
+   * pending") on the first navigate call under xvfb; settle briefly and retry
+   * instead of failing the test.
+   */
+  private async navigateSettled(url: string): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.webview.navigate(url);
+        return;
+      } catch (error) {
+        const code = (error as { code?: unknown }).code;
+        const message = error instanceof Error ? error.message : String(error);
+        const pendingNavigation = code === "ERR_INVALID_STATE"
+          || message.includes("navigation is already pending");
+        if (!pendingNavigation || attempt >= 19) throw error;
+        await Bun.sleep(100);
+      }
+    }
+  }
+
   async goto(url: string, options: GotoOptions = {}): Promise<void> {
     const timeout = options.timeout ?? 15000;
 
@@ -180,7 +202,7 @@ export class BrowserPage {
     // the protected route so application bootstrap sees the initialized state.
     if (options.initStorage) {
       const target = new URL(url);
-      await this.webview.navigate(new URL("/login", target).toString());
+      await this.navigateSettled(new URL("/login", target).toString());
       await this.enableRuntimeCapture();
       const storagePairs = Object.entries(options.initStorage);
       const setStorageScript = `
@@ -193,7 +215,7 @@ export class BrowserPage {
       await this.webview.evaluate(setStorageScript);
     }
 
-    await this.webview.navigate(url);
+    await this.navigateSettled(url);
     await this.enableRuntimeCapture();
 
     // Track requests started after navigation; app readiness below covers
