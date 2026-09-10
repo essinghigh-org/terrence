@@ -199,7 +199,7 @@ test("renders replacement and nested safe diffs and filters resources", async ()
   });
 });
 
-test("summary filters retain replacement resources and next change opens the selected row", async () => {
+test("summary filters retain replacements and flat resource rows expand independently", async () => {
   globalThis.fetch = mock(async (): Promise<Response> => json({
     resource_changes: [
       {
@@ -229,6 +229,17 @@ test("summary filters retain replacement resources and next change opens the sel
     expect(view.getByText("aws_instance.replaced")).toBeTruthy();
   });
 
+  fireEvent.click(view.getByText("aws_instance.replaced"));
+  fireEvent.click(view.getByText("aws_instance.updated"));
+  await waitFor((): void => {
+    expect(view.getByLabelText("Attribute changes for aws_instance.replaced")).toBeTruthy();
+    expect(view.getByLabelText("Attribute changes for aws_instance.updated")).toBeTruthy();
+  });
+  fireEvent.click(view.getByText("aws_instance.replaced"));
+  await waitFor((): void => {
+    expect(view.queryByLabelText("Attribute changes for aws_instance.replaced")).toBeNull();
+  });
+
   fireEvent.click(view.getByRole("button", { name: "1 to create" }));
   await waitFor((): void => {
     expect(view.getByText("aws_instance.replaced")).toBeTruthy();
@@ -236,9 +247,14 @@ test("summary filters retain replacement resources and next change opens the sel
     expect(view.getByText("Showing 1 of 2")).toBeTruthy();
   });
 
-  fireEvent.keyDown(view.container.querySelector("section")!, { key: "n" });
+  expect(view.queryByRole("navigation", { name: "Plan resource outline" })).toBeNull();
+  fireEvent.click(view.getByText("aws_instance.replaced"));
   await waitFor((): void => {
     expect(view.getByLabelText("Attribute changes for aws_instance.replaced")).toBeTruthy();
+  });
+  fireEvent.click(view.getByText("aws_instance.replaced"));
+  await waitFor((): void => {
+    expect(view.queryByLabelText("Attribute changes for aws_instance.replaced")).toBeNull();
   });
 });
 

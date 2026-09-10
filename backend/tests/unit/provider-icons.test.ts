@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -148,6 +148,20 @@ test("resolves exact provider artwork through the Terraform Registry v2 API", as
     expect(metadata?.url).toBe(expectedArtworkUrl);
     expect(requestedUrls).toHaveLength(1);
     expect(requestedUrls[0]).not.toContain("/v1/providers/");
+    const clock = spyOn(Date, "now");
+    const now = Date.now();
+    try {
+      clearProviderIconCache();
+      clock.mockReturnValue(now + 364 * 24 * 60 * 60 * 1000);
+      expect(await resolveProviderIconUrl("cloudflare/cloudflare")).toBe(avatarUrl);
+      expect(requestedUrls).toHaveLength(1);
+      clearProviderIconCache();
+      clock.mockReturnValue(now + 366 * 24 * 60 * 60 * 1000);
+      expect(await resolveProviderIconUrl("cloudflare/cloudflare")).toBe(avatarUrl);
+      expect(requestedUrls).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
 
     const response = await app.handle(new Request(
       "http://terrence.test/api/v2/provider-icons?provider-name=registry.terraform.io%2Fcloudflare%2Fcloudflare",
@@ -204,6 +218,7 @@ test("resolves legacy GitHub slug artwork through the Registry owner avatar", as
     expect(metadata?.url).toBe(expectedArtworkUrl);
     expect(requestedUrls).toHaveLength(2);
     expect(requestedUrls[0]).not.toContain("/v1/providers/");
+
     expect(requestedUrls[1]).toBe("https://registry.terraform.io/github/users/cloudflare");
   } finally {
     globalThis.fetch = originalFetch;
@@ -268,6 +283,7 @@ test("returns no artwork when the v2 response has no exact provider identity", a
     expect(parsed.searchParams.get("filter[namespace]")).toBe("acme");
     expect(parsed.searchParams.get("filter[name]")).toBe("widgets");
     expect(requestedUrls[0]).not.toContain("/v1/providers/");
+
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -290,8 +306,8 @@ test("serves cached artwork through the provider-icon image route", async () => 
     contentType: "image/svg+xml",
     etag: null,
     lastModified: null,
-    fetchedAt: Date.now(),
-    expiresAt: Date.now() + 60_000,
+    fetchedAt: Date.now() - 180 * 24 * 60 * 60 * 1000,
+    expiresAt: Date.now() - 60_000,
     bytes: bytes.byteLength,
     contentHash,
   }));
@@ -303,6 +319,9 @@ test("serves cached artwork through the provider-icon image route", async () => 
   ));
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toBe("image/svg+xml");
+  expect(response.headers.get("cache-control")).toBe("private, max-age=15984000");
+  await AvatarService.sweepCache();
+  expect(AvatarService.hasCached(key)).toBe(true);
   expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
 });
 

@@ -904,25 +904,6 @@ export function WorkspaceDetail({
                       {latestRunError && (
                         <p role="status" className="mt-2 text-xs text-warning">Run status may be out of date.</p>
                       )}
-                      {latestRunSucceeded && (
-                        <div className="mt-5 border-t border-border pt-5">
-                          <WorkspaceGettingStarted
-                            compact
-                            orgName={orgName ?? ""}
-                            workspaceName={workspace.attributes.name}
-                            workspaceId={workspace.id}
-                            engine={workspace.attributes["iac-binary"] ?? "terraform"}
-                            source={workspace.attributes.source}
-                            executionMode={workspace.attributes["execution-mode"]}
-                            agentPoolConfigured={isString(workspace.attributes["agent-pool-id"]) && workspace.attributes["agent-pool-id"] !== ""}
-                            hasRepository={Boolean(workspace.attributes["vcs-repo"]?.identifier)}
-                            localExecution={workspace.attributes["execution-mode"] === "local"}
-                            canQueueRun={canQueueRun}
-                            canUpdate={canUpdate}
-                            canReadVariable={canReadVariable}
-                          />
-                        </div>
-                      )}
                     </>
                   )}
                 </div>

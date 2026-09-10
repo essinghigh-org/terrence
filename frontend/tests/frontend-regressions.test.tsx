@@ -263,6 +263,7 @@ test("stops WorkspaceDetail polling after a terminal run but refreshes on run st
   expect(scheduledDelays).toHaveLength(0);
   const liveRegion = view.container.querySelector('[aria-live="polite"]');
   expect(liveRegion?.textContent).toContain("Applied");
+  expect(view.queryByText("Workspace readiness")).toBeNull();
 
   const emit = emitRunStatus;
   if (emit === undefined) throw new Error("Expected the SSE stream to be connected");
@@ -340,6 +341,7 @@ test("announces run status in the RunList live region", async () => {
   await waitFor((): void => { expect(view.getByText("Applied")).toBeTruthy(); });
   const liveRegion = view.container.querySelector('[aria-live="polite"]');
   expect(liveRegion?.textContent).toContain("Applied");
+  expect(view.queryByText("Workspace readiness")).toBeNull();
   expect(liveRegion?.textContent).toContain("run-1");
   expect(liveRegion?.textContent).toContain("Completed fixture");
 });

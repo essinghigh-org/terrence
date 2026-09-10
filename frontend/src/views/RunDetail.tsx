@@ -370,13 +370,14 @@ function PhaseMeta({
   );
 }
 
-function RunLogDisclosure({ label, status, children }: Readonly<{
+function RunLogDisclosure({ label, status, children, autoExpand = true }: Readonly<{
   label: string;
   status: string;
   children: React.ReactNode;
+  autoExpand?: boolean;
 }>): React.JSX.Element {
   const [expanded, setExpanded] = useState<boolean | null>(null);
-  const open = expanded ?? ["running", "errored", "unreachable"].includes(status);
+  const open = expanded ?? (autoExpand && ["running", "errored", "unreachable"].includes(status));
   return (
     <Disclosure label={label} open={open}
       onToggle={(next): void => { if (next !== open) setExpanded(next); }}
@@ -453,6 +454,10 @@ export function RunDetail({
   const fullscreenContainerRef = useRef<HTMLDivElement | null>(null);
   const [planExpanded, setPlanExpanded] = useState<boolean | null>(null);
   const [applyExpanded, setApplyExpanded] = useState<boolean | null>(null);
+  const applyExecutionStarted = run?.attributes.status === "applying" || apply?.attributes.status === "running";
+  useEffect((): void => {
+    if (applyExecutionStarted) setApplyExpanded(true);
+  }, [runId, applyExecutionStarted]);
   const planOpenRendered = useRef<boolean>(false);
   const applyOpenRendered = useRef<boolean>(false);
   const [commentBody, setCommentBody] = useState("");
@@ -1740,7 +1745,7 @@ export function RunDetail({
             )}
 
             <div id="apply-log-viewer" className="relative">
-                <RunLogDisclosure key={`apply-${runId}`} label="Raw apply log" status={applyStatus}>
+                <RunLogDisclosure key={`apply-${runId}`} label="Raw apply log" status={applyStatus} autoExpand={false}>
                 <RunLogOutput
                   active={applyStatus === "running"}
                   phase="apply"

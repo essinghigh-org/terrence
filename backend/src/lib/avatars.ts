@@ -46,6 +46,7 @@ export const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 6_000;
 const DNS_TIMEOUT_MS = 2_500;
 export const AVATAR_REVALIDATE_MS = 60 * 60 * 1000; // server considers fresh 1h
+export const PROVIDER_ICON_REVALIDATE_MS = 365 * 24 * 60 * 60 * 1000;
 export const AVATAR_CLIENT_CACHE = "private, max-age=86400";
 // Throttle: sweep at most ~1 in this many successful upstream fetches.
 const SWEEP_EVERY_N_FETCHES = 64;
@@ -636,14 +637,14 @@ function buildFetchedAvatarMeta(meta: DeepReadonly<AvatarMeta>, raw: DeepReadonl
     etag: typeof raw.headers.etag === "string" ? raw.headers.etag : meta.etag,
     lastModified: typeof raw.headers["last-modified"] === "string" ? raw.headers["last-modified"] : meta.lastModified,
     fetchedAt: now,
-    expiresAt: now + AVATAR_REVALIDATE_MS,
+    expiresAt: now + (meta.providerId === "provider-icon" ? PROVIDER_ICON_REVALIDATE_MS : AVATAR_REVALIDATE_MS),
     bytes: raw.bytes.length,
     contentHash,
   };
 }
 
 async function handleAvatarNotModified(meta: AvatarMeta, now: number): Promise<AvatarFetchResult> {
-  const refreshed: AvatarMeta = { ...meta, state: "fetched", fetchedAt: now, expiresAt: now + AVATAR_REVALIDATE_MS };
+  const refreshed: AvatarMeta = { ...meta, state: "fetched", fetchedAt: now, expiresAt: now + (meta.providerId === "provider-icon" ? PROVIDER_ICON_REVALIDATE_MS : AVATAR_REVALIDATE_MS) };
   await writeMeta(refreshed);
   return { ok: true, status: 304, message: null, meta: refreshed };
 }
@@ -876,6 +877,12 @@ async function sweepAvatarCache(): Promise<{ removed: number }> {
   if (shardNames === null) return { removed: 0 };
   const entries = await collectAvatarEntries(dir, shardNames);
   await hydrateAvatarEntries(entries);
+  // Provider artwork has its own one-year retention, independent of avatar budgets.
+  for (const key of entries.keys()) {
+    const meta = await readAvatarMeta(key);
+    if (meta?.providerId === "provider-icon" && meta.fetchedAt !== null
+      && now < meta.fetchedAt + PROVIDER_ICON_REVALIDATE_MS) entries.delete(key);
+  }
   const removals = selectAgeBasedRemovals(entries, now, maxAgeMs);
   selectBudgetRemovals(entries, removals, maxBytes, maxEntries);
   const removed = await removeAvatarEntries(entries, removals);
