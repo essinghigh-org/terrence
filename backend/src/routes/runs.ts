@@ -1819,6 +1819,49 @@ async function queuePendingRun(
   return { data: await actionRunResource(updatedRun, authorized.workspace, user?.id, orgId ?? null, teamId ?? null) };
 }
 
+const FORCE_CANCELABLE_RUN_STATUSES: readonly string[] = ["pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed", "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated", "policy_checking", "policy_override", "policy_checked", "post_plan_running", "post_plan_completed", "confirmed", "apply_queued", "applying", "canceled"];
+
+function requiresCancelBeforeForceCancel(
+  statusTimestamps: AuthorizedRun["run"]["statusTimestamps"],
+  status: string,
+): boolean {
+  const cancelRequestedAt = statusTimestamps?.["cancel-requested-at"];
+  return cancelRequestedAt === undefined || !FORCE_CANCELABLE_RUN_STATUSES.includes(status);
+}
+
+async function forceCancelActiveRun(
+  authorized: AuthorizedRun,
+  runId: string,
+  user: ParamCtx["user"],
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ ok: true } | { failure: unknown }>> {
+  const updated = await db.update(runs).set({ status: "force_canceled" }).where(and(
+    eq(runs.id, runId),
+    eq(runs.status, authorized.run.status),
+    inArray(runs.status, [...FORCE_CANCELABLE_RUN_STATUSES]),
+  )).returning();
+  if (updated.length === 0) {
+    (set as { status: number }).status = 409;
+    return { failure: { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-cancelable" }] } };
+  }
+  await revokeRunTokens(runId);
+  const { cancelRunExecution, cleanupSavedPlan, scheduleRunWorkDirCleanup } = await import("../worker");
+  cancelRunExecution(runId, true);
+  scheduleRunWorkDirCleanup(runId);
+  await cleanupSavedPlan(runId);
+  await cancelAgentJobsForRun(runId);
+  await auditLog("force-cancel", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+    workspaceId: authorized.workspace.id,
+    fromStatus: authorized.run.status,
+    toStatus: "force_canceled",
+    ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+  });
+  queueRunNotification(runId, "run:errored", "force_canceled");
+  (set as { status: number }).status = 202;
+  return { ok: true as const };
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -2635,31 +2678,12 @@ export const runRoutes = new Elysia({ name: "runs" })
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const cancelRequestedAt = authorized.run.statusTimestamps?.["cancel-requested-at"];
-    if (cancelRequestedAt === undefined || !["pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed", "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated", "policy_checking", "policy_override", "policy_checked", "post_plan_running", "post_plan_completed", "confirmed", "apply_queued", "applying", "canceled"].includes(authorized.run.status)) {
+    if (requiresCancelBeforeForceCancel(authorized.run.statusTimestamps, authorized.run.status)) {
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Cancel the run before force-canceling it" }] };
     }
-    const updated = await db.update(runs).set({ status: "force_canceled" }).where(and(
-      eq(runs.id, runId),
-      eq(runs.status, authorized.run.status),
-      inArray(runs.status, ["pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed", "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated", "policy_checking", "policy_override", "policy_checked", "post_plan_running", "post_plan_completed", "confirmed", "apply_queued", "applying", "canceled"]),
-    )).returning();
-    if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-cancelable" }] }; }
-    await revokeRunTokens(runId);
-    const { cancelRunExecution, cleanupSavedPlan, scheduleRunWorkDirCleanup } = await import("../worker");
-    cancelRunExecution(runId, true);
-    scheduleRunWorkDirCleanup(runId);
-    await cleanupSavedPlan(runId);
-    await cancelAgentJobsForRun(runId);
-    await auditLog("force-cancel", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
-      workspaceId: authorized.workspace.id,
-      fromStatus: authorized.run.status,
-      toStatus: "force_canceled",
-      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
-    });
-    queueRunNotification(runId, "run:errored", "force_canceled");
-    (set as { status: number }).status = 202;
+    const canceled = await forceCancelActiveRun(authorized, runId, user, teamId, set);
+    if ("failure" in canceled) return canceled.failure;
     return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
