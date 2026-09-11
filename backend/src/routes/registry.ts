@@ -1312,6 +1312,50 @@ type ProviderPlatformFields = Readonly<{
   shasum: string;
 }>;
 
+type ProviderVersionFields = Readonly<{
+  version: string;
+  keyId: string | null;
+  protocols: string[];
+  shasumsUrl: string | null;
+  shasumsSignatureUrl: string | null;
+}>;
+
+async function resolveProviderForWrite(
+  params: Readonly<Record<string, string>>,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ provider: ProvItem } | { failure: unknown }>> {
+  if (params["registry_name"] !== "private") return { failure: registryNotFound(set) };
+  const org = await cachedOrgByName(params["org_name"] ?? "");
+  const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
+  if (org === undefined || provider === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-providers"))) return { failure: registryNotFound(set) };
+  return { provider };
+}
+
+async function parseProviderVersionFields(
+  body: unknown,
+  orgId: string,
+  namespace: string,
+): Promise<ProviderVersionFields | Readonly<{ error: string }>> {
+  const attrs = jsonApiAttributes(body);
+  const version = typeof attrs["version"] === "string" ? attrs["version"] : "";
+  if (version === "") return { error: "Version is required" };
+  const rawKeyId = attrs["key-id"];
+  if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) return { error: "key-id must identify a GPG key" };
+  const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
+  if (keyId !== null && await registrySigningKey(orgId, namespace, keyId) === undefined) return { error: "key-id must identify a GPG key in the provider namespace" };
+  const protocols = Array.isArray(attrs["protocols"]) ? (attrs["protocols"] as string[]) : ["5.0"];
+  return {
+    version,
+    keyId,
+    protocols,
+    shasumsUrl: typeof attrs["shasums-url"] === "string" ? attrs["shasums-url"] : null,
+    shasumsSignatureUrl: typeof attrs["shasums-signature-url"] === "string" ? attrs["shasums-signature-url"] : null,
+  };
+}
+
 function jsonApiAttributes(body: unknown): Record<string, unknown> {
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
   const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
@@ -2412,24 +2456,18 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return version === undefined ? registryNotFound(set) : { data: registryProviderVersionResource(version) };
   })
   .post("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-    if (org === undefined || provider === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return registryNotFound(set);
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const version = typeof attrs["version"] === "string" ? attrs["version"] : "";
-    if (version === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version is required" }] }; }
-    const rawKeyId = attrs["key-id"];
-    if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key" }] }; }
-    const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
-    if (keyId !== null && await registrySigningKey(org.id, provider.namespace, keyId) === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key in the provider namespace" }] }; }
+    const resolved = await resolveProviderForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { provider } = resolved;
+    const fields = await parseProviderVersionFields(body, provider.orgId, provider.namespace);
+    if ("error" in fields) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
+    }
     const id = newResourceId("provver");
-    const protocols = Array.isArray(attrs["protocols"]) ? (attrs["protocols"] as string[]) : ["5.0"];
     const createdAt = Date.now();
     try {
-      await db.insert(registryProviderVersions).values({ id, providerId: provider.id, version, keyId, protocols, shasumsUrl: typeof attrs["shasums-url"] === "string" ? attrs["shasums-url"] : null, shasumsSignatureUrl: typeof attrs["shasums-signature-url"] === "string" ? attrs["shasums-signature-url"] : null, createdAt });
+      await db.insert(registryProviderVersions).values({ id, providerId: provider.id, version: fields.version, keyId: fields.keyId, protocols: fields.protocols, shasumsUrl: fields.shasumsUrl, shasumsSignatureUrl: fields.shasumsSignatureUrl, createdAt });
     } catch (error: unknown) {
       if (!isUniqueConstraintError(error)) throw error;
       (set as { status: number }).status = 422;
