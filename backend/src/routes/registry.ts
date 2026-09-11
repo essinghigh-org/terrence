@@ -35,6 +35,7 @@ import {
   pageRequest,
   pagination,
   type DeepReadonly,
+  type RequestWithUrl,
 } from "../lib/utils";
 import { join } from "path";
 import { mkdir, rm, writeFile } from "fs/promises";
@@ -1308,6 +1309,59 @@ type OrgRowForWrite = NonNullable<Awaited<ReturnType<typeof cachedOrgByName>>>;
 
 type NoCodeRow = typeof noCodeModules.$inferSelect;
 
+function moduleListWhere(orgId: string, query: URLSearchParams): SQL | undefined {
+  const search = (query.get("q") ?? "").trim().toLocaleLowerCase();
+  const provider = query.get("filter[provider]");
+  const publishingMechanism = query.get("filter[publishing_mechanism]");
+  const conditions: SQL[] = [eq(registryModules.orgId, orgId)];
+  if (search !== "") {
+    const pattern = `%${search}%`;
+    const searchCondition = or(
+      sql`lower(${registryModules.namespace}) like ${pattern}`,
+      sql`lower(${registryModules.name}) like ${pattern}`,
+      sql`lower(${registryModules.provider}) like ${pattern}`,
+    );
+    if (searchCondition !== undefined) conditions.push(searchCondition);
+  }
+  if (provider !== null && provider !== "") conditions.push(eq(registryModules.provider, provider));
+  if (publishingMechanism !== null && publishingMechanism !== "") {
+    conditions.push(eq(registryModules.publishingMechanism, publishingMechanism));
+  }
+  return and(...conditions);
+}
+
+function moduleListOrderBy(sort: string | null): SQL[] {
+  if (sort === "name") return [asc(registryModules.name), asc(registryModules.provider), asc(registryModules.id)];
+  if (sort === "provider") return [asc(registryModules.provider), asc(registryModules.name), asc(registryModules.id)];
+  return [desc(registryModules.updatedAt), asc(registryModules.id)];
+}
+
+async function buildModuleListResponse(
+  request: RequestWithUrl,
+  page: Readonly<{ number: number; size: number }>,
+  orgName: string,
+  canManage: boolean,
+  pageModules: readonly ModItem[],
+  total: number,
+  providerRows: readonly { provider: string }[],
+): Promise<Record<string, unknown>> {
+  const pageData = pagination(request, page.number, page.size, total);
+  const pageVersions = pageModules.length === 0 ? [] : await db.query.registryModuleVersions.findMany({
+    where: inArray(registryModuleVersions.moduleId, pageModules.map((mod): string => mod.id)),
+    orderBy: [desc(registryModuleVersions.createdAt)],
+  });
+  const versionsByModule = Map.groupBy(pageVersions, (version): string => version.moduleId);
+  return {
+    data: await Promise.all(pageModules.map(async (mod): Promise<Record<string, unknown>> =>
+      await registryModuleResource(mod, orgName, canManage, versionsByModule.get(mod.id) ?? []))),
+    ...pageData,
+    meta: {
+      ...pageData.meta,
+      providers: providerRows.map(({ provider: name }): string => name).sort(),
+    },
+  };
+}
+
 function parseRegistryModuleFields(
   body: unknown,
   orgName: string,
@@ -2008,37 +2062,14 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const query = new URL(request.url).searchParams;
-    const search = (query.get("q") ?? "").trim().toLocaleLowerCase();
-    const provider = query.get("filter[provider]");
-    const publishingMechanism = query.get("filter[publishing_mechanism]");
-    const requestedSort = query.get("sort");
-    const sort = requestedSort === "name" || requestedSort === "provider" ? requestedSort : "updated";
-    const conditions: SQL[] = [eq(registryModules.orgId, org.id)];
-    if (search !== "") {
-      const pattern = `%${search}%`;
-      const searchCondition = or(
-        sql`lower(${registryModules.namespace}) like ${pattern}`,
-        sql`lower(${registryModules.name}) like ${pattern}`,
-        sql`lower(${registryModules.provider}) like ${pattern}`,
-      );
-      if (searchCondition !== undefined) conditions.push(searchCondition);
-    }
-    if (provider !== null && provider !== "") conditions.push(eq(registryModules.provider, provider));
-    if (publishingMechanism !== null && publishingMechanism !== "") {
-      conditions.push(eq(registryModules.publishingMechanism, publishingMechanism));
-    }
-    const where = and(...conditions);
+    const where = moduleListWhere(org.id, query);
     const page = pageRequest(request);
     const start = (page.number - 1) * page.size;
     const canManage = await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules");
     const [pageModules, countRows, providerRows] = await Promise.all([
       db.query.registryModules.findMany({
         where,
-        orderBy: sort === "name"
-          ? [asc(registryModules.name), asc(registryModules.provider), asc(registryModules.id)]
-          : sort === "provider"
-            ? [asc(registryModules.provider), asc(registryModules.name), asc(registryModules.id)]
-            : [desc(registryModules.updatedAt), asc(registryModules.id)],
+        orderBy: moduleListOrderBy(query.get("sort")),
         limit: page.size,
         offset: start,
       }),
@@ -2047,21 +2078,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
         .from(registryModules)
         .where(eq(registryModules.orgId, org.id)),
     ]);
-    const pageData = pagination(request, page.number, page.size, countRows[0]?.total ?? 0);
-    const pageVersions = pageModules.length === 0 ? [] : await db.query.registryModuleVersions.findMany({
-      where: inArray(registryModuleVersions.moduleId, pageModules.map((mod): string => mod.id)),
-      orderBy: [desc(registryModuleVersions.createdAt)],
-    });
-    const versionsByModule = Map.groupBy(pageVersions, (version): string => version.moduleId);
-    return {
-      data: await Promise.all(pageModules.map(async (mod): Promise<Record<string, unknown>> =>
-        await registryModuleResource(mod, org.name, canManage, versionsByModule.get(mod.id) ?? []))),
-      ...pageData,
-      meta: {
-        ...pageData.meta,
-        providers: providerRows.map(({ provider: name }): string => name).sort(),
-      },
-    };
+    return await buildModuleListResponse(request, page, org.name, canManage, pageModules, countRows[0]?.total ?? 0, providerRows);
   })
   .post("/api/v2/organizations/:org_name/registry-modules", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
