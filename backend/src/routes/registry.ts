@@ -626,40 +626,44 @@ function matchesTerraformType(value: unknown, type: TerraformType): boolean {
   return matchesObjectType(value, objectType.fields);
 }
 
+function variableOptionValues(id: string | undefined, values: Readonly<Record<string, unknown>>): VariableOptionInput | Readonly<{ error: string }> {
+  const variableName = values["variable-name"];
+  const variableType = values["variable-type"];
+  const options = values["options"];
+  if (typeof variableName !== "string" || !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(variableName)) {
+    return { error: "variable-name must be a valid Terraform variable name" };
+  }
+  if (typeof variableType !== "string") return { error: `variable-type is required for ${variableName}` };
+  const terraformType = parseTerraformType(variableType.trim());
+  if (terraformType === undefined) return { error: `variable-type is invalid for ${variableName}` };
+  if (!Array.isArray(options)) return { error: `options must be an array for ${variableName}` };
+  if (!options.every((option: unknown): boolean => matchesTerraformType(option, terraformType))) {
+    return { error: `options must match variable-type for ${variableName}` };
+  }
+  return { id, variableName, variableType: variableType.trim(), options };
+}
+
+function variableOptionEntry(entry: unknown): VariableOptionInput | Readonly<{ error: string }> {
+  if (entry === null || typeof entry !== "object") return { error: "variable-options entries must be objects" };
+  const item = entry as Record<string, unknown>;
+  if (item["type"] !== "variable-options") return { error: "variable-options type must be variable-options" };
+  const id = item["id"];
+  if (id !== undefined && (typeof id !== "string" || id === "")) return { error: "variable-options id must be a non-empty string" };
+  const attributes = item["attributes"];
+  if (attributes === null || typeof attributes !== "object") return { error: "variable-options attributes are required" };
+  return variableOptionValues(typeof id === "string" ? id : undefined, attributes as Record<string, unknown>);
+}
+
 function variableOptionsInput(raw: unknown): readonly VariableOptionInput[] | Readonly<{ error: string }> {
   if (!Array.isArray(raw)) return { error: "variable-options.data must be an array" };
   const parsed: VariableOptionInput[] = [];
   const names = new Set<string>();
   for (const entry of raw) {
-    if (entry === null || typeof entry !== "object") return { error: "variable-options entries must be objects" };
-    const item = entry as Record<string, unknown>;
-    if (item["type"] !== "variable-options") return { error: "variable-options type must be variable-options" };
-    const id = item["id"];
-    if (id !== undefined && (typeof id !== "string" || id === "")) return { error: "variable-options id must be a non-empty string" };
-    const attributes = item["attributes"];
-    if (attributes === null || typeof attributes !== "object") return { error: "variable-options attributes are required" };
-    const values = attributes as Record<string, unknown>;
-    const variableName = values["variable-name"];
-    const variableType = values["variable-type"];
-    const options = values["options"];
-    if (typeof variableName !== "string" || !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(variableName)) {
-      return { error: "variable-name must be a valid Terraform variable name" };
-    }
-    if (names.has(variableName)) return { error: `variable-options contains duplicate variable-name ${variableName}` };
-    names.add(variableName);
-    if (typeof variableType !== "string") return { error: `variable-type is required for ${variableName}` };
-    const terraformType = parseTerraformType(variableType.trim());
-    if (terraformType === undefined) return { error: `variable-type is invalid for ${variableName}` };
-    if (!Array.isArray(options)) return { error: `options must be an array for ${variableName}` };
-    if (!options.every((option: unknown): boolean => matchesTerraformType(option, terraformType))) {
-      return { error: `options must match variable-type for ${variableName}` };
-    }
-    parsed.push({
-      id: typeof id === "string" ? id : undefined,
-      variableName,
-      variableType: variableType.trim(),
-      options,
-    });
+    const result = variableOptionEntry(entry);
+    if ("error" in result) return result;
+    if (names.has(result.variableName)) return { error: `variable-options contains duplicate variable-name ${result.variableName}` };
+    names.add(result.variableName);
+    parsed.push(result);
   }
   return parsed;
 }
