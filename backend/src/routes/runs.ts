@@ -1019,10 +1019,11 @@ function manifestProvenanceVariables(
 }
 
 function resolveRunDisplayFields(
-  message: string,
+  attributes: Readonly<Record<string, unknown>>,
   requestedPlanOnly: boolean | undefined,
   configurationVersion: typeof configurationVersions.$inferSelect | undefined,
 ): Readonly<{ planOnly: boolean; finalMsg: string }> {
+  const message = typeof attributes["message"] === "string" ? attributes["message"] : "";
   return {
     planOnly: requestedPlanOnly ?? configurationVersion?.speculative ?? false,
     finalMsg: message !== "" ? message : (configurationVersion?.source === "tfe-cli" ? "Triggered via CLI" : "Triggered via UI"),
@@ -1099,7 +1100,7 @@ async function completeRunCreationResponse(
     id: string;
     workspaceId: string;
     orgId: string;
-    userId: string | undefined;
+    userId: string | null;
     origin: RunOrigin | undefined;
     nowIso: string;
     autoApplySuppressed: boolean;
@@ -1109,7 +1110,7 @@ async function completeRunCreationResponse(
     set: SetObj;
   }>,
 ): Promise<Record<string, unknown>> {
-  await auditLog("create", "runs", input.id, input.userId ?? null, input.orgId, {
+  await auditLog("create", "runs", input.id, input.userId, input.orgId, {
     workspaceId: input.workspaceId,
     status: "pending",
     source: input.origin?.source ?? "tfe-api",
@@ -1147,8 +1148,11 @@ async function assembleRunProvenance(
   effectiveVersion: string | null,
   id: string,
   createdAt: number,
-  runVariables: Awaited<ReturnType<typeof runVariablesForWrite>> | null,
-): Promise<Awaited<ReturnType<typeof buildRunProvenanceCapsule>>> {
+  runVariablesInput: Parameters<typeof runVariablesForWrite>[0] | null,
+): Promise<Readonly<{
+  provenance: Awaited<ReturnType<typeof buildRunProvenanceCapsule>>;
+  runVariables: Awaited<ReturnType<typeof runVariablesForWrite>> | null;
+}>> {
   const [effectiveVariables, inputState] = await Promise.all([
     effectiveWorkspaceVariables(workspace.id, workspace.orgId, workspace.projectId ?? null),
     db.query.stateVersions.findFirst({
@@ -1157,7 +1161,8 @@ async function assembleRunProvenance(
       columns: { id: true, uploadSha256: true },
     }),
   ]);
-  return await buildRunProvenanceCapsule({
+  const runVariables = runVariablesInput === null ? null : await runVariablesForWrite(runVariablesInput);
+  const provenance = await buildRunProvenanceCapsule({
     runId: id,
     createdAt,
     configurationVersionId: cvId ?? null,
@@ -1175,6 +1180,7 @@ async function assembleRunProvenance(
     runVariables: runVariables ?? [],
     ...manifestProvenanceVariables(effectiveVariables),
   });
+  return { provenance, runVariables };
 }
 
 type AuthorizedRun = NonNullable<Awaited<ReturnType<typeof findAuthorizedRun>>>;
@@ -1273,7 +1279,6 @@ export async function createRun(
   set: SetObj,
   idempotency: IdempotencyContext | null = null,
 ): Promise<Record<string, unknown> | { errors: { status: string; title: string; detail?: string }[] }> {
-  const message = typeof attributes["message"] === "string" ? attributes["message"] : "";
   const operationRequest = parseRunOperationRequest(attributes, set);
   if ("failure" in operationRequest) return operationRequest.failure;
   const { requestedOperation, isDestroy, invokeActionAddrs } = operationRequest.request;
@@ -1306,11 +1311,11 @@ export async function createRun(
   const id = newRunId();
   const createdAt = Date.now();
   const logToken = crypto.randomUUID();
-  const { planOnly, finalMsg } = resolveRunDisplayFields(message, requestedPlanOnly, configurationVersion);
-  const runVariables = runVariablesInput === null ? null : await runVariablesForWrite(runVariablesInput);
+  const actorId = user?.id ?? null;
+  const { planOnly, finalMsg } = resolveRunDisplayFields(attributes, requestedPlanOnly, configurationVersion);
   const nowIso = new Date(createdAt).toISOString();
   const origin = originForConfiguration(configurationVersion);
-  const provenance = await assembleRunProvenance(workspace, cvId, configurationVersion, effectiveTool, effectiveVersion, id, createdAt, runVariables);
+  const { provenance, runVariables } = await assembleRunProvenance(workspace, cvId, configurationVersion, effectiveTool, effectiveVersion, id, createdAt, runVariablesInput);
   // The lock was validated above, but that check and the insert below are
   // separate statements; re-validate inside the insert transaction so a
   // concurrent workspace lock can never slip a queued run past the 422.
@@ -1320,7 +1325,7 @@ export async function createRun(
       columns: { locked: true, lockedReason: true },
     });
     if (fresh?.locked === true) return { lockedReason: fresh.lockedReason ?? null };
-    await tx.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, inputSchemaVersion: 1, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, statusMetadataSchemaVersion: 1, createdBy: user?.id ?? null, appliedAt: null, createdAt });
+    await tx.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, inputSchemaVersion: 1, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, statusMetadataSchemaVersion: 1, createdBy: actorId, appliedAt: null, createdAt });
     await tx.insert(runProvenanceCapsules).values({
       id: newResourceId("rpc"),
       runId: id,
@@ -1338,14 +1343,14 @@ export async function createRun(
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(lockConflict.lockedReason) }] };
   }
   scheduleExplorerInventory(workspaceId);
-  const createdRun = { id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, agentVersion: null, agentProtocolVersion: null, agentCapabilities: null, agentExecutionPolicy: null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, inputSchemaVersion: 1, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, statusMetadataSchemaVersion: 1, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, scheduledAt: null, softDeletedAt: null, createdAt };
+  const createdRun = { id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, agentVersion: null, agentProtocolVersion: null, agentCapabilities: null, agentExecutionPolicy: null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, inputSchemaVersion: 1, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, statusMetadataSchemaVersion: 1, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: actorId, appliedAt: null, scheduledAt: null, softDeletedAt: null, createdAt };
   const createdLinkage = await linkageForRuns([createdRun]);
   const createdResource = runResource(createdRun, canApply, false, origin, undefined, undefined, createdLinkage.get(id));
   return await completeRunCreationResponse({
     id,
     workspaceId,
     orgId: workspace.orgId,
-    userId: user?.id,
+    userId: actorId,
     origin,
     nowIso,
     autoApplySuppressed,
