@@ -890,6 +890,90 @@ async function resolveVcsConnection(orgId: string, connection: VcsModuleConnecti
   return resolveOauthConnection(orgId, connection.oauthTokenId);
 }
 
+function vcsConnectionRef(connection: VcsModuleConnection): Readonly<{ type: "github-app" | "oauth-token"; id: string }> {
+  if (typeof connection.githubAppInstallationId === "string") {
+    return { type: "github-app", id: connection.githubAppInstallationId };
+  }
+  return { type: "oauth-token", id: connection.oauthTokenId as string };
+}
+
+function vcsDisplayIdentifier(vcsRepo: Readonly<Record<string, unknown>>, identifier: string): string {
+  if (typeof vcsRepo["display-identifier"] === "string") return vcsRepo["display-identifier"];
+  if (typeof vcsRepo["display_identifier"] === "string") return vcsRepo["display_identifier"];
+  return identifier;
+}
+
+function buildVcsRepositoryUrl(
+  repositoryBaseUrl: string | null,
+  rawRepositoryUrl: unknown,
+  identifier: string,
+): Readonly<{ url: string | null } | { error: string }> {
+  let repositoryUrl: string | null = null;
+  if (repositoryBaseUrl !== null) {
+    try {
+      const parsed = new URL(repositoryBaseUrl);
+      if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+        parsed.username = "";
+        parsed.password = "";
+        repositoryUrl = `${parsed.toString().replace(/\/$/, "")}/${identifier}`;
+      }
+    } catch {
+      // An invalid optional connection URL should not fabricate a github.com link.
+    }
+  }
+  if (typeof rawRepositoryUrl === "string") {
+    try {
+      const parsed = new URL(rawRepositoryUrl);
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error();
+      parsed.username = "";
+      parsed.password = "";
+      repositoryUrl = parsed.toString();
+    } catch {
+      return { error: "repository-url must be an HTTP or HTTPS URL" };
+    }
+  }
+  return { url: repositoryUrl };
+}
+
+async function checkVcsRepositoryAccess(
+  orgId: string,
+  connection: VcsModuleConnection,
+  identifier: string,
+): Promise<string | null> {
+  try {
+    await validateRegistryModuleRepository({
+      orgId,
+      vcsConnectionType: typeof connection.githubAppInstallationId === "string" ? "github-app" : "oauth-token",
+      vcsConnectionId: typeof connection.githubAppInstallationId === "string" ? connection.githubAppInstallationId : connection.oauthTokenId as string,
+      repositoryIdentifier: identifier,
+    });
+  } catch (error: unknown) {
+    return error instanceof Error ? error.message : "Repository validation failed";
+  }
+  return null;
+}
+
+async function finishVcsModuleCreation(
+  id: string,
+  branch: string | null,
+  initialVersion: string,
+  orgName: string,
+  set: ParamCtx["set"],
+): Promise<unknown> {
+  const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
+  if (mod === undefined) throw new Error("Registry module could not be created");
+  try {
+    await synchronizeRegistryModule(mod, branch === null ? undefined : initialVersion);
+  } catch {
+    // Registration succeeded. Sync records its error on the module, and a
+    // later tag webhook or explicit resync can retry version publication.
+  }
+  const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
+  if (updated === undefined) throw new Error("Registry module could not be created");
+  (set as { status: number }).status = 201;
+  return { data: await registryModuleResource(updated, orgName, true) };
+}
+
 function variableOptionResource(option: NoCodeVariableOptionItem): Record<string, unknown> {
   return {
     id: option.id,
@@ -1558,85 +1642,55 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const org = await cachedOrgByName(params["org_name"] ?? "");
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
     const envelope = parseVcsEnvelope(body);
-    const { data } = envelope;
-    const { identifier, name, provider } = parseVcsNaming(envelope.attributes, envelope.vcsRepo);
-    const { githubAppInstallationId, oauthTokenId, connectionCount, branch } = parseVcsConnection(envelope.vcsRepo);
-    const { sourceDirectory, tagPrefix, initialVersion, identifierValid } = parseVcsOptions(envelope.attributes, envelope.vcsRepo, identifier);
+    const naming = parseVcsNaming(envelope.attributes, envelope.vcsRepo);
+    const connection = parseVcsConnection(envelope.vcsRepo);
+    const options = parseVcsOptions(envelope.attributes, envelope.vcsRepo, naming.identifier);
     const fieldError = vcsModuleFieldError(
-      data,
-      { identifier, name, provider },
-      { githubAppInstallationId, oauthTokenId, connectionCount, branch },
-      { sourceDirectory, tagPrefix, initialVersion, identifierValid },
+      envelope.data,
+      naming,
+      connection,
+      options,
     );
     if (fieldError !== null) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fieldError }] };
     }
-    const connectionStatus = await resolveVcsConnection(org.id, { githubAppInstallationId, oauthTokenId, connectionCount, branch });
+    const connectionStatus = await resolveVcsConnection(org.id, connection);
     const connectionAvailable = connectionStatus.available;
-    const repositoryBaseUrl = connectionStatus.repositoryBaseUrl;
     if (!connectionAvailable) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The selected VCS connection is unavailable or unsupported" }] };
     }
     const now = Date.now();
     const id = newResourceId("mod");
-    const rawRepositoryUrl = envelope.vcsRepo["repository-url"];
-    let repositoryUrl: string | null = null;
-    if (repositoryBaseUrl !== null) {
-      try {
-        const parsed = new URL(repositoryBaseUrl);
-        if (parsed.protocol === "https:" || parsed.protocol === "http:") {
-          parsed.username = "";
-          parsed.password = "";
-          repositoryUrl = `${parsed.toString().replace(/\/$/, "")}/${identifier}`;
-        }
-      } catch {
-        // An invalid optional connection URL should not fabricate a github.com link.
-      }
-    }
-    if (typeof rawRepositoryUrl === "string") {
-      try {
-        const parsed = new URL(rawRepositoryUrl);
-        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error();
-        parsed.username = "";
-        parsed.password = "";
-        repositoryUrl = parsed.toString();
-      } catch {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "repository-url must be an HTTP or HTTPS URL" }] };
-      }
-    }
-    try {
-      await validateRegistryModuleRepository({
-        orgId: org.id,
-        vcsConnectionType: typeof githubAppInstallationId === "string" ? "github-app" : "oauth-token",
-        vcsConnectionId: typeof githubAppInstallationId === "string" ? githubAppInstallationId : oauthTokenId as string,
-        repositoryIdentifier: identifier,
-      });
-    } catch (error: unknown) {
+    const connectionRef = vcsConnectionRef(connection);
+    const urlResult = buildVcsRepositoryUrl(connectionStatus.repositoryBaseUrl, envelope.vcsRepo["repository-url"], naming.identifier);
+    if ("error" in urlResult) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Repository validation failed" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: urlResult.error }] };
+    }
+    const accessError = await checkVcsRepositoryAccess(org.id, connection, naming.identifier);
+    if (accessError !== null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: accessError }] };
     }
     try {
       await db.insert(registryModules).values({
         id,
         orgId: org.id,
         namespace: org.name,
-        name,
-        provider,
+        name: naming.name,
+        provider: naming.provider,
         publishingMechanism: "vcs",
-        publishingWorkflow: branch === null ? "tag" : "branch",
-        vcsConnectionType: typeof githubAppInstallationId === "string" ? "github-app" : "oauth-token",
-        vcsConnectionId: typeof githubAppInstallationId === "string" ? githubAppInstallationId : oauthTokenId as string,
-        repositoryIdentifier: identifier,
-        repositoryDisplayIdentifier: typeof envelope.vcsRepo["display-identifier"] === "string"
-          ? envelope.vcsRepo["display-identifier"]
-          : typeof envelope.vcsRepo["display_identifier"] === "string" ? envelope.vcsRepo["display_identifier"] : identifier,
-        repositoryUrl,
-        sourceDirectory,
-        tagPrefix,
-        branch,
+        publishingWorkflow: connection.branch === null ? "tag" : "branch",
+        vcsConnectionType: connectionRef.type,
+        vcsConnectionId: connectionRef.id,
+        repositoryIdentifier: naming.identifier,
+        repositoryDisplayIdentifier: vcsDisplayIdentifier(envelope.vcsRepo, naming.identifier),
+        repositoryUrl: urlResult.url,
+        sourceDirectory: options.sourceDirectory,
+        tagPrefix: options.tagPrefix,
+        branch: connection.branch,
         status: "pending",
         createdAt: now,
         updatedAt: now,
@@ -1646,18 +1700,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "This private module already exists" }] };
     }
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
-    if (mod === undefined) throw new Error("Registry module could not be created");
-    try {
-      await synchronizeRegistryModule(mod, branch === null ? undefined : initialVersion);
-    } catch {
-      // Registration succeeded. Sync records its error on the module, and a
-      // later tag webhook or explicit resync can retry version publication.
-    }
-    const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
-    if (updated === undefined) throw new Error("Registry module could not be created");
-    (set as { status: number }).status = 201;
-    return { data: await registryModuleResource(updated, org.name, true) };
+    return finishVcsModuleCreation(id, connection.branch, options.initialVersion, org.name, set);
   })
   .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
