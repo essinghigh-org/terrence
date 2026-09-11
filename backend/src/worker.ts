@@ -2581,6 +2581,45 @@ async function cleanupApplyArtifacts(runId: string): Promise<void> {
   }
 }
 
+// Re-check executor policy at apply entry too (admin may have tightened policy between plan and apply).
+async function enforceApplyExecutorPolicy(
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  run: typeof runs.$inferSelect,
+  runId: string,
+): Promise<boolean> {
+  if (workspace.executionMode === "agent") return true;
+  const pForApply = workspace.projectId
+    ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) })
+    : undefined;
+  const policyErr = executorPolicyAllowsLocal(
+    workspace,
+    pForApply !== undefined ? { allowedExecutionModes: (pForApply as unknown as { allowedExecutionModes?: string | null } | undefined)?.allowedExecutionModes ?? null } : null,
+    org !== undefined ? { requireHardIsolation: (org as unknown as { requireHardIsolation?: boolean | null } | undefined)?.requireHardIsolation ?? null } : null,
+  );
+  if (policyErr === null) return true;
+  if (run.status !== "canceled" && run.status !== "force_canceled") {
+    await updateRunStatus(runId, "errored");
+    await writeRunDiagnostic(
+      runId,
+      "apply",
+      "error",
+      "run.apply.policy_blocked",
+      "Apply was blocked by executor policy before execution started.",
+      {
+        failureReason: "executor_policy_blocked",
+        policyError: policyErr,
+        executionMode: workspace.executionMode,
+      },
+    );
+    await writeLog(runId, "apply", `[terrence ERROR] ${policyErr}`);
+    publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "errored", at: new Date().toISOString() });
+    queueRunNotification(runId, "run:errored", "errored");
+    void reportRunVcsStatus(runId, "errored");
+  }
+  return false;
+}
+
 async function executeApplyImpl(runId: string): Promise<void> {
   assertRunSandboxAvailable();
   const run = await db.query.runs.findFirst({
@@ -2604,38 +2643,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
   });
 
   // Re-check executor policy at apply entry too (admin may have tightened policy between plan and apply).
-  if (workspace.executionMode !== "agent") {
-    const pForApply = workspace.projectId
-      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) })
-      : undefined;
-    const policyErr = executorPolicyAllowsLocal(
-      workspace,
-      pForApply !== undefined ? { allowedExecutionModes: (pForApply as unknown as { allowedExecutionModes?: string | null } | undefined)?.allowedExecutionModes ?? null } : null,
-      org !== undefined ? { requireHardIsolation: (org as unknown as { requireHardIsolation?: boolean | null } | undefined)?.requireHardIsolation ?? null } : null,
-    );
-    if (policyErr !== null) {
-      if (run.status !== "canceled" && run.status !== "force_canceled") {
-        await updateRunStatus(runId, "errored");
-        await writeRunDiagnostic(
-          runId,
-          "apply",
-          "error",
-          "run.apply.policy_blocked",
-          "Apply was blocked by executor policy before execution started.",
-          {
-            failureReason: "executor_policy_blocked",
-            policyError: policyErr,
-            executionMode: workspace.executionMode,
-          },
-        );
-        await writeLog(runId, "apply", `[terrence ERROR] ${policyErr}`);
-        publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "errored", at: new Date().toISOString() });
-        queueRunNotification(runId, "run:errored", "errored");
-        void reportRunVcsStatus(runId, "errored");
-      }
-      return;
-    }
-  }
+  if (!(await enforceApplyExecutorPolicy(workspace, org, run, runId))) return;
 
   if (!(await acquireRunWorkspaceLock(workspace.id, runId))) {
     const key = `workspace-lock:${runId}`;
