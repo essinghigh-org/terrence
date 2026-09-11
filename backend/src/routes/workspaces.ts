@@ -14,7 +14,7 @@ import {
 } from "../lib/response";
 import { CLIENT_ENCRYPTED_STATE_ERROR, decodeStatePayload, isClientEncryptedState, isUniqueConstraintError, validVariableAttributes } from "../lib/validation";
 import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
-import { validateVersion, caseInsensitiveLike, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, parseTagBindings, parseStatePayload, auditLog, strictAuditEnabled, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly } from "../lib/utils";
+import { validateVersion, caseInsensitiveLike, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, parseTagBindings, parseStatePayload, auditLog, strictAuditEnabled, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly, type LockPrincipal } from "../lib/utils";
 import { pageRequest, pagination } from "../lib/pagination";
 import { applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspace } from "../lib/lifecycle";
 
@@ -1485,27 +1485,23 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
 
   .post("/api/v2/workspaces/:workspace_id/actions/unlock", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "lock"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    if (ws.locked !== true) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is not locked" }] }; }
-    const principal = lockPrincipal(user?.id, principalOrgId, teamId);
-    const ownerlessLegacyLock = ws.lockOwnerType === null && ws.lockOwnerId === null;
-    if (!ownerlessLegacyLock && !ownsWorkspaceLock(ws, principal)) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Only the lock owner can unlock this workspace" }] }; }
-    const ownerPredicate = ownerlessLegacyLock
+    const actor = actorScope(user, principalOrgId, teamId);
+    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId);
+    if (ws === undefined) return failWorkspaceUpdate(set, 404);
+    if (!(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "lock"))) return failWorkspaceUpdate(set, 403);
+    if (ws.locked !== true) return failWorkspaceUpdate(set, 409, "Workspace is not locked");
+    const principal = lockPrincipal(actor.actorId, actor.actorOrgId, actor.actorTeamId);
+    const owner = resolveUnlockOwner(ws, principal);
+    if ("error" in owner) return failWorkspaceUpdate(set, 403, owner.error);
+    const ownerPredicate = owner.ownerless
       ? and(isNull(workspaces.lockOwnerType), isNull(workspaces.lockOwnerId))
       : and(eq(workspaces.lockOwnerType, principal.type), eq(workspaces.lockOwnerId, principal.id));
     const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true), ownerPredicate)).returning({ id: workspaces.id });
-    if (unlocked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock changed while unlocking" }] }; }
+    if (unlocked.length === 0) return failWorkspaceUpdate(set, 409, "Workspace lock changed while unlocking");
     await promoteIntermediateStateVersion(workspaceId);
     const org = await cachedOrgById(ws.orgId);
     return {
-      data: await workspaceResource(
-        { ...ws, locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null },
-        org?.defaultIacBinary,
-        await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
-        { orgName: org?.name ?? null },
-      ),
+      data: await lockedWorkspaceResource(ws, org, actor, { locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null }),
     };
   })
   .post("/api/v2/workspaces/:workspace_id/actions/force-unlock", async ({ params, user, orgId: principalOrgId, teamId, set, body }: ParamCtx): Promise<unknown> => {
@@ -2555,6 +2551,17 @@ async function workspaceIfMatchFailure(
   if (ifMatchSatisfied(request, { data: currentResource })) return null;
   (set as { status: number }).status = 412;
   return { errors: [{ status: "412", title: "Precondition Failed" }] };
+}
+
+function resolveUnlockOwner(
+  ws: WsItem,
+  principal: LockPrincipal,
+): Readonly<{ ownerless: boolean } | { error: string }> {
+  const ownerlessLegacyLock = ws.lockOwnerType === null && ws.lockOwnerId === null;
+  if (!ownerlessLegacyLock && !ownsWorkspaceLock(ws, principal)) {
+    return { error: "Only the lock owner can unlock this workspace" };
+  }
+  return { ownerless: ownerlessLegacyLock };
 }
 
 async function lockedWorkspaceResource(
