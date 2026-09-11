@@ -561,6 +561,141 @@ function sessionTokenValue(session: unknown): string | null {
   return typeof token === "string" ? token : null;
 }
 
+function resolveLogoutUrls(request: RequestInfo): { expectedSloUrl: string; expectedLogoutEndpointUrl: string; entityId: string } {
+  try {
+    return {
+      expectedSloUrl: sloUrl(request),
+      expectedLogoutEndpointUrl: logoutEndpointUrl(request),
+      entityId: samlSpEntityId(request),
+    };
+  } catch {
+    throw new SamlAuthError(502, "SAML SSO is misconfigured. PUBLIC_URL must be configured.");
+  }
+}
+
+function decodeLogoutXml(rawRequest: string): string {
+  if (rawRequest === "") throw new SamlAuthError(400, "Invalid SAML logout request");
+  try {
+    return decodeSamlMessage(rawRequest);
+  } catch {
+    throw new SamlAuthError(400, "Invalid SAML logout request");
+  }
+}
+
+async function verifyLogoutRequestSignatures(args: {
+  request: RequestInfo;
+  xml: string;
+  rawRequest: string;
+  certificates: readonly string[];
+}): Promise<{ nameId: string; requestId: string; issuer?: string | undefined; destination?: string | undefined; issueInstant?: string | undefined }> {
+  const redirectSignature = verifyRedirectLogoutSignature(args.request, args.certificates, args.rawRequest);
+  if (redirectSignature.present && !redirectSignature.valid) {
+    await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML redirect signature verification failed" });
+    throw new SamlAuthError(400, "Invalid SAML logout request signature");
+  }
+  const verifiedLogout = verifyLogoutSignature(args.xml, args.certificates, redirectSignature.present);
+  if (!verifiedLogout.valid || verifiedLogout.nameId === undefined || verifiedLogout.requestId === undefined) {
+    await auditLog("sso-failure", "saml", null, null, null, { reason: verifiedLogout.error });
+    throw new SamlAuthError(400, "Invalid SAML logout request signature");
+  }
+  return {
+    nameId: verifiedLogout.nameId,
+    requestId: verifiedLogout.requestId,
+    issuer: verifiedLogout.issuer,
+    destination: verifiedLogout.destination,
+    issueInstant: verifiedLogout.issueInstant,
+  };
+}
+
+async function assertLogoutFreshness(issueInstant: string | undefined): Promise<void> {
+  // The IssueInstant must be present and within the clock-skew window: a
+  // stale or future-dated LogoutRequest is not worth acting on.
+  const issueInstantMs = issueInstant !== undefined ? Date.parse(issueInstant) : Number.NaN;
+  if (Number.isNaN(issueInstantMs) || Math.abs(Date.now() - issueInstantMs) > TIME_SKEW_MS) {
+    await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML logout request issue instant out of range" });
+    throw new SamlAuthError(400, "Invalid SAML logout request");
+  }
+}
+
+async function assertLogoutAudience(
+  logout: { issuer?: string | undefined; destination?: string | undefined },
+  settings: SamlRow,
+  expectedSloUrl: string,
+  expectedLogoutEndpointUrl: string,
+): Promise<void> {
+  // The LogoutRequest must name this IdP and target one of this SP's SLO
+  // endpoints; otherwise the session must not be revoked on its authority.
+  if (logout.issuer === undefined || logout.issuer === ""
+    || logout.issuer !== settings.idpEntityId
+    || logout.destination === undefined || logout.destination === ""
+    || (logout.destination !== expectedSloUrl && logout.destination !== expectedLogoutEndpointUrl)) {
+    await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML logout request issuer or destination mismatch" });
+    throw new SamlAuthError(400, "Invalid SAML logout request");
+  }
+}
+
+async function claimLogoutRequest(requestId: string): Promise<void> {
+  if (!(await claimSsoChallenge(
+    SAML_LOGOUT_CHALLENGE_KIND,
+    requestId,
+    {},
+    Date.now() + PENDING_AUTHNREQUEST_TTL_MS,
+  ))) {
+    await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML logout request replayed" });
+    throw new SamlAuthError(400, "SAML logout request has already been used");
+  }
+}
+
+async function revokeMismatchedSession(args: {
+  request: RequestInfo;
+  set: SetObj;
+  nameId: string;
+}): Promise<boolean> {
+  const sessionUser = await browserSessionUser(args.request);
+  const subjectMatches = sessionUser?.ssoProvider === "saml" && sessionUser.ssoSubject === args.nameId;
+  if (!subjectMatches) {
+    await auditLog("sso-failure", "saml", null, sessionUser?.id ?? null, null, { reason: "logout NameID does not match session" });
+  } else if (sessionUser !== null) {
+    await revokeBrowserSession(args.set, args.request);
+    await auditLog("sso-logout", "saml", sessionUser.id, sessionUser.id, null, { reason: "IdP-initiated" });
+  }
+  return subjectMatches;
+}
+
+function logoutRedirectTarget(args: {
+  settings: SamlRow;
+  entityId: string;
+  requestId: string;
+  subjectMatches: boolean;
+  relayState: string | undefined;
+  set: SetObj;
+}): Response {
+  if (args.settings.sloEndpointUrl === null) {
+    const response = new Response(null, { status: 302, headers: { "Cache-Control": "no-store", Location: "/app" } });
+    appendSetCookies(response, args.set.headers["Set-Cookie"]);
+    return response;
+  }
+  let target: URL;
+  try {
+    target = new URL(args.settings.sloEndpointUrl);
+  } catch {
+    const response = new Response(null, { status: 302, headers: { "Cache-Control": "no-store", Location: "/app" } });
+    appendSetCookies(response, args.set.headers["Set-Cookie"]);
+    return response;
+  }
+  // A LogoutRequest whose NameID does not match the local session cannot
+  // count as a full logout: report PartialLogout per SAML 2.0 so the IdP
+  // does not consider the session terminated on this SP.
+  target.searchParams.set("SAMLResponse", encodeRedirect(logoutResponseXml(args.entityId, args.requestId, args.subjectMatches)));
+  if (args.relayState !== undefined) target.searchParams.set("RelayState", args.relayState);
+  const response = new Response(null, {
+    status: 302,
+    headers: { "Cache-Control": "no-store", Location: target.toString() },
+  });
+  appendSetCookies(response, args.set.headers["Set-Cookie"]);
+  return response;
+}
+
 async function handleIdpInitiatedLogout(
   rawRequest: string,
   relayState: string | undefined,
@@ -573,98 +708,29 @@ async function handleIdpInitiatedLogout(
     status: 400,
     headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
   });
-  let expectedSloUrl: string;
-  let expectedLogoutEndpointUrl: string;
-  let entityId: string;
   try {
-    expectedSloUrl = sloUrl(request);
-    expectedLogoutEndpointUrl = logoutEndpointUrl(request);
-    entityId = samlSpEntityId(request);
-  } catch {
-    return new Response("SAML SSO is misconfigured. PUBLIC_URL must be configured.", {
-      status: 502,
-      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
-    });
+    const { expectedSloUrl, expectedLogoutEndpointUrl, entityId } = resolveLogoutUrls(request);
+    const xml = decodeLogoutXml(rawRequest);
+    const certificates = [settings.idpCert, settings.oldIdpCert]
+      .filter((cert): cert is string => typeof cert === "string" && cert !== "");
+    const logout = await verifyLogoutRequestSignatures({ request, xml, rawRequest, certificates });
+    await assertLogoutFreshness(logout.issueInstant);
+    await assertLogoutAudience(logout, settings, expectedSloUrl, expectedLogoutEndpointUrl);
+    await claimLogoutRequest(logout.requestId);
+    const subjectMatches = await revokeMismatchedSession({ request, set, nameId: logout.nameId });
+    return logoutRedirectTarget({ settings, entityId, requestId: logout.requestId, subjectMatches, relayState, set });
+  } catch (error: unknown) {
+    if (error instanceof SamlAuthError) {
+      if (error.status === 502) {
+        return new Response(error.message, {
+          status: 502,
+          headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+        });
+      }
+      return invalid(error.message);
+    }
+    throw error;
   }
-  if (rawRequest === "") return invalid("Invalid SAML logout request");
-
-  let xml: string;
-  try {
-    xml = decodeSamlMessage(rawRequest);
-  } catch {
-    return invalid("Invalid SAML logout request");
-  }
-  const certificates = [settings.idpCert, settings.oldIdpCert]
-    .filter((cert): cert is string => typeof cert === "string" && cert !== "");
-  const redirectSignature = verifyRedirectLogoutSignature(request, certificates, rawRequest);
-  if (redirectSignature.present && !redirectSignature.valid) {
-    await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML redirect signature verification failed" });
-    return invalid("Invalid SAML logout request signature");
-  }
-  const verifiedLogout = verifyLogoutSignature(xml, certificates, redirectSignature.present);
-  if (!verifiedLogout.valid || verifiedLogout.nameId === undefined || verifiedLogout.requestId === undefined) {
-    await auditLog("sso-failure", "saml", null, null, null, { reason: verifiedLogout.error });
-    return invalid("Invalid SAML logout request signature");
-  }
-  // The IssueInstant must be present and within the clock-skew window: a
-  // stale or future-dated LogoutRequest is not worth acting on.
-  const issueInstantMs = verifiedLogout.issueInstant !== undefined ? Date.parse(verifiedLogout.issueInstant) : Number.NaN;
-  if (Number.isNaN(issueInstantMs) || Math.abs(Date.now() - issueInstantMs) > TIME_SKEW_MS) {
-    await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML logout request issue instant out of range" });
-    return invalid("Invalid SAML logout request");
-  }
-  // The LogoutRequest must name this IdP and target one of this SP's SLO
-  // endpoints; otherwise the session must not be revoked on its authority.
-  if (verifiedLogout.issuer === undefined || verifiedLogout.issuer === ""
-    || verifiedLogout.issuer !== settings.idpEntityId
-    || verifiedLogout.destination === undefined || verifiedLogout.destination === ""
-    || (verifiedLogout.destination !== expectedSloUrl && verifiedLogout.destination !== expectedLogoutEndpointUrl)) {
-    await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML logout request issuer or destination mismatch" });
-    return invalid("Invalid SAML logout request");
-  }
-  if (!(await claimSsoChallenge(
-    SAML_LOGOUT_CHALLENGE_KIND,
-    verifiedLogout.requestId,
-    {},
-    Date.now() + PENDING_AUTHNREQUEST_TTL_MS,
-  ))) {
-    await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML logout request replayed" });
-    return invalid("SAML logout request has already been used");
-  }
-
-  const sessionUser = await browserSessionUser(request);
-  const subjectMatches = sessionUser?.ssoProvider === "saml" && sessionUser.ssoSubject === verifiedLogout.nameId;
-  if (!subjectMatches) {
-    await auditLog("sso-failure", "saml", null, sessionUser?.id ?? null, null, { reason: "logout NameID does not match session" });
-  } else if (sessionUser !== null) {
-    await revokeBrowserSession(set, request);
-    await auditLog("sso-logout", "saml", sessionUser.id, sessionUser.id, null, { reason: "IdP-initiated" });
-  }
-
-  if (settings.sloEndpointUrl === null) {
-    const response = new Response(null, { status: 302, headers: { "Cache-Control": "no-store", Location: "/app" } });
-    appendSetCookies(response, set.headers["Set-Cookie"]);
-    return response;
-  }
-  let target: URL;
-  try {
-    target = new URL(settings.sloEndpointUrl);
-  } catch {
-    const response = new Response(null, { status: 302, headers: { "Cache-Control": "no-store", Location: "/app" } });
-    appendSetCookies(response, set.headers["Set-Cookie"]);
-    return response;
-  }
-  // A LogoutRequest whose NameID does not match the local session cannot
-  // count as a full logout: report PartialLogout per SAML 2.0 so the IdP
-  // does not consider the session terminated on this SP.
-  target.searchParams.set("SAMLResponse", encodeRedirect(logoutResponseXml(entityId, verifiedLogout.requestId, subjectMatches)));
-  if (relayState !== undefined) target.searchParams.set("RelayState", relayState);
-  const response = new Response(null, {
-    status: 302,
-    headers: { "Cache-Control": "no-store", Location: target.toString() },
-  });
-  appendSetCookies(response, set.headers["Set-Cookie"]);
-  return response;
 }
 
 function isApplicationLogoutRequest(request: RequestInfo): boolean {
