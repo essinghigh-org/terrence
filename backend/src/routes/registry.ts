@@ -389,6 +389,18 @@ async function resolveModuleVersionKeyId(
   return { keyId };
 }
 
+function parseModuleVersionEnvelope(
+  body: unknown,
+): Readonly<{ attributes: Readonly<Record<string, unknown>> } | { error: string }> {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  if (data["type"] !== undefined && data["type"] !== "registry-module-versions") {
+    return { error: "data.type must be registry-module-versions" };
+  }
+  const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  return { attributes };
+}
+
 async function createRegistryModuleVersion(
   mod: ModItem,
   attributes: Readonly<Record<string, unknown>>,
@@ -2800,14 +2812,12 @@ export const registryRoutes = new Elysia({ name: "registry" })
       ),
     });
     if (mod === undefined) return registryNotFound(set);
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    if (data["type"] !== undefined && data["type"] !== "registry-module-versions") {
+    const envelope = parseModuleVersionEnvelope(body);
+    if ("error" in envelope) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be registry-module-versions" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: envelope.error }] };
     }
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    return createRegistryModuleVersion(mod, attributes, set);
+    return createRegistryModuleVersion(mod, envelope.attributes, set);
   })
   .get("/api/v2/registry-modules/:module_id/versions", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const moduleId = params["module_id"] ?? "";
