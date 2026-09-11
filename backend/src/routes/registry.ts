@@ -836,6 +836,32 @@ function parseVcsOptions(
   return { sourceDirectory, tagPrefix, initialVersion, identifierValid };
 }
 
+function isValidSourceDirectory(sourceDirectory: string): boolean {
+  return sourceDirectory === ""
+    || (!sourceDirectory.startsWith("/") && !sourceDirectory.includes("\\") && !sourceDirectory.split("/").includes(".."));
+}
+
+function vcsModuleFieldError(
+  data: Readonly<Record<string, unknown>>,
+  naming: VcsModuleNaming,
+  connection: VcsModuleConnection,
+  options: VcsModuleOptions,
+): string | null {
+  if (data["type"] !== "registry-modules" || !options.identifierValid || connection.connectionCount !== 1) {
+    return "A repository identifier and exactly one VCS connection are required";
+  }
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?$/.test(naming.name) || !/^[a-z0-9]{1,64}$/.test(naming.provider)) {
+    return "Repository name must follow terraform-<provider>-<module>, or module-name and provider must be supplied";
+  }
+  if (!isValidSourceDirectory(options.sourceDirectory) || options.tagPrefix.length > 128) {
+    return "Source directory or tag prefix is invalid";
+  }
+  if (connection.branch !== null && !validModuleVersion(options.initialVersion)) {
+    return "Branch-based publication requires a semantic initial-version";
+  }
+  return null;
+}
+
 function variableOptionResource(option: NoCodeVariableOptionItem): Record<string, unknown> {
   return {
     id: option.id,
@@ -1508,21 +1534,15 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const { identifier, name, provider } = parseVcsNaming(envelope.attributes, envelope.vcsRepo);
     const { githubAppInstallationId, oauthTokenId, connectionCount, branch } = parseVcsConnection(envelope.vcsRepo);
     const { sourceDirectory, tagPrefix, initialVersion, identifierValid } = parseVcsOptions(envelope.attributes, envelope.vcsRepo, identifier);
-    if (data["type"] !== "registry-modules" || !identifierValid || connectionCount !== 1) {
+    const fieldError = vcsModuleFieldError(
+      data,
+      { identifier, name, provider },
+      { githubAppInstallationId, oauthTokenId, connectionCount, branch },
+      { sourceDirectory, tagPrefix, initialVersion, identifierValid },
+    );
+    if (fieldError !== null) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A repository identifier and exactly one VCS connection are required" }] };
-    }
-    if (!/^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?$/.test(name) || !/^[a-z0-9]{1,64}$/.test(provider)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Repository name must follow terraform-<provider>-<module>, or module-name and provider must be supplied" }] };
-    }
-    if ((sourceDirectory !== "" && (sourceDirectory.startsWith("/") || sourceDirectory.includes("\\") || sourceDirectory.split("/").includes(".."))) || tagPrefix.length > 128) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Source directory or tag prefix is invalid" }] };
-    }
-    if (branch !== null && !validModuleVersion(initialVersion)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Branch-based publication requires a semantic initial-version" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fieldError }] };
     }
     let connectionAvailable = false;
     let repositoryBaseUrl: string | null = null;
