@@ -733,6 +733,34 @@ async function authorizedOrgWorkspaces(
   });
 }
 
+type RunOperationRequest = Readonly<{
+  requestedOperation: string | undefined;
+  isDestroy: boolean;
+  invokeActionAddrs: string[];
+}>;
+
+function parseRunOperationRequest(
+  attributes: Readonly<Record<string, unknown>>,
+  set: SetObj,
+): Readonly<{ request: RunOperationRequest } | { failure: Record<string, unknown> }> {
+  const requestedOperation = typeof attributes["operation"] === "string" ? attributes["operation"] : undefined;
+  const allowedOperations = new Set(["plan", "plan_and_apply", "plan_only", "save_plan", "empty_apply", "action_only", "destroy", "refresh_only"]);
+  if (requestedOperation !== undefined && !allowedOperations.has(requestedOperation)) {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid operation" }] } };
+  }
+  const isDestroy = requestedOperation === "destroy"
+    || (typeof attributes["is-destroy"] === "boolean" ? attributes["is-destroy"] : false);
+  const invokeActionAddrs = Array.isArray(attributes["invoke-action-addrs"])
+    ? attributes["invoke-action-addrs"].filter((value: unknown): value is string => typeof value === "string" && value.trim() !== "").map((value: string): string => value.trim())
+    : [];
+  const targetAddrsCount = Array.isArray(attributes["target-addrs"]) ? attributes["target-addrs"].length : 0;
+  if (invokeActionAddrs.length > 1 || (invokeActionAddrs.length > 0 && (isDestroy || targetAddrsCount > 0))) {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "invoke-action-addrs accepts one address and cannot be combined with destroy or target addresses" }] } };
+  }
+  return { request: { requestedOperation, isDestroy, invokeActionAddrs } };
+}
 
 export async function createRun(
   workspaceId: string,
@@ -745,22 +773,9 @@ export async function createRun(
   idempotency: IdempotencyContext | null = null,
 ): Promise<Record<string, unknown> | { errors: { status: string; title: string; detail?: string }[] }> {
   const message = typeof attributes["message"] === "string" ? attributes["message"] : "";
-  const requestedOperation = typeof attributes["operation"] === "string" ? attributes["operation"] : undefined;
-  const allowedOperations = new Set(["plan", "plan_and_apply", "plan_only", "save_plan", "empty_apply", "action_only", "destroy", "refresh_only"]);
-  if (requestedOperation !== undefined && !allowedOperations.has(requestedOperation)) {
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid operation" }] };
-  }
-  const isDestroy = requestedOperation === "destroy"
-    || (typeof attributes["is-destroy"] === "boolean" ? attributes["is-destroy"] : false);
-  const invokeActionAddrs = Array.isArray(attributes["invoke-action-addrs"])
-    ? attributes["invoke-action-addrs"].filter((value: unknown): value is string => typeof value === "string" && value.trim() !== "").map((value: string): string => value.trim())
-    : [];
-  const targetAddrsInput = Array.isArray(attributes["target-addrs"]) ? attributes["target-addrs"] : [];
-  if (invokeActionAddrs.length > 1 || (invokeActionAddrs.length > 0 && (isDestroy || targetAddrsInput.length > 0))) {
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "invoke-action-addrs accepts one address and cannot be combined with destroy or target addresses" }] };
-  }
+  const operationRequest = parseRunOperationRequest(attributes, set);
+  if ("failure" in operationRequest) return operationRequest.failure;
+  const { requestedOperation, isDestroy, invokeActionAddrs } = operationRequest.request;
   const requestedAutoApply = typeof attributes["auto-apply"] === "boolean" ? attributes["auto-apply"] : undefined;
   const requestedPlanOnly = requestedOperation === "plan" || requestedOperation === "plan_only"
     ? true
