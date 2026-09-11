@@ -5817,6 +5817,42 @@ async function claimLocalRun(
   }
 }
 
+async function dispatchQueuedRun(
+  run: typeof runs.$inferSelect,
+  workspace: typeof workspaces.$inferSelect | undefined,
+  ctx: QueuePageContext,
+  claimWhere: SQL | undefined,
+  claimedRunIds: string[],
+  claimedWorkspaceIds: Set<string>,
+): Promise<void> {
+  if (claimedWorkspaceIds.has(run.workspaceId)) return;
+  if (workspace === undefined) return;
+  if (workspace.locked === true) {
+    await noteLockedQueueRun(run.id, workspace);
+    return;
+  }
+
+  if (workspace.executionMode === "agent") {
+    await claimAgentPoolRun(run, workspace, ctx, claimWhere, claimedRunIds, claimedWorkspaceIds);
+    return;
+  }
+
+  // Executor policy (36-39): refuse local Landlock for untrusted workspaces
+  // or when project/org requires hard isolation.
+  if (!(await enforceQueueExecutorPolicy(run, workspace, ctx, claimWhere))) return;
+
+  // Local-execution workspaces never run on the server (issue #567):
+  // remote runs are rejected at creation, so any pending row here
+  // predates the gate. Error it with an explanation instead of
+  // executing it or leaving it stuck forever.
+  if (workspace.executionMode === "local") {
+    await rejectLocalExecutionRun(run, workspace, claimWhere);
+    return;
+  }
+
+  await claimLocalRun(run, workspace, claimWhere, claimedRunIds, claimedWorkspaceIds);
+}
+
 export async function pollWorkerQueue(): Promise<string[]> {
   return withQueueGate("worker", async (): Promise<string[]> => {
   if (isMaintenanceActive()) return [];
@@ -5870,36 +5906,10 @@ export async function pollWorkerQueue(): Promise<string[]> {
     cursorCreatedAt = run.createdAt;
     cursorId = run.id;
     workerQueueCursor = { createdAt: cursorCreatedAt, id: cursorId };
-    if (claimedWorkspaceIds.has(run.workspaceId)) continue;
 
     const workspace = ctx.workspacesById.get(run.workspaceId);
-    if (workspace === undefined) continue;
-    if (workspace.locked === true) {
-      await noteLockedQueueRun(run.id, workspace);
-      continue;
-    }
-
     const claimWhere = buildRunClaimWhere(run);
-
-    if (workspace.executionMode === "agent") {
-      await claimAgentPoolRun(run, workspace, ctx, claimWhere, claimedRunIds, claimedWorkspaceIds);
-      continue;
-    }
-
-    // Executor policy (36-39): refuse local Landlock for untrusted workspaces
-    // or when project/org requires hard isolation.
-    if (!(await enforceQueueExecutorPolicy(run, workspace, ctx, claimWhere))) continue;
-
-    // Local-execution workspaces never run on the server (issue #567):
-    // remote runs are rejected at creation, so any pending row here
-    // predates the gate. Error it with an explanation instead of
-    // executing it or leaving it stuck forever.
-    if (workspace.executionMode === "local") {
-      await rejectLocalExecutionRun(run, workspace, claimWhere);
-      continue;
-    }
-
-    await claimLocalRun(run, workspace, claimWhere, claimedRunIds, claimedWorkspaceIds);
+    await dispatchQueuedRun(run, workspace, ctx, claimWhere, claimedRunIds, claimedWorkspaceIds);
   }
   }
 
