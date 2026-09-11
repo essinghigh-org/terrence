@@ -1139,6 +1139,44 @@ async function completeRunCreationResponse(
   return responseBody;
 }
 
+async function assembleRunProvenance(
+  workspace: typeof workspaces.$inferSelect,
+  cvId: string | undefined,
+  configurationVersion: typeof configurationVersions.$inferSelect | undefined,
+  effectiveTool: string,
+  effectiveVersion: string | null,
+  id: string,
+  createdAt: number,
+  runVariables: Awaited<ReturnType<typeof runVariablesForWrite>> | null,
+): Promise<Awaited<ReturnType<typeof buildRunProvenanceCapsule>>> {
+  const [effectiveVariables, inputState] = await Promise.all([
+    effectiveWorkspaceVariables(workspace.id, workspace.orgId, workspace.projectId ?? null),
+    db.query.stateVersions.findFirst({
+      where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")),
+      orderBy: [desc(stateVersions.serial)],
+      columns: { id: true, uploadSha256: true },
+    }),
+  ]);
+  return await buildRunProvenanceCapsule({
+    runId: id,
+    createdAt,
+    configurationVersionId: cvId ?? null,
+    configurationSource: configurationVersion?.source ?? null,
+    configurationIngress: configurationVersion?.ingressAttributes ?? null,
+    configurationDigest: provenanceConfigurationDigest(configurationVersion),
+    engine: effectiveTool,
+    engineVersion: effectiveVersion ?? null,
+    workspaceId: workspace.id,
+    workingDirectory: workspace.workingDirectory,
+    executionMode: workspace.executionMode,
+    agentPoolId: workspace.agentPoolId,
+    inputStateId: inputState?.id ?? null,
+    inputStateDigest: inputState?.uploadSha256 ?? null,
+    runVariables: runVariables ?? [],
+    ...manifestProvenanceVariables(effectiveVariables),
+  });
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -1193,32 +1231,7 @@ export async function createRun(
   const runVariables = runVariablesInput === null ? null : await runVariablesForWrite(runVariablesInput);
   const nowIso = new Date(createdAt).toISOString();
   const origin = originForConfiguration(configurationVersion);
-  const [effectiveVariables, inputState] = await Promise.all([
-    effectiveWorkspaceVariables(workspace.id, workspace.orgId, workspace.projectId ?? null),
-    db.query.stateVersions.findFirst({
-      where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")),
-      orderBy: [desc(stateVersions.serial)],
-      columns: { id: true, uploadSha256: true },
-    }),
-  ]);
-  const provenance = await buildRunProvenanceCapsule({
-    runId: id,
-    createdAt,
-    configurationVersionId: cvId ?? null,
-    configurationSource: configurationVersion?.source ?? null,
-    configurationIngress: configurationVersion?.ingressAttributes ?? null,
-    configurationDigest: provenanceConfigurationDigest(configurationVersion),
-    engine: effectiveTool,
-    engineVersion: effectiveVersion ?? null,
-    workspaceId: workspace.id,
-    workingDirectory: workspace.workingDirectory,
-    executionMode: workspace.executionMode,
-    agentPoolId: workspace.agentPoolId,
-    inputStateId: inputState?.id ?? null,
-    inputStateDigest: inputState?.uploadSha256 ?? null,
-    runVariables: runVariables ?? [],
-    ...manifestProvenanceVariables(effectiveVariables),
-  });
+  const provenance = await assembleRunProvenance(workspace, cvId, configurationVersion, effectiveTool, effectiveVersion, id, createdAt, runVariables);
   // The lock was validated above, but that check and the insert below are
   // separate statements; re-validate inside the insert transaction so a
   // concurrent workspace lock can never slip a queued run past the 422.
