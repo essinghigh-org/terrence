@@ -869,18 +869,21 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const orgName = params["org_name"] ?? "";
     const workspaceName = params["workspace_name"] ?? "";
     const org = await cachedOrgByName(orgName);
-    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (org === undefined) return failWorkspaceUpdate(set, 404);
+    const actor = actorScope(user, principalOrgId, teamId);
     const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
-    const runScoped = run !== undefined && run !== null && ws !== undefined && run.workspaceId === ws.id;
-    if (ws === undefined || (!runScoped && !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read")))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const currentRunByName = await currentRunForWorkspace(ws.id, new URL(request.url).searchParams.get("include") ?? "");
+    if (ws === undefined) return failWorkspaceUpdate(set, 404);
+    const runScoped = run !== undefined && run !== null && run.workspaceId === ws.id;
+    if (!runScoped && !(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "read"))) return failWorkspaceUpdate(set, 404);
+    const include = new URL(request.url).searchParams.get("include") ?? "";
+    const currentRunByName = await currentRunForWorkspace(ws.id, include);
     const data = await workspaceResource(
       ws,
       org.defaultIacBinary,
-      await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+      await resourcePermissions(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId),
       { orgName: org.name, ...(currentRunByName === undefined ? {} : { currentRun: currentRunByName }) },
     );
-    return maybeAttachOutputs(data, ws, new URL(request.url).searchParams.get("include") ?? "");
+    return maybeAttachOutputs(data, ws, include);
   })
   .patch("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, body, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
