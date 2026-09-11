@@ -2052,28 +2052,7 @@ async function executeRunImpl(runId: string): Promise<void> {
 
   // Re-check executor policy at plan/apply entry (36-39): handles
   // admin enabling requireHardIsolation between claim and execution.
-  if (workspace.executionMode !== "agent") {
-    const pForExec = workspace.projectId
-      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) })
-      : undefined;
-    const policyError = executorPolicyAllowsLocal(
-      workspace,
-      pForExec !== undefined ? { allowedExecutionModes: (pForExec as unknown as { allowedExecutionModes?: string | null } | undefined)?.allowedExecutionModes ?? null } : null,
-      org !== undefined ? { requireHardIsolation: (org as unknown as { requireHardIsolation?: boolean | null } | undefined)?.requireHardIsolation ?? null } : null,
-    );
-    if (policyError !== null) {
-      const policyRejected = await db.update(runs).set({ status: "errored", statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() } }).where(and(
-        eq(runs.id, runId),
-        eq(runs.status, run.status),
-      )).returning({ id: runs.id });
-      if (policyRejected.length === 0) return;
-      await writeLog(runId, "plan", `[terrence ERROR] ${policyError}`);
-      publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "errored", at: new Date().toISOString() });
-      queueRunNotification(runId, "run:errored", "errored");
-      void reportRunVcsStatus(runId, "errored");
-      return;
-    }
-  }
+  if (!(await enforcePlanExecutorPolicy(workspace, org, run.status, run.statusTimestamps, runId))) return;
 
   const workDir = runWorkDir(runId);
   let durablePlan: SavedPlanMetadata | undefined;
@@ -2873,6 +2852,37 @@ async function seedApplyExecutionDir(
     await writeLog(runId, "apply", `[terrence] Seeded workspace state for saved plan apply.`);
   }
   if (savedPlanRequired) await writeLocalBackendOverride(executionDir);
+}
+
+// Re-check executor policy at plan/apply entry (36-39): handles
+// admin enabling requireHardIsolation between claim and execution.
+async function enforcePlanExecutorPolicy(
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  runStatus: string,
+  statusTimestamps: ReturnType<typeof parsePersistedStatusMetadata>,
+  runId: string,
+): Promise<boolean> {
+  if (workspace.executionMode === "agent") return true;
+  const pForExec = workspace.projectId
+    ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) })
+    : undefined;
+  const policyError = executorPolicyAllowsLocal(
+    workspace,
+    pForExec !== undefined ? { allowedExecutionModes: (pForExec as unknown as { allowedExecutionModes?: string | null } | undefined)?.allowedExecutionModes ?? null } : null,
+    org !== undefined ? { requireHardIsolation: (org as unknown as { requireHardIsolation?: boolean | null } | undefined)?.requireHardIsolation ?? null } : null,
+  );
+  if (policyError === null) return true;
+  const policyRejected = await db.update(runs).set({ status: "errored", statusTimestamps: { ...(statusTimestamps ?? {}), "errored-at": new Date().toISOString() } }).where(and(
+    eq(runs.id, runId),
+    eq(runs.status, runStatus),
+  )).returning({ id: runs.id });
+  if (policyRejected.length === 0) return false;
+  await writeLog(runId, "plan", `[terrence ERROR] ${policyError}`);
+  publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "errored", at: new Date().toISOString() });
+  queueRunNotification(runId, "run:errored", "errored");
+  void reportRunVcsStatus(runId, "errored");
+  return false;
 }
 
 async function executeApplyImpl(runId: string): Promise<void> {
