@@ -1302,6 +1302,87 @@ function assembleTestVariableResult(
   return result;
 }
 
+type TestConfigRow = DeepReadonly<typeof moduleTestConfigurations.$inferSelect>;
+
+async function resolveTestConfigModule(
+  params: Readonly<Record<string, string>>,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ mod: ModItem } | { failure: unknown }>> {
+  if (params["module_id"] !== "private") return { failure: registryNotFound(set) };
+  const { namespace, name, provider } = params;
+  const org = await cachedOrgByName(namespace ?? "");
+  const mod = await db.query.registryModules.findFirst({
+    where: and(eq(registryModules.orgId, org?.id ?? ""), eq(registryModules.namespace, namespace ?? ""), eq(registryModules.name, name ?? ""), eq(registryModules.provider, provider ?? "")),
+  });
+  if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"))) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { mod };
+}
+
+function resolveTestConfigBasics(
+  attrs: Readonly<Record<string, unknown>>,
+  existing: TestConfigRow | undefined,
+  legacyProviderUrl: string | null,
+): Readonly<{ id: string; oidcEnabled: boolean; oidcProvider: string | null; rawConfiguration: unknown } | { error: string }> {
+  const rawEnabled = attrs["oidc-enabled"];
+  const rawProvider = attrs["oidc-provider"];
+  if (rawEnabled !== undefined && typeof rawEnabled !== "boolean") {
+    return { error: "oidc-enabled must be a boolean" };
+  }
+  const id = existing?.id ?? crypto.randomUUID();
+  const oidcEnabled = typeof rawEnabled === "boolean" ? rawEnabled : existing?.oidcEnabled ?? legacyProviderUrl !== null;
+  const oidcProvider = typeof rawProvider === "string" ? rawProvider : existing?.oidcProvider ?? null;
+  return { id, oidcEnabled, oidcProvider, rawConfiguration: attrs["oidc-configuration"] };
+}
+
+function testConfigOidcError(
+  oidcEnabled: boolean,
+  oidcProvider: string | null,
+  oidcConfiguration: Readonly<Record<string, unknown>> | null,
+): string | null {
+  if (oidcEnabled && oidcConfiguration === null) {
+    return "oidc-configuration is required when OIDC is enabled";
+  }
+  if (oidcEnabled && oidcConfiguration !== null) {
+    const requiredFields: Record<string, readonly string[]> = {
+      aws: ["role-arn"],
+      gcp: ["service-account-email", "workload-provider-name"],
+      azure: ["tenant-id", "client-id", "subscription-id"],
+      vault: ["url", "role-name"],
+    };
+    const missing = (requiredFields[oidcProvider ?? ""] ?? []).filter((field): boolean => typeof oidcConfiguration[field] !== "string" || oidcConfiguration[field] === "");
+    if (missing.length > 0) {
+      return `oidc-configuration requires ${missing.join(", ")}`;
+    }
+  }
+  return null;
+}
+
+function resolveTestConfigConfiguration(
+  oidcEnabled: boolean,
+  oidcProvider: string | null,
+  rawConfiguration: unknown,
+  existingConfiguration: Readonly<Record<string, unknown>> | null | undefined,
+): Readonly<{ configuration: Record<string, unknown> | null } | { error: string }> {
+  if (oidcEnabled && (oidcProvider === null || !["aws", "gcp", "azure", "vault"].includes(oidcProvider))) {
+    return { error: "oidc-provider must be aws, gcp, azure, or vault when OIDC is enabled" };
+  }
+  if (rawConfiguration !== undefined && (rawConfiguration === null || typeof rawConfiguration !== "object" || Array.isArray(rawConfiguration))) {
+    return { error: "oidc-configuration must be an object" };
+  }
+  const oidcConfiguration = rawConfiguration === undefined
+    ? existingConfiguration ?? null
+    : rawConfiguration as Record<string, unknown>;
+  const oidcError = testConfigOidcError(oidcEnabled, oidcProvider, oidcConfiguration);
+  if (oidcError !== null) return { error: oidcError };
+  return { configuration: oidcConfiguration };
+}
+
 function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null }> | Readonly<{ error: string }> {
   const envelope = testVariableAttributes(body);
   if ("error" in envelope) return envelope;
@@ -2914,58 +2995,26 @@ export const registryRoutes = new Elysia({ name: "registry" })
     };
   })
   .patch("/api/v2/registry-modules/:module_id/:namespace/:name/:provider/test-configuration", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["module_id"] !== "private") return registryNotFound(set);
-    const { namespace, name, provider } = params;
-    const org = await cachedOrgByName(namespace ?? "");
-    const mod = await db.query.registryModules.findFirst({
-      where: and(eq(registryModules.orgId, org?.id ?? ""), eq(registryModules.namespace, namespace ?? ""), eq(registryModules.name, name ?? ""), eq(registryModules.provider, provider ?? "")),
-    });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
+    const resolved = await resolveTestConfigModule(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { mod } = resolved;
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = (data?.["attributes"] as Record<string, unknown>) ?? {};
-    const rawEnabled = attrs["oidc-enabled"];
-    const rawProvider = attrs["oidc-provider"];
-    const rawConfiguration = attrs["oidc-configuration"];
     const legacyProviderUrl = typeof attrs["oidc-provider-url"] === "string" ? attrs["oidc-provider-url"] : null;
-    if (rawEnabled !== undefined && typeof rawEnabled !== "boolean") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "oidc-enabled must be a boolean" }] };
-    }
     const existing = await db.query.moduleTestConfigurations.findFirst({ where: eq(moduleTestConfigurations.moduleId, mod.id) });
-    const id = existing?.id ?? crypto.randomUUID();
-    const oidcEnabled = typeof rawEnabled === "boolean" ? rawEnabled : existing?.oidcEnabled ?? legacyProviderUrl !== null;
-    const oidcProvider = typeof rawProvider === "string" ? rawProvider : existing?.oidcProvider ?? null;
-    if (oidcEnabled && (oidcProvider === null || !["aws", "gcp", "azure", "vault"].includes(oidcProvider))) {
+    const basics = resolveTestConfigBasics(attrs, existing, legacyProviderUrl);
+    if ("error" in basics) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "oidc-provider must be aws, gcp, azure, or vault when OIDC is enabled" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: basics.error }] };
     }
-    if (rawConfiguration !== undefined && (rawConfiguration === null || typeof rawConfiguration !== "object" || Array.isArray(rawConfiguration))) {
+    const configResult = resolveTestConfigConfiguration(basics.oidcEnabled, basics.oidcProvider, basics.rawConfiguration, existing?.oidcConfiguration);
+    if ("error" in configResult) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "oidc-configuration must be an object" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: configResult.error }] };
     }
-    const oidcConfiguration = rawConfiguration === undefined
-      ? existing?.oidcConfiguration ?? null
-      : rawConfiguration as Record<string, unknown>;
-    if (oidcEnabled && oidcConfiguration === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "oidc-configuration is required when OIDC is enabled" }] };
-    }
-    if (oidcEnabled && oidcConfiguration !== null) {
-      const requiredFields: Record<string, readonly string[]> = {
-        aws: ["role-arn"],
-        gcp: ["service-account-email", "workload-provider-name"],
-        azure: ["tenant-id", "client-id", "subscription-id"],
-        vault: ["url", "role-name"],
-      };
-      const missing = (requiredFields[oidcProvider ?? ""] ?? []).filter((field): boolean => typeof oidcConfiguration[field] !== "string" || oidcConfiguration[field] === "");
-      if (missing.length > 0) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `oidc-configuration requires ${missing.join(", ")}` }] };
-      }
-    }
+    const { id, oidcEnabled, oidcProvider } = basics;
+    const { configuration: oidcConfiguration } = configResult;
     const updatedAt = Date.now();
     if (existing !== undefined) {
       await db.update(moduleTestConfigurations).set({ oidcEnabled, oidcProvider, oidcConfiguration, oidcProviderUrl: legacyProviderUrl ?? existing.oidcProviderUrl, updatedAt }).where(eq(moduleTestConfigurations.id, id));
