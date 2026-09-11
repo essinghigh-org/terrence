@@ -1676,6 +1676,28 @@ async function deleteCommentWithAudit(
   });
 }
 
+function parseCommentCreateBody(body: unknown, set: SetObj): Readonly<{ text: string } | { failure: unknown }> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  if (data?.["type"] !== "comments") {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be comments" }] } };
+  }
+  const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  const textVal = attrs["body"] ?? payload["body"];
+  const text = typeof textVal === "string" ? textVal : "";
+  if (text === "") {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity" }] } };
+  }
+  return { text };
+}
+
+function commentActor(user: ParamCtx["user"]): { username?: string | null; avatarUrl?: string | null } {
+  if (user === undefined || user === null) return {};
+  return { username: user.username, avatarUrl: gravatarUrl(user.email) };
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -2705,20 +2727,11 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "plan");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    if (data?.["type"] !== "comments") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be comments" }] }; }
-    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const textVal = attrs["body"] ?? payload["body"];
-    const text = typeof textVal === "string" ? textVal : "";
-    if (text === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
-    const { id, createdAt } = await createRunComment({ runId, userId: user?.id ?? null, body: text, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
+    const parsed = parseCommentCreateBody(body, set);
+    if ("failure" in parsed) return parsed.failure;
+    const { id, createdAt } = await createRunComment({ runId, userId: user?.id ?? null, body: parsed.text, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
     (set as { status: number }).status = 201;
-    let actor: { username?: string | null; avatarUrl?: string | null } = {};
-    if (user !== undefined && user !== null) {
-      actor = { username: user.username, avatarUrl: gravatarUrl(user.email) };
-    }
-    return { data: commentResource({ id, runId, body: text, userId: user?.id ?? null, createdAt, ...actor }) };
+    return { data: commentResource({ id, runId, body: parsed.text, userId: user?.id ?? null, createdAt, ...commentActor(user) }) };
   })
   .delete("/api/v2/comments/:comment_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const commentId = params["comment_id"] ?? "";
