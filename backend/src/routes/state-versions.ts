@@ -888,6 +888,28 @@ async function resolvePromotedRecovery(
   return { stateVersionId: existing.id, committedSerial: existing.serial };
 }
 
+function hashCommittedStatePayload(statePayload: string | null | undefined): string | null {
+  if (statePayload === null || statePayload === undefined || statePayload === "") return null;
+  try {
+    return createHash("sha256").update(decodeStatePayload(statePayload)).digest("hex");
+  } catch {
+    throw new StateSerialConflictError();
+  }
+}
+
+function assertRecoveryCandidateSerial(
+  candidateSerial: unknown,
+  current: { serial: number } | undefined,
+  currentDigest: string | null,
+  candidateDigest: string,
+): void {
+  if (typeof candidateSerial !== "number" || !Number.isSafeInteger(candidateSerial)
+    || (current !== undefined && (candidateSerial < current.serial
+      || (candidateSerial === current.serial && currentDigest !== candidateDigest)))) {
+    throw new StateSerialConflictError();
+  }
+}
+
 async function promoteRecoveryCapture(
   runId: string,
   run: RecoverStateContext["run"],
@@ -927,19 +949,8 @@ async function promoteRecoveryCapture(
         if (currentLineageError !== null) throw new StateSerialConflictError();
         const candidateSerial = latestParsed["serial"];
         const candidateDigest = createHash("sha256").update(rawState).digest("hex");
-        let currentDigest: string | null = null;
-        if (current?.statePayload !== null && current?.statePayload !== undefined && current.statePayload !== "") {
-          try {
-            currentDigest = createHash("sha256").update(decodeStatePayload(current.statePayload)).digest("hex");
-          } catch {
-            throw new StateSerialConflictError();
-          }
-        }
-        if (typeof candidateSerial !== "number" || !Number.isSafeInteger(candidateSerial)
-          || (current !== undefined && (candidateSerial < current.serial
-            || (candidateSerial === current.serial && currentDigest !== candidateDigest)))) {
-          throw new StateSerialConflictError();
-        }
+        const currentDigest = hashCommittedStatePayload(current?.statePayload);
+        assertRecoveryCandidateSerial(candidateSerial, current, currentDigest, candidateDigest);
         const serial = await nextStateSerialTx(t, workspace.id);
         const promoted = statePayloadWithSerial(rawState, serial);
         const id = crypto.randomUUID();
