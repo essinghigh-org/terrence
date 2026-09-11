@@ -199,6 +199,136 @@ function parseLockReason(body: unknown): Readonly<{ reason: string | null; error
   return { reason: reason === "" ? null : reason, error: null };
 }
 
+function resolveVcsIdentifier(
+  raw: Readonly<Record<string, unknown>>,
+  existing: DeepReadonly<WorkspaceVcsRepo> | undefined,
+): { identifier: string } | { error: string } {
+  const identifierValue = raw["identifier"];
+  const identifier = identifierValue === undefined
+    ? existing?.identifier ?? ""
+    : typeof identifierValue === "string" ? identifierValue.trim() : "";
+  if (identifier === "") return { error: "Repository identifier is required" };
+  return { identifier };
+}
+
+function resolveVcsCredential(
+  raw: Readonly<Record<string, unknown>>,
+  existing: DeepReadonly<WorkspaceVcsRepo> | undefined,
+  dashedKey: string,
+  field: "githubAppInstallationId" | "oauthTokenId",
+): { id: string | undefined } | { error: string } {
+  const value = Object.hasOwn(raw, dashedKey) ? raw[dashedKey] : raw[field];
+  if (value !== undefined && value !== null && typeof value !== "string") {
+    return { error: `${dashedKey} must be a string or null` };
+  }
+  return { id: value === null ? undefined : typeof value === "string" ? value.trim() : existing?.[field] };
+}
+
+function checkVcsCredentialPair(
+  installationId: string | undefined,
+  oauthTokenId: string | undefined,
+): string | null {
+  if ((installationId !== undefined && installationId !== "") && (oauthTokenId !== undefined && oauthTokenId !== "")) {
+    return "A vcs-repo may contain either a GitHub App installation or an OAuth token, not both";
+  }
+  if ((installationId === undefined || installationId === "") && (oauthTokenId === undefined || oauthTokenId === "")) {
+    return "A GitHub App installation or OAuth token is required";
+  }
+  return null;
+}
+
+async function checkVcsInstallation(
+  database: typeof db,
+  installationId: string | undefined,
+  orgId: string,
+): Promise<string | null> {
+  if (installationId === undefined || installationId === "") return null;
+  const installation = await database.query.githubAppInstallations.findFirst({
+    where: and(eq(githubAppInstallations.id, installationId), eq(githubAppInstallations.orgId, orgId)),
+  });
+  if (installation === undefined) return "GitHub App installation is not registered in this organization";
+  return null;
+}
+
+async function checkVcsOauthToken(
+  database: typeof db,
+  oauthTokenId: string | undefined,
+  orgId: string,
+): Promise<string | null> {
+  if (oauthTokenId === undefined || oauthTokenId === "") return null;
+  let token = await database.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId) });
+  if (token !== undefined && isPostgres) {
+    const execute = (database as unknown as { execute: (query: unknown) => Promise<unknown> }).execute.bind(database);
+    // Match deletion's client-before-token lock order, then re-read after
+    // waiting so a delete that won the race cannot leave a JSON reference.
+    await execute(sql`SELECT id FROM oauth_clients WHERE id = ${token.oauthClientId} FOR KEY SHARE`);
+    await execute(sql`SELECT id FROM oauth_tokens WHERE id = ${oauthTokenId} FOR KEY SHARE`);
+    token = await database.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId) });
+  }
+  const client = token === undefined
+    ? undefined
+    : await database.query.oauthClients.findFirst({
+        where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
+      });
+  if (client === undefined) return "OAuth token is not registered in this organization";
+  return null;
+}
+
+function resolveVcsTagsRegex(
+  raw: Readonly<Record<string, unknown>>,
+  existing: DeepReadonly<WorkspaceVcsRepo> | undefined,
+): { tagsRegex: string | undefined } | { error: string } {
+  const tagsRegexValue = raw["tags-regex"] ?? raw["tagsRegex"];
+  if (tagsRegexValue !== undefined && tagsRegexValue !== null && typeof tagsRegexValue !== "string") {
+    return { error: "tags-regex must be a string or null" };
+  }
+  const tagsRegex = tagsRegexValue === null
+    ? undefined
+    : typeof tagsRegexValue === "string" ? tagsRegexValue : existing?.tagsRegex;
+  if (tagsRegex === undefined) return { tagsRegex };
+  if (tagsRegex.length > 256) return { error: "tags-regex must be at most 256 characters" };
+  if (!isValidTagsRegex(tagsRegex)) return { error: "tags-regex must be a valid, non-pathological regular expression" };
+  return { tagsRegex };
+}
+
+function validateVcsBranchField(branchValue: unknown): string | null {
+  if (branchValue !== undefined && branchValue !== null && typeof branchValue !== "string") {
+    return "branch must be a string or null";
+  }
+  return null;
+}
+
+function validateVcsIngressField(ingressValue: unknown): string | null {
+  if (ingressValue !== undefined && typeof ingressValue !== "boolean") {
+    return "ingress-submodules must be a boolean";
+  }
+  return null;
+}
+
+function assembleVcsRepoValue(args: Readonly<{
+  identifier: string;
+  branchValue: unknown;
+  ingressValue: unknown;
+  oauthTokenId: string | undefined;
+  installationId: string | undefined;
+  tagsRegex: string | undefined;
+  existing: DeepReadonly<WorkspaceVcsRepo> | undefined;
+}>): WorkspaceVcsRepo {
+  const value: WorkspaceVcsRepo = { identifier: args.identifier };
+  const branch = args.branchValue === null
+    ? undefined
+    : typeof args.branchValue === "string" ? args.branchValue : args.existing?.branch;
+  const ingressSubmodules = typeof args.ingressValue === "boolean" ? args.ingressValue : args.existing?.ingressSubmodules;
+  if (branch !== undefined) value.branch = branch;
+  if (args.oauthTokenId !== undefined && args.oauthTokenId !== "") value.oauthTokenId = args.oauthTokenId;
+  if (args.installationId !== undefined && args.installationId !== "") value.githubAppInstallationId = args.installationId;
+  if (ingressSubmodules !== undefined) value.ingressSubmodules = ingressSubmodules;
+  if (args.tagsRegex !== undefined) value.tagsRegex = args.tagsRegex;
+  const cloneUrl: unknown = args.existing?.cloneUrl;
+  if (typeof cloneUrl === "string") value.cloneUrl = cloneUrl;
+  return value;
+}
+
 async function normalizeVcsRepo(
   input: unknown,
   orgId: string,
@@ -209,95 +339,39 @@ async function normalizeVcsRepo(
   if (typeof input !== "object") return { error: "vcs-repo must be an object or null" };
   const raw = input as Record<string, unknown>;
 
-  const identifierValue = raw["identifier"];
-  const identifier = identifierValue === undefined
-    ? existing?.identifier ?? ""
-    : typeof identifierValue === "string" ? identifierValue.trim() : "";
-  if (identifier === "") return { error: "Repository identifier is required" };
-
-  const installationValue = Object.hasOwn(raw, "github-app-installation-id")
-    ? raw["github-app-installation-id"]
-    : raw["githubAppInstallationId"];
-  if (installationValue !== undefined && installationValue !== null && typeof installationValue !== "string") {
-    return { error: "github-app-installation-id must be a string or null" };
-  }
-  const installationId = installationValue === null
-    ? undefined
-    : typeof installationValue === "string" ? installationValue.trim() : existing?.githubAppInstallationId;
-
-  const oauthTokenValue = Object.hasOwn(raw, "oauth-token-id")
-    ? raw["oauth-token-id"]
-    : raw["oauthTokenId"];
-  if (oauthTokenValue !== undefined && oauthTokenValue !== null && typeof oauthTokenValue !== "string") {
-    return { error: "oauth-token-id must be a string or null" };
-  }
-  const oauthTokenId = oauthTokenValue === null
-    ? undefined
-    : typeof oauthTokenValue === "string" ? oauthTokenValue.trim() : existing?.oauthTokenId;
-  if ((installationId !== undefined && installationId !== "") && (oauthTokenId !== undefined && oauthTokenId !== "")) {
-    return { error: "A vcs-repo may contain either a GitHub App installation or an OAuth token, not both" };
-  }
-  if ((installationId === undefined || installationId === "") && (oauthTokenId === undefined || oauthTokenId === "")) {
-    return { error: "A GitHub App installation or OAuth token is required" };
-  }
-
-  if (installationId !== undefined && installationId !== "") {
-    const installation = await database.query.githubAppInstallations.findFirst({
-      where: and(eq(githubAppInstallations.id, installationId), eq(githubAppInstallations.orgId, orgId)),
-    });
-    if (installation === undefined) return { error: "GitHub App installation is not registered in this organization" };
-  }
-  if (oauthTokenId !== undefined && oauthTokenId !== "") {
-    let token = await database.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId) });
-    if (token !== undefined && isPostgres) {
-      const execute = (database as unknown as { execute: (query: unknown) => Promise<unknown> }).execute.bind(database);
-      // Match deletion's client-before-token lock order, then re-read after
-      // waiting so a delete that won the race cannot leave a JSON reference.
-      await execute(sql`SELECT id FROM oauth_clients WHERE id = ${token.oauthClientId} FOR KEY SHARE`);
-      await execute(sql`SELECT id FROM oauth_tokens WHERE id = ${oauthTokenId} FOR KEY SHARE`);
-      token = await database.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId) });
-    }
-    const client = token === undefined
-      ? undefined
-      : await database.query.oauthClients.findFirst({
-          where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
-        });
-    if (client === undefined) return { error: "OAuth token is not registered in this organization" };
-  }
+  const identifier = resolveVcsIdentifier(raw, existing);
+  if ("error" in identifier) return identifier;
+  const installation = resolveVcsCredential(raw, existing, "github-app-installation-id", "githubAppInstallationId");
+  if ("error" in installation) return installation;
+  const oauth = resolveVcsCredential(raw, existing, "oauth-token-id", "oauthTokenId");
+  if ("error" in oauth) return oauth;
+  const pairError = checkVcsCredentialPair(installation.id, oauth.id);
+  if (pairError !== null) return { error: pairError };
+  const installationError = await checkVcsInstallation(database, installation.id, orgId);
+  if (installationError !== null) return { error: installationError };
+  const oauthError = await checkVcsOauthToken(database, oauth.id, orgId);
+  if (oauthError !== null) return { error: oauthError };
 
   const branchValue = raw["branch"];
-  if (branchValue !== undefined && branchValue !== null && typeof branchValue !== "string") {
-    return { error: "branch must be a string or null" };
-  }
-  const tagsRegexValue = raw["tags-regex"] ?? raw["tagsRegex"];
-  if (tagsRegexValue !== undefined && tagsRegexValue !== null && typeof tagsRegexValue !== "string") {
-    return { error: "tags-regex must be a string or null" };
-  }
-  const tagsRegex = tagsRegexValue === null
-    ? undefined
-    : typeof tagsRegexValue === "string" ? tagsRegexValue : existing?.tagsRegex;
-  if (tagsRegex !== undefined) {
-    if (tagsRegex.length > 256) return { error: "tags-regex must be at most 256 characters" };
-    if (!isValidTagsRegex(tagsRegex)) return { error: "tags-regex must be a valid, non-pathological regular expression" };
-  }
+  const branchError = validateVcsBranchField(branchValue);
+  if (branchError !== null) return { error: branchError };
+  const tags = resolveVcsTagsRegex(raw, existing);
+  if ("error" in tags) return tags;
   const ingressValue = raw["ingress-submodules"] ?? raw["ingressSubmodules"];
-  if (ingressValue !== undefined && typeof ingressValue !== "boolean") {
-    return { error: "ingress-submodules must be a boolean" };
-  }
+  const ingressError = validateVcsIngressField(ingressValue);
+  if (ingressError !== null) return { error: ingressError };
 
-  const value: WorkspaceVcsRepo = { identifier };
-  const branch = branchValue === null
-    ? undefined
-    : typeof branchValue === "string" ? branchValue : existing?.branch;
-  const ingressSubmodules = typeof ingressValue === "boolean" ? ingressValue : existing?.ingressSubmodules;
-  if (branch !== undefined) value.branch = branch;
-  if (oauthTokenId !== undefined && oauthTokenId !== "") value.oauthTokenId = oauthTokenId;
-  if (installationId !== undefined && installationId !== "") value.githubAppInstallationId = installationId;
-  if (ingressSubmodules !== undefined) value.ingressSubmodules = ingressSubmodules;
-  if (tagsRegex !== undefined) value.tagsRegex = tagsRegex;
-  const cloneUrl: unknown = existing?.cloneUrl;
-  if (typeof cloneUrl === "string") value.cloneUrl = cloneUrl;
-  return { value };
+  return {
+    value: assembleVcsRepoValue({
+      identifier: identifier.identifier,
+      branchValue,
+      ingressValue,
+      oauthTokenId: oauth.id,
+      installationId: installation.id,
+      tagsRegex: tags.tagsRegex,
+      existing,
+    }),
+  };
 }
 
 // Attach the workspace's latest state outputs (type "workspace-outputs") to a
