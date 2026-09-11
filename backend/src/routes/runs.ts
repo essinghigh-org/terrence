@@ -1630,6 +1630,52 @@ function resolveRunCreateIdempotency(
   return { idempotency };
 }
 
+type RunCommentRow = typeof runComments.$inferSelect;
+
+async function authorizeCommentDelete(
+  comment: RunCommentRow,
+  authorized: AuthorizedRun,
+  user: ParamCtx["user"],
+  orgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ isAuthor: boolean } | { failure: unknown }>> {
+  const isAuthor = comment.userId !== null && comment.userId === user?.id && orgId === null && teamId === null;
+  if (!isAuthor && !(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) {
+    await auditLog("delete", "run-comments", comment.id, user?.id ?? null, authorized.workspace.orgId, { runId: comment.runId, reason: "requires-author-or-administrator" }, { result: "denied", immutable: true });
+    (set as { status: number }).status = 403;
+    return { failure: { errors: [{ status: "403", title: "Forbidden", detail: "Only the comment author or a workspace administrator can delete it." }] } };
+  }
+  return { isAuthor };
+}
+
+async function deleteCommentWithAudit(
+  comment: RunCommentRow,
+  authorized: AuthorizedRun,
+  userId: string | null,
+  isAuthor: boolean,
+): Promise<boolean> {
+  return db.transaction(async (transaction): Promise<boolean> => {
+    const tx = transaction as unknown as typeof db;
+    const removed = await tx.delete(runComments).where(eq(runComments.id, comment.id)).returning({ id: runComments.id });
+    if (removed.length === 0) return false;
+    await tx.insert(auditLogs).values(auditLogValues({
+      action: "delete",
+      resourceType: "run-comments",
+      resourceId: comment.id,
+      userId,
+      orgId: authorized.workspace.orgId,
+      details: {
+        runId: comment.runId,
+        workspaceId: authorized.workspace.id,
+        bodyBytes: Buffer.byteLength(comment.body, "utf8"),
+        deletedByAuthor: isAuthor,
+      },
+    }) as typeof auditLogs.$inferInsert);
+    return true;
+  });
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -2684,31 +2730,9 @@ export const runRoutes = new Elysia({ name: "runs" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const isAuthor = c.userId !== null && c.userId === user?.id && orgId === null && teamId === null;
-    if (!isAuthor && !(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) {
-      await auditLog("delete", "run-comments", commentId, user?.id ?? null, authorized.workspace.orgId, { runId: c.runId, reason: "requires-author-or-administrator" }, { result: "denied", immutable: true });
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: "Only the comment author or a workspace administrator can delete it." }] };
-    }
-    const deleted = await db.transaction(async (transaction): Promise<boolean> => {
-      const tx = transaction as unknown as typeof db;
-      const removed = await tx.delete(runComments).where(eq(runComments.id, commentId)).returning({ id: runComments.id });
-      if (removed.length === 0) return false;
-      await tx.insert(auditLogs).values(auditLogValues({
-        action: "delete",
-        resourceType: "run-comments",
-        resourceId: commentId,
-        userId: user?.id ?? null,
-        orgId: authorized.workspace.orgId,
-        details: {
-          runId: c.runId,
-          workspaceId: authorized.workspace.id,
-          bodyBytes: Buffer.byteLength(c.body, "utf8"),
-          deletedByAuthor: isAuthor,
-        },
-      }) as typeof auditLogs.$inferInsert);
-      return true;
-    });
+    const auth = await authorizeCommentDelete(c, authorized, user, orgId, teamId, set);
+    if ("failure" in auth) return auth.failure;
+    const deleted = await deleteCommentWithAudit(c, authorized, user?.id ?? null, auth.isAuthor);
     if (!deleted) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     (set as { status: number }).status = 204;
     return new Response(null, { status: 204 });
