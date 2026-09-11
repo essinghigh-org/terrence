@@ -4812,7 +4812,7 @@ export async function enqueueDueAutoDestroyRuns(now = Date.now()): Promise<strin
 }
 
 
-export async function enqueueDueAssessments(now = Date.now()): Promise<string[]> {
+async function fetchAssessmentCandidates(): Promise<(typeof workspaces.$inferSelect)[]> {
   if (isMaintenanceActive()) return [];
   if (workerQueueDraining()) return [];
   // ponytail: a per-workspace scan is sufficient for a homelab scheduler; use one ranked SQL query if scale demands it.
@@ -4826,17 +4826,18 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
       Readonly<typeof organizations.$inferSelect>,
     ] => [organization.id, organization]),
   );
-  const cutoff = now - assessmentIntervalMs();
 
   // Filter candidate workspaces first
-  const candidateWorkspaces = allWorkspaces.filter((workspace): boolean => {
+  return allWorkspaces.filter((workspace): boolean => {
     const organization = organizationsById.get(workspace.orgId);
     return workspace.assessmentsEnabled === true || organization?.assessmentsEnforced === true;
   });
-  if (candidateWorkspaces.length === 0) return [];
+}
 
-  const candidateIds = candidateWorkspaces.map((ws): string => ws.id);
-
+async function fetchAssessmentSignals(candidateIds: string[]): Promise<{
+  assessmentsByWorkspace: Map<string, (typeof assessmentResults.$inferSelect)[]>;
+  runsByWorkspace: Map<string, (typeof runs.$inferSelect)[]>;
+}> {
   // Batch fetch only the latest + active assessment results and runs, capped
   const batchLimit = Math.max(candidateIds.length * 5, 20);
   const [allAssessments, allRuns] = await Promise.all([
@@ -4853,8 +4854,8 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
   ]);
 
   // Group by workspace ID
-  const assessmentsByWorkspace = new Map<string, typeof allAssessments>();
-  const runsByWorkspace = new Map<string, typeof allRuns>();
+  const assessmentsByWorkspace = new Map<string, (typeof assessmentResults.$inferSelect)[]>();
+  const runsByWorkspace = new Map<string, (typeof runs.$inferSelect)[]>();
   for (const a of allAssessments) {
     const list = assessmentsByWorkspace.get(a.workspaceId);
     if (list === undefined) assessmentsByWorkspace.set(a.workspaceId, [a]);
@@ -4865,32 +4866,66 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
     if (list === undefined) runsByWorkspace.set(r.workspaceId, [r]);
     else list.push(r);
   }
+  return { assessmentsByWorkspace, runsByWorkspace };
+}
+
+function findWorkspaceAssessmentSignals(
+  wsAssessments: readonly (typeof assessmentResults.$inferSelect)[],
+  wsRuns: readonly (typeof runs.$inferSelect)[],
+): {
+  latestResult: (typeof assessmentResults.$inferSelect) | undefined;
+  activeResult: (typeof assessmentResults.$inferSelect) | undefined;
+  latestRun: (typeof runs.$inferSelect) | undefined;
+  latestAppliedRun: (typeof runs.$inferSelect) | undefined;
+  activeRun: (typeof runs.$inferSelect) | undefined;
+} {
+  // latestResult is the first assessment (sorted desc)
+  const latestResult = wsAssessments.length > 0 ? wsAssessments[0] : undefined;
+  // activeResult is any pending/running
+  const activeResult = wsAssessments.find((a): boolean => ["pending", "running"].includes(a.status));
+  // latestRun is the first run (sorted desc)
+  const latestRun = wsRuns.length > 0 ? wsRuns[0] : undefined;
+  // latestAppliedRun is the first applied run with CV
+  const latestAppliedRun = wsRuns.find((r): boolean => r.status === "applied" && r.configurationVersionId !== null);
+  // activeRun is any run not in final statuses
+  const activeRun = wsRuns.find((r): boolean => !FINAL_RUN_STATUSES.includes(r.status));
+  return { latestResult, activeResult, latestRun, latestAppliedRun, activeRun };
+}
+
+function assessmentDueForWorkspace(
+  wsAssessments: readonly (typeof assessmentResults.$inferSelect)[],
+  wsRuns: readonly (typeof runs.$inferSelect)[],
+  cutoff: number,
+): boolean {
+  const signals = findWorkspaceAssessmentSignals(wsAssessments, wsRuns);
+  if (signals.activeResult !== undefined) return false;
+  if (signals.activeRun !== undefined) return false;
+  if (signals.latestAppliedRun === undefined) return false;
+  if (signals.latestRun === undefined) return false;
+  if (!["applied", "planned_and_finished"].includes(signals.latestRun.status)) return false;
+  if (signals.latestResult !== undefined && signals.latestResult.createdAt > cutoff) return false;
+  return true;
+}
+
+async function persistAssessmentBatch(batch: (typeof assessmentResults.$inferInsert)[]): Promise<void> {
+  if (batch.length > 0) await db.insert(assessmentResults).values(batch);
+  for (const assessment of batch) scheduleExplorerInventory(assessment.workspaceId);
+}
+
+export async function enqueueDueAssessments(now = Date.now()): Promise<string[]> {
+  const candidateWorkspaces = await fetchAssessmentCandidates();
+  if (candidateWorkspaces.length === 0) return [];
+
+  const candidateIds = candidateWorkspaces.map((ws): string => ws.id);
+  const signals = await fetchAssessmentSignals(candidateIds);
+  const cutoff = now - assessmentIntervalMs();
   const enqueued: string[] = [];
   const batch: (typeof assessmentResults.$inferInsert)[] = [];
 
   for (const workspace of candidateWorkspaces) {
-    const wsAssessments = assessmentsByWorkspace.get(workspace.id) ?? [];
-    const wsRuns = runsByWorkspace.get(workspace.id) ?? [];
-
-    // latestResult is the first assessment (sorted desc)
-    const latestResult = wsAssessments.length > 0 ? wsAssessments[0] : undefined;
-    // activeResult is any pending/running
-    const activeResult = wsAssessments.find((a): boolean => ["pending", "running"].includes(a.status));
-    // latestRun is the first run (sorted desc)
-    const latestRun = wsRuns.length > 0 ? wsRuns[0] : undefined;
-    // latestAppliedRun is the first applied run with CV
-    const latestAppliedRun = wsRuns.find((r): boolean => r.status === "applied" && r.configurationVersionId !== null);
-    // activeRun is any run not in final statuses
-    const activeRun = wsRuns.find((r): boolean => !FINAL_RUN_STATUSES.includes(r.status));
-
-    if (
-      activeResult !== undefined
-      || activeRun !== undefined
-      || latestAppliedRun === undefined
-      || latestRun === undefined
-      || !["applied", "planned_and_finished"].includes(latestRun.status)
-      || (latestResult !== undefined && latestResult.createdAt > cutoff)
-    ) continue;
+    const wsAssessments = signals.assessmentsByWorkspace.get(workspace.id) ?? [];
+    const wsRuns = signals.runsByWorkspace.get(workspace.id) ?? [];
+    if (!assessmentDueForWorkspace(wsAssessments, wsRuns, cutoff)) continue;
 
     const id = newResourceId("asmtres");
     batch.push({
@@ -4902,8 +4937,7 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
     });
     enqueued.push(id);
   }
-  if (batch.length > 0) await db.insert(assessmentResults).values(batch);
-  for (const assessment of batch) scheduleExplorerInventory(assessment.workspaceId);
+  await persistAssessmentBatch(batch);
   return enqueued;
 }
 
