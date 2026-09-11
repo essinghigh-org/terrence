@@ -303,6 +303,8 @@ function resolvePresentCostModel(costAttributes: CostEstimate["attributes"]): Co
         && Number.isFinite(Number(delta))
         && Number(delta) > 0;
     })
+    .slice()
+    .sort((left, right): number => Number(right["delta-monthly-cost"]) - Number(left["delta-monthly-cost"]))
     .slice(0, 5);
   return {
     costStatus,
@@ -331,6 +333,19 @@ export type PolicyModel = Readonly<{
 }>;
 
 export function resolvePolicyModel(policyChecks: readonly PolicyCheck[], status: string): PolicyModel {
+  // A hard policy failure can land with no check records (e.g. evaluation
+  // failed before producing any). The run still failed policy: show the
+  // section with a failed summary instead of "not required".
+  if (policyChecks.length === 0 && status === "policy_hard_failed") {
+    return {
+      hasSoftFailedPolicy: false,
+      hasHardFailedPolicy: true,
+      hasFailedPolicy: true,
+      advisoryIssues: [],
+      policySummary: "failed",
+      showPolicyChecks: true,
+    };
+  }
   const hasSoftFailedPolicy = status === "policy_soft_failed"
     || policyChecks.some((check: PolicyCheck): boolean => check.attributes.status === "soft_failed");
   const hasHardFailedPolicy = policyChecks.some((check: PolicyCheck): boolean =>
@@ -506,7 +521,7 @@ export function resolveSummaryCounts(args: Readonly<{
   planImportCount: number | null;
 }>): SummaryCountsModel {
   const applyCounts = args.apply?.attributes;
-  const summaryCounts = args.applyStatus === "finished" ? (applyCounts ?? {}) : args.planCounts;
+  const summaryCounts = args.applyStatus === "finished" ? (applyCounts ?? args.planCounts) : args.planCounts;
   const summaryImportCount = args.applyStatus === "finished"
     ? applyCounts?.["resource-imports"] ?? args.planImportCount
     : args.planImportCount;

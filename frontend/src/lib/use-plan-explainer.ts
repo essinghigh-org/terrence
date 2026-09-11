@@ -30,25 +30,27 @@ function isSignalAborted(session: ExplainSession): boolean {
 // Durable: non-stream POST enqueues a background job (tab-close safe).
 // The GET polls that job until the cached explanation appears. Abort-aware
 // so cancel/unmount stops polling and prevents setState after abort.
-async function pollExplanationUntilReady(session: ExplainSession, timeoutMs = 180_000): Promise<boolean> {
+type PollOutcome = "ready" | "failed" | "unfinished" | "stopped";
+
+async function pollExplanationUntilReady(session: ExplainSession, timeoutMs = 180_000): Promise<PollOutcome> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    if (isSignalAborted(session)) return false;
+    if (isSignalAborted(session)) return "stopped";
     const row = await fetchExplanation(session.runId, session.kind).catch((): null => null);
-    if (isSignalAborted(session)) return false;
+    if (isSignalAborted(session)) return "stopped";
     if (row !== null && row.explanation !== "") {
       session.setExplanation(row.explanation);
       session.setExplainerModel(row.model);
       session.setExplainerReasoningEffort(row.reasoningEffort);
-      return true;
+      return "ready";
     }
     if (row !== null && row.status === "failed") {
       session.setExplainError("Plan explainer failed. Check the endpoint, model, and API key, then try again.");
-      return false;
+      return "failed";
     }
-    if (Date.now() >= deadline) return false;
+    if (Date.now() >= deadline) return "unfinished";
     const retry = await waitForAbortableDelay(session.signal, 1500);
-    if (!retry) return false;
+    if (!retry) return "stopped";
   }
 }
 
@@ -75,11 +77,13 @@ function applyStreamEvent(
 async function settleStreamSession(session: ExplainSession, sawProgress: boolean): Promise<void> {
   // Durable job enqueued: poll GET until the cached explanation lands.
   if (sawProgress && session.isCurrent()) {
-    const ready = await pollExplanationUntilReady(session);
-    if (!ready && session.isCurrent() && !isSignalAborted(session)) {
+    const outcome = await pollExplanationUntilReady(session);
+    // A terminal failure already set its specific message; only a poll that
+    // ran out of time without an answer gets one more enqueue-and-wait round.
+    if (outcome === "unfinished" && session.isCurrent() && !isSignalAborted(session)) {
       await enqueueExplanation(session.runId, session.kind).catch((): null => null);
-      const settled = await pollExplanationUntilReady(session);
-      if (!settled && session.isCurrent() && !isSignalAborted(session)) {
+      const second = await pollExplanationUntilReady(session);
+      if (second === "unfinished" && session.isCurrent() && !isSignalAborted(session)) {
         session.setExplainError("The explanation did not finish in time. Try again.");
       }
     }
@@ -93,14 +97,20 @@ async function handleExplainError(caught: unknown, session: ExplainSession, sawP
   const msg = caught instanceof Error ? caught.message : String(caught);
   const isProgressStream = sawProgress || /without a done event/i.test(msg);
   if (isProgressStream && !isSignalAborted(session)) {
-    const ready = await pollExplanationUntilReady(session).catch((): boolean => false);
-    if (ready) return;
+    const outcome = await pollExplanationUntilReady(session).catch((): PollOutcome => "unfinished");
+    // "ready" landed the explanation; "failed" set its own specific error.
+    // Either way there is nothing left for the fallback paths to add.
+    if (outcome === "ready" || outcome === "failed") return;
   }
   // 202/queued path: enqueue durably and poll; closing the tab no longer aborts the LLM call.
   if (caught instanceof ApiError && (caught.status === 202 || /queued|job/i.test(caught.message))) {
     if (await enqueueAndPollExplanation(session)) return;
   }
-  session.setExplainError(msg);
+  // The poll above can outlive this session (cancel, supersede, unmount):
+  // only the session that is still current may set the dialog error.
+  if (session.isCurrent() && !isSignalAborted(session)) {
+    session.setExplainError(msg);
+  }
 }
 
 /**
@@ -113,8 +123,8 @@ async function enqueueAndPollExplanation(session: ExplainSession): Promise<boole
   try {
     if (isSignalAborted(session)) return true;
     await enqueueExplanation(session.runId, session.kind);
-    const ready = await pollExplanationUntilReady(session);
-    return ready;
+    const outcome = await pollExplanationUntilReady(session);
+    return outcome !== "unfinished";
   } catch (enqueueErr) {
     if (isSignalAborted(session) || !session.isCurrent()) return true;
     console.error("Failed to enqueue explanation:", enqueueErr);

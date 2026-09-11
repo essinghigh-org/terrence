@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { fetchApi } from "./api";
 import { taskOutcomeLabel, type RunProvenanceManifest } from "./run-detail-format";
 import type { RunResource } from "./run-view-state";
+import { isString } from "./type-guards";
 
 /**
  * Speculative plans never apply (issue #603): the run row only carries
@@ -56,6 +57,29 @@ export type ProvenanceState = Readonly<{
   provenanceError: string;
 }>;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The provenance panel dereferences engine/configuration/inputState/
+ * variables/sandbox unconditionally, so a partial manifest (e.g. `{}`)
+ * would crash the render. Validate the full read shape before storing it.
+ */
+function isProvenanceManifest(value: unknown): value is RunProvenanceManifest {
+  if (!isRecord(value)) return false;
+  const engine = value["engine"];
+  const configuration = value["configuration"];
+  if (!isRecord(engine) || !isString(engine["binary"])) return false;
+  if (!isRecord(configuration) || !isString(configuration["digest"])) return false;
+  if (!isRecord(value["inputState"])) return false;
+  if (!Array.isArray(value["variables"])) return false;
+  if (!isRecord(value["sandbox"])) return false;
+  const rerun = value["rerun"];
+  return rerun === undefined
+    || (isRecord(rerun) && isString(rerun["mode"]) && Array.isArray(rerun["changedSinceSource"]));
+}
+
 export function useProvenanceManifest(runId: string): ProvenanceState {
   const [provenanceManifest, setProvenanceManifest] = useState<RunProvenanceManifest | null>(null);
   const [provenanceError, setProvenanceError] = useState("");
@@ -68,7 +92,12 @@ export function useProvenanceManifest(runId: string): ProvenanceState {
       .then((payload: unknown): void => {
         if (controller.signal.aborted) return;
         const data = (payload as { data?: { attributes?: { manifest?: unknown } } }).data?.attributes?.manifest;
-        if (data !== null && typeof data === "object" && !Array.isArray(data)) setProvenanceManifest(data as RunProvenanceManifest);
+        if (data === undefined || data === null) return;
+        if (!isProvenanceManifest(data)) {
+          setProvenanceError("The provenance manifest was incomplete.");
+          return;
+        }
+        setProvenanceManifest(data);
       })
       .catch((error: unknown): void => {
         if (!controller.signal.aborted) setProvenanceError(error instanceof Error ? error.message : String(error));

@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, renderHook, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { useRunView } from "../src/lib/use-run-view";
+import { usePhaseOpen } from "../src/lib/use-phase-open";
 import { resolvePhaseStatus } from "../src/lib/run-status";
 import { auxKindsForStatus } from "../src/lib/run-view-state";
 import { resolveStages } from "../src/components/RunStageStrip";
@@ -144,4 +145,21 @@ test("returning to the page refreshes the phase for the newly fetched status", a
     expect(view.result.current.state.plan?.attributes.status).toBe("running");
     expect(planReads).toBeGreaterThan(initialReads);
   });
+});
+
+test("apply auto-open preserves an explicit collapse when execution starts", () => {
+  const hook = renderHook(
+    ({ runStatus, applyStatus }: { runStatus: string; applyStatus: string }) =>
+      usePhaseOpen("run-collapse", runStatus, "finished", applyStatus),
+    { initialProps: { runStatus: "planned", applyStatus: "pending" } },
+  );
+  expect(hook.result.current.applyIsOpen).toBe(false);
+  act((): void => { hook.result.current.setApplyExpanded(false); });
+  hook.rerender({ runStatus: "applying", applyStatus: "running" });
+  expect(hook.result.current.applyIsOpen).toBe(false);
+});
+
+test("apply auto-opens when execution starts with no explicit choice", () => {
+  const hook = renderHook(() => usePhaseOpen("run-auto", "applying", "finished", "running"));
+  expect(hook.result.current.applyIsOpen).toBe(true);
 });

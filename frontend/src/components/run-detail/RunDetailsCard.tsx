@@ -31,8 +31,14 @@ function RunTimeline({ timestamps, inputStateSerial }: Readonly<{
   timestamps: Readonly<Record<string, string>>;
   inputStateSerial: string | undefined;
 }>): React.JSX.Element | null {
+  // Insertion order is a serialization detail; the timeline reads oldest
+  // first regardless of the order the API record lists the keys in.
   const timestampEntries = Object.entries(timestamps)
-    .filter(([key, value]): boolean => timestampMilliseconds(key, value) !== undefined);
+    .flatMap(([key, value]): ReadonlyArray<readonly [string, string, number]> => {
+      const at = timestampMilliseconds(key, value);
+      return at === undefined ? [] : [[key, value, at]];
+    })
+    .sort(([, , left], [, , right]): number => left - right);
   const isNumericSerial = inputStateSerial !== undefined && /^\d+$/.test(inputStateSerial);
   if (timestampEntries.length === 0 && !isNumericSerial) return null;
   return (

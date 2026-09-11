@@ -441,7 +441,10 @@ function envelopeArray(value: unknown): readonly unknown[] {
 /** Unwrap a JSON:API single-resource envelope. */
 function envelopeResource(value: unknown): unknown {
   const data = (value as { data?: unknown } | null)?.data;
-  return data ?? null;
+  // Collection payloads (e.g. a mock fallback returning `data: []`) are not
+  // a resource: treat them as missing so readers see null, not an array
+  // whose `.attributes` read would throw.
+  return data !== null && typeof data === "object" && !Array.isArray(data) ? data : null;
 }
 
 /**

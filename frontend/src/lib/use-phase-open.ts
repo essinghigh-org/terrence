@@ -24,7 +24,9 @@ export function usePhaseOpen(
   const [applyExpanded, setApplyExpanded] = useState<boolean | null>(null);
   const applyExecutionStarted = runStatus === "applying" || applyStatus === "running";
   useEffect((): void => {
-    if (applyExecutionStarted) setApplyExpanded(true);
+    // Auto-open on execution start, but never override an explicit user
+    // choice: a deliberate collapse stays collapsed.
+    if (applyExecutionStarted) setApplyExpanded((current): boolean | null => current ?? true);
   }, [runId, applyExecutionStarted]);
   const planOpenRendered = useRef<boolean>(false);
   const applyOpenRendered = useRef<boolean>(false);

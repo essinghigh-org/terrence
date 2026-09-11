@@ -52,15 +52,14 @@ function ApplyResourceCounts({ applyCounts, planImportCount, applyStatus }: Read
   );
 }
 
-function ApplyDiagnosticsFallback({ applyErrors, applyWarnings, applyStatus }: Readonly<{
+function ApplyDiagnosticsFallback({ applyErrors, applyStatus }: Readonly<{
   applyErrors: readonly TerraformDiagnostic[];
-  applyWarnings: readonly TerraformDiagnostic[];
   applyStatus: string;
 }>): React.JSX.Element | null {
   if (applyErrors.length > 0) {
     return <DiagnosticsBanner severity="error" diagnostics={applyErrors} collapsible />;
   }
-  if (applyWarnings.length === 0 && ["errored", "unreachable"].includes(applyStatus)) {
+  if (["errored", "unreachable"].includes(applyStatus)) {
     return (
       <section aria-labelledby="apply-diagnostics-heading" className="border-t border-destructive/30 bg-destructive/10 px-5 py-4">
         <h4 id="apply-diagnostics-heading" className="text-sm font-semibold text-destructive">Diagnostics</h4>
@@ -149,7 +148,6 @@ export function ApplySection(props: ApplySectionProps): React.JSX.Element {
 
       <ApplyDiagnosticsFallback
         applyErrors={props.applyErrors}
-        applyWarnings={props.applyWarnings}
         applyStatus={applyStatus}
       />
       {applyStatus !== "pending" && (

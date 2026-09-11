@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { fetchApi } from "./api";
 import { ACTION_CONFIRMATIONS, type RunActionKind } from "./run-decision";
 import type { AuxKind } from "./run-view-state";
@@ -32,6 +32,9 @@ export function useRunActions(args: UseRunActionsArgs): RunActions {
   const { runId, markActionSent, markActionSettled, refreshAll, refresh } = args;
   const [pendingAction, setPendingAction] = useState("");
   const [commentBody, setCommentBody] = useState("");
+  // Synchronous guard: state updates land on re-render, so two rapid
+  // submissions could both pass a state check and send duplicate POSTs.
+  const actionInFlightRef = useRef(false);
 
   /**
    * Send a run action.
@@ -48,6 +51,8 @@ export function useRunActions(args: UseRunActionsArgs): RunActions {
     successTitle: string,
     comment = "",
   ): Promise<boolean> => {
+    if (actionInFlightRef.current) return false;
+    actionInFlightRef.current = true;
     setPendingAction(action);
     try {
       const trimmedComment = comment.trim();
@@ -77,6 +82,7 @@ export function useRunActions(args: UseRunActionsArgs): RunActions {
       return false;
     } finally {
       setPendingAction("");
+      actionInFlightRef.current = false;
     }
   }, [runId, markActionSent, markActionSettled, refreshAll]);
 
@@ -88,6 +94,8 @@ export function useRunActions(args: UseRunActionsArgs): RunActions {
     event.preventDefault();
     const body = commentBody.trim();
     if (body === "") return;
+    if (actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
     setPendingAction("comment");
     try {
       await fetchApi(`/api/v2/runs/${encodeURIComponent(runId)}/comments`, {
@@ -111,6 +119,7 @@ export function useRunActions(args: UseRunActionsArgs): RunActions {
       });
     } finally {
       setPendingAction("");
+      actionInFlightRef.current = false;
     }
   }
 
