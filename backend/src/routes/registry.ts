@@ -1614,6 +1614,77 @@ async function resolveProviderPlatformChain(
   return { chain: { org, provider, version, platform } };
 }
 
+async function resolveModuleVersionForManage(
+  versionId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ ver: ModVerItem; mod: ModItem } | { failure: unknown }>> {
+  const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+  if (ver === undefined) { (set as { status: number }).status = 404; return { failure: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
+  if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"))) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { ver, mod };
+}
+
+async function ingestModuleVersionUpload(
+  versionId: string,
+  moduleId: string,
+  bytes: Uint8Array,
+  set: SetObj,
+): Promise<unknown> {
+  const claimed = await db.update(registryModuleVersions)
+    .set({ status: "ingesting", updatedAt: Date.now() })
+    .where(and(
+      eq(registryModuleVersions.id, versionId),
+      isNull(registryModuleVersions.archivePath),
+      ne(registryModuleVersions.status, "ingesting"),
+    ))
+    .returning({ id: registryModuleVersions.id });
+  if (claimed.length !== 1) {
+    (set as { status: number }).status = 409;
+    return { errors: [{ status: "409", title: "Conflict", detail: "Module version content was already uploaded" }] };
+  }
+  const rawPath = join(CV_STORAGE_DIR, `registry-module-${versionId}.${crypto.randomUUID()}.upload`);
+  const archivePath = join(REGISTRY_MODULE_STORAGE_DIR, `${versionId}.tar.gz`);
+  try {
+    await mkdir(CV_STORAGE_DIR, { recursive: true, mode: 0o700 });
+    await writeFile(rawPath, bytes, { mode: 0o600 });
+    const metadata = await ingestModuleArchive(rawPath, archivePath, "", inspectRegistryModule);
+    const publishedAt = Date.now();
+    await db.transaction(async (tx): Promise<void> => {
+      await tx.update(registryModuleVersions).set({
+        archivePath,
+        status: "ok",
+        metadata,
+        ingestError: null,
+        publishedAt,
+        updatedAt: publishedAt,
+      }).where(eq(registryModuleVersions.id, versionId));
+      await tx.update(registryModules).set({
+        status: "setup_complete",
+        description: metadata.description,
+        updatedAt: publishedAt,
+      }).where(eq(registryModules.id, moduleId));
+    });
+    const updated = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+    (set as { status: number }).status = 200;
+    if (updated === undefined) throw new Error("Uploaded registry module version could not be loaded");
+    return { data: registryModuleVersionResource(updated) };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Module archive ingestion failed";
+    await db.update(registryModuleVersions).set({ status: "errored", ingestError: message.slice(0, 2_000), updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: message }] };
+  } finally {
+    await rm(rawPath, { force: true });
+  }
+}
+
 async function resolveProviderVersionByIdForWrite(
   versionId: string,
   userId: string | undefined,
@@ -2391,18 +2462,9 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return updated === undefined ? registryNotFound(set) : { data: registryModuleVersionResource(updated) };
   })
   .delete("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/:version", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const mod = org === undefined ? undefined : await db.query.registryModules.findFirst({
-      where: and(
-        eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params["namespace"] ?? ""),
-        eq(registryModules.name, params["module_name"] ?? ""),
-        eq(registryModules.provider, params["provider"] ?? ""),
-      ),
-    });
-    const version = mod === undefined ? undefined : await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, params["version"] ?? "")) });
-    if (org === undefined || mod === undefined || version === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
+    const resolved = await resolveModuleVersionForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
+    const { version } = resolved;
     await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, version.id));
     if (version.archivePath !== null) await rm(version.archivePath, { force: true });
     (set as { status: number }).status = 204;
@@ -2980,11 +3042,9 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   // --- Module Version Upload ---
   .put("/api/v2/registry-module-versions/:version_id/upload", async ({ params, body, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
-    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const access = await resolveModuleVersionForManage(params["version_id"] ?? "", user?.id, tokenOrgId, teamId, set);
+    if ("failure" in access) return access.failure;
+    const { ver, mod } = access;
     if (mod.publishingMechanism !== "manual") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "VCS-backed module versions are ingested from their configured VCS connection" }] };
@@ -3003,52 +3063,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       (set as { status: number }).status = 413;
       return { errors: [{ status: "413", title: "Payload Too Large", detail: "Module archive exceeds the upload limit" }] };
     }
-    const claimed = await db.update(registryModuleVersions)
-      .set({ status: "ingesting", updatedAt: Date.now() })
-      .where(and(
-        eq(registryModuleVersions.id, versionId),
-        isNull(registryModuleVersions.archivePath),
-        ne(registryModuleVersions.status, "ingesting"),
-      ))
-      .returning({ id: registryModuleVersions.id });
-    if (claimed.length !== 1) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Module version content was already uploaded" }] };
-    }
-    const rawPath = join(CV_STORAGE_DIR, `registry-module-${versionId}.${crypto.randomUUID()}.upload`);
-    const archivePath = join(REGISTRY_MODULE_STORAGE_DIR, `${versionId}.tar.gz`);
-    try {
-      await mkdir(CV_STORAGE_DIR, { recursive: true, mode: 0o700 });
-      await writeFile(rawPath, bytes, { mode: 0o600 });
-      const metadata = await ingestModuleArchive(rawPath, archivePath, "", inspectRegistryModule);
-      const publishedAt = Date.now();
-      await db.transaction(async (tx): Promise<void> => {
-        await tx.update(registryModuleVersions).set({
-          archivePath,
-          status: "ok",
-          metadata,
-          ingestError: null,
-          publishedAt,
-          updatedAt: publishedAt,
-        }).where(eq(registryModuleVersions.id, versionId));
-        await tx.update(registryModules).set({
-          status: "setup_complete",
-          description: metadata.description,
-          updatedAt: publishedAt,
-        }).where(eq(registryModules.id, mod.id));
-      });
-      const updated = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
-      (set as { status: number }).status = 200;
-      if (updated === undefined) throw new Error("Uploaded registry module version could not be loaded");
-      return { data: registryModuleVersionResource(updated) };
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Module archive ingestion failed";
-      await db.update(registryModuleVersions).set({ status: "errored", ingestError: message.slice(0, 2_000), updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: message }] };
-    } finally {
-      await rm(rawPath, { force: true });
-    }
+    return await ingestModuleVersionUpload(ver.id, mod.id, bytes, set);
   })
   .patch("/api/v2/registry-module-versions/:version_id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const versionId = params["version_id"] ?? "";
