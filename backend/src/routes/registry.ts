@@ -351,6 +351,44 @@ async function uploadedBytes(body: unknown, request: ParamCtx["request"]): Promi
   return new Uint8Array(await request.arrayBuffer());
 }
 
+async function createVcsBranchVersion(
+  mod: ModItem,
+  version: string,
+  set: SetObj,
+): Promise<unknown> {
+  if (mod.publishingWorkflow !== "branch") {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Tag-based module versions are created by matching VCS tags" }] };
+  }
+  try {
+    await synchronizeRegistryModule(mod, version);
+    const created = await db.query.registryModuleVersions.findFirst({
+      where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)),
+    });
+    if (created === undefined) throw new Error("The branch revision did not produce a module version");
+    (set as { status: number }).status = 201;
+    return { data: registryModuleVersionResource(created) };
+  } catch (error: unknown) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Branch publication failed" }] };
+  }
+}
+
+async function resolveModuleVersionKeyId(
+  mod: ModItem,
+  attributes: Readonly<Record<string, unknown>>,
+): Promise<Readonly<{ keyId: string | null } | { error: string }>> {
+  const rawKeyId = attributes["key-id"];
+  if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) {
+    return { error: "key-id must identify a GPG key" };
+  }
+  const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
+  if (keyId !== null && await registrySigningKey(mod.orgId, mod.namespace, keyId) === undefined) {
+    return { error: "key-id must identify a GPG key in the module namespace" };
+  }
+  return { keyId };
+}
+
 async function createRegistryModuleVersion(
   mod: ModItem,
   attributes: Readonly<Record<string, unknown>>,
@@ -369,34 +407,15 @@ async function createRegistryModuleVersion(
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Version ${version} already exists` }] };
   }
   if (mod.publishingMechanism === "vcs") {
-    if (mod.publishingWorkflow !== "branch") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Tag-based module versions are created by matching VCS tags" }] };
-    }
-    try {
-      await synchronizeRegistryModule(mod, version);
-      const created = await db.query.registryModuleVersions.findFirst({
-        where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)),
-      });
-      if (created === undefined) throw new Error("The branch revision did not produce a module version");
-      (set as { status: number }).status = 201;
-      return { data: registryModuleVersionResource(created) };
-    } catch (error: unknown) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Branch publication failed" }] };
-    }
+    return await createVcsBranchVersion(mod, version, set);
   }
 
-  const rawKeyId = attributes["key-id"];
-  if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) {
+  const key = await resolveModuleVersionKeyId(mod, attributes);
+  if ("error" in key) {
     (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key" }] };
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: key.error }] };
   }
-  const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
-  if (keyId !== null && await registrySigningKey(mod.orgId, mod.namespace, keyId) === undefined) {
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key in the module namespace" }] };
-  }
+  const keyId = key.keyId;
   const commitSha = typeof attributes["commit-sha"] === "string" && attributes["commit-sha"] !== ""
     ? attributes["commit-sha"]
     : null;
