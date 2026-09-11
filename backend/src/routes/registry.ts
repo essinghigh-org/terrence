@@ -584,36 +584,46 @@ function parseTerraformType(source: string): TerraformType | undefined {
   return new TerraformTypeParser(source).parseDocument();
 }
 
+function matchesListType(value: unknown, item: TerraformType): boolean {
+  return Array.isArray(value) && value.every((entry: unknown): boolean => matchesTerraformType(entry, item));
+}
+
+function matchesMapType(value: unknown, item: TerraformType): boolean {
+  return value !== null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Object.values(value).every((entry: unknown): boolean => matchesTerraformType(entry, item));
+}
+
+function matchesTupleType(value: unknown, items: readonly TerraformType[]): boolean {
+  return Array.isArray(value)
+    && value.length === items.length
+    && value.every((entry: unknown, index: number): boolean => {
+      const item = items[index];
+      return item !== undefined && matchesTerraformType(entry, item);
+    });
+}
+
+function matchesObjectType(value: unknown, fields: Readonly<Record<string, TerraformType>>): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return Object.entries(fields).every(([key, fieldType]): boolean => {
+    const optional = fieldType.kind === "optional";
+    return (optional && record[key] === undefined) || matchesTerraformType(record[key], fieldType);
+  });
+}
+
 function matchesTerraformType(value: unknown, type: TerraformType): boolean {
   if (type.kind === "any") return true;
   if (type.kind === "string") return typeof value === "string";
   if (type.kind === "number") return typeof value === "number" && Number.isFinite(value);
   if (type.kind === "bool") return typeof value === "boolean";
-  if (type.kind === "list" || type.kind === "set") {
-    return Array.isArray(value) && value.every((entry: unknown): boolean => matchesTerraformType(entry, type.item));
-  }
-  if (type.kind === "map") {
-    return value !== null
-      && typeof value === "object"
-      && !Array.isArray(value)
-      && Object.values(value).every((entry: unknown): boolean => matchesTerraformType(entry, type.item));
-  }
+  if (type.kind === "list" || type.kind === "set") return matchesListType(value, type.item);
+  if (type.kind === "map") return matchesMapType(value, type.item);
   if (type.kind === "optional") return value === null || matchesTerraformType(value, type.item);
-  if (type.kind === "tuple") {
-    return Array.isArray(value)
-      && value.length === type.items.length
-      && value.every((entry: unknown, index: number): boolean => {
-        const item = type.items[index];
-        return item !== undefined && matchesTerraformType(entry, item);
-      });
-  }
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  if (type.kind === "tuple") return matchesTupleType(value, type.items);
   const objectType = type as Extract<TerraformType, Readonly<{ kind: "object" }>>;
-  const record = value as Record<string, unknown>;
-  return Object.entries(objectType.fields).every(([key, fieldType]): boolean => {
-    const optional = fieldType.kind === "optional";
-    return (optional && record[key] === undefined) || matchesTerraformType(record[key], fieldType);
-  });
+  return matchesObjectType(value, objectType.fields);
 }
 
 function variableOptionsInput(raw: unknown): readonly VariableOptionInput[] | Readonly<{ error: string }> {
