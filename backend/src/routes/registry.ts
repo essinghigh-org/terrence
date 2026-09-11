@@ -763,6 +763,79 @@ function noCodeInput(body: unknown, requireModule: boolean): NoCodeInput | Reado
   };
 }
 
+type VcsModuleEnvelope = Readonly<{
+  data: Record<string, unknown>;
+  attributes: Record<string, unknown>;
+  vcsRepo: Record<string, unknown>;
+}>;
+
+type VcsModuleNaming = Readonly<{
+  identifier: string;
+  name: string;
+  provider: string;
+}>;
+
+type VcsModuleConnection = Readonly<{
+  githubAppInstallationId: unknown;
+  oauthTokenId: unknown;
+  connectionCount: number;
+  branch: string | null;
+}>;
+
+type VcsModuleOptions = Readonly<{
+  sourceDirectory: string;
+  tagPrefix: string;
+  initialVersion: string;
+  identifierValid: boolean;
+}>;
+
+function parseVcsEnvelope(body: unknown): VcsModuleEnvelope {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  const vcsRepo = attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object"
+    ? attributes["vcs-repo"] as Record<string, unknown>
+    : {};
+  return { data, attributes, vcsRepo };
+}
+
+function parseVcsNaming(attributes: Readonly<Record<string, unknown>>, vcsRepo: Readonly<Record<string, unknown>>): VcsModuleNaming {
+  const identifier = typeof vcsRepo["identifier"] === "string" ? vcsRepo["identifier"].trim() : "";
+  const repositoryName = identifier.split("/").at(-1) ?? "";
+  const conventional = /^terraform-([a-z0-9]+)-([A-Za-z0-9][A-Za-z0-9_-]*)$/.exec(repositoryName);
+  const rawModuleName = attributes["module-name"] ?? attributes["name"];
+  const rawProvider = attributes["module-provider"] ?? attributes["provider"];
+  const name = typeof rawModuleName === "string" ? rawModuleName.trim() : conventional?.[2] ?? "";
+  const provider = typeof rawProvider === "string" ? rawProvider.trim() : conventional?.[1] ?? "";
+  return { identifier, name, provider };
+}
+
+function parseVcsConnection(vcsRepo: Readonly<Record<string, unknown>>): VcsModuleConnection {
+  const githubAppInstallationId = vcsRepo["github-app-installation-id"];
+  const oauthTokenId = vcsRepo["oauth-token-id"];
+  const connectionCount = Number(typeof githubAppInstallationId === "string" && githubAppInstallationId !== "")
+    + Number(typeof oauthTokenId === "string" && oauthTokenId !== "");
+  const branch = typeof vcsRepo["branch"] === "string" && vcsRepo["branch"].trim() !== "" ? vcsRepo["branch"].trim() : null;
+  return { githubAppInstallationId, oauthTokenId, connectionCount, branch };
+}
+
+function parseVcsOptions(
+  attributes: Readonly<Record<string, unknown>>,
+  vcsRepo: Readonly<Record<string, unknown>>,
+  identifier: string,
+): VcsModuleOptions {
+  const rawSourceDirectory = attributes["source-directory"] ?? vcsRepo["source-directory"];
+  const rawTagPrefix = attributes["tag-prefix"] ?? vcsRepo["tag-prefix"];
+  const sourceDirectory = typeof rawSourceDirectory === "string" ? rawSourceDirectory.trim() : "";
+  const tagPrefix = typeof rawTagPrefix === "string" ? rawTagPrefix.trim() : "";
+  const rawInitialVersion = attributes["initial-version"] ?? attributes["version"];
+  const initialVersion = typeof rawInitialVersion === "string" ? rawInitialVersion.replace(/^v/, "") : "0.0.0";
+  const identifierParts = identifier.split("/");
+  const identifierValid = identifierParts.length === 2
+    && identifierParts.every((part): boolean => /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part));
+  return { sourceDirectory, tagPrefix, initialVersion, identifierValid };
+}
+
 function variableOptionResource(option: NoCodeVariableOptionItem): Record<string, unknown> {
   return {
     id: option.id,
@@ -1430,33 +1503,11 @@ export const registryRoutes = new Elysia({ name: "registry" })
   .post("/api/v2/organizations/:org_name/registry-modules/vcs", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const org = await cachedOrgByName(params["org_name"] ?? "");
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const vcsRepo = attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object"
-      ? attributes["vcs-repo"] as Record<string, unknown>
-      : {};
-    const identifier = typeof vcsRepo["identifier"] === "string" ? vcsRepo["identifier"].trim() : "";
-    const repositoryName = identifier.split("/").at(-1) ?? "";
-    const conventional = /^terraform-([a-z0-9]+)-([A-Za-z0-9][A-Za-z0-9_-]*)$/.exec(repositoryName);
-    const rawModuleName = attributes["module-name"] ?? attributes["name"];
-    const rawProvider = attributes["module-provider"] ?? attributes["provider"];
-    const name = typeof rawModuleName === "string" ? rawModuleName.trim() : conventional?.[2] ?? "";
-    const provider = typeof rawProvider === "string" ? rawProvider.trim() : conventional?.[1] ?? "";
-    const githubAppInstallationId = vcsRepo["github-app-installation-id"];
-    const oauthTokenId = vcsRepo["oauth-token-id"];
-    const connectionCount = Number(typeof githubAppInstallationId === "string" && githubAppInstallationId !== "")
-      + Number(typeof oauthTokenId === "string" && oauthTokenId !== "");
-    const branch = typeof vcsRepo["branch"] === "string" && vcsRepo["branch"].trim() !== "" ? vcsRepo["branch"].trim() : null;
-    const rawSourceDirectory = attributes["source-directory"] ?? vcsRepo["source-directory"];
-    const rawTagPrefix = attributes["tag-prefix"] ?? vcsRepo["tag-prefix"];
-    const sourceDirectory = typeof rawSourceDirectory === "string" ? rawSourceDirectory.trim() : "";
-    const tagPrefix = typeof rawTagPrefix === "string" ? rawTagPrefix.trim() : "";
-    const rawInitialVersion = attributes["initial-version"] ?? attributes["version"];
-    const initialVersion = typeof rawInitialVersion === "string" ? rawInitialVersion.replace(/^v/, "") : "0.0.0";
-    const identifierParts = identifier.split("/");
-    const identifierValid = identifierParts.length === 2
-      && identifierParts.every((part): boolean => /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part));
+    const envelope = parseVcsEnvelope(body);
+    const { data } = envelope;
+    const { identifier, name, provider } = parseVcsNaming(envelope.attributes, envelope.vcsRepo);
+    const { githubAppInstallationId, oauthTokenId, connectionCount, branch } = parseVcsConnection(envelope.vcsRepo);
+    const { sourceDirectory, tagPrefix, initialVersion, identifierValid } = parseVcsOptions(envelope.attributes, envelope.vcsRepo, identifier);
     if (data["type"] !== "registry-modules" || !identifierValid || connectionCount !== 1) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A repository identifier and exactly one VCS connection are required" }] };
@@ -1494,7 +1545,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     }
     const now = Date.now();
     const id = newResourceId("mod");
-    const rawRepositoryUrl = vcsRepo["repository-url"];
+    const rawRepositoryUrl = envelope.vcsRepo["repository-url"];
     let repositoryUrl: string | null = null;
     if (repositoryBaseUrl !== null) {
       try {
@@ -1543,9 +1594,9 @@ export const registryRoutes = new Elysia({ name: "registry" })
         vcsConnectionType: typeof githubAppInstallationId === "string" ? "github-app" : "oauth-token",
         vcsConnectionId: typeof githubAppInstallationId === "string" ? githubAppInstallationId : oauthTokenId as string,
         repositoryIdentifier: identifier,
-        repositoryDisplayIdentifier: typeof vcsRepo["display-identifier"] === "string"
-          ? vcsRepo["display-identifier"]
-          : typeof vcsRepo["display_identifier"] === "string" ? vcsRepo["display_identifier"] : identifier,
+        repositoryDisplayIdentifier: typeof envelope.vcsRepo["display-identifier"] === "string"
+          ? envelope.vcsRepo["display-identifier"]
+          : typeof envelope.vcsRepo["display_identifier"] === "string" ? envelope.vcsRepo["display_identifier"] : identifier,
         repositoryUrl,
         sourceDirectory,
         tagPrefix,
