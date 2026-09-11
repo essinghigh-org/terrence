@@ -2055,7 +2055,6 @@ async function executeRunImpl(runId: string): Promise<void> {
   if (!(await enforcePlanExecutorPolicy(workspace, org, run.status, run.statusTimestamps, runId))) return;
 
   const workDir = runWorkDir(runId);
-  let durablePlan: SavedPlanMetadata | undefined;
   let plannedAgainstState: { id: string | null; serial: number } = { id: null, serial: 0 };
 
   try {
@@ -2096,75 +2095,10 @@ async function executeRunImpl(runId: string): Promise<void> {
 
     const planTimeoutMs = await executionTimeoutMs("plan");
     if (resolved !== null && hasTfFiles) {
-      await db.update(runs).set({ terraformVersion: resolved.version }).where(eq(runs.id, runId));
-      const binary = resolved.binaryPath;
-      await writeLog(runId, "plan", `[terrence] Using ${resolved.tool} v${resolved.version} at ${binary}`);
-      if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
-
-      // 1. Run init
-      if (await returnIfRunCanceled(runId)) return;
-      await writeLog(runId, "plan", `\n--- Executing ${resolved.tool} init ---`);
-      if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
-      const initProc = spawnRunProcess(
-        runId,
-        [binary, "init", "-reconfigure", "-no-color", "-input=false"],
-        {
-          cwd: executionDir,
-          env: envVars,
-          stdout: "pipe",
-          stderr: "pipe",
-        },
-        runSandbox,
-      );
-
-      const initOutput = Promise.all([
-        streamLog(runId, "plan", initProc.stdout),
-        streamLog(runId, "plan", initProc.stderr),
-      ]);
-      const [initExit] = await waitForTrackedProcess(runId, "plan", initProc, initOutput, planTimeoutMs);
-
-      if (await returnIfRunCanceled(runId)) return;
-      if (initExit !== 0) {
-        throw new Error(`${resolved.tool} init failed with exit code ${initExit}`);
-      }
-
-      // 2. Run plan
-      if (await returnIfRunCanceled(runId)) return;
-      await writeLog(runId, "plan", `\n--- Executing ${resolved.tool} plan ---`);
-      const planArgs = [binary, "plan", "-no-color", "-input=false", "-detailed-exitcode"];
-      if (!run.refresh) planArgs.push("-refresh=false");
-      if (run.refreshOnly || run.operation === "action_only") planArgs.push("-refresh-only");
-      if (run.isDestroy === true) planArgs.push("-destroy");
-      for (const action of run.invokeActionAddrs ?? []) planArgs.push(`-invoke=${action}`);
-      for (const target of run.targetAddrs ?? []) planArgs.push(`-target=${target}`);
-      for (const replacement of run.replaceAddrs ?? []) planArgs.push(`-replace=${replacement}`);
-      if (tfVarsLines.length > 0) planArgs.push("-var-file=terrence.workspace.tfvars");
-      if (runTfVarsLines.length > 0) planArgs.push("-var-file=terrence.run.tfvars");
-      planArgs.push("-out=tfplan");
-
-      const planProc = spawnRunProcess(
-        runId,
-        planArgs,
-        {
-          cwd: executionDir,
-          env: envVars,
-          stdout: "pipe",
-          stderr: "pipe",
-        },
-        runSandbox,
-      );
-
-      const planOutput = Promise.all([
-        streamLog(runId, "plan", planProc.stdout),
-        streamLog(runId, "plan", planProc.stderr),
-      ]);
-      const [planExit] = await waitForTrackedProcess(runId, "plan", planProc, planOutput, planTimeoutMs);
-
-      if (await returnIfRunCanceled(runId)) return;
-      planHasChanges = planExit === 2;
-      if (planExit !== 0 && planExit !== 2) {
-        throw new Error(`${resolved.tool} plan failed with exit code ${planExit}`);
-      }
+      const planArgs = buildPlanArgs(resolved.binaryPath, run, tfVarsLines, runTfVarsLines);
+      const planOutcome = await runPlanInitAndPlan(runId, resolved, executionDir, envVars, planArgs, planTimeoutMs);
+      if (!planOutcome.proceed) return;
+      planHasChanges = planOutcome.planHasChanges;
     } else if (isSimulatedAllowed) {
       await writeLog(runId, "plan", `[terrence] Execution engine: Simulated plan completed successfully.`);
       await writeLog(runId, "plan", `Plan: 1 to add, 0 to change, 0 to destroy.`);
@@ -2179,158 +2113,13 @@ async function executeRunImpl(runId: string): Promise<void> {
       throw new Error(`No Terraform configuration (.tf or .tf.json) files were found in workspace directory '${executionDir}'.`);
     }
 
-    const planCapture = isSimulatedAllowed
-      ? undefined
-      : await readPlanJson(runId, executionDir, resolved?.binaryPath, planTimeoutMs, workDir);
-    const planJson = isSimulatedAllowed
-      ? parseJsonObject(process.env["SIMULATED_PLAN_JSON"] ?? "{}")
-      : planCapture?.planJson;
-    if (planJson !== undefined) {
-      if (planCapture === undefined) await writePlanJsonArtifact(runId, planJson);
-      else {
-        // readPlanJson only returns after the child and both output streams are
-        // complete; the raw file is in the private run workdir. Copy those
-        // exact bytes instead of reserializing the large parsed plan in memory.
-        await writePlanJsonArtifactFromFile(runId, planCapture.rawPath);
-      }
-      // The structured plan is persisted: tell SSE clients to fetch it once
-      // instead of polling /json-output while the run is still planning.
-      publish("plan.output.ready", {
-        "run-id": runId,
-        "workspace-id": workspace.id,
-        "org-id": workspace.orgId,
-        "plan-id": `plan-${runId}`,
-      });
-      const checks = await storePlanCheckResults(workspace.id, planJson, { runId });
-      await writeLog(
-        runId,
-        "plan",
-        `[terrence] Evaluated checks: ${String(checks.passed)} passed, ${String(checks.failed)} failed, ${String(checks.errored)} errored, ${String(checks.unknown)} unknown.`,
-      );
-    }
+    const finalized = await finalizePlanOutput(runId, workspace, executionDir, workDir, plannedAgainstState, run.configurationVersionId, planTimeoutMs, resolved?.binaryPath, isSimulatedAllowed);
+    const planJson = finalized.planJson;
+    const persistPlanForLater = finalized.persistPlanForLater;
 
-    // Parse resource counts from the structured plan JSON when it supplied
-    // them; only the log summary line is ever needed otherwise (issue #618),
-    // so match just those rows in SQL instead of loading the whole plan log.
-    const jsonCounts = planJson === undefined ? undefined : planJsonResourceCounts(planJson);
-    const resourceCounts = jsonCounts
-      ?? parseResourceCounts((await findSummaryLogRows(runId, "plan")).join("\n"));
-
-    await updateRunStatus(runId, "planned", {
-      planResourceAdditions: resourceCounts.additions,
-      planResourceChanges: resourceCounts.changes,
-      planResourceDestructions: resourceCounts.destructions,
-      planResourceImports: resourceCounts.imports,
-    });
-    await recordPlanInput(runId, plannedAgainstState, undefined);
-    const persistPlanForLater = async (): Promise<void> => {
-      if (durablePlan !== undefined) return;
-      durablePlan = await persistSavedPlan(
-        runId,
-        executionDir,
-        plannedAgainstState,
-        run.configurationVersionId,
-        isSimulatedAllowed,
-      );
-      await recordPlanInput(runId, plannedAgainstState, durablePlan);
-    };
-    if (await returnIfRunCanceled(runId)) return;
-    await writeLog(runId, "plan", `[terrence] Plan completed successfully.`);
-
-    await updateRunStatus(runId, "cost_estimating");
-    await executeCostEstimate(runId, executionDir);
-    if (await returnIfRunCanceled(runId)) return;
-    await updateRunStatus(runId, "cost_estimated");
-
-    await updateRunStatus(runId, "policy_checking");
-    if (await returnIfRunCanceled(runId)) return;
-    const policyResult = await runPolicyChecks(
-      runId,
-      workspace.id,
-      workspace.orgId,
-      executionDir,
-      resolved?.binaryPath,
-      planJson,
-    );
-    if (!policyResult.proceed) {
-      // Persist before the terminal policy markers so metadata such as the
-      // plan hash cannot appear to be a later execution phase.
-      await persistPlanForLater();
-      if (policyResult.hardFailed) {
-        await updateRunStatus(runId, "errored");
-        await writeLog(runId, "plan", `[terrence] Run blocked by hard-mandatory policy failure.`);
-      } else if (policyResult.softFailed) {
-        await updateRunStatus(runId, "policy_override");
-        await updateRunStatus(runId, "policy_soft_failed");
-        await writeLog(runId, "plan", `[terrence] Run requires policy override before apply.`);
-      }
-    } else {
-      await updateRunStatus(runId, "policy_checked");
-      if (await returnIfRunCanceled(runId)) return;
-      await updateRunStatus(runId, "post_plan_running");
-      if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "post_plan"))) {
-        throw new Error("Run blocked by mandatory post-plan task failure.");
-      }
-      await updateRunStatus(runId, "post_plan_completed");
-      if (await returnIfRunCanceled(runId)) return;
-
-      // Terraform's detailed exit code includes output/import/move changes,
-      // while observed drift alone does not imply there is anything to apply.
-      if (run.operation === "action_only") {
-        // Action-only runs still need the run-cancellation check and the
-        // site-wide apply gates. Without them, a maintenance window or an
-        // approval workflow would be bypassed whenever the caller created
-        // the run through a path that requires apply permission (enforced
-        // at create time, but the gate is defense-in-depth here too).
-        if (await returnIfRunCanceled(runId)) return;
-        const actionOnlyBlockReason = await import("./lib/operations").then(async (mod): Promise<string | null> =>
-          mod.applyGateBlockReason(new Date()),
-        );
-        if (actionOnlyBlockReason !== null) {
-          await writeLog(runId, "plan", `[terrence] Action-only apply blocked: ${actionOnlyBlockReason}`);
-          await updateRunStatus(runId, "planned");
-          queueRunNotification(runId, "run:needs_attention", "planned");
-          await persistPlanForLater();
-        } else {
-          await executeApply(runId);
-        }
-      } else if (run.savePlan) {
-        await persistPlanForLater();
-        await updateRunStatus(runId, "planned_and_saved");
-      } else if (run.planOnly) {
-        await updateRunStatus(runId, "planned_and_finished");
-      } else if (run.autoApply === true) {
-        if (await returnIfRunCanceled(runId)) return;
-        // Auto-apply must not bypass the site-wide apply gates: when an
-        // approval workflow or a maintenance window blocks applies, fall
-        // back to the needs-attention state instead of applying.
-        const autoApplyBlockReason = await import("./lib/operations").then(async (mod): Promise<string | null> =>
-          mod.applyGateBlockReason(new Date()),
-        );
-        if (autoApplyBlockReason !== null) {
-          await writeLog(runId, "plan", `[terrence] Auto-apply blocked: ${autoApplyBlockReason}`);
-          await updateRunStatus(runId, "planned");
-          queueRunNotification(runId, "run:needs_attention", "planned");
-          await persistPlanForLater();
-        } else {
-          await writeLog(
-            runId,
-            "plan",
-            !planHasChanges
-              ? `[terrence] Plan has no changes. Automatically applying to update workspace state.`
-              : `[terrence] Cost estimate, policies, and run tasks passed. Proceeding to apply.`,
-          );
-          await executeApply(runId);
-        }
-      } else if (!planHasChanges && !run.allowEmptyApply) {
-        await writeLog(runId, "plan", `[terrence] Plan has no changes. Run finished.`);
-        await updateRunStatus(runId, "planned_and_finished");
-      } else {
-        await updateRunStatus(runId, "planned");
-        queueRunNotification(runId, "run:needs_attention", "planned");
-        await persistPlanForLater();
-      }
-    }
+    if (!(await runCostEstimateStage(runId, executionDir))) return;
+    if (!(await runPolicyGateStage(runId, workspace, executionDir, resolved?.binaryPath, planJson, persistPlanForLater))) return;
+    await runPostPlanDispatch(runId, workspace, org, run, planHasChanges, persistPlanForLater);
   } catch (error: unknown) {
     // Issue #615: a cancel that wins the race against a plan-phase write must
     // not surface internal state-machine errors in the user-visible log. The
@@ -2943,6 +2732,332 @@ async function buildPlanExecutionFiles(
     await writeLog(runId, "plan", `[terrence] Injected ${runTfVarsLines.length} run Terraform variables.`);
   }
   return { envVars, tfVarsLines, runTfVarsLines };
+}
+
+type PlanRunFlags = Readonly<{
+  refresh: boolean | null;
+  refreshOnly: boolean | null;
+  operation: string;
+  isDestroy: boolean | null;
+  invokeActionAddrs: readonly string[] | null;
+  targetAddrs: readonly string[] | null;
+  replaceAddrs: readonly string[] | null;
+}>;
+
+function planTargetArgs(run: PlanRunFlags): string[] {
+  return [
+    ...(run.invokeActionAddrs ?? []).map((action: string): string => `-invoke=${action}`),
+    ...(run.targetAddrs ?? []).map((target: string): string => `-target=${target}`),
+    ...(run.replaceAddrs ?? []).map((replacement: string): string => `-replace=${replacement}`),
+  ];
+}
+
+function buildPlanArgs(
+  binary: string,
+  run: PlanRunFlags,
+  tfVarsLines: readonly string[],
+  runTfVarsLines: readonly string[],
+): string[] {
+  const planArgs = [binary, "plan", "-no-color", "-input=false", "-detailed-exitcode"];
+  if (!run.refresh) planArgs.push("-refresh=false");
+  if (run.refreshOnly || run.operation === "action_only") planArgs.push("-refresh-only");
+  if (run.isDestroy === true) planArgs.push("-destroy");
+  planArgs.push(...planTargetArgs(run));
+  if (tfVarsLines.length > 0) planArgs.push("-var-file=terrence.workspace.tfvars");
+  if (runTfVarsLines.length > 0) planArgs.push("-var-file=terrence.run.tfvars");
+  planArgs.push("-out=tfplan");
+  return planArgs;
+}
+
+async function runPlanInitAndPlan(
+  runId: string,
+  resolved: NonNullable<Awaited<ReturnType<typeof ensureBinary>>>,
+  executionDir: string,
+  envVars: Record<string, string>,
+  planArgs: readonly string[],
+  planTimeoutMs: number,
+): Promise<{ proceed: boolean; planHasChanges: boolean }> {
+  const binary = resolved.binaryPath;
+  await db.update(runs).set({ terraformVersion: resolved.version }).where(eq(runs.id, runId));
+  await writeLog(runId, "plan", `[terrence] Using ${resolved.tool} v${resolved.version} at ${binary}`);
+  if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
+
+  // 1. Run init
+  if (await returnIfRunCanceled(runId)) return { proceed: false, planHasChanges: true };
+  await writeLog(runId, "plan", `\n--- Executing ${resolved.tool} init ---`);
+  if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
+  const initProc = spawnRunProcess(
+    runId,
+    [binary, "init", "-reconfigure", "-no-color", "-input=false"],
+    {
+      cwd: executionDir,
+      env: envVars,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+    runSandbox,
+  );
+
+  const initOutput = Promise.all([
+    streamLog(runId, "plan", initProc.stdout),
+    streamLog(runId, "plan", initProc.stderr),
+  ]);
+  const [initExit] = await waitForTrackedProcess(runId, "plan", initProc, initOutput, planTimeoutMs);
+
+  if (await returnIfRunCanceled(runId)) return { proceed: false, planHasChanges: true };
+  if (initExit !== 0) {
+    throw new Error(`${resolved.tool} init failed with exit code ${initExit}`);
+  }
+
+  // 2. Run plan
+  if (await returnIfRunCanceled(runId)) return { proceed: false, planHasChanges: true };
+  await writeLog(runId, "plan", `\n--- Executing ${resolved.tool} plan ---`);
+  const planProc = spawnRunProcess(
+    runId,
+    planArgs,
+    {
+      cwd: executionDir,
+      env: envVars,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+    runSandbox,
+  );
+
+  const planOutput = Promise.all([
+    streamLog(runId, "plan", planProc.stdout),
+    streamLog(runId, "plan", planProc.stderr),
+  ]);
+  const [planExit] = await waitForTrackedProcess(runId, "plan", planProc, planOutput, planTimeoutMs);
+
+  if (await returnIfRunCanceled(runId)) return { proceed: false, planHasChanges: true };
+  const planHasChanges = planExit === 2;
+  if (planExit !== 0 && planExit !== 2) {
+    throw new Error(`${resolved.tool} plan failed with exit code ${planExit}`);
+  }
+  return { proceed: true, planHasChanges };
+}
+
+function createPlanPersister(
+  runId: string,
+  executionDir: string,
+  plannedState: Readonly<{ id: string | null; serial: number }>,
+  configurationVersionId: string | null,
+  isSimulatedAllowed: boolean,
+): () => Promise<void> {
+  let durablePlan: SavedPlanMetadata | undefined;
+  return async (): Promise<void> => {
+    if (durablePlan !== undefined) return;
+    durablePlan = await persistSavedPlan(
+      runId,
+      executionDir,
+      plannedState,
+      configurationVersionId,
+      isSimulatedAllowed,
+    );
+    await recordPlanInput(runId, plannedState, durablePlan);
+  };
+}
+
+async function finalizePlanOutput(
+  runId: string,
+  workspace: typeof workspaces.$inferSelect,
+  executionDir: string,
+  workDir: string,
+  plannedState: Readonly<{ id: string | null; serial: number }>,
+  configurationVersionId: string | null,
+  planTimeoutMs: number,
+  resolvedBinaryPath: string | undefined,
+  isSimulatedAllowed: boolean,
+): Promise<{ planJson: JsonObject | undefined; persistPlanForLater: () => Promise<void> }> {
+  const planCapture = isSimulatedAllowed
+    ? undefined
+    : await readPlanJson(runId, executionDir, resolvedBinaryPath, planTimeoutMs, workDir);
+  const planJson = isSimulatedAllowed
+    ? parseJsonObject(process.env["SIMULATED_PLAN_JSON"] ?? "{}")
+    : planCapture?.planJson;
+  if (planJson !== undefined) {
+    if (planCapture === undefined) await writePlanJsonArtifact(runId, planJson);
+    else {
+      // readPlanJson only returns after the child and both output streams are
+      // complete; the raw file is in the private run workdir. Copy those
+      // exact bytes instead of reserializing the large parsed plan in memory.
+      await writePlanJsonArtifactFromFile(runId, planCapture.rawPath);
+    }
+    // The structured plan is persisted: tell SSE clients to fetch it once
+    // instead of polling /json-output while the run is still planning.
+    publish("plan.output.ready", {
+      "run-id": runId,
+      "workspace-id": workspace.id,
+      "org-id": workspace.orgId,
+      "plan-id": `plan-${runId}`,
+    });
+    const checks = await storePlanCheckResults(workspace.id, planJson, { runId });
+    await writeLog(
+      runId,
+      "plan",
+      `[terrence] Evaluated checks: ${String(checks.passed)} passed, ${String(checks.failed)} failed, ${String(checks.errored)} errored, ${String(checks.unknown)} unknown.`,
+    );
+  }
+
+  // Parse resource counts from the structured plan JSON when it supplied
+  // them; only the log summary line is ever needed otherwise (issue #618),
+  // so match just those rows in SQL instead of loading the whole plan log.
+  const jsonCounts = planJson === undefined ? undefined : planJsonResourceCounts(planJson);
+  const resourceCounts = jsonCounts
+    ?? parseResourceCounts((await findSummaryLogRows(runId, "plan")).join("\n"));
+
+  await updateRunStatus(runId, "planned", {
+    planResourceAdditions: resourceCounts.additions,
+    planResourceChanges: resourceCounts.changes,
+    planResourceDestructions: resourceCounts.destructions,
+    planResourceImports: resourceCounts.imports,
+  });
+  await recordPlanInput(runId, plannedState, undefined);
+  const persistPlanForLater = createPlanPersister(runId, executionDir, plannedState, configurationVersionId, isSimulatedAllowed);
+  return { planJson, persistPlanForLater };
+}
+
+async function runCostEstimateStage(runId: string, executionDir: string): Promise<boolean> {
+  if (await returnIfRunCanceled(runId)) return false;
+  await writeLog(runId, "plan", `[terrence] Plan completed successfully.`);
+
+  await updateRunStatus(runId, "cost_estimating");
+  await executeCostEstimate(runId, executionDir);
+  if (await returnIfRunCanceled(runId)) return false;
+  await updateRunStatus(runId, "cost_estimated");
+  return true;
+}
+
+async function runPolicyGateStage(
+  runId: string,
+  workspace: typeof workspaces.$inferSelect,
+  executionDir: string,
+  resolvedBinaryPath: string | undefined,
+  planJson: JsonObject | undefined,
+  persistPlanForLater: () => Promise<void>,
+): Promise<boolean> {
+  await updateRunStatus(runId, "policy_checking");
+  if (await returnIfRunCanceled(runId)) return false;
+  const policyResult = await runPolicyChecks(
+    runId,
+    workspace.id,
+    workspace.orgId,
+    executionDir,
+    resolvedBinaryPath,
+    planJson,
+  );
+  if (!policyResult.proceed) {
+    // Persist before the terminal policy markers so metadata such as the
+    // plan hash cannot appear to be a later execution phase.
+    await persistPlanForLater();
+    if (policyResult.hardFailed) {
+      await updateRunStatus(runId, "errored");
+      await writeLog(runId, "plan", `[terrence] Run blocked by hard-mandatory policy failure.`);
+    } else if (policyResult.softFailed) {
+      await updateRunStatus(runId, "policy_override");
+      await updateRunStatus(runId, "policy_soft_failed");
+      await writeLog(runId, "plan", `[terrence] Run requires policy override before apply.`);
+    }
+    return false;
+  }
+  await updateRunStatus(runId, "policy_checked");
+  if (await returnIfRunCanceled(runId)) return false;
+  return true;
+}
+
+async function runActionOnlyApply(runId: string, persistPlanForLater: () => Promise<void>): Promise<void> {
+  // Action-only runs still need the run-cancellation check and the
+  // site-wide apply gates. Without them, a maintenance window or an
+  // approval workflow would be bypassed whenever the caller created
+  // the run through a path that requires apply permission (enforced
+  // at create time, but the gate is defense-in-depth here too).
+  if (await returnIfRunCanceled(runId)) return;
+  const actionOnlyBlockReason = await import("./lib/operations").then(async (mod): Promise<string | null> =>
+    mod.applyGateBlockReason(new Date()),
+  );
+  if (actionOnlyBlockReason !== null) {
+    await writeLog(runId, "plan", `[terrence] Action-only apply blocked: ${actionOnlyBlockReason}`);
+    await updateRunStatus(runId, "planned");
+    queueRunNotification(runId, "run:needs_attention", "planned");
+    await persistPlanForLater();
+  } else {
+    await executeApply(runId);
+  }
+}
+
+async function runAutoApplyGate(
+  runId: string,
+  planHasChanges: boolean,
+  persistPlanForLater: () => Promise<void>,
+): Promise<void> {
+  if (await returnIfRunCanceled(runId)) return;
+  // Auto-apply must not bypass the site-wide apply gates: when an
+  // approval workflow or a maintenance window blocks applies, fall
+  // back to the needs-attention state instead of applying.
+  const autoApplyBlockReason = await import("./lib/operations").then(async (mod): Promise<string | null> =>
+    mod.applyGateBlockReason(new Date()),
+  );
+  if (autoApplyBlockReason !== null) {
+    await writeLog(runId, "plan", `[terrence] Auto-apply blocked: ${autoApplyBlockReason}`);
+    await updateRunStatus(runId, "planned");
+    queueRunNotification(runId, "run:needs_attention", "planned");
+    await persistPlanForLater();
+  } else {
+    await writeLog(
+      runId,
+      "plan",
+      !planHasChanges
+        ? `[terrence] Plan has no changes. Automatically applying to update workspace state.`
+        : `[terrence] Cost estimate, policies, and run tasks passed. Proceeding to apply.`,
+    );
+    await executeApply(runId);
+  }
+}
+
+type PostPlanRunFlags = Readonly<{
+  operation: string;
+  savePlan: boolean | null;
+  planOnly: boolean | null;
+  autoApply: boolean | null;
+  allowEmptyApply: boolean | null;
+}>;
+
+async function runPostPlanDispatch(
+  runId: string,
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  run: PostPlanRunFlags,
+  planHasChanges: boolean,
+  persistPlanForLater: () => Promise<void>,
+): Promise<void> {
+  await updateRunStatus(runId, "post_plan_running");
+  if (await returnIfRunCanceled(runId)) return;
+  if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "post_plan"))) {
+    throw new Error("Run blocked by mandatory post-plan task failure.");
+  }
+  await updateRunStatus(runId, "post_plan_completed");
+  if (await returnIfRunCanceled(runId)) return;
+
+  // Terraform's detailed exit code includes output/import/move changes,
+  // while observed drift alone does not imply there is anything to apply.
+  if (run.operation === "action_only") {
+    await runActionOnlyApply(runId, persistPlanForLater);
+  } else if (run.savePlan) {
+    await persistPlanForLater();
+    await updateRunStatus(runId, "planned_and_saved");
+  } else if (run.planOnly) {
+    await updateRunStatus(runId, "planned_and_finished");
+  } else if (run.autoApply === true) {
+    await runAutoApplyGate(runId, planHasChanges, persistPlanForLater);
+  } else if (!planHasChanges && !run.allowEmptyApply) {
+    await writeLog(runId, "plan", `[terrence] Plan has no changes. Run finished.`);
+    await updateRunStatus(runId, "planned_and_finished");
+  } else {
+    await updateRunStatus(runId, "planned");
+    queueRunNotification(runId, "run:needs_attention", "planned");
+    await persistPlanForLater();
+  }
 }
 
 async function executeApplyImpl(runId: string): Promise<void> {
