@@ -103,6 +103,66 @@ function dependencyGraphFromState(statePayload: string | null): readonly Depende
   }));
 }
 
+function resourceProviderName(rObj: Readonly<Record<string, unknown>>): string {
+  let provider = "hashicorp/provider";
+  if (typeof rObj["provider"] === "string") {
+    const match = /provider\["([^"]+)"\]/.exec(rObj["provider"]);
+    const providerName = match?.[1];
+    if (typeof providerName === "string" && providerName !== "") provider = providerName;
+  }
+  return provider;
+}
+
+function buildWorkspaceResourceItem(
+  r: unknown,
+  ctx: Readonly<{ workspaceId: string; stateVersionId: string; dateStr: string }>,
+): Record<string, unknown> | null {
+  if (r === null || typeof r !== "object") return null;
+  const rObj = r as Record<string, unknown>;
+  const rType = typeof rObj["type"] === "string" ? rObj["type"] : "resource";
+  const rName = typeof rObj["name"] === "string" ? rObj["name"] : "unnamed";
+  const mod = typeof rObj["module"] === "string" && rObj["module"] !== "" ? rObj["module"] : "root";
+  const address = mod === "root" ? `${rType}.${rName}` : `${mod}.${rType}.${rName}`;
+  const id = `wsr-${Bun.hash(`${ctx.workspaceId}:${address}`).toString(36)}`;
+  return {
+    id,
+    type: "resources",
+    attributes: {
+      address,
+      name: rName,
+      "created-at": ctx.dateStr,
+      "updated-at": ctx.dateStr,
+      module: mod,
+      provider: resourceProviderName(rObj),
+      "provider-type": rType,
+      "modified-by-state-version-id": ctx.stateVersionId,
+      "name-index": null,
+    },
+  };
+}
+
+function resourceListFromState(latestState: {
+  readonly jsonState: unknown;
+  readonly statePayload: string | null;
+}): readonly unknown[] {
+  // Prefer jsonState (parsed at record time); fall back to parsing the raw
+  // statePayload so older versions (recorded before jsonState existed) still
+  // render their resources.
+  const jsonStateSource = latestState.jsonState ?? latestState.statePayload ?? null;
+  if (jsonStateSource === null) return [];
+  try {
+    const parsed: unknown = typeof jsonStateSource === "string"
+      ? JSON.parse(decodeStatePayload(jsonStateSource)) as unknown
+      : jsonStateSource;
+    const rawResources = parsed !== null && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)["resources"]
+      : undefined;
+    return Array.isArray(rawResources) ? rawResources : [];
+  } catch {
+    return [];
+  }
+}
+
 const MAX_README_BYTES = 256 * 1024;
 const README_ARCHIVE_TIMEOUT_MS = 5_000;
 
@@ -895,8 +955,9 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   })
   .get("/api/v2/workspaces/:workspace_id/resources", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "state-read");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const actor = actorScope(user, principalOrgId, teamId);
+    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId, "state-read");
+    if (ws === undefined) return failWorkspaceUpdate(set, 404);
     const latestState = await db.query.stateVersions.findFirst({
       where: and(
         eq(stateVersions.workspaceId, ws.id),
@@ -907,60 +968,16 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     });
 
     const resources: Record<string, unknown>[] = [];
-    // Prefer jsonState (parsed at record time); fall back to parsing the raw
-    // statePayload so older versions (recorded before jsonState existed) still
-    // render their resources.
     if (latestState !== undefined) {
       if (isClientEncryptedState(latestState.statePayload)) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR }] };
       }
-      const jsonStateSource = latestState.jsonState ?? latestState.statePayload ?? null;
-      if (jsonStateSource !== null) {
-        try {
-          const parsed: unknown = typeof jsonStateSource === "string"
-            ? JSON.parse(decodeStatePayload(jsonStateSource)) as unknown
-            : jsonStateSource;
-          const rawResources = parsed !== null && typeof parsed === "object"
-            ? (parsed as Record<string, unknown>)["resources"]
-            : undefined;
-          const resList = Array.isArray(rawResources) ? rawResources : [];
-          const dateStr = new Date(latestState.createdAt).toISOString().split("T")[0];
-
-          for (const r of resList) {
-            if (r !== null && typeof r === "object") {
-              const rObj = r as Record<string, unknown>;
-              const rType = typeof rObj["type"] === "string" ? rObj["type"] : "resource";
-              const rName = typeof rObj["name"] === "string" ? rObj["name"] : "unnamed";
-              const mod = typeof rObj["module"] === "string" && rObj["module"] !== "" ? rObj["module"] : "root";
-              const address = mod === "root" ? `${rType}.${rName}` : `${mod}.${rType}.${rName}`;
-
-              let provider = "hashicorp/provider";
-              if (typeof rObj["provider"] === "string") {
-                const match = /provider\["([^"]+)"\]/.exec(rObj["provider"]);
-                const providerName = match?.[1];
-                if (typeof providerName === "string" && providerName !== "") provider = providerName;
-              }
-
-              const id = `wsr-${Bun.hash(`${ws.id}:${address}`).toString(36)}`;
-              resources.push({
-                id,
-                type: "resources",
-                attributes: {
-                  address,
-                  name: rName,
-                  "created-at": dateStr,
-                  "updated-at": dateStr,
-                  module: mod,
-                  provider,
-                  "provider-type": rType,
-                  "modified-by-state-version-id": latestState.id,
-                  "name-index": null,
-                },
-              });
-            }
-          }
-        } catch {}
+      const dateStr = new Date(latestState.createdAt).toISOString().split("T")[0] ?? "";
+      const ctx = { workspaceId: ws.id, stateVersionId: latestState.id, dateStr };
+      for (const r of resourceListFromState(latestState)) {
+        const item = buildWorkspaceResourceItem(r, ctx);
+        if (item !== null) resources.push(item);
       }
     }
 
