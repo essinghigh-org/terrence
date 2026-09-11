@@ -1487,6 +1487,62 @@ async function runProvenanceAttribute(runId: string): Promise<Record<string, unk
   };
 }
 
+function parseScheduleApplyAt(body: unknown, set: SetObj): Readonly<{ applyAtMs: number } | { failure: unknown }> {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const attributes = payload["data"] !== null && typeof payload["data"] === "object"
+    && (payload["data"] as Record<string, unknown>)["attributes"] !== null
+    && typeof (payload["data"] as Record<string, unknown>)["attributes"] === "object"
+    ? (payload["data"] as Record<string, unknown>)["attributes"] as Record<string, unknown>
+    : {};
+  const applyAtRaw = attributes["apply-at"];
+  if (typeof applyAtRaw !== "string" || applyAtRaw === "") {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "apply-at is required" }] } };
+  }
+  const applyAtMs = Date.parse(applyAtRaw);
+  if (!Number.isFinite(applyAtMs)) {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "apply-at must be a valid date" }] } };
+  }
+  if (applyAtMs <= Date.now()) {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "apply-at must be in the future" }] } };
+  }
+  return { applyAtMs };
+}
+
+async function publishScheduleConfirmation(
+  runId: string,
+  userId: string | null,
+  teamId: string | null | undefined,
+  fromStatus: string,
+  body: unknown,
+  workspace: AuthorizedRun["workspace"],
+  applyAtMs: number,
+): Promise<Record<string, unknown>> {
+  const scheduledAt = new Date(applyAtMs).toISOString();
+  await auditLog("schedule-apply", "runs", runId, userId, workspace.orgId, {
+    workspaceId: workspace.id,
+    fromStatus,
+    toStatus: "confirmed",
+    "scheduled-at": scheduledAt,
+    ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+  });
+  // Match the manual apply action: an optional comment is persisted with
+  // the confirmation.
+  const commentStr = actionComment(body);
+  if (commentStr !== "") await createRunComment({ runId, userId, body: commentStr, workspaceId: workspace.id, orgId: workspace.orgId });
+  publish("run.status", {
+    "run-id": runId,
+    "workspace-id": workspace.id,
+    "org-id": workspace.orgId,
+    status: "confirmed",
+    at: scheduledAt,
+  });
+  scheduleExplorerInventory(workspace.id);
+  return { data: { id: runId, type: "runs", attributes: { status: "confirmed", "scheduled-at": scheduledAt } } };
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -2255,26 +2311,9 @@ export const runRoutes = new Elysia({ name: "runs" })
       ),
     });
     if (before === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }] }; }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const attributes = payload["data"] !== null && typeof payload["data"] === "object"
-      && (payload["data"] as Record<string, unknown>)["attributes"] !== null
-      && typeof (payload["data"] as Record<string, unknown>)["attributes"] === "object"
-      ? (payload["data"] as Record<string, unknown>)["attributes"] as Record<string, unknown>
-      : {};
-    const applyAtRaw = attributes["apply-at"];
-    if (typeof applyAtRaw !== "string" || applyAtRaw === "") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "apply-at is required" }] };
-    }
-    const applyAtMs = Date.parse(applyAtRaw);
-    if (!Number.isFinite(applyAtMs)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "apply-at must be a valid date" }] };
-    }
-    if (applyAtMs <= Date.now()) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "apply-at must be in the future" }] };
-    }
+    const parsedApplyAt = parseScheduleApplyAt(body, set);
+    if ("failure" in parsedApplyAt) return parsedApplyAt.failure;
+    const { applyAtMs } = parsedApplyAt;
     const confirmed = await db.update(runs).set({
       status: "confirmed",
       scheduledAt: applyAtMs,
@@ -2285,26 +2324,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       },
     }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
     if (confirmed.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] }; }
-    await auditLog("schedule-apply", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
-      workspaceId: authorized.workspace.id,
-      fromStatus: before.status,
-      toStatus: "confirmed",
-      "scheduled-at": new Date(applyAtMs).toISOString(),
-      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
-    });
-    // Match the manual apply action: an optional comment is persisted with
-    // the confirmation.
-    const commentStr = actionComment(body);
-    if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
-    publish("run.status", {
-      "run-id": runId,
-      "workspace-id": authorized.workspace.id,
-      "org-id": authorized.workspace.orgId,
-      status: "confirmed",
-      at: new Date(applyAtMs).toISOString(),
-    });
-    scheduleExplorerInventory(authorized.workspace.id);
-    return { data: { id: runId, type: "runs", attributes: { status: "confirmed", "scheduled-at": new Date(applyAtMs).toISOString() } } };
+    return await publishScheduleConfirmation(runId, user?.id ?? null, teamId, before.status, body, authorized.workspace, applyAtMs);
   })
   .post("/api/v2/runs/:run_id/actions/discard", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
