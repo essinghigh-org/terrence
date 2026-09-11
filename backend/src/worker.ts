@@ -4809,6 +4809,91 @@ async function autoDestroyRunFacts(workspaceIds: readonly string[]): Promise<Aut
   return { activeWorkspaceIds, lastAttemptAt };
 }
 
+async function fetchAutoDestroyWorkspacePage(
+  workspaceCursor: AutoDestroyDescendingCursor | null,
+): Promise<(typeof workspaces.$inferSelect)[]> {
+  return await db.query.workspaces.findMany({
+    where: workspaceCursor === null
+      ? undefined
+      : or(
+          gt(workspaces.createdAt, workspaceCursor.createdAt),
+          and(eq(workspaces.createdAt, workspaceCursor.createdAt), gt(workspaces.id, workspaceCursor.id)),
+        ),
+    orderBy: [asc(workspaces.createdAt), asc(workspaces.id)],
+    limit: AUTO_DESTROY_SCAN_PAGE_SIZE,
+  });
+}
+
+async function createAutoDestroyRun(
+  workspace: typeof workspaces.$inferSelect,
+  configurationVersionId: string | null,
+  scheduled: boolean,
+  now: number,
+): Promise<string> {
+  const runId = newRunId();
+  await db.transaction(async (tx): Promise<void> => {
+    await tx.insert(runs).values({
+      id: runId,
+      workspaceId: workspace.id,
+      configurationVersionId,
+      status: "pending",
+      message: scheduled
+        ? "[auto-destroy] Scheduled workspace destruction"
+        : "[auto-destroy] Inactivity workspace destruction",
+      isDestroy: true,
+      autoApply: true,
+      statusTimestamps: { "pending-at": new Date(now).toISOString() },
+      inputSchemaVersion: 1,
+      statusMetadataSchemaVersion: 1,
+      createdAt: now,
+    });
+    if (scheduled) {
+      await tx.update(workspaces).set({ autoDestroyAt: null }).where(eq(workspaces.id, workspace.id));
+    }
+  });
+  return runId;
+}
+
+async function processAutoDestroyWorkspace(
+  workspace: typeof workspaces.$inferSelect,
+  latestStateAt: ReadonlyMap<string, number>,
+  latestConfigurationId: ReadonlyMap<string, string>,
+  runFacts: AutoDestroyRunFacts,
+  now: number,
+): Promise<string | null> {
+  if (workspace.locked === true || runFacts.activeWorkspaceIds.has(workspace.id)) return null;
+  const scheduledAt = workspace.autoDestroyAt === null ? Number.NaN : Date.parse(workspace.autoDestroyAt);
+  const scheduled = Number.isFinite(scheduledAt) && scheduledAt <= now;
+  const duration = autoDestroyDurationMs(workspace.autoDestroyActivityDuration);
+  const activityAt = Math.max(
+    workspace.createdAt,
+    latestStateAt.get(workspace.id) ?? 0,
+    runFacts.lastAttemptAt.get(workspace.id) ?? 0,
+  );
+  const inactive = duration !== undefined && activityAt + duration <= now;
+  if (!scheduled && !inactive) return null;
+  return await createAutoDestroyRun(workspace, latestConfigurationId.get(workspace.id) ?? null, scheduled, now);
+}
+
+async function processAutoDestroyWorkspacePage(
+  workspacePage: (typeof workspaces.$inferSelect)[],
+  now: number,
+): Promise<string[]> {
+  const workspaceIds = workspacePage.map((workspace): string => workspace.id);
+  const [latestStateAt, latestConfigurationId, runFacts] = await Promise.all([
+    latestAutoDestroyStateAt(workspaceIds),
+    latestAutoDestroyConfigurationIds(workspaceIds),
+    autoDestroyRunFacts(workspaceIds),
+  ]);
+
+  const created: string[] = [];
+  for (const workspace of workspacePage) {
+    const runId = await processAutoDestroyWorkspace(workspace, latestStateAt, latestConfigurationId, runFacts, now);
+    if (runId !== null) created.push(runId);
+  }
+  return created;
+}
+
 export async function enqueueDueAutoDestroyRuns(now = Date.now()): Promise<string[]> {
   if (isMaintenanceActive()) return [];
   if (workerQueueDraining()) return [];
@@ -4816,61 +4901,10 @@ export async function enqueueDueAutoDestroyRuns(now = Date.now()): Promise<strin
   const created: string[] = [];
   let workspaceCursor: AutoDestroyDescendingCursor | null = null;
   for (;;) {
-    const workspacePage: (typeof workspaces.$inferSelect)[] = await db.query.workspaces.findMany({
-      where: workspaceCursor === null
-        ? undefined
-        : or(
-            gt(workspaces.createdAt, workspaceCursor.createdAt),
-            and(eq(workspaces.createdAt, workspaceCursor.createdAt), gt(workspaces.id, workspaceCursor.id)),
-          ),
-      orderBy: [asc(workspaces.createdAt), asc(workspaces.id)],
-      limit: AUTO_DESTROY_SCAN_PAGE_SIZE,
-    });
+    const workspacePage = await fetchAutoDestroyWorkspacePage(workspaceCursor);
     if (workspacePage.length === 0) break;
 
-    const workspaceIds = workspacePage.map((workspace): string => workspace.id);
-    const [latestStateAt, latestConfigurationId, runFacts] = await Promise.all([
-      latestAutoDestroyStateAt(workspaceIds),
-      latestAutoDestroyConfigurationIds(workspaceIds),
-      autoDestroyRunFacts(workspaceIds),
-    ]);
-
-    for (const workspace of workspacePage) {
-      if (workspace.locked === true || runFacts.activeWorkspaceIds.has(workspace.id)) continue;
-      const scheduledAt = workspace.autoDestroyAt === null ? Number.NaN : Date.parse(workspace.autoDestroyAt);
-      const scheduled = Number.isFinite(scheduledAt) && scheduledAt <= now;
-      const duration = autoDestroyDurationMs(workspace.autoDestroyActivityDuration);
-      const activityAt = Math.max(
-        workspace.createdAt,
-        latestStateAt.get(workspace.id) ?? 0,
-        runFacts.lastAttemptAt.get(workspace.id) ?? 0,
-      );
-      const inactive = duration !== undefined && activityAt + duration <= now;
-      if (!scheduled && !inactive) continue;
-
-      const runId = newRunId();
-      await db.transaction(async (tx): Promise<void> => {
-        await tx.insert(runs).values({
-          id: runId,
-          workspaceId: workspace.id,
-          configurationVersionId: latestConfigurationId.get(workspace.id) ?? null,
-          status: "pending",
-          message: scheduled
-            ? "[auto-destroy] Scheduled workspace destruction"
-            : "[auto-destroy] Inactivity workspace destruction",
-          isDestroy: true,
-          autoApply: true,
-          statusTimestamps: { "pending-at": new Date(now).toISOString() },
-          inputSchemaVersion: 1,
-          statusMetadataSchemaVersion: 1,
-          createdAt: now,
-        });
-        if (scheduled) {
-          await tx.update(workspaces).set({ autoDestroyAt: null }).where(eq(workspaces.id, workspace.id));
-        }
-      });
-      created.push(runId);
-    }
+    created.push(...(await processAutoDestroyWorkspacePage(workspacePage, now)));
 
     const last = workspacePage[workspacePage.length - 1];
     if (last === undefined) break;
