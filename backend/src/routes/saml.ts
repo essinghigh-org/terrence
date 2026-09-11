@@ -289,6 +289,50 @@ type LogoutVerification = Readonly<{
   issueInstant?: string;
 }>;
 
+function logoutRequestFields(request: DomElement | null): { requestId: string; nameId: string; issuer: string; destination: string; issueInstant: string } {
+  return {
+    requestId: request?.getAttribute("ID") ?? "",
+    nameId: request?.getElementsByTagNameNS("*", "NameID").item(0)?.textContent?.trim() ?? "",
+    issuer: request?.getElementsByTagNameNS("*", "Issuer").item(0)?.textContent?.trim() ?? "",
+    destination: request?.getAttribute("Destination") ?? "",
+    issueInstant: request?.getAttribute("IssueInstant") ?? "",
+  };
+}
+
+function logoutSignedRequestMatches(signedXml: string, requestId: string, nameId: string): boolean {
+  const signedDoc = new DOMParser({ errorHandler: (): void => undefined })
+    .parseFromString(signedXml, "text/xml");
+  const signedRequests = signedDoc.getElementsByTagNameNS("*", "LogoutRequest");
+  const signedRequest = signedRequests.length === 1 ? signedRequests.item(0) : null;
+  if (signedRequest === null || signedRequest.getAttribute("ID") !== requestId) return false;
+  const signedNameId = signedRequest.getElementsByTagNameNS("*", "NameID").item(0)?.textContent?.trim() ?? "";
+  return signedNameId === nameId;
+}
+
+function verifyLogoutSignatureWithCert(args: {
+  xml: string;
+  certificate: string;
+  signatureElement: DomElement;
+  requestId: string;
+  nameId: string;
+}): boolean {
+  try {
+    const signed = new SignedXml();
+    signed.getCertFromKeyInfo = (): string => pemCertificate(args.certificate);
+    signed.loadSignature(args.signatureElement as unknown as Parameters<SignedXml["loadSignature"]>[0]);
+    if (!supportedXmlSignature(signed)) return false;
+    if (!signed.checkSignature(args.xml)) return false;
+    const references = signed.getReferences();
+    if (references.length !== 1 || (references[0] as { uri?: string }).uri?.replace(/^#/, "") !== args.requestId) return false;
+    const signedReferences = signed.getSignedReferences();
+    if (signedReferences.length !== 1 || signedReferences[0] === undefined) return false;
+    return logoutSignedRequestMatches(signedReferences[0], args.requestId, args.nameId);
+  } catch {
+    // Try the next certificate (e.g. the old cert during rotation).
+    return false;
+  }
+}
+
 function verifyLogoutSignature(
   xml: string,
   certificates: readonly string[],
@@ -303,38 +347,15 @@ function verifyLogoutSignature(
   }
   const requests = doc.getElementsByTagNameNS("*", "LogoutRequest");
   if (requests.length !== 1 || requests.item(0) === null) return { valid: false, error: "SAML logout request is invalid" };
-  const request = requests.item(0);
-  const requestId = request?.getAttribute("ID") ?? "";
-  if (requestId === "") return { valid: false, error: "SAML logout request has no request ID" };
-  const nameId = request?.getElementsByTagNameNS("*", "NameID").item(0)?.textContent?.trim() ?? "";
-  if (nameId === "") return { valid: false, error: "SAML logout request has no NameID" };
-  const issuer = request?.getElementsByTagNameNS("*", "Issuer").item(0)?.textContent?.trim() ?? "";
-  const destination = request?.getAttribute("Destination") ?? "";
-  const issueInstant = request?.getAttribute("IssueInstant") ?? "";
-  if (redirectBinding) return { valid: true, error: "", nameId, requestId, issuer, destination, issueInstant };
+  const fields = logoutRequestFields(requests.item(0));
+  if (fields.requestId === "") return { valid: false, error: "SAML logout request has no request ID" };
+  if (fields.nameId === "") return { valid: false, error: "SAML logout request has no NameID" };
+  if (redirectBinding) return { valid: true, error: "", ...fields };
   const signatureElement = doc.getElementsByTagNameNS("*", "Signature").item(0);
   if (signatureElement === null) return { valid: false, error: "SAML logout request is not signed" };
   for (const certificate of certificates) {
-    try {
-      const signed = new SignedXml();
-      signed.getCertFromKeyInfo = (): string => pemCertificate(certificate);
-      signed.loadSignature(signatureElement as unknown as Parameters<SignedXml["loadSignature"]>[0]);
-      if (!supportedXmlSignature(signed)) continue;
-      if (!signed.checkSignature(xml)) continue;
-      const references = signed.getReferences();
-      if (references.length !== 1 || (references[0] as { uri?: string }).uri?.replace(/^#/, "") !== requestId) continue;
-      const signedReferences = signed.getSignedReferences();
-      if (signedReferences.length !== 1 || signedReferences[0] === undefined) continue;
-      const signedDoc = new DOMParser({ errorHandler: (): void => undefined })
-        .parseFromString(signedReferences[0], "text/xml");
-      const signedRequests = signedDoc.getElementsByTagNameNS("*", "LogoutRequest");
-      const signedRequest = signedRequests.length === 1 ? signedRequests.item(0) : null;
-      if (signedRequest === null || signedRequest.getAttribute("ID") !== requestId) continue;
-      const signedNameId = signedRequest.getElementsByTagNameNS("*", "NameID").item(0)?.textContent?.trim() ?? "";
-      if (signedNameId !== nameId) continue;
-      return { valid: true, error: "", nameId, requestId, issuer, destination, issueInstant };
-    } catch {
-      // Try the next certificate (e.g. the old cert during rotation).
+    if (verifyLogoutSignatureWithCert({ xml, certificate, signatureElement, requestId: fields.requestId, nameId: fields.nameId })) {
+      return { valid: true, error: "", ...fields };
     }
   }
   return { valid: false, error: "SAML logout request signature verification failed" };
