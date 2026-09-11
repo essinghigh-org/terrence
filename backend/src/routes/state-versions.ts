@@ -247,15 +247,21 @@ async function activeRecoveryOwner(runId: string, runStatus: string): Promise<Re
   };
 }
 
-async function recoveryReviewFor(
+type RecoveryReviewData = Awaited<ReturnType<typeof fetchRecoveryReviewData>>;
+type RecoveryCapture = RecoveryReviewData["capture"];
+type RecoveryOwner = RecoveryReviewData["owner"];
+type RecoveryCandidate = ReturnType<typeof recoveryCandidateMetadata>;
+type CommittedRecoveryState = ReturnType<typeof stateMetadata> | null;
+
+async function fetchRecoveryReviewData(
   run: Readonly<typeof runs.$inferSelect>,
   workspace: Readonly<typeof workspaces.$inferSelect>,
-  user: Readonly<typeof users.$inferSelect> | null | undefined,
+  userId: string | undefined,
   orgId: string | null,
   teamId: string | null,
-): Promise<Record<string, unknown>> {
+) {
   const canWritePromise = orgId === null
-    ? checkWorkspacePermission(workspace, user?.id, orgId, teamId, "state-write")
+    ? checkWorkspacePermission(workspace, userId, orgId, teamId, "state-write")
     : Promise.resolve(false);
   const [capture, latest, owner, recentLogs, canWrite] = await Promise.all([
     inspectRecoveryCopy(storageDir, run.id),
@@ -273,61 +279,155 @@ async function recoveryReviewFor(
     }),
     canWritePromise,
   ]);
-  const committed = latest === undefined ? null : stateMetadata(latest);
-  const candidate = recoveryCandidateMetadata(capture);
-  const checks: RecoveryReviewCheck[] = [];
-  const markerPass = capture.status !== "missing" && capture.status !== "incomplete" && capture.marker !== null;
-  checks.push({ id: "capture-complete", status: markerPass ? "pass" : "fail", detail: markerPass ? "The durable capture marker is present." : "The capture marker is missing or invalid; this copy is not a verified candidate." });
-  const candidatePass = capture.status === "candidate" || capture.status === "promoted";
-  checks.push({ id: "candidate-parse", status: candidatePass ? "pass" : capture.status === "opaque" ? "blocked" : "fail", detail: candidatePass ? "The captured state is a supported Terraform state document." : capture.status === "opaque" ? "The captured state is client-encrypted and needs its original client keys." : "The captured state cannot be parsed as a supported Terraform state document." });
-  const digestPass = candidate?.digest !== null && candidate?.digest !== undefined && (capture.evidence === null || (capture.evidence.digest === candidate.digest && capture.evidence.size === candidate.size));
-  checks.push({ id: "digest", status: digestPass ? "pass" : "fail", detail: digestPass ? "The captured bytes match their recorded SHA-256 digest." : "The captured bytes do not match the recorded SHA-256 digest." });
-  const lineagePass = candidate?.lineage !== null && (committed === null || committed.lineage === null || candidate?.lineage === committed.lineage);
-  checks.push({ id: "lineage", status: candidate?.lineage === null ? "unknown" : lineagePass ? "pass" : "fail", detail: candidate?.lineage === null ? "The candidate has no lineage value to compare." : lineagePass ? "The candidate lineage matches the latest committed state." : "The candidate lineage differs from the latest committed state." });
-  const sameDigest = candidate?.digest !== null && candidate?.digest !== undefined && candidate.digest === committed?.digest;
+  return { capture, latest, owner, recentLogs, canWrite };
+}
+
+function isRecoveryOwnerClear(owner: RecoveryOwner): boolean {
+  return !owner.runActive && !owner.localProcessActive && owner.agentJobs.length === 0;
+}
+
+function isRecoveryCandidate(capture: RecoveryCapture): boolean {
+  return capture.status === "candidate" || capture.status === "promoted";
+}
+
+function captureCompleteCheck(capture: RecoveryCapture): RecoveryReviewCheck {
+  const pass = capture.status !== "missing" && capture.status !== "incomplete" && capture.marker !== null;
+  return { id: "capture-complete", status: pass ? "pass" : "fail", detail: pass ? "The durable capture marker is present." : "The capture marker is missing or invalid; this copy is not a verified candidate." };
+}
+
+function candidateParseCheck(capture: RecoveryCapture): RecoveryReviewCheck {
+  const pass = capture.status === "candidate" || capture.status === "promoted";
+  return { id: "candidate-parse", status: pass ? "pass" : capture.status === "opaque" ? "blocked" : "fail", detail: pass ? "The captured state is a supported Terraform state document." : capture.status === "opaque" ? "The captured state is client-encrypted and needs its original client keys." : "The captured state cannot be parsed as a supported Terraform state document." };
+}
+
+function digestCheck(capture: RecoveryCapture, candidate: RecoveryCandidate): RecoveryReviewCheck {
+  const pass = candidate?.digest !== null && candidate?.digest !== undefined && (capture.evidence === null || (capture.evidence.digest === candidate.digest && capture.evidence.size === candidate.size));
+  return { id: "digest", status: pass ? "pass" : "fail", detail: pass ? "The captured bytes match their recorded SHA-256 digest." : "The captured bytes do not match the recorded SHA-256 digest." };
+}
+
+function lineageCheck(candidate: RecoveryCandidate, committed: CommittedRecoveryState): RecoveryReviewCheck {
+  const pass = candidate?.lineage !== null && (committed === null || committed.lineage === null || candidate?.lineage === committed.lineage);
+  return { id: "lineage", status: candidate?.lineage === null ? "unknown" : pass ? "pass" : "fail", detail: candidate?.lineage === null ? "The candidate has no lineage value to compare." : pass ? "The candidate lineage matches the latest committed state." : "The candidate lineage differs from the latest committed state." };
+}
+
+function recoveryDigestsMatch(candidate: RecoveryCandidate, committed: CommittedRecoveryState): boolean {
+  return candidate?.digest !== null && candidate?.digest !== undefined && candidate.digest === committed?.digest;
+}
+
+function recoveryCandidateStale(candidate: RecoveryCandidate, committed: CommittedRecoveryState, sameDigest: boolean): boolean {
   const candidateSerial = candidate?.serial;
   const committedSerial = committed?.serial;
-  const stale = committedSerial !== null && committedSerial !== undefined && candidateSerial !== null && candidateSerial !== undefined
+  return committedSerial !== null && committedSerial !== undefined && candidateSerial !== null && candidateSerial !== undefined
     && candidateSerial < committedSerial && !sameDigest;
-  const serialConflict = committedSerial !== null && committedSerial !== undefined && candidateSerial !== null && candidateSerial !== undefined
+}
+
+function recoverySerialConflict(candidate: RecoveryCandidate, committed: CommittedRecoveryState, sameDigest: boolean): boolean {
+  const candidateSerial = candidate?.serial;
+  const committedSerial = committed?.serial;
+  return committedSerial !== null && committedSerial !== undefined && candidateSerial !== null && candidateSerial !== undefined
     && candidateSerial === committedSerial && !sameDigest;
-  checks.push({ id: "serial", status: candidate?.serial === null || candidate?.serial === undefined ? "unknown" : stale || serialConflict ? "fail" : "pass", detail: stale ? "The candidate serial is behind a different committed state and is stale." : serialConflict ? "The candidate shares a serial with a different committed digest." : "The candidate serial is compatible with the current history." });
-  const ownerClear = !owner.runActive && !owner.localProcessActive && owner.agentJobs.length === 0;
-  checks.push({ id: "owner-terminated", status: ownerClear ? "pass" : "blocked", detail: ownerClear ? "The run and its local/agent execution owners are stopped." : "Execution is still owned by the run or an agent; stop it or reconcile ownership before promotion." });
-  const lockOwned = ownsWorkspaceLock(workspace, lockPrincipal(user?.id, orgId, teamId));
-  checks.push({ id: "workspace-lock", status: lockOwned ? "pass" : "blocked", detail: lockOwned ? "The workspace lock is held by this caller." : "The workspace must be locked by this caller before promotion." });
-  checks.push({ id: "state-write", status: canWrite ? "pass" : "blocked", detail: canWrite ? "The caller has state-write permission." : "The caller does not have state-write permission for this workspace." });
+}
+
+function serialCheck(candidate: RecoveryCandidate, committed: CommittedRecoveryState): RecoveryReviewCheck {
+  const sameDigest = recoveryDigestsMatch(candidate, committed);
+  const stale = recoveryCandidateStale(candidate, committed, sameDigest);
+  const conflict = recoverySerialConflict(candidate, committed, sameDigest);
+  const known = candidate?.serial !== null && candidate?.serial !== undefined;
+  return { id: "serial", status: !known ? "unknown" : stale || conflict ? "fail" : "pass", detail: stale ? "The candidate serial is behind a different committed state and is stale." : conflict ? "The candidate shares a serial with a different committed digest." : "The candidate serial is compatible with the current history." };
+}
+
+function ownerTerminatedCheck(owner: RecoveryOwner): RecoveryReviewCheck {
+  const clear = isRecoveryOwnerClear(owner);
+  return { id: "owner-terminated", status: clear ? "pass" : "blocked", detail: clear ? "The run and its local/agent execution owners are stopped." : "Execution is still owned by the run or an agent; stop it or reconcile ownership before promotion." };
+}
+
+function workspaceLockCheck(
+  workspace: Readonly<typeof workspaces.$inferSelect>,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+): RecoveryReviewCheck {
+  const owned = ownsWorkspaceLock(workspace, lockPrincipal(userId, orgId, teamId));
+  return { id: "workspace-lock", status: owned ? "pass" : "blocked", detail: owned ? "The workspace lock is held by this caller." : "The workspace must be locked by this caller before promotion." };
+}
+
+function stateWriteCheck(canWrite: boolean): RecoveryReviewCheck {
+  return { id: "state-write", status: canWrite ? "pass" : "blocked", detail: canWrite ? "The caller has state-write permission." : "The caller does not have state-write permission for this workspace." };
+}
+
+function buildRecoveryReviewChecks(args: {
+  capture: RecoveryCapture;
+  candidate: RecoveryCandidate;
+  committed: CommittedRecoveryState;
+  owner: RecoveryOwner;
+  workspace: Readonly<typeof workspaces.$inferSelect>;
+  userId: string | undefined;
+  orgId: string | null;
+  teamId: string | null;
+  canWrite: boolean;
+}): { checks: RecoveryReviewCheck[]; ownerClear: boolean; alreadyPromoted: boolean; promotionAllowed: boolean; blockers: string[] } {
+  const checks: RecoveryReviewCheck[] = [
+    captureCompleteCheck(args.capture),
+    candidateParseCheck(args.capture),
+    digestCheck(args.capture, args.candidate),
+    lineageCheck(args.candidate, args.committed),
+    serialCheck(args.candidate, args.committed),
+    ownerTerminatedCheck(args.owner),
+    workspaceLockCheck(args.workspace, args.userId, args.orgId, args.teamId),
+    stateWriteCheck(args.canWrite),
+  ];
   const blockers = checks.filter((check): boolean => check.status === "fail" || check.status === "blocked").map((check): string => check.detail);
-  const alreadyPromoted = capture.status === "promoted" && capture.evidence?.promotedStateVersionId !== undefined;
-  const promotionAllowed = alreadyPromoted || (blockers.length === 0 && candidatePass);
-  const timestamps = run.statusTimestamps ?? {};
+  const alreadyPromoted = args.capture.status === "promoted" && args.capture.evidence?.promotedStateVersionId !== undefined;
+  return {
+    checks,
+    ownerClear: isRecoveryOwnerClear(args.owner),
+    alreadyPromoted,
+    promotionAllowed: alreadyPromoted || (blockers.length === 0 && isRecoveryCandidate(args.capture)),
+    blockers,
+  };
+}
+
+function assembleRecoveryReview(args: {
+  run: Readonly<typeof runs.$inferSelect>;
+  capture: RecoveryCapture;
+  candidate: RecoveryCandidate;
+  committed: CommittedRecoveryState;
+  owner: RecoveryOwner;
+  recentLogs: RecoveryReviewData["recentLogs"];
+  checks: RecoveryReviewCheck[];
+  ownerClear: boolean;
+  alreadyPromoted: boolean;
+  promotionAllowed: boolean;
+  blockers: string[];
+}): Record<string, unknown> {
+  const timestamps = args.run.statusTimestamps ?? {};
   return {
     "run": {
-      id: run.id,
-      status: run.status,
-      operation: run.operation,
+      id: args.run.id,
+      status: args.run.status,
+      operation: args.run.operation,
       "applying-at": timestamps["applying-at"] ?? null,
-      "terminal-at": timestamps[`${run.status.replace(/_/g, "-")}-at`] ?? null,
-      "agent-id": run.agentId,
-      "agent-pool-id": run.agentPoolId,
+      "terminal-at": timestamps[`${args.run.status.replace(/_/g, "-")}-at`] ?? null,
+      "agent-id": args.run.agentId,
+      "agent-pool-id": args.run.agentPoolId,
     },
     "capture": {
-      status: capture.status,
-      "marker-present": capture.marker !== null,
-      "captured-at": capture.capturedAt,
-      "manifest-present": capture.evidence !== null,
-      "promoted-state-version-id": capture.evidence?.promotedStateVersionId ?? null,
+      status: args.capture.status,
+      "marker-present": args.capture.marker !== null,
+      "captured-at": args.capture.capturedAt,
+      "manifest-present": args.capture.evidence !== null,
+      "promoted-state-version-id": args.capture.evidence?.promotedStateVersionId ?? null,
     },
-    "candidate-state": candidate,
-    "last-committed-state": committed,
-    "checks": checks,
+    "candidate-state": args.candidate,
+    "last-committed-state": args.committed,
+    "checks": args.checks,
     "execution-owner": {
-      "run-active": owner.runActive,
-      "local-process-active": owner.localProcessActive,
-      "agent-jobs": owner.agentJobs,
-      "terminated": ownerClear,
+      "run-active": args.owner.runActive,
+      "local-process-active": args.owner.localProcessActive,
+      "agent-jobs": args.owner.agentJobs,
+      "terminated": args.ownerClear,
     },
-    "relevant-logs": [...recentLogs].reverse().map((entry): Record<string, unknown> => ({
+    "relevant-logs": [...args.recentLogs].reverse().map((entry): Record<string, unknown> => ({
       id: entry.id,
       phase: entry.phase,
       "created-at": new Date(entry.createdAt).toISOString(),
@@ -335,13 +435,49 @@ async function recoveryReviewFor(
       truncated: entry.outputText.length > 4096,
     })),
     promotion: {
-      allowed: promotionAllowed,
-      "already-promoted": alreadyPromoted,
-      blockers,
+      allowed: args.promotionAllowed,
+      "already-promoted": args.alreadyPromoted,
+      blockers: args.blockers,
       "evidence-retention": "The captured bytes and promotion manifest are retained until the configured recovery retention sweep removes promoted evidence.",
     },
     "secret-warning": "State downloads and log excerpts may contain sensitive values. Back up them only in an approved secure location.",
   };
+}
+
+async function recoveryReviewFor(
+  run: Readonly<typeof runs.$inferSelect>,
+  workspace: Readonly<typeof workspaces.$inferSelect>,
+  user: Readonly<typeof users.$inferSelect> | null | undefined,
+  orgId: string | null,
+  teamId: string | null,
+): Promise<Record<string, unknown>> {
+  const data = await fetchRecoveryReviewData(run, workspace, user?.id, orgId, teamId);
+  const committed = data.latest === undefined ? null : stateMetadata(data.latest);
+  const candidate = recoveryCandidateMetadata(data.capture);
+  const summary = buildRecoveryReviewChecks({
+    capture: data.capture,
+    candidate,
+    committed,
+    owner: data.owner,
+    workspace,
+    userId: user?.id,
+    orgId,
+    teamId,
+    canWrite: data.canWrite,
+  });
+  return assembleRecoveryReview({
+    run,
+    capture: data.capture,
+    candidate,
+    committed,
+    owner: data.owner,
+    recentLogs: data.recentLogs,
+    checks: summary.checks,
+    ownerClear: summary.ownerClear,
+    alreadyPromoted: summary.alreadyPromoted,
+    promotionAllowed: summary.promotionAllowed,
+    blockers: summary.blockers,
+  });
 }
 
 class StateVersionRejected extends Error {
