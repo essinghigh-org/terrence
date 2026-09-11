@@ -4569,6 +4569,48 @@ async function recordPolicyCheckError(
   return { hardFailed, softFailed };
 }
 
+async function loadPolicyEvaluationPlan(
+  runId: string,
+  executionDir: string | undefined,
+  planBinaryPath: string | undefined,
+  preloadedPlanJson: JsonObject | undefined,
+  planTimeoutMs: number,
+): Promise<{ planJsonPayload: string | null; generatedPlanJson: JsonObject | undefined }> {
+  const generatedPlanCapture = preloadedPlanJson !== undefined || executionDir === undefined || executionDir === ""
+    ? undefined
+    : await readPlanJson(runId, executionDir, planBinaryPath, planTimeoutMs, executionDir);
+  const generatedPlanJson = preloadedPlanJson ?? generatedPlanCapture?.planJson;
+  if (generatedPlanCapture !== undefined) await rm(generatedPlanCapture.rawPath, { force: true });
+  const planJsonPayload = generatedPlanJson === undefined ? null : JSON.stringify(generatedPlanJson);
+  return { planJsonPayload, generatedPlanJson };
+}
+
+async function evaluateSinglePolicy(
+  runId: string,
+  policy: Parameters<typeof evaluatePlanPolicy>[1],
+  policySetsById: Parameters<typeof evaluatePlanPolicy>[2],
+  parametersBySet: Parameters<typeof evaluatePlanPolicy>[3],
+  planJsonPayload: string,
+  generatedPlanJson: JsonObject | undefined,
+  policyTimeoutMs: number,
+  checkBatch: (typeof policyChecks.$inferInsert)[],
+): Promise<{ hardFailed: boolean; softFailed: boolean }> {
+  const checkId = newResourceId("pchk");
+  let checkStatus = "unreachable";
+  let checkResult: Record<string, unknown> = {};
+
+  try {
+    ({ status: checkStatus, result: checkResult } = await evaluatePlanPolicy(runId, policy, policySetsById, parametersBySet, planJsonPayload, generatedPlanJson, policyTimeoutMs));
+    return await recordPolicyCheckOutcome(runId, policy, checkId, checkStatus, checkResult, checkBatch);
+  } catch (err: unknown) {
+    return await recordPolicyCheckError(runId, policy, checkId, err, checkBatch);
+  }
+}
+
+async function persistPolicyCheckBatch(checkBatch: (typeof policyChecks.$inferInsert)[]): Promise<void> {
+  if (checkBatch.length > 0) await db.insert(policyChecks).values(checkBatch);
+}
+
 export async function runPolicyChecks(
   runId: string,
   workspaceId: string,
@@ -4583,12 +4625,7 @@ export async function runPolicyChecks(
 
   const planTimeoutMs = await executionTimeoutMs("plan");
   const policyTimeoutMs = Math.min(planTimeoutMs, POLICY_EVALUATION_TIMEOUT_MS);
-  const generatedPlanCapture = preloadedPlanJson !== undefined || executionDir === undefined || executionDir === ""
-    ? undefined
-    : await readPlanJson(runId, executionDir, planBinaryPath, planTimeoutMs, executionDir);
-  const generatedPlanJson = preloadedPlanJson ?? generatedPlanCapture?.planJson;
-  if (generatedPlanCapture !== undefined) await rm(generatedPlanCapture.rawPath, { force: true });
-  const planJsonPayload = generatedPlanJson === undefined ? null : JSON.stringify(generatedPlanJson);
+  const { planJsonPayload, generatedPlanJson } = await loadPolicyEvaluationPlan(runId, executionDir, planBinaryPath, preloadedPlanJson, planTimeoutMs);
 
   let hardFailed = false;
   let softFailed = false;
@@ -4601,24 +4638,12 @@ export async function runPolicyChecks(
   await writeLog(runId, "plan", `[terrence] Evaluating ${allPolicies.length} policies across ${allSetIds.length} policy sets...`);
 
   for (const policy of allPolicies) {
-    const checkId = newResourceId("pchk");
-    let checkStatus = "unreachable";
-    let checkResult: Record<string, unknown> = {};
-
-    try {
-      ({ status: checkStatus, result: checkResult } = await evaluatePlanPolicy(runId, policy, policySetsById, parametersBySet, planJsonPayload, generatedPlanJson, policyTimeoutMs));
-
-      const outcome = await recordPolicyCheckOutcome(runId, policy, checkId, checkStatus, checkResult, checkBatch);
-      hardFailed = hardFailed || outcome.hardFailed;
-      softFailed = softFailed || outcome.softFailed;
-    } catch (err: unknown) {
-      const errorOutcome = await recordPolicyCheckError(runId, policy, checkId, err, checkBatch);
-      hardFailed = hardFailed || errorOutcome.hardFailed;
-      softFailed = softFailed || errorOutcome.softFailed;
-    }
+    const outcome = await evaluateSinglePolicy(runId, policy, policySetsById, parametersBySet, planJsonPayload, generatedPlanJson, policyTimeoutMs, checkBatch);
+    hardFailed = hardFailed || outcome.hardFailed;
+    softFailed = softFailed || outcome.softFailed;
   }
 
-  if (checkBatch.length > 0) await db.insert(policyChecks).values(checkBatch);
+  await persistPolicyCheckBatch(checkBatch);
 
   // Both hard and soft failures block apply
   const proceed = !hardFailed && !softFailed;
