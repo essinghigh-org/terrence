@@ -1445,6 +1445,43 @@ async function probeLegacyStateOutput(
   return null;
 }
 
+type ActionRollbackScope = Awaited<ReturnType<typeof resolveActionRollbackScope>>;
+
+async function resolveActionRollbackScope(
+  stateVersionId: string,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+) {
+  const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+  if (sv === undefined) {
+    throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+  if (ws === undefined || !(await checkWorkspacePermission(ws, userId, orgId, teamId, "state-write"))) {
+    throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  if (orgId !== null && orgId !== undefined) {
+    throw new StateVersionRejected(403, { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot roll back state" }] });
+  }
+  if (!ownsWorkspaceLock(ws, lockPrincipal(userId, orgId, teamId))) {
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before rollback" }] });
+  }
+  return { sv, ws };
+}
+
+function parseActionRollbackSource(sv: ActionRollbackScope["sv"]): { sourcePayload: string; parsedSource: NonNullable<ReturnType<typeof parseTerraformStatePayload>> } {
+  if (sv.statePayload === null || sv.status !== "finalized") {
+    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: "State version cannot be rolled back" }] });
+  }
+  const sourcePayload = decodeStatePayload(sv.statePayload);
+  const parsedSource = parseTerraformStatePayload(sourcePayload);
+  if (parsedSource === null) {
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(sourcePayload) }] });
+  }
+  return { sourcePayload, parsedSource };
+}
+
 export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   .use(authPlugin)
   .get("/api/v2/state-versions", async ({ request, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -1915,89 +1952,51 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   })
   .post("/api/v2/state-versions/:state_version_id/actions/rollback", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-write"))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot roll back state" }] }; }
-    if (!ownsWorkspaceLock(ws, lockPrincipal(user?.id, orgId, teamId))) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before rollback" }] }; }
-    const idempotency = idempotencyContext(
-      request,
-      `state-action-rollback:${stateVersionId}`,
-      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
-      {},
-      set as unknown as { status?: number | string; headers: Record<string, string | number> },
-    );
-    if (idempotency === "invalid") {
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
-    }
-    if (sv.statePayload === null || sv.status !== "finalized") {
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State version cannot be rolled back" }] };
-    }
-    const sourcePayload = decodeStatePayload(sv.statePayload);
-    const parsedSource = parseTerraformStatePayload(sourcePayload);
-    if (parsedSource === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(sourcePayload) }] };
-    }
-    const idempotencyBegin = await beginIdempotency(
-      idempotency,
-      "state-action-rollback",
-      set as unknown as { status?: number | string; headers: Record<string, string | number> },
-    );
-    if (idempotencyBegin.kind === "replay") return replayStateVersion(idempotencyBegin.resourceId, sv.workspaceId, request, idempotencyBegin.body);
-    if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
-    const newId = crypto.randomUUID();
     try {
-      await withStateSerialRetry(async () => db.transaction(async (tx): Promise<void> => {
-        if (!(await fenceStateWorkspace(tx, ws))) throw new StateSerialConflictError();
-        await pruneStateReservations(tx, ws);
-        const latest = await tx.query.stateVersions.findFirst({
-          where: eq(stateVersions.workspaceId, sv.workspaceId),
-          orderBy: [desc(stateVersions.serial)],
-        });
-        const serial = (latest?.serial ?? 0) + 1;
-        if (!Number.isSafeInteger(serial)) throw new StateSerialConflictError();
-        const promoted = statePayloadWithSerial(sourcePayload, serial);
-        await tx.insert(stateVersions).values({
-          id: newId,
-          workspaceId: sv.workspaceId,
-          serial,
-          runId: null,
-          createdBy: user?.id ?? null,
-          uploadSha256: createHash("sha256").update(promoted).digest("hex"),
-          statePayload: await encryptStatePayload(promoted),
-          jsonState: await encryptStatePayload(promoted),
-          jsonStateOutputs: await encryptStatePayload(JSON.stringify(parsedSource["outputs"] ?? {})),
-          vcsCommitSha: sv.vcsCommitSha,
-          vcsCommitUrl: sv.vcsCommitUrl,
-          terraformVersion: sv.terraformVersion,
-          intermediate: false,
-          status: "finalized",
-          createdAt: Date.now(),
-        });
-        await insertStateOutputIndex(tx, newId, sv.workspaceId,
-          promoted, promoted);
-      }));
-    } catch (error) {
-      if (!(error instanceof StateSerialConflictError) && !isUniqueConstraintError(error)) throw error;
-      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }] };
+      const { sv, ws } = await resolveActionRollbackScope(stateVersionId, user?.id, orgId, teamId);
+      const idempotency = idempotencyContext(
+        request,
+        `state-action-rollback:${stateVersionId}`,
+        idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
+        {},
+        set,
+      );
+      if (idempotency === "invalid") {
+        return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+      }
+      const { sourcePayload, parsedSource } = parseActionRollbackSource(sv);
+      const idempotencyBegin = await beginIdempotency(
+        idempotency,
+        "state-action-rollback",
+        set,
+      );
+      if (idempotencyBegin.kind === "replay") return await replayStateVersion(idempotencyBegin.resourceId, sv.workspaceId, request, idempotencyBegin.body);
+      if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
+      const newId = await commitRollbackVersion({
+        workspaceId: sv.workspaceId,
+        workspace: ws,
+        source: { source: sv, sourcePayload, parsedSource },
+        userId: user?.id,
+        idempotencyBegin,
+      });
+      scheduleExplorerInventory(sv.workspaceId);
+      const newSv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, newId) });
+      if (newSv === undefined) {
+        if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+        (set as { status: number }).status = 500;
+        return { errors: [{ status: "500", title: "Internal Server Error" }] };
+      }
+      (set as { status: number }).status = 201;
+      const responseBody = { data: stateVersionResource(newSv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
+      if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, newId);
+      return responseBody;
+    } catch (error: unknown) {
+      if (error instanceof StateVersionRejected) {
+        (set as { status: number }).status = error.status;
+        return error.body;
+      }
+      throw error;
     }
-    scheduleExplorerInventory(sv.workspaceId);
-    const newSv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, newId) });
-    if (newSv === undefined) {
-      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-      (set as { status: number }).status = 500;
-      return { errors: [{ status: "500", title: "Internal Server Error" }] };
-    }
-    (set as { status: number }).status = 201;
-     const responseBody = { data: stateVersionResource(newSv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
-     if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, newId);
-     return responseBody;
   })
   .post("/api/v2/state-versions/:state_version_id/actions/soft_delete_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
