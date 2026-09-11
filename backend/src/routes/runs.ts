@@ -923,6 +923,66 @@ async function resolveRunToolchain(
   return { toolchain: { effectiveTool, effectiveVersion } };
 }
 
+async function findAuthorizedRunWorkspace(
+  workspaceId: string,
+  user: Readonly<typeof users.$inferSelect> | null | undefined,
+  orgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ workspace: typeof workspaces.$inferSelect } | { failure: Record<string, unknown> }>> {
+  const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
+  if (workspace === undefined) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  if (orgId !== null && orgId !== undefined) {
+    (set as { status: number }).status = 403;
+    return { failure: { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create runs. Use a team token or user token." }] } };
+  }
+  if (!(await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "plan"))) {
+    (set as { status: number }).status = 403;
+    return { failure: { errors: [{ status: "403", title: "Forbidden" }] } };
+  }
+  return { workspace };
+}
+
+async function checkRunCreationGuards(
+  workspace: typeof workspaces.$inferSelect,
+  userId: string | undefined,
+  teamId: string | null | undefined,
+  guards: Readonly<{ isDestroy: boolean; requestedAutoApply: boolean | undefined; allowEmptyApply: boolean; operation: string }>,
+  begin: IdempotencyBegin,
+  set: SetObj,
+): Promise<Readonly<{ canApply: boolean } | { failure: Record<string, unknown> }>> {
+  if (begin.kind === "replay") return { failure: begin.body };
+  if (begin.kind === "error") return { failure: idempotencyError(begin) };
+  if (workspace.locked === true) {
+    await abandonReservedIdempotency(begin);
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(workspace.lockedReason) }] } };
+  }
+  // Local-execution workspaces never run remotely (issue #567): the CLI
+  // plans and applies on the operator machine and the server only stores
+  // state. This matches the reference behavior for local workspaces.
+  if (workspace.executionMode === "local") {
+    await abandonReservedIdempotency(begin);
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote runs cannot be created for workspaces with local execution mode" }] } };
+  }
+  if (guards.isDestroy && workspace.allowDestroyPlan === false) {
+    await abandonReservedIdempotency(begin);
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Destroy plans are disabled for this workspace" }] } };
+  }
+  const canApply = await checkWorkspacePermission(workspace, userId, null, teamId ?? null, "apply");
+  if (!canApply && (guards.requestedAutoApply === true || guards.allowEmptyApply || guards.operation === "action_only")) {
+    await abandonReservedIdempotency(begin);
+    (set as { status: number }).status = 403;
+    return { failure: { errors: [{ status: "403", title: "Forbidden" }] } };
+  }
+  return { canApply };
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -957,41 +1017,17 @@ export async function createRun(
     set,
   );
   if (invalidInputs !== null) return invalidInputs;
-  const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
-  if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create runs. Use a team token or user token." }] }; }
-  if (!(await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "plan"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+  const workspaceAccess = await findAuthorizedRunWorkspace(workspaceId, user, orgId, teamId, set);
+  if ("failure" in workspaceAccess) return workspaceAccess.failure;
+  const { workspace } = workspaceAccess;
   const idempotencyBegin = await beginIdempotency(
     idempotency,
     "runs",
     set as unknown as { status?: number | string; headers: Record<string, string | number> },
   );
-  if (idempotencyBegin.kind === "replay") return idempotencyBegin.body;
-  if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
-  if (workspace.locked === true) {
-    await abandonReservedIdempotency(idempotencyBegin);
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(workspace.lockedReason) }] };
-  }
-  // Local-execution workspaces never run remotely (issue #567): the CLI
-  // plans and applies on the operator machine and the server only stores
-  // state. This matches the reference behavior for local workspaces.
-  if (workspace.executionMode === "local") {
-    await abandonReservedIdempotency(idempotencyBegin);
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote runs cannot be created for workspaces with local execution mode" }] };
-  }
-  if (isDestroy && workspace.allowDestroyPlan === false) {
-    await abandonReservedIdempotency(idempotencyBegin);
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Destroy plans are disabled for this workspace" }] };
-  }
-  const canApply = await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "apply");
-  if (!canApply && (requestedAutoApply === true || allowEmptyApply || operation === "action_only")) {
-    await abandonReservedIdempotency(idempotencyBegin);
-    (set as { status: number }).status = 403;
-    return { errors: [{ status: "403", title: "Forbidden" }] };
-  }
+  const guardCheck = await checkRunCreationGuards(workspace, user?.id, teamId, { isDestroy, requestedAutoApply, allowEmptyApply, operation }, idempotencyBegin, set);
+  if ("failure" in guardCheck) return guardCheck.failure;
+  const { canApply } = guardCheck;
   const autoApply = operation === "action_only" ? canApply : canApply && (requestedAutoApply ?? workspace.autoApply === true);
   // Issue #601: inheriting the workspace default while lacking apply rights
   // silently drops auto-apply (explicit requests already 403 above). Flag it
