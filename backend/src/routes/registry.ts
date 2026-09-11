@@ -1141,6 +1141,52 @@ async function findTestVarsModule(params: TestVarsParams): Promise<DeepReadonly<
   });
 }
 
+type TestVariableRow = DeepReadonly<typeof testVariables.$inferSelect>;
+type TestVariableFieldInput = Exclude<ReturnType<typeof testVariableInput>, Readonly<{ error: string }>>;
+
+async function resolveTestVariableForWrite(
+  params: TestVarsParams,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ variable: TestVariableRow } | { failure: unknown }>> {
+  const variable = await findTestVariable(params);
+  if (variable === undefined || !(await checkOrganizationPermission((await findTestVarsModule(params))?.orgId ?? "", userId, tokenOrgId, teamId ?? null, "manage-modules"))) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { variable };
+}
+
+async function validateTestVariableKey(
+  moduleId: string,
+  excludeId: string,
+  key: string,
+  set: SetObj,
+): Promise<{ failure: unknown } | null> {
+  if (key.trim() === "") {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key must not be empty" }] } };
+  }
+  const dup = await db.query.testVariables.findFirst({ where: and(eq(testVariables.moduleId, moduleId), eq(testVariables.key, key), ne(testVariables.id, excludeId)) });
+  if (dup !== undefined) {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A test variable with this key already exists" }] } };
+  }
+  return null;
+}
+
+function testVariableScalarUpdates(input: TestVariableFieldInput): Partial<typeof testVariables.$inferInsert> {
+  const updates: Partial<typeof testVariables.$inferInsert> = {};
+  if (input.value !== undefined) updates.value = input.value;
+  if (input.sensitive !== undefined) updates.sensitive = input.sensitive;
+  if (input.hcl !== undefined) updates.hcl = input.hcl;
+  if (input.category !== undefined) updates.category = input.category;
+  if (input.description !== undefined) updates.description = input.description ?? null;
+  return updates;
+}
+
 async function findTestVariable(params: TestVarsParams): Promise<DeepReadonly<typeof testVariables.$inferSelect> | undefined> {
   const mod = await findTestVarsModule(params);
   if (mod === undefined || params.variable_id === undefined) return undefined;
@@ -3137,33 +3183,23 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: testVariableResource(created) };
   })
   .get("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const variable = await findTestVariable(params);
-    if (variable === undefined || !(await checkOrganizationPermission((await findTestVarsModule(params))?.orgId ?? "", user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const resolved = await resolveTestVariableForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { variable } = resolved;
     return { data: testVariableResource(variable) };
   })
   .patch("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const variable = await findTestVariable(params);
-    if (variable === undefined || !(await checkOrganizationPermission((await findTestVarsModule(params))?.orgId ?? "", user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const resolved = await resolveTestVariableForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { variable } = resolved;
     const input = testVariableInput(body, false);
     if ("error" in input) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] }; }
-    const updates: Partial<typeof testVariables.$inferInsert> = { updatedAt: Date.now() };
+    const updates: Partial<typeof testVariables.$inferInsert> = { updatedAt: Date.now(), ...testVariableScalarUpdates(input) };
     if (input.key !== undefined) {
-      if (input.key.trim() === "") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key must not be empty" }] };
-      }
-      const dup = await db.query.testVariables.findFirst({ where: and(eq(testVariables.moduleId, variable.moduleId), eq(testVariables.key, input.key), ne(testVariables.id, variable.id)) });
-      if (dup !== undefined) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A test variable with this key already exists" }] };
-      }
+      const keyFailure = await validateTestVariableKey(variable.moduleId, variable.id, input.key, set);
+      if (keyFailure !== null) return keyFailure.failure;
       updates.key = input.key;
     }
-    if (input.value !== undefined) updates.value = input.value;
-    if (input.sensitive !== undefined) updates.sensitive = input.sensitive;
-    if (input.hcl !== undefined) updates.hcl = input.hcl;
-    if (input.category !== undefined) updates.category = input.category;
-    if (input.description !== undefined) updates.description = input.description ?? null;
     let conflict = "";
     await db.transaction(async (tx): Promise<void> => {
       // Duplicate-key enforcement and the write share one transaction so a
@@ -3184,8 +3220,9 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: updated === undefined ? undefined : testVariableResource(updated) };
   })
   .delete("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const variable = await findTestVariable(params);
-    if (variable === undefined || !(await checkOrganizationPermission((await findTestVarsModule(params))?.orgId ?? "", user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const resolved = await resolveTestVariableForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
+    const { variable } = resolved;
     await db.delete(testVariables).where(eq(testVariables.id, variable.id));
     (set as { status: number }).status = 204;
     return {};
