@@ -38,6 +38,7 @@ import {
   projects,
 } from "./db/schema";
 import { eq, desc, asc, and, gt, lt, like, inArray, notInArray, or, sql, isNotNull, isNull } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { spawn } from "bun";
 import { createHash, createHmac } from "node:crypto";
 import { join, resolve } from "path";
@@ -5021,6 +5022,290 @@ export async function pollAssessmentQueue(): Promise<string[]> {
 let isWorkerLoopRunning = false;
 let workerQueueCursor: { createdAt: number; id: string } = { createdAt: 0, id: "" };
 
+type QueuePageContext = Readonly<{
+  workspacesById: ReadonlyMap<string, typeof workspaces.$inferSelect>;
+  poolsById: ReadonlyMap<string, typeof agentPools.$inferSelect>;
+  projectsById: ReadonlyMap<string, typeof projects.$inferSelect>;
+  organizationsById: ReadonlyMap<string, typeof organizations.$inferSelect>;
+  allowedWorkspacesByPool: ReadonlyMap<string, ReadonlySet<string>>;
+  allowedProjectsByPool: ReadonlyMap<string, ReadonlySet<string>>;
+  noAllowedIds: ReadonlySet<string>;
+}>;
+
+async function prefetchQueuePageContext(pendingRuns: readonly (typeof runs.$inferSelect)[]): Promise<QueuePageContext> {
+  // Pre-fetch workspaces to avoid N+1 inside the loop
+  const workspaceIds = [...new Set(pendingRuns.map((run): string => run.workspaceId))];
+  const workspacesById = workspaceIds.length === 0
+    ? new Map<string, typeof workspaces.$inferSelect>()
+    : new Map(
+        (await db.query.workspaces.findMany({
+          where: inArray(workspaces.id, workspaceIds),
+        })).map((ws): [string, typeof workspaces.$inferSelect] => [ws.id, ws]),
+      );
+
+  // Resolve queue eligibility inputs once per page instead of querying the
+  // same pool, project, organization, and scope rows for every candidate.
+  const agentPoolIds = [...new Set([...workspacesById.values()]
+    .filter((workspace): boolean => workspace.executionMode === "agent" && workspace.agentPoolId !== null)
+    .map((workspace): string | null => workspace.agentPoolId)
+    .filter((id): id is string => id !== null))];
+  const projectIds = [...new Set([...workspacesById.values()]
+    .map((workspace): string | null => workspace.projectId)
+    .filter((id): id is string => id !== null))];
+  const organizationIds = [...new Set([...workspacesById.values()].map((workspace): string => workspace.orgId))];
+  const [poolRows, projectRows, organizationRows, allowedWorkspaceRows, allowedProjectRows] = await Promise.all([
+    agentPoolIds.length === 0 ? Promise.resolve([]) : db.query.agentPools.findMany({ where: inArray(agentPools.id, agentPoolIds) }),
+    projectIds.length === 0 ? Promise.resolve([]) : db.query.projects.findMany({ where: inArray(projects.id, projectIds) }),
+    organizationIds.length === 0 ? Promise.resolve([]) : db.query.organizations.findMany({ where: inArray(organizations.id, organizationIds) }),
+    agentPoolIds.length === 0 ? Promise.resolve([]) : db.query.agentPoolAllowedWorkspaces.findMany({ where: inArray(agentPoolAllowedWorkspaces.agentPoolId, agentPoolIds) }),
+    agentPoolIds.length === 0 ? Promise.resolve([]) : db.query.agentPoolAllowedProjects.findMany({ where: inArray(agentPoolAllowedProjects.agentPoolId, agentPoolIds) }),
+  ]);
+  const poolsById = new Map(poolRows.map((pool): [string, typeof agentPools.$inferSelect] => [pool.id, pool]));
+  const projectsById = new Map(projectRows.map((project): [string, typeof projects.$inferSelect] => [project.id, project]));
+  const organizationsById = new Map(organizationRows.map((organization): [string, typeof organizations.$inferSelect] => [organization.id, organization]));
+  const allowedWorkspacesByPool = new Map<string, Set<string>>();
+  for (const row of allowedWorkspaceRows) {
+    const values = allowedWorkspacesByPool.get(row.agentPoolId) ?? new Set<string>();
+    values.add(row.workspaceId);
+    allowedWorkspacesByPool.set(row.agentPoolId, values);
+  }
+  const allowedProjectsByPool = new Map<string, Set<string>>();
+  for (const row of allowedProjectRows) {
+    const values = allowedProjectsByPool.get(row.agentPoolId) ?? new Set<string>();
+    values.add(row.projectId);
+    allowedProjectsByPool.set(row.agentPoolId, values);
+  }
+  return { workspacesById, poolsById, projectsById, organizationsById, allowedWorkspacesByPool, allowedProjectsByPool, noAllowedIds: new Set<string>() };
+}
+
+async function noteLockedQueueRun(runId: string, workspace: typeof workspaces.$inferSelect): Promise<void> {
+  // A lock acquired after run creation parks the run silently (issue
+  // #575). Log the block throttled instead of parking with no signal.
+  if (notePlanLockLogged(runId)) {
+    const reason = typeof workspace.lockedReason === "string" && workspace.lockedReason !== ""
+      ? ` Reason: ${workspace.lockedReason}`
+      : "";
+    await writeLog(runId, "plan", `[terrence] Run is waiting: the workspace is locked.${reason} Unlock the workspace or cancel this run.`);
+  }
+}
+
+function buildRunClaimWhere(run: typeof runs.$inferSelect): SQL | undefined {
+  // Atomic conditional claim: only claim if no planning/applying run exists for this workspace,
+  // and the run is still pending.
+  // Speculative/plan-only runs do NOT block the queue — they can run alongside other runs.
+  const blockerStatuses = run.planOnly || run.savePlan
+    ? []
+    : [
+        ...WORKSPACE_BLOCKING_RUN_STATUSES,
+      ];
+
+  return and(
+    eq(runs.id, run.id),
+    eq(runs.status, "pending"),
+    blockerStatuses.length > 0
+      ? notInArray(
+          runs.workspaceId,
+          db.select({ workspaceId: runs.workspaceId }).from(runs).where(
+            and(
+              eq(runs.workspaceId, run.workspaceId),
+              inArray(runs.status, blockerStatuses),
+              eq(runs.planOnly, false),
+              eq(runs.savePlan, false),
+            ),
+          ),
+        )
+      : sql`1=1`,
+  );
+}
+
+async function claimAgentPoolRun(
+  run: typeof runs.$inferSelect,
+  workspace: typeof workspaces.$inferSelect,
+  ctx: QueuePageContext,
+  claimWhere: SQL | undefined,
+  claimedRunIds: string[],
+  claimedWorkspaceIds: Set<string>,
+): Promise<void> {
+  const pool = workspace.agentPoolId === null ? undefined : ctx.poolsById.get(workspace.agentPoolId);
+  if (
+    pool?.orgId !== workspace.orgId
+    || !(await agentPoolAllowsWorkspace(
+      pool,
+      workspace.id,
+      workspace.projectId,
+      ctx.allowedWorkspacesByPool.get(pool.id) ?? ctx.noAllowedIds,
+      ctx.allowedProjectsByPool.get(pool.id) ?? ctx.noAllowedIds,
+    ))
+  ) {
+    const unreachable = await db.update(runs).set({
+      status: "unreachable",
+      statusTimestamps: {
+        ...(run.statusTimestamps ?? {}),
+        "unreachable-at": new Date().toISOString(),
+      },
+    }).where(claimWhere).returning({ id: runs.id });
+    if (unreachable.length > 0) {
+      claimedRunIds.push(run.id);
+      claimedWorkspaceIds.add(run.workspaceId);
+      await writeLog(run.id, "plan", "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.");
+      queueRunNotification(run.id, "run:errored", "unreachable");
+      void reportRunVcsStatus(run.id, "unreachable");
+    }
+    return;
+  }
+
+  const queued = await db.transaction(async (transaction): Promise<boolean> => {
+    const tx = transaction as unknown as typeof db;
+    const inputState = await tx.query.stateVersions.findFirst({
+      where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
+      orderBy: [desc(stateVersions.serial)],
+      columns: { id: true, serial: true },
+    });
+    const claimed = await tx.update(runs).set({
+      agentPoolId: pool.id,
+      status: "plan_queued",
+      statusTimestamps: {
+        ...(run.statusTimestamps ?? {}),
+        "plan-queued-at": new Date().toISOString(),
+        ...(inputState === undefined ? {} : {
+          "input-state-version-id": inputState.id,
+          "input-state-serial": String(inputState.serial),
+        }),
+      },
+    }).where(claimWhere).returning({ id: runs.id });
+    if (claimed.length === 0) return false;
+    await tx.insert(agentJobs).values({
+      id: newResourceId("ajob"),
+      runId: run.id,
+      agentPoolId: pool.id,
+      phase: "plan",
+      // Resolve the IaC binary now so claimAgentJob can route by
+      // capability. Unset workspace binary means terraform for agent
+      // execution (the tfc-agent contract); the org default only
+      // applies to locally executed runs.
+      iacBinary: workspace.iacBinary ?? "terraform",
+      fencingToken: 0,
+      status: "queued",
+      createdAt: Date.now(),
+    });
+    return true;
+  });
+  if (queued) {
+    claimedRunIds.push(run.id);
+    claimedWorkspaceIds.add(run.workspaceId);
+    void reportRunVcsStatus(run.id, "plan_queued");
+  }
+}
+
+async function enforceQueueExecutorPolicy(
+  run: typeof runs.$inferSelect,
+  workspace: typeof workspaces.$inferSelect,
+  ctx: QueuePageContext,
+  claimWhere: SQL | undefined,
+): Promise<boolean> {
+  // Executor policy (36-39): refuse local Landlock for untrusted workspaces
+  // or when project/org requires hard isolation.
+  let projectForPolicy: { allowedExecutionModes?: string | null } | null = null;
+  let orgForPolicy: { requireHardIsolation?: boolean | null } | null = null;
+  try {
+    if (workspace.projectId !== null && workspace.projectId !== undefined) {
+      const p = ctx.projectsById.get(workspace.projectId);
+      if (p !== undefined) projectForPolicy = { allowedExecutionModes: p.allowedExecutionModes ?? null };
+    }
+    const o = ctx.organizationsById.get(workspace.orgId);
+    if (o !== undefined) orgForPolicy = { requireHardIsolation: o.requireHardIsolation ?? null };
+  } catch (error: unknown) {
+    log.error("executor policy lookup failed, deferring run", { runId: run.id, error: String(error) });
+    return false;
+  }
+  const policyError = executorPolicyAllowsLocal(
+    workspace,
+    projectForPolicy,
+    orgForPolicy,
+  );
+  if (policyError !== null) {
+    const blocked = await db.update(runs).set({
+      status: "errored",
+      statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+    }).where(and(claimWhere, eq(runs.status, "pending"))).returning({ id: runs.id });
+    if (blocked.length > 0) {
+      await writeLog(run.id, "plan", `[terrence ERROR] ${policyError}`);
+      queueRunNotification(run.id, "run:errored", "errored");
+      void reportRunVcsStatus(run.id, "errored");
+      publish("run.status", {
+        "run-id": run.id,
+        "workspace-id": workspace.id,
+        "org-id": workspace.orgId,
+        status: "errored",
+        at: new Date().toISOString(),
+      });
+    }
+    return false;
+  }
+  return true;
+}
+
+async function rejectLocalExecutionRun(
+  run: typeof runs.$inferSelect,
+  workspace: typeof workspaces.$inferSelect,
+  claimWhere: SQL | undefined,
+): Promise<void> {
+  // Local-execution workspaces never run on the server (issue #567):
+  // remote runs are rejected at creation, so any pending row here
+  // predates the gate. Error it with an explanation instead of
+  // executing it or leaving it stuck forever.
+  const blocked = await db.update(runs).set({
+    status: "errored",
+    statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+  }).where(and(claimWhere, eq(runs.status, "pending"))).returning({ id: runs.id });
+  if (blocked.length > 0) {
+    await writeLog(run.id, "plan", "[terrence ERROR] Remote runs cannot execute on workspaces with local execution mode. Plan and apply locally with the CLI; this run predates local-execution enforcement.");
+    queueRunNotification(run.id, "run:errored", "errored");
+    void reportRunVcsStatus(run.id, "errored");
+    publish("run.status", {
+      "run-id": run.id,
+      "workspace-id": workspace.id,
+      "org-id": workspace.orgId,
+      status: "errored",
+      at: new Date().toISOString(),
+    });
+  }
+}
+
+async function claimLocalRun(
+  run: typeof runs.$inferSelect,
+  workspace: typeof workspaces.$inferSelect,
+  claimWhere: SQL | undefined,
+  claimedRunIds: string[],
+  claimedWorkspaceIds: Set<string>,
+): Promise<void> {
+  let localReservationHeld = workspace.executionMode !== "agent" && reserveLocalRunExecution(run.id);
+  if (!localReservationHeld && workspace.executionMode !== "agent") return;
+
+  // Claim local and remote runs atomically by moving them into the first execution stage.
+  try {
+    const claimed = await db.update(runs)
+      .set({ status: "fetching" })
+      .where(claimWhere)
+      .returning({ id: runs.id });
+
+    if (claimed.length > 0) {
+      claimedRunIds.push(run.id);
+      claimedWorkspaceIds.add(run.workspaceId);
+      planLockLoggedAt.delete(run.id);
+      // Advance through plan_queued then dispatch to planning
+      executeRun(run.id).catch((err: unknown): void => { log.error("Worker error on run", { runId: run.id, error: err }); });
+      localReservationHeld = false;
+    } else if (localReservationHeld) {
+      releaseLocalRunReservation(run.id);
+      localReservationHeld = false;
+    }
+  } catch (error: unknown) {
+    if (localReservationHeld) releaseLocalRunReservation(run.id);
+    throw error;
+  }
+}
+
 export async function pollWorkerQueue(): Promise<string[]> {
   return withQueueGate("worker", async (): Promise<string[]> => {
   if (isMaintenanceActive()) return [];
@@ -5067,49 +5352,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
     }
     morePages = pendingRuns.length === SCAN_PAGE_SIZE;
 
-  // Pre-fetch workspaces to avoid N+1 inside the loop
-  const workspaceIds = [...new Set(pendingRuns.map((run): string => run.workspaceId))];
-  const workspacesById = workspaceIds.length === 0
-    ? new Map<string, typeof workspaces.$inferSelect>()
-    : new Map(
-        (await db.query.workspaces.findMany({
-          where: inArray(workspaces.id, workspaceIds),
-        })).map((ws): [string, typeof workspaces.$inferSelect] => [ws.id, ws]),
-      );
-
-  // Resolve queue eligibility inputs once per page instead of querying the
-  // same pool, project, organization, and scope rows for every candidate.
-  const agentPoolIds = [...new Set([...workspacesById.values()]
-    .filter((workspace): boolean => workspace.executionMode === "agent" && workspace.agentPoolId !== null)
-    .map((workspace): string | null => workspace.agentPoolId)
-    .filter((id): id is string => id !== null))];
-  const projectIds = [...new Set([...workspacesById.values()]
-    .map((workspace): string | null => workspace.projectId)
-    .filter((id): id is string => id !== null))];
-  const organizationIds = [...new Set([...workspacesById.values()].map((workspace): string => workspace.orgId))];
-  const [poolRows, projectRows, organizationRows, allowedWorkspaceRows, allowedProjectRows] = await Promise.all([
-    agentPoolIds.length === 0 ? Promise.resolve([]) : db.query.agentPools.findMany({ where: inArray(agentPools.id, agentPoolIds) }),
-    projectIds.length === 0 ? Promise.resolve([]) : db.query.projects.findMany({ where: inArray(projects.id, projectIds) }),
-    organizationIds.length === 0 ? Promise.resolve([]) : db.query.organizations.findMany({ where: inArray(organizations.id, organizationIds) }),
-    agentPoolIds.length === 0 ? Promise.resolve([]) : db.query.agentPoolAllowedWorkspaces.findMany({ where: inArray(agentPoolAllowedWorkspaces.agentPoolId, agentPoolIds) }),
-    agentPoolIds.length === 0 ? Promise.resolve([]) : db.query.agentPoolAllowedProjects.findMany({ where: inArray(agentPoolAllowedProjects.agentPoolId, agentPoolIds) }),
-  ]);
-  const poolsById = new Map(poolRows.map((pool): [string, typeof agentPools.$inferSelect] => [pool.id, pool]));
-  const projectsById = new Map(projectRows.map((project): [string, typeof projects.$inferSelect] => [project.id, project]));
-  const organizationsById = new Map(organizationRows.map((organization): [string, typeof organizations.$inferSelect] => [organization.id, organization]));
-  const allowedWorkspacesByPool = new Map<string, Set<string>>();
-  for (const row of allowedWorkspaceRows) {
-    const values = allowedWorkspacesByPool.get(row.agentPoolId) ?? new Set<string>();
-    values.add(row.workspaceId);
-    allowedWorkspacesByPool.set(row.agentPoolId, values);
-  }
-  const allowedProjectsByPool = new Map<string, Set<string>>();
-  for (const row of allowedProjectRows) {
-    const values = allowedProjectsByPool.get(row.agentPoolId) ?? new Set<string>();
-    values.add(row.projectId);
-    allowedProjectsByPool.set(row.agentPoolId, values);
-  }
-  const noAllowedIds = new Set<string>();
+  const ctx = await prefetchQueuePageContext(pendingRuns);
 
   for (const run of pendingRuns) {
     if (claimedRunIds.length === MAX_CLAIMS) break;
@@ -5118,211 +5361,34 @@ export async function pollWorkerQueue(): Promise<string[]> {
     workerQueueCursor = { createdAt: cursorCreatedAt, id: cursorId };
     if (claimedWorkspaceIds.has(run.workspaceId)) continue;
 
-    const workspace = workspacesById.get(run.workspaceId);
+    const workspace = ctx.workspacesById.get(run.workspaceId);
     if (workspace === undefined) continue;
-    // A lock acquired after run creation parks the run silently (issue
-    // #575). Log the block throttled instead of parking with no signal.
     if (workspace.locked === true) {
-      if (notePlanLockLogged(run.id)) {
-        const reason = typeof workspace.lockedReason === "string" && workspace.lockedReason !== ""
-          ? ` Reason: ${workspace.lockedReason}`
-          : "";
-        await writeLog(run.id, "plan", `[terrence] Run is waiting: the workspace is locked.${reason} Unlock the workspace or cancel this run.`);
-      }
+      await noteLockedQueueRun(run.id, workspace);
       continue;
     }
 
-    // Atomic conditional claim: only claim if no planning/applying run exists for this workspace,
-    // and the run is still pending.
-    // Speculative/plan-only runs do NOT block the queue — they can run alongside other runs.
-    const blockerStatuses = run.planOnly || run.savePlan
-      ? []
-      : [
-          ...WORKSPACE_BLOCKING_RUN_STATUSES,
-        ];
-
-    const claimWhere = and(
-        eq(runs.id, run.id),
-        eq(runs.status, "pending"),
-        blockerStatuses.length > 0
-          ? notInArray(
-              runs.workspaceId,
-              db.select({ workspaceId: runs.workspaceId }).from(runs).where(
-                and(
-                  eq(runs.workspaceId, run.workspaceId),
-                  inArray(runs.status, blockerStatuses),
-                  eq(runs.planOnly, false),
-                  eq(runs.savePlan, false),
-                ),
-              ),
-            )
-          : sql`1=1`,
-      );
+    const claimWhere = buildRunClaimWhere(run);
 
     if (workspace.executionMode === "agent") {
-      const pool = workspace.agentPoolId === null ? undefined : poolsById.get(workspace.agentPoolId);
-      if (
-        pool?.orgId !== workspace.orgId
-        || !(await agentPoolAllowsWorkspace(
-          pool,
-          workspace.id,
-          workspace.projectId,
-          allowedWorkspacesByPool.get(pool.id) ?? noAllowedIds,
-          allowedProjectsByPool.get(pool.id) ?? noAllowedIds,
-        ))
-      ) {
-        const unreachable = await db.update(runs).set({
-          status: "unreachable",
-          statusTimestamps: {
-            ...(run.statusTimestamps ?? {}),
-            "unreachable-at": new Date().toISOString(),
-          },
-        }).where(claimWhere).returning({ id: runs.id });
-        if (unreachable.length > 0) {
-          claimedRunIds.push(run.id);
-          claimedWorkspaceIds.add(run.workspaceId);
-          await writeLog(run.id, "plan", "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.");
-          queueRunNotification(run.id, "run:errored", "unreachable");
-          void reportRunVcsStatus(run.id, "unreachable");
-        }
-        continue;
-      }
-
-      const queued = await db.transaction(async (transaction): Promise<boolean> => {
-        const tx = transaction as unknown as typeof db;
-        const inputState = await tx.query.stateVersions.findFirst({
-          where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
-          orderBy: [desc(stateVersions.serial)],
-          columns: { id: true, serial: true },
-        });
-        const claimed = await tx.update(runs).set({
-          agentPoolId: pool.id,
-          status: "plan_queued",
-          statusTimestamps: {
-            ...(run.statusTimestamps ?? {}),
-            "plan-queued-at": new Date().toISOString(),
-            ...(inputState === undefined ? {} : {
-              "input-state-version-id": inputState.id,
-              "input-state-serial": String(inputState.serial),
-            }),
-          },
-        }).where(claimWhere).returning({ id: runs.id });
-        if (claimed.length === 0) return false;
-        await tx.insert(agentJobs).values({
-          id: newResourceId("ajob"),
-          runId: run.id,
-          agentPoolId: pool.id,
-          phase: "plan",
-          // Resolve the IaC binary now so claimAgentJob can route by
-          // capability. Unset workspace binary means terraform for agent
-          // execution (the tfc-agent contract); the org default only
-          // applies to locally executed runs.
-          iacBinary: workspace.iacBinary ?? "terraform",
-          fencingToken: 0,
-          status: "queued",
-          createdAt: Date.now(),
-        });
-        return true;
-      });
-      if (queued) {
-        claimedRunIds.push(run.id);
-        claimedWorkspaceIds.add(run.workspaceId);
-        void reportRunVcsStatus(run.id, "plan_queued");
-      }
+      await claimAgentPoolRun(run, workspace, ctx, claimWhere, claimedRunIds, claimedWorkspaceIds);
       continue;
     }
 
     // Executor policy (36-39): refuse local Landlock for untrusted workspaces
     // or when project/org requires hard isolation.
-    {
-      let projectForPolicy: { allowedExecutionModes?: string | null } | null = null;
-      let orgForPolicy: { requireHardIsolation?: boolean | null } | null = null;
-      try {
-        if (workspace.projectId !== null && workspace.projectId !== undefined) {
-          const p = projectsById.get(workspace.projectId);
-          if (p !== undefined) projectForPolicy = { allowedExecutionModes: p.allowedExecutionModes ?? null };
-        }
-        const o = organizationsById.get(workspace.orgId);
-        if (o !== undefined) orgForPolicy = { requireHardIsolation: o.requireHardIsolation ?? null };
-      } catch (error: unknown) {
-        log.error("executor policy lookup failed, deferring run", { runId: run.id, error: String(error) });
-        continue;
-      }
-      const policyError = executorPolicyAllowsLocal(
-        workspace,
-        projectForPolicy,
-        orgForPolicy,
-      );
-      if (policyError !== null) {
-        const blocked = await db.update(runs).set({
-          status: "errored",
-          statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
-        }).where(and(claimWhere, eq(runs.status, "pending"))).returning({ id: runs.id });
-        if (blocked.length > 0) {
-          await writeLog(run.id, "plan", `[terrence ERROR] ${policyError}`);
-          queueRunNotification(run.id, "run:errored", "errored");
-          void reportRunVcsStatus(run.id, "errored");
-          publish("run.status", {
-            "run-id": run.id,
-            "workspace-id": workspace.id,
-            "org-id": workspace.orgId,
-            status: "errored",
-            at: new Date().toISOString(),
-          });
-        }
-        continue;
-      }
-    }
+    if (!(await enforceQueueExecutorPolicy(run, workspace, ctx, claimWhere))) continue;
 
     // Local-execution workspaces never run on the server (issue #567):
     // remote runs are rejected at creation, so any pending row here
     // predates the gate. Error it with an explanation instead of
     // executing it or leaving it stuck forever.
     if (workspace.executionMode === "local") {
-      const blocked = await db.update(runs).set({
-        status: "errored",
-        statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
-      }).where(and(claimWhere, eq(runs.status, "pending"))).returning({ id: runs.id });
-      if (blocked.length > 0) {
-        await writeLog(run.id, "plan", "[terrence ERROR] Remote runs cannot execute on workspaces with local execution mode. Plan and apply locally with the CLI; this run predates local-execution enforcement.");
-        queueRunNotification(run.id, "run:errored", "errored");
-        void reportRunVcsStatus(run.id, "errored");
-        publish("run.status", {
-          "run-id": run.id,
-          "workspace-id": workspace.id,
-          "org-id": workspace.orgId,
-          status: "errored",
-          at: new Date().toISOString(),
-        });
-      }
+      await rejectLocalExecutionRun(run, workspace, claimWhere);
       continue;
     }
 
-    let localReservationHeld = workspace.executionMode !== "agent" && reserveLocalRunExecution(run.id);
-    if (!localReservationHeld && workspace.executionMode !== "agent") continue;
-
-    // Claim local and remote runs atomically by moving them into the first execution stage.
-    try {
-      const claimed = await db.update(runs)
-        .set({ status: "fetching" })
-        .where(claimWhere)
-        .returning({ id: runs.id });
-
-      if (claimed.length > 0) {
-        claimedRunIds.push(run.id);
-        claimedWorkspaceIds.add(run.workspaceId);
-        planLockLoggedAt.delete(run.id);
-        // Advance through plan_queued then dispatch to planning
-        executeRun(run.id).catch((err: unknown): void => { log.error("Worker error on run", { runId: run.id, error: err }); });
-        localReservationHeld = false;
-      } else if (localReservationHeld) {
-        releaseLocalRunReservation(run.id);
-        localReservationHeld = false;
-      }
-    } catch (error: unknown) {
-      if (localReservationHeld) releaseLocalRunReservation(run.id);
-      throw error;
-    }
+    await claimLocalRun(run, workspace, claimWhere, claimedRunIds, claimedWorkspaceIds);
   }
   }
 
