@@ -1698,6 +1698,87 @@ function commentActor(user: ParamCtx["user"]): { username?: string | null; avata
   return { username: user.username, avatarUrl: gravatarUrl(user.email) };
 }
 
+function forceExecuteStatusLists(): Readonly<{ blocking: string[]; resting: string[] }> {
+  return {
+    blocking: WORKSPACE_BLOCKING_RUN_STATUSES.filter((status): boolean => !(DISCARDABLE_RUN_STATUSES as readonly string[]).includes(status)),
+    resting: WORKSPACE_BLOCKING_RUN_STATUSES.filter((status): boolean => (DISCARDABLE_RUN_STATUSES as readonly string[]).includes(status)),
+  };
+}
+
+async function stopForceExecuteBlockers(
+  workspaceId: string,
+  runId: string,
+  restingStatuses: readonly string[],
+  blockingStatuses: readonly string[],
+  set: SetObj,
+): Promise<Readonly<{ ok: true } | { failure: unknown }>> {
+  const restingBlockers = await db.query.runs.findMany({
+    where: and(
+      eq(runs.workspaceId, workspaceId),
+      inArray(runs.status, [...restingStatuses]),
+      ne(runs.id, runId),
+    ),
+    columns: { id: true, status: true, planOnly: true, savePlan: true },
+    orderBy: [asc(runs.createdAt), asc(runs.id)],
+  });
+  const resting = restingBlockers.find((run): boolean => run.planOnly !== true && run.savePlan !== true);
+  // A blocker in a resting state (planned, policy_soft_failed) still holds
+  // the queue but must be discarded, not force-executed. Speculative and
+  // save-plan runs never hold the queue, so they are excluded.
+  if (resting !== undefined) {
+    (set as { status: number }).status = 409;
+    return { failure: { errors: [{ status: "409", title: "Conflict", detail: `Run ${resting.id} is ${resting.status}; discard it before force-executing this run` }] } };
+  }
+  const blockers = await db.query.runs.findMany({
+    where: and(eq(runs.workspaceId, workspaceId), inArray(runs.status, [...blockingStatuses]), ne(runs.id, runId)),
+    orderBy: [asc(runs.createdAt), asc(runs.id)],
+  });
+  const blockingRuns = blockers.filter((run): boolean => run.planOnly !== true && run.savePlan !== true);
+  if (blockingRuns.length === 0) {
+    (set as { status: number }).status = 409;
+    return { failure: { errors: [{ status: "409", title: "Conflict", detail: "No blocking run is available to force-execute" }] } };
+  }
+  const blockerCanceled = await db.update(runs).set({ status: "force_canceled" }).where(and(
+    inArray(runs.id, blockingRuns.map((run): string => run.id)),
+    inArray(runs.status, [...blockingStatuses]),
+  )).returning({ id: runs.id });
+  if (blockerCanceled.length === 0) {
+    (set as { status: number }).status = 409;
+    return { failure: { errors: [{ status: "409", title: "Conflict", detail: "The blocking run changed before it could be stopped" }] } };
+  }
+  const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
+  await Promise.all(blockerCanceled.map(async ({ id }): Promise<void> => {
+    await revokeRunTokens(id);
+    cancelRunExecution(id, true);
+    await cleanupSavedPlan(id);
+    await cancelAgentJobsForRun(id);
+  }));
+  return { ok: true as const };
+}
+
+async function transitionForceExecutedRun(
+  authorized: AuthorizedRun,
+  runId: string,
+  user: ParamCtx["user"],
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ ok: true } | { failure: unknown }>> {
+  const updated = await db.update(runs).set({ status: "pending" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status))).returning();
+  if (updated.length === 0) {
+    (set as { status: number }).status = 409;
+    return { failure: { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-executable" }] } };
+  }
+  await auditLog("force-execute", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+    workspaceId: authorized.workspace.id,
+    fromStatus: authorized.run.status,
+    toStatus: "pending",
+    ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+  });
+  queueRunNotification(runId, "run:needs_attention", "pending");
+  (set as { status: number }).status = 202;
+  return { ok: true as const };
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -2611,62 +2692,11 @@ export const runRoutes = new Elysia({ name: "runs" })
     // minus the resting states a user can discard themselves (planned,
     // policy_soft_failed). The old four-status list reported nothing blocking
     // while fetching/confirmed/policy runs held the queue.
-    const forceExecuteBlockingStatuses = WORKSPACE_BLOCKING_RUN_STATUSES.filter(
-      (status): boolean => !(DISCARDABLE_RUN_STATUSES as readonly string[]).includes(status),
-    );
-    const restingBlockingStatuses = WORKSPACE_BLOCKING_RUN_STATUSES.filter(
-      (status): boolean => (DISCARDABLE_RUN_STATUSES as readonly string[]).includes(status),
-    );
-    // A blocker in a discardable resting state (planned, policy_soft_failed)
-    // still holds the queue but must be discarded, not force-executed — and a
-    // force-execute that only clears active blockers would 202 while the
-    // target stays queued behind it. Surface the discard hint before touching
-    // anything. Speculative and save-plan runs never hold the queue, so they
-    // are excluded here exactly as for active blockers below.
-    const restingBlockers = await db.query.runs.findMany({
-      where: and(
-        eq(runs.workspaceId, authorized.workspace.id),
-        inArray(runs.status, [...restingBlockingStatuses]),
-        ne(runs.id, runId),
-      ),
-      columns: { id: true, status: true, planOnly: true, savePlan: true },
-      orderBy: [asc(runs.createdAt), asc(runs.id)],
-    });
-    const resting = restingBlockers.find((run): boolean => run.planOnly !== true && run.savePlan !== true);
-    if (resting !== undefined) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: `Run ${resting.id} is ${resting.status}; discard it before force-executing this run` }] };
-    }
-    const blockers = await db.query.runs.findMany({
-      where: and(eq(runs.workspaceId, authorized.workspace.id), inArray(runs.status, [...forceExecuteBlockingStatuses]), ne(runs.id, runId)),
-      orderBy: [asc(runs.createdAt), asc(runs.id)],
-    });
-    const blockingRuns = blockers.filter((run): boolean => run.planOnly !== true && run.savePlan !== true);
-    if (blockingRuns.length === 0) {
-      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "No blocking run is available to force-execute" }] };
-    }
-    const blockerCanceled = await db.update(runs).set({ status: "force_canceled" }).where(and(
-      inArray(runs.id, blockingRuns.map((run): string => run.id)),
-      inArray(runs.status, [...forceExecuteBlockingStatuses]),
-    )).returning({ id: runs.id });
-    if (blockerCanceled.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "The blocking run changed before it could be stopped" }] }; }
-    const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
-    await Promise.all(blockerCanceled.map(async ({ id }): Promise<void> => {
-      await revokeRunTokens(id);
-      cancelRunExecution(id, true);
-      await cleanupSavedPlan(id);
-      await cancelAgentJobsForRun(id);
-    }));
-    const updated = await db.update(runs).set({ status: "pending" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status))).returning();
-    if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-executable" }] }; }
-    await auditLog("force-execute", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
-      workspaceId: authorized.workspace.id,
-      fromStatus: authorized.run.status,
-      toStatus: "pending",
-      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
-    });
-    queueRunNotification(runId, "run:needs_attention", "pending");
-    (set as { status: number }).status = 202;
+    const { blocking, resting } = forceExecuteStatusLists();
+    const stopped = await stopForceExecuteBlockers(authorized.workspace.id, runId, resting, blocking, set);
+    if ("failure" in stopped) return stopped.failure;
+    const done = await transitionForceExecutedRun(authorized, runId, user, teamId, set);
+    if ("failure" in done) return done.failure;
     return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/queue", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
