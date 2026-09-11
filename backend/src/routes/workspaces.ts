@@ -1061,24 +1061,17 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   })
   .patch("/api/v2/workspaces/:workspace_id", async ({ params, body, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const actor = actorScope(user, principalOrgId, teamId);
+    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId);
+    if (ws === undefined) return failWorkspaceUpdate(set, 404);
+    if (!(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "admin"))) return failWorkspaceUpdate(set, 403);
     const org = await cachedOrgById(ws.orgId);
-    const ifMatch = request.headers.get("if-match");
-    if (ifMatch !== null && ifMatch.trim() !== "*") {
-      const currentResource = await workspaceResource(
-        ws,
-        org?.defaultIacBinary,
-        await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
-        { orgName: org?.name ?? null },
-      );
-      if (!ifMatchSatisfied(request, { data: currentResource })) { (set as { status: number }).status = 412; return { errors: [{ status: "412", title: "Precondition Failed" }] }; }
-    }
+    const ifMatchFailure = await workspaceIfMatchFailure(request, ws, org, actor, set);
+    if (ifMatchFailure !== null) return ifMatchFailure;
     return updateWorkspaceResponse(
       ws,
       org?.defaultIacBinary,
-      { userId: user?.id, principalOrgId: principalOrgId ?? null, teamId: teamId ?? null },
+      { userId: actor.actorId, principalOrgId: actor.actorOrgId, teamId: actor.actorTeamId },
       body,
       set,
       org?.name ?? null,
@@ -2547,6 +2540,26 @@ function workspaceOrgOption(orgName: string | null | undefined): Readonly<{ orgN
   // exactOptionalPropertyTypes: the resource options omit orgName when it is
   // undefined but reject an explicit undefined, so normalize it here.
   return { orgName: orgName ?? null };
+}
+
+async function workspaceIfMatchFailure(
+  request: ParamCtx["request"],
+  ws: WsItem,
+  org: Awaited<ReturnType<typeof cachedOrgById>>,
+  actor: ActorScope,
+  set: SetObj,
+): Promise<WorkspaceUpdateFailure | null> {
+  const ifMatch = request.headers.get("if-match");
+  if (ifMatch === null || ifMatch.trim() === "*") return null;
+  const currentResource = await workspaceResource(
+    ws,
+    org?.defaultIacBinary,
+    await resourcePermissions(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId),
+    { orgName: org?.name ?? null },
+  );
+  if (ifMatchSatisfied(request, { data: currentResource })) return null;
+  (set as { status: number }).status = 412;
+  return { errors: [{ status: "412", title: "Precondition Failed" }] };
 }
 
 async function updateWorkspaceResponse(
