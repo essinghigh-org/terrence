@@ -862,6 +862,34 @@ function vcsModuleFieldError(
   return null;
 }
 
+type VcsConnectionStatus = Readonly<{
+  available: boolean;
+  repositoryBaseUrl: string | null;
+}>;
+
+async function resolveGithubAppConnection(orgId: string, installationId: string): Promise<VcsConnectionStatus> {
+  const available = await db.query.githubAppInstallations.findFirst({
+    where: and(eq(githubAppInstallations.id, installationId), eq(githubAppInstallations.orgId, orgId)),
+  }) !== undefined;
+  return { available, repositoryBaseUrl: integrationSetting("GITHUB_APP_HTTP_URL") ?? "https://github.com" };
+}
+
+async function resolveOauthConnection(orgId: string, oauthTokenId: unknown): Promise<VcsConnectionStatus> {
+  const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId as string) });
+  const client = token === undefined ? undefined : await db.query.oauthClients.findFirst({
+    where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
+  });
+  const available = client !== undefined && ["github", "github_enterprise"].includes(client.serviceProvider);
+  return { available, repositoryBaseUrl: client?.httpUrl ?? (client?.serviceProvider === "github" ? "https://github.com" : null) };
+}
+
+async function resolveVcsConnection(orgId: string, connection: VcsModuleConnection): Promise<VcsConnectionStatus> {
+  if (typeof connection.githubAppInstallationId === "string") {
+    return resolveGithubAppConnection(orgId, connection.githubAppInstallationId);
+  }
+  return resolveOauthConnection(orgId, connection.oauthTokenId);
+}
+
 function variableOptionResource(option: NoCodeVariableOptionItem): Record<string, unknown> {
   return {
     id: option.id,
@@ -1544,21 +1572,9 @@ export const registryRoutes = new Elysia({ name: "registry" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fieldError }] };
     }
-    let connectionAvailable = false;
-    let repositoryBaseUrl: string | null = null;
-    if (typeof githubAppInstallationId === "string") {
-      connectionAvailable = await db.query.githubAppInstallations.findFirst({
-        where: and(eq(githubAppInstallations.id, githubAppInstallationId), eq(githubAppInstallations.orgId, org.id)),
-      }) !== undefined;
-      repositoryBaseUrl = integrationSetting("GITHUB_APP_HTTP_URL") ?? "https://github.com";
-    } else {
-      const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId as string) });
-      const client = token === undefined ? undefined : await db.query.oauthClients.findFirst({
-        where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, org.id)),
-      });
-      connectionAvailable = client !== undefined && ["github", "github_enterprise"].includes(client.serviceProvider);
-      repositoryBaseUrl = client?.httpUrl ?? (client?.serviceProvider === "github" ? "https://github.com" : null);
-    }
+    const connectionStatus = await resolveVcsConnection(org.id, { githubAppInstallationId, oauthTokenId, connectionCount, branch });
+    const connectionAvailable = connectionStatus.available;
+    const repositoryBaseUrl = connectionStatus.repositoryBaseUrl;
     if (!connectionAvailable) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The selected VCS connection is unavailable or unsupported" }] };
