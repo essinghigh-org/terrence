@@ -1284,6 +1284,87 @@ async function commitRollbackVersion(args: {
   return id;
 }
 
+async function resolveVisibleOrgIds(
+  user: ParamCtx["user"],
+  orgId: string | null,
+  teamId: string | null,
+): Promise<string[] | null> {
+  const teamOrg = teamId === null ? undefined : await db.query.teams.findFirst({ where: eq(teams.id, teamId), columns: { orgId: true } });
+  const principalOrgId = orgId ?? teamOrg?.orgId ?? null;
+  if (principalOrgId !== null) return [principalOrgId];
+  if (user?.isSiteAdmin === true) return null;
+  if (user === null || user === undefined) return [];
+  return (await db.query.organizationMemberships.findMany({ where: and(eq(organizationMemberships.userId, user.id), eq(organizationMemberships.status, "active")), columns: { orgId: true } })).map((membership) => membership.orgId);
+}
+
+async function listCandidateWorkspaces(
+  user: ParamCtx["user"],
+  orgId: string | null,
+  teamId: string | null,
+  workspaceFilter: string | null,
+): Promise<{ id: string; orgId: string }[]> {
+  if (workspaceFilter !== null) {
+    return db.query.workspaces.findMany({ where: eq(workspaces.id, workspaceFilter), columns: { id: true, orgId: true } });
+  }
+  const visibleOrgIds = await resolveVisibleOrgIds(user, orgId, teamId);
+  if (visibleOrgIds === null) {
+    return db.query.workspaces.findMany({ columns: { id: true, orgId: true } });
+  }
+  if (visibleOrgIds.length === 0) return [];
+  return db.query.workspaces.findMany({ where: inArray(workspaces.orgId, visibleOrgIds), columns: { id: true, orgId: true } });
+}
+
+async function authorizeIndexWorkspaces(
+  candidateWorkspaces: { id: string; orgId: string }[],
+  user: ParamCtx["user"],
+  orgId: string | null,
+  teamId: string | null,
+): Promise<Set<string>> {
+  const allowedWorkspaceIds = new Set<string>();
+  for (const org of new Set(candidateWorkspaces.map((workspace): string => workspace.orgId))) {
+    const authorized = await workspaceIdsForPermission(org, user?.id, orgId, teamId, "state-read");
+    if (authorized === null) {
+      for (const workspace of candidateWorkspaces) if (workspace.orgId === org) allowedWorkspaceIds.add(workspace.id);
+    } else {
+      for (const workspaceId of authorized) allowedWorkspaceIds.add(workspaceId);
+    }
+  }
+  return allowedWorkspaceIds;
+}
+
+async function fetchStateVersionIndex(
+  allowedWorkspaceIds: Set<string>,
+  workspaceFilter: string | null,
+  runFilter: string | null,
+  number: number,
+  size: number,
+) {
+  // Issue #703: reservations are upload-in-progress handles, not history.
+  // They stay reachable through the direct show endpoint the uploader
+  // polls, but listings only ever return committed versions. The NULL arm
+  // preserves legacy rows that predate the status column default.
+  const conditions = [inArray(stateVersions.workspaceId, [...allowedWorkspaceIds]), or(isNull(stateVersions.status), ne(stateVersions.status, "pending"))];
+  if (workspaceFilter !== null) conditions.push(eq(stateVersions.workspaceId, workspaceFilter));
+  if (runFilter !== null) conditions.push(eq(stateVersions.runId, runFilter));
+  const where = and(...conditions);
+  const [versions, countRows] = await Promise.all([
+    db.query.stateVersions.findMany({ where,
+      columns: { statePayload: false, jsonState: false, jsonStateOutputs: false },
+      extras: {
+        hasRawState: sql<boolean>`${stateVersions.statePayload} IS NOT NULL AND ${stateVersions.statePayload} <> ''`.mapWith(Boolean).as("has_raw_state"),
+        hasJsonState: sql<boolean>`${stateVersions.jsonState} IS NOT NULL AND ${stateVersions.jsonState} <> ''`.mapWith(Boolean).as("has_json_state"),
+      }, orderBy: [desc(stateVersions.serial), desc(stateVersions.createdAt)], limit: size, offset: (number - 1) * size }),
+    db.select({ total: count() }).from(stateVersions).where(where),
+  ]);
+  return { versions, total: countRows[0]?.total ?? 0 };
+}
+
+async function attachIndexRunData(versions: Awaited<ReturnType<typeof fetchStateVersionIndex>>["versions"]) {
+  const runIds = [...new Set(versions.map((version): string | null => version.runId).filter((id): id is string => id !== null))];
+  const runRows = runIds.length === 0 ? [] : await db.query.runs.findMany({ where: inArray(runs.id, runIds), columns: { id: true, status: true, message: true } });
+  return new Map(runRows.map((run): [string, { status: string; message: string | null }] => [run.id, { status: run.status, message: run.message }]));
+}
+
 export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   .use(authPlugin)
   .get("/api/v2/state-versions", async ({ request, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -1294,62 +1375,18 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    let candidateWorkspaces: { id: string; orgId: string }[];
-    if (workspaceFilter !== null) {
-      candidateWorkspaces = await db.query.workspaces.findMany({ where: eq(workspaces.id, workspaceFilter), columns: { id: true, orgId: true } });
-    } else {
-      const teamOrg = teamId === null ? undefined : await db.query.teams.findFirst({ where: eq(teams.id, teamId), columns: { orgId: true } });
-      const principalOrgId = orgId ?? teamOrg?.orgId ?? null;
-      const visibleOrgIds = principalOrgId !== null
-        ? [principalOrgId]
-        : user?.isSiteAdmin === true
-          ? null
-          : user === null || user === undefined
-            ? []
-            : (await db.query.organizationMemberships.findMany({ where: and(eq(organizationMemberships.userId, user.id), eq(organizationMemberships.status, "active")), columns: { orgId: true } })).map((membership) => membership.orgId);
-      candidateWorkspaces = visibleOrgIds === null
-        ? await db.query.workspaces.findMany({ columns: { id: true, orgId: true } })
-        : visibleOrgIds.length === 0
-          ? []
-          : await db.query.workspaces.findMany({ where: inArray(workspaces.orgId, visibleOrgIds), columns: { id: true, orgId: true } });
-    }
-    const allowedWorkspaceIds = new Set<string>();
-    for (const org of new Set(candidateWorkspaces.map((workspace): string => workspace.orgId))) {
-      const authorized = await workspaceIdsForPermission(org, user?.id, orgId, teamId, "state-read");
-      if (authorized === null) {
-        for (const workspace of candidateWorkspaces) if (workspace.orgId === org) allowedWorkspaceIds.add(workspace.id);
-      } else {
-        for (const workspaceId of authorized) allowedWorkspaceIds.add(workspaceId);
-      }
-    }
+    const candidateWorkspaces = await listCandidateWorkspaces(user, orgId, teamId, workspaceFilter);
+    const allowedWorkspaceIds = await authorizeIndexWorkspaces(candidateWorkspaces, user, orgId, teamId);
     if (allowedWorkspaceIds.size === 0) {
       const { number, size } = pageRequest(request);
       return { data: [], ...pagination(request, number, size, 0) };
     }
-    // Issue #703: reservations are upload-in-progress handles, not history.
-    // They stay reachable through the direct show endpoint the uploader
-    // polls, but listings only ever return committed versions. The NULL arm
-    // preserves legacy rows that predate the status column default.
-    const conditions = [inArray(stateVersions.workspaceId, [...allowedWorkspaceIds]), or(isNull(stateVersions.status), ne(stateVersions.status, "pending"))];
-    if (workspaceFilter !== null) conditions.push(eq(stateVersions.workspaceId, workspaceFilter));
-    if (runFilter !== null) conditions.push(eq(stateVersions.runId, runFilter));
-    const where = and(...conditions);
     const { number, size } = pageRequest(request);
-    const [versions, countRows] = await Promise.all([
-      db.query.stateVersions.findMany({ where,
-        columns: { statePayload: false, jsonState: false, jsonStateOutputs: false },
-        extras: {
-          hasRawState: sql<boolean>`${stateVersions.statePayload} IS NOT NULL AND ${stateVersions.statePayload} <> ''`.mapWith(Boolean).as("has_raw_state"),
-          hasJsonState: sql<boolean>`${stateVersions.jsonState} IS NOT NULL AND ${stateVersions.jsonState} <> ''`.mapWith(Boolean).as("has_json_state"),
-        }, orderBy: [desc(stateVersions.serial), desc(stateVersions.createdAt)], limit: size, offset: (number - 1) * size }),
-      db.select({ total: count() }).from(stateVersions).where(where),
-    ]);
-    const runIds = [...new Set(versions.map((version): string | null => version.runId).filter((id): id is string => id !== null))];
-    const runRows = runIds.length === 0 ? [] : await db.query.runs.findMany({ where: inArray(runs.id, runIds), columns: { id: true, status: true, message: true } });
-    const runMap = new Map(runRows.map((run): [string, { status: string; message: string | null }] => [run.id, { status: run.status, message: run.message }]));
+    const { versions, total } = await fetchStateVersionIndex(allowedWorkspaceIds, workspaceFilter, runFilter, number, size);
+    const runMap = await attachIndexRunData(versions);
     return {
       data: versions.map((version): Record<string, unknown> => stateVersionSummaryResource(version, request, version.runId === null ? null : runMap.get(version.runId) ?? null, authorizedStateAccess(version.workspaceId, "state-read"))),
-      ...pagination(request, number, size, countRows[0]?.total ?? 0),
+      ...pagination(request, number, size, total),
     };
   })
   .get("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
