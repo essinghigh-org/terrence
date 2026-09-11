@@ -335,7 +335,17 @@ function invalidRunInput(set: SetObj, detail: string): { errors: { status: strin
  * and rejects control characters so untrusted input never reaches the plan log,
  * the tfvars file, or the database.
  */
-function validateRunInputs(
+function isValidRunAddress(value: unknown): boolean {
+  return typeof value === "string"
+    && value !== ""
+    && value.length <= 1024
+    && !value.startsWith("-")
+    && !RUN_CONTROL_CHARS.test(value)
+    && !/\s/.test(value)
+    && RUN_ADDRESS_PATTERN.test(value);
+}
+
+function invalidRunInputShape(
   variables: unknown,
   targetAddrs: unknown,
   replaceAddrs: unknown,
@@ -344,53 +354,55 @@ function validateRunInputs(
   if (targetAddrs !== null && targetAddrs !== undefined && !Array.isArray(targetAddrs)) return invalidRunInput(set, "target-addrs must be an array");
   if (replaceAddrs !== null && replaceAddrs !== undefined && !Array.isArray(replaceAddrs)) return invalidRunInput(set, "replace-addrs must be an array");
   if (variables !== null && variables !== undefined && !Array.isArray(variables)) return invalidRunInput(set, "variables must be an array");
+  return null;
+}
 
-  for (const rawTarget of targetAddrs ?? []) {
-    if (
-      typeof rawTarget !== "string"
-      || rawTarget === ""
-      || rawTarget.length > 1024
-      || rawTarget.startsWith("-")
-      || RUN_CONTROL_CHARS.test(rawTarget)
-      || /\s/.test(rawTarget)
-      || !RUN_ADDRESS_PATTERN.test(rawTarget)
-    ) return invalidRunInput(set, "target-addrs contains an invalid address");
+function isValidRunVariableKey(key: unknown): boolean {
+  return typeof key === "string"
+    && key !== ""
+    && key.length <= 256
+    && !key.startsWith("-")
+    && !RUN_CONTROL_CHARS.test(key)
+    && RUN_VARIABLE_KEY_PATTERN.test(key);
+}
+
+function runVariableError(rawVariable: unknown): string | null {
+  if (rawVariable === null || typeof rawVariable !== "object" || Array.isArray(rawVariable)) {
+    return "variables must be an array of objects with a key and value";
   }
-  for (const rawReplacement of replaceAddrs ?? []) {
-    if (
-      typeof rawReplacement !== "string"
-      || rawReplacement === ""
-      || rawReplacement.length > 1024
-      || rawReplacement.startsWith("-")
-      || RUN_CONTROL_CHARS.test(rawReplacement)
-      || /\s/.test(rawReplacement)
-      || !RUN_ADDRESS_PATTERN.test(rawReplacement)
-    ) return invalidRunInput(set, "replace-addrs contains an invalid address");
+  const variable = rawVariable as Readonly<Record<string, unknown>>;
+  if (!isValidRunVariableKey(variable["key"])) return "variables contains an invalid variable key";
+  const value = variable["value"];
+  if (
+    typeof value !== "string"
+    || Buffer.byteLength(value, "utf8") > MAX_RUN_VARIABLE_VALUE_BYTES
+    || RUN_CONTROL_CHARS.test(value)
+  ) return "variables contains an invalid variable value";
+  const category = variable["category"];
+  if (category !== undefined && category !== "terraform" && category !== "env") return "variables contains an invalid category";
+  const sensitive = variable["sensitive"];
+  if (sensitive !== undefined && typeof sensitive !== "boolean") return "variables contains an invalid sensitivity flag";
+  return null;
+}
+
+function validateRunInputs(
+  variables: unknown,
+  targetAddrs: unknown,
+  replaceAddrs: unknown,
+  set: SetObj,
+): { errors: { status: string; title: string; detail: string }[] } | null {
+  const shapeError = invalidRunInputShape(variables, targetAddrs, replaceAddrs, set);
+  if (shapeError !== null) return shapeError;
+
+  for (const rawTarget of Array.isArray(targetAddrs) ? targetAddrs : []) {
+    if (!isValidRunAddress(rawTarget)) return invalidRunInput(set, "target-addrs contains an invalid address");
   }
-  for (const rawVariable of variables ?? []) {
-    if (rawVariable === null || typeof rawVariable !== "object" || Array.isArray(rawVariable)) {
-      return invalidRunInput(set, "variables must be an array of objects with a key and value");
-    }
-    const variable = rawVariable as Readonly<Record<string, unknown>>;
-    const key = variable["key"];
-    const value = variable["value"];
-    if (
-      typeof key !== "string"
-      || key === ""
-      || key.length > 256
-      || key.startsWith("-")
-      || RUN_CONTROL_CHARS.test(key)
-      || !RUN_VARIABLE_KEY_PATTERN.test(key)
-    ) return invalidRunInput(set, "variables contains an invalid variable key");
-    if (
-      typeof value !== "string"
-      || Buffer.byteLength(value, "utf8") > MAX_RUN_VARIABLE_VALUE_BYTES
-      || RUN_CONTROL_CHARS.test(value)
-    ) return invalidRunInput(set, "variables contains an invalid variable value");
-    const category = variable["category"];
-    if (category !== undefined && category !== "terraform" && category !== "env") return invalidRunInput(set, "variables contains an invalid category");
-    const sensitive = variable["sensitive"];
-    if (sensitive !== undefined && typeof sensitive !== "boolean") return invalidRunInput(set, "variables contains an invalid sensitivity flag");
+  for (const rawReplacement of Array.isArray(replaceAddrs) ? replaceAddrs : []) {
+    if (!isValidRunAddress(rawReplacement)) return invalidRunInput(set, "replace-addrs contains an invalid address");
+  }
+  for (const rawVariable of Array.isArray(variables) ? variables : []) {
+    const variableError = runVariableError(rawVariable);
+    if (variableError !== null) return invalidRunInput(set, variableError);
   }
   return null;
 }
