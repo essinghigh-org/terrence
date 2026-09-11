@@ -1306,6 +1306,46 @@ type TestConfigRow = DeepReadonly<typeof moduleTestConfigurations.$inferSelect>;
 
 type OrgRowForWrite = NonNullable<Awaited<ReturnType<typeof cachedOrgByName>>>;
 
+async function resolveModuleVersionForWrite(
+  params: Readonly<Record<string, string>>,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ version: ModVerItem } | { failure: unknown }>> {
+  if (params["registry_name"] !== "private") return { failure: registryNotFound(set) };
+  const org = await cachedOrgByName(params["org_name"] ?? "");
+  const mod = org === undefined ? undefined : await db.query.registryModules.findFirst({
+    where: and(
+      eq(registryModules.orgId, org.id),
+      eq(registryModules.namespace, params["namespace"] ?? ""),
+      eq(registryModules.name, params["module_name"] ?? ""),
+      eq(registryModules.provider, params["provider"] ?? ""),
+    ),
+  });
+  if (org === undefined || mod === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-modules"))) return { failure: registryNotFound(set) };
+  const version = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, params["version"] ?? "")) });
+  if (version === undefined) return { failure: registryNotFound(set) };
+  return { version };
+}
+
+function parseDeprecationFlag(body: unknown): Readonly<{ deprecated: boolean } | { error: string }> {
+  const attrs = jsonApiAttributes(body);
+  const deprecation = attrs["deprecation"] !== null && typeof attrs["deprecation"] === "object" ? attrs["deprecation"] as Record<string, unknown> : {};
+  const status = deprecation["deprecated-status"];
+  const deprecated = typeof attrs["deprecated"] === "boolean"
+    ? attrs["deprecated"]
+    : status === "Deprecated"
+      ? true
+      : status === "Undeprecated"
+        ? false
+        : undefined;
+  if (deprecated === undefined) {
+    return { error: "deprecation.deprecated-status must be Deprecated or Undeprecated" };
+  }
+  return { deprecated };
+}
+
 async function resolveRegistryModuleForWrite(
   params: Readonly<Record<string, string>>,
   userId: string | undefined,
@@ -1947,36 +1987,15 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return version === undefined ? registryNotFound(set) : { data: registryModuleVersionResource(version) };
   })
   .patch("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/:version", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const mod = org === undefined ? undefined : await db.query.registryModules.findFirst({
-      where: and(
-        eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params["namespace"] ?? ""),
-        eq(registryModules.name, params["module_name"] ?? ""),
-        eq(registryModules.provider, params["provider"] ?? ""),
-      ),
-    });
-    if (org === undefined || mod === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    const version = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, params["version"] ?? "")) });
-    if (version === undefined) return registryNotFound(set);
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const deprecation = attrs["deprecation"] !== null && typeof attrs["deprecation"] === "object" ? attrs["deprecation"] as Record<string, unknown> : {};
-    const status = deprecation["deprecated-status"];
-    const deprecated = typeof attrs["deprecated"] === "boolean"
-      ? attrs["deprecated"]
-      : status === "Deprecated"
-        ? true
-        : status === "Undeprecated"
-          ? false
-          : undefined;
-    if (deprecated === undefined) {
+    const resolved = await resolveModuleVersionForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { version } = resolved;
+    const parsed = parseDeprecationFlag(body);
+    if ("error" in parsed) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "deprecation.deprecated-status must be Deprecated or Undeprecated" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: parsed.error }] };
     }
-    await db.update(registryModuleVersions).set({ isDeprecated: deprecated, updatedAt: Date.now() }).where(eq(registryModuleVersions.id, version.id));
+    await db.update(registryModuleVersions).set({ isDeprecated: parsed.deprecated, updatedAt: Date.now() }).where(eq(registryModuleVersions.id, version.id));
     const updated = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, version.id) });
     return updated === undefined ? registryNotFound(set) : { data: registryModuleVersionResource(updated) };
   })
