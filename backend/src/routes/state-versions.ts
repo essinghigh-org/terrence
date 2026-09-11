@@ -804,6 +804,196 @@ async function completeStateVersionCreation(
    return responseBody;
 }
 
+type RecoveryCaptureFull = Awaited<ReturnType<typeof inspectRecoveryCopy>>;
+type RecoverStateContext = Awaited<ReturnType<typeof requireRecoverStateContext>>;
+
+async function requireRecoverStateContext(
+  runId: string,
+  user: ParamCtx["user"],
+  orgId: string | null,
+  teamId: string | null,
+) {
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+  const workspace = run === undefined ? undefined : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "state-write");
+  if (run === undefined || workspace === undefined) {
+    throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  if (orgId !== null && orgId !== undefined) {
+    throw new StateVersionRejected(403, { errors: [{ status: "403", title: "Forbidden" }] });
+  }
+  return { run, workspace };
+}
+
+async function resolveRecoverCandidate(runId: string, workspace: RecoverStateContext["workspace"], request: Request) {
+  const initialCapture = await inspectRecoveryCopy(storageDir, runId, true);
+  if (initialCapture.status === "promoted" && initialCapture.evidence?.promotedStateVersionId !== undefined) {
+    const existing = await db.query.stateVersions.findFirst({
+      where: and(eq(stateVersions.id, initialCapture.evidence.promotedStateVersionId), eq(stateVersions.workspaceId, workspace.id)),
+    });
+    if (existing !== undefined) {
+      return { kind: "promoted" as const, status: 200, response: { data: stateVersionResource(existing, request), meta: { idempotent: true, evidenceRetained: true } } };
+    }
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Recovery evidence says it was promoted, but the committed state version is unavailable" }] });
+  }
+  if (initialCapture.status === "incomplete" || initialCapture.status === "missing") {
+    throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  if (initialCapture.status === "opaque") {
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unsupported state representation", detail: statePayloadError(initialCapture.payload ?? null) }] });
+  }
+  if (initialCapture.status !== "candidate" || initialCapture.payload === undefined) {
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(initialCapture.payload ?? null) }] });
+  }
+  const parsed = parseTerraformStatePayload(initialCapture.payload);
+  if (parsed === null) {
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(initialCapture.payload) }] });
+  }
+  return { kind: "candidate" as const, capture: initialCapture, parsed };
+}
+
+async function requireRecoveryQuiesced(
+  run: RecoverStateContext["run"],
+  workspace: RecoverStateContext["workspace"],
+  user: ParamCtx["user"],
+  orgId: string | null,
+  teamId: string | null,
+): Promise<void> {
+  const review = await recoveryReviewFor(run, workspace, user, orgId, teamId);
+  const owner = review["execution-owner"] as Readonly<{ terminated?: unknown }> | undefined;
+  if (owner?.terminated !== true) {
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "The run or its execution owner is still active; stop it or reconcile ownership before recovering state" }] });
+  }
+  const reviewChecks = Array.isArray(review["checks"]) ? review["checks"] as RecoveryReviewCheck[] : [];
+  const failedReview = reviewChecks.find((check): boolean => check.status === "fail");
+  if (failedReview !== undefined) {
+    const status = failedReview.id === "lineage" || failedReview.id === "candidate-parse" || failedReview.id === "digest" ? 422 : 409;
+    throw new StateVersionRejected(status, { errors: [{ status: String(status), title: "Recovery precondition failed", detail: failedReview.detail }] });
+  }
+  if (!ownsWorkspaceLock(workspace, lockPrincipal(user?.id, orgId, teamId))) {
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before recovering state" }] });
+  }
+}
+
+async function resolvePromotedRecovery(
+  capture: RecoveryCaptureFull,
+  workspace: RecoverStateContext["workspace"],
+): Promise<{ stateVersionId: string; committedSerial: number } | null> {
+  if (capture.status !== "promoted" || capture.evidence?.promotedStateVersionId === undefined) return null;
+  const existing = await db.query.stateVersions.findFirst({
+    where: and(eq(stateVersions.id, capture.evidence.promotedStateVersionId), eq(stateVersions.workspaceId, workspace.id)),
+  });
+  if (existing === undefined) {
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Recovery evidence says it was promoted, but the committed state version is unavailable" }] });
+  }
+  return { stateVersionId: existing.id, committedSerial: existing.serial };
+}
+
+async function promoteRecoveryCapture(
+  runId: string,
+  run: RecoverStateContext["run"],
+  workspace: RecoverStateContext["workspace"],
+  userId: string | undefined,
+): Promise<{ stateVersionId: string | null; committedSerial: number | null; idempotent: boolean }> {
+  if (!(await acquireRecoveryPromotionLock(storageDir, runId))) {
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Another recovery promotion is already in progress" }] });
+  }
+  let stateVersionId: string | null = null;
+  let committedSerial: number | null = null;
+  let idempotent = false;
+  try {
+    const latestCapture = await inspectRecoveryCopy(storageDir, runId, true);
+    const promoted = await resolvePromotedRecovery(latestCapture, workspace);
+    if (promoted !== null) {
+      stateVersionId = promoted.stateVersionId;
+      committedSerial = promoted.committedSerial;
+      idempotent = true;
+    } else if (latestCapture.status !== "candidate" || latestCapture.payload === undefined) {
+      throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "The recovery copy changed while it was being reviewed" }] });
+    } else {
+      const rawState = latestCapture.payload;
+      const latestParsed = parseTerraformStatePayload(rawState);
+      if (latestParsed === null) {
+        throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(rawState) }] });
+      }
+      stateVersionId = await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<string> => {
+        const t = tx as typeof db;
+        if (!(await fenceStateWorkspace(t, workspace))) throw new StateSerialConflictError();
+        await pruneStateReservations(t, workspace);
+        const current = await t.query.stateVersions.findFirst({
+          where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
+          orderBy: [desc(stateVersions.serial)],
+        });
+        const currentLineageError = stateLineageError(current, latestParsed);
+        if (currentLineageError !== null) throw new StateSerialConflictError();
+        const candidateSerial = latestParsed["serial"];
+        const candidateDigest = createHash("sha256").update(rawState).digest("hex");
+        let currentDigest: string | null = null;
+        if (current?.statePayload !== null && current?.statePayload !== undefined && current.statePayload !== "") {
+          try {
+            currentDigest = createHash("sha256").update(decodeStatePayload(current.statePayload)).digest("hex");
+          } catch {
+            throw new StateSerialConflictError();
+          }
+        }
+        if (typeof candidateSerial !== "number" || !Number.isSafeInteger(candidateSerial)
+          || (current !== undefined && (candidateSerial < current.serial
+            || (candidateSerial === current.serial && currentDigest !== candidateDigest)))) {
+          throw new StateSerialConflictError();
+        }
+        const serial = await nextStateSerialTx(t, workspace.id);
+        const promoted = statePayloadWithSerial(rawState, serial);
+        const id = crypto.randomUUID();
+        await commitStateVersionAtSerialTx(t, {
+          id,
+          workspaceId: workspace.id,
+          serial,
+          runId,
+          uploadSha256: createHash("sha256").update(promoted).digest("hex"),
+          statePayload: await encryptStatePayload(promoted),
+          jsonState: await encryptStatePayload(promoted),
+          jsonStateOutputs: await encryptStatePayload(latestParsed["outputs"] === undefined ? null : JSON.stringify(latestParsed["outputs"])),
+          createdBy: run.createdBy,
+          status: "finalized",
+          terraformVersion: typeof latestParsed["terraform_version"] === "string" ? latestParsed["terraform_version"] : null,
+          intermediate: false,
+          createdAt: Date.now(),
+        }, promoted, promoted);
+        await t.insert(auditLogs).values(auditLogValues({
+          action: "recover-state",
+          resourceType: "state-version",
+          resourceId: id,
+          orgId: workspace.orgId,
+          userId: userId ?? null,
+          details: {
+            runId,
+            workspaceId: workspace.id,
+            serial,
+            previousSerial: current?.serial ?? null,
+            before: { recoveryCapture: true },
+            after: { status: "finalized", intermediate: false, serial },
+          },
+          immutable: true,
+        }) as typeof auditLogs.$inferInsert);
+        committedSerial = serial;
+        return id;
+      }));
+    }
+    if (stateVersionId !== null && committedSerial !== null) {
+      // Keep the filesystem lock until the manifest is durable. This
+      // closes the commit-to-marker window where a concurrent retry could
+      // create a second state version from the same capture.
+      await markRecoveryPromoted(storageDir, runId, stateVersionId, committedSerial);
+    }
+  } catch (error) {
+    if (error instanceof StateVersionRejected) throw error;
+    if (!(error instanceof StateSerialConflictError) && !isUniqueConstraintError(error)) throw error;
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }] });
+  } finally {
+    await releaseRecoveryPromotionLock(storageDir, runId);
+  }
+  return { stateVersionId, committedSerial, idempotent };
+}
+
 export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   .use(authPlugin)
   .get("/api/v2/state-versions", async ({ request, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -1621,182 +1811,37 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   })
   .post("/api/v2/runs/:run_id/actions/recover-state", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-    const workspace = run === undefined ? undefined : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "state-write");
-    if (run === undefined || workspace === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (orgId !== null && orgId !== undefined) {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden" }] };
-    }
-    const initialCapture = await inspectRecoveryCopy(storageDir, runId, true);
-    if (initialCapture.status === "promoted" && initialCapture.evidence?.promotedStateVersionId !== undefined) {
-      const existing = await db.query.stateVersions.findFirst({
-        where: and(eq(stateVersions.id, initialCapture.evidence.promotedStateVersionId), eq(stateVersions.workspaceId, workspace.id)),
-      });
-      if (existing !== undefined) {
-        (set as { status: number }).status = 200;
-        return { data: stateVersionResource(existing, request), meta: { idempotent: true, evidenceRetained: true } };
-      }
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Recovery evidence says it was promoted, but the committed state version is unavailable" }] };
-    }
-    if (initialCapture.status === "incomplete" || initialCapture.status === "missing") {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (initialCapture.status === "opaque") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unsupported state representation", detail: statePayloadError(initialCapture.payload ?? null) }] };
-    }
-    if (initialCapture.status !== "candidate" || initialCapture.payload === undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(initialCapture.payload ?? null) }] };
-    }
-    const parsed = parseTerraformStatePayload(initialCapture.payload);
-    if (parsed === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(initialCapture.payload) }] };
-    }
-    const review = await recoveryReviewFor(run, workspace, user, orgId, teamId);
-    const owner = review["execution-owner"] as Readonly<{ terminated?: unknown }> | undefined;
-    if (owner?.terminated !== true) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "The run or its execution owner is still active; stop it or reconcile ownership before recovering state" }] };
-    }
-    const reviewChecks = Array.isArray(review["checks"]) ? review["checks"] as RecoveryReviewCheck[] : [];
-    const failedReview = reviewChecks.find((check): boolean => check.status === "fail");
-    if (failedReview !== undefined) {
-      (set as { status: number }).status = failedReview.id === "lineage" || failedReview.id === "candidate-parse" || failedReview.id === "digest" ? 422 : 409;
-      return { errors: [{ status: String((set as { status?: number }).status), title: "Recovery precondition failed", detail: failedReview.detail }] };
-    }
-    if (!ownsWorkspaceLock(workspace, lockPrincipal(user?.id, orgId, teamId))) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before recovering state" }] };
-    }
-    if (!(await acquireRecoveryPromotionLock(storageDir, runId))) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Another recovery promotion is already in progress" }] };
-    }
-    let stateVersionId: string | null = null;
-    let committedSerial: number | null = null;
-    let idempotent = false;
     try {
-      const latestCapture = await inspectRecoveryCopy(storageDir, runId, true);
-      if (latestCapture.status === "promoted" && latestCapture.evidence?.promotedStateVersionId !== undefined) {
-        const existing = await db.query.stateVersions.findFirst({
-          where: and(eq(stateVersions.id, latestCapture.evidence.promotedStateVersionId), eq(stateVersions.workspaceId, workspace.id)),
-        });
-        if (existing === undefined) {
-          (set as { status: number }).status = 409;
-          return { errors: [{ status: "409", title: "Conflict", detail: "Recovery evidence says it was promoted, but the committed state version is unavailable" }] };
-        }
-        stateVersionId = existing.id;
-        committedSerial = existing.serial;
-        idempotent = true;
-      } else if (latestCapture.status !== "candidate" || latestCapture.payload === undefined) {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "The recovery copy changed while it was being reviewed" }] };
-      } else {
-        const rawState = latestCapture.payload;
-        const latestParsed = parseTerraformStatePayload(rawState);
-        if (latestParsed === null) {
-          (set as { status: number }).status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(rawState) }] };
-        }
-        stateVersionId = await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<string> => {
-          const t = tx as typeof db;
-          if (!(await fenceStateWorkspace(t, workspace))) throw new StateSerialConflictError();
-          await pruneStateReservations(t, workspace);
-        const current = await t.query.stateVersions.findFirst({
-          where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
-          orderBy: [desc(stateVersions.serial)],
-        });
-        const currentLineageError = stateLineageError(current, latestParsed);
-        if (currentLineageError !== null) throw new StateSerialConflictError();
-        const candidateSerial = latestParsed["serial"];
-        const candidateDigest = createHash("sha256").update(rawState).digest("hex");
-        let currentDigest: string | null = null;
-        if (current?.statePayload !== null && current?.statePayload !== undefined && current.statePayload !== "") {
-          try {
-            currentDigest = createHash("sha256").update(decodeStatePayload(current.statePayload)).digest("hex");
-          } catch {
-            throw new StateSerialConflictError();
-          }
-        }
-        if (typeof candidateSerial !== "number" || !Number.isSafeInteger(candidateSerial)
-          || (current !== undefined && (candidateSerial < current.serial
-            || (candidateSerial === current.serial && currentDigest !== candidateDigest)))) {
-          throw new StateSerialConflictError();
-        }
-        const serial = await nextStateSerialTx(t, workspace.id);
-          const promoted = statePayloadWithSerial(rawState, serial);
-          const id = crypto.randomUUID();
-          await commitStateVersionAtSerialTx(t, {
-            id,
-            workspaceId: workspace.id,
-            serial,
-            runId,
-            uploadSha256: createHash("sha256").update(promoted).digest("hex"),
-            statePayload: await encryptStatePayload(promoted),
-            jsonState: await encryptStatePayload(promoted),
-            jsonStateOutputs: await encryptStatePayload(latestParsed["outputs"] === undefined ? null : JSON.stringify(latestParsed["outputs"])),
-            createdBy: run.createdBy,
-            status: "finalized",
-            terraformVersion: typeof latestParsed["terraform_version"] === "string" ? latestParsed["terraform_version"] : null,
-            intermediate: false,
-            createdAt: Date.now(),
-          }, promoted, promoted);
-          await t.insert(auditLogs).values(auditLogValues({
-            action: "recover-state",
-            resourceType: "state-version",
-            resourceId: id,
-            orgId: workspace.orgId,
-            userId: user?.id ?? null,
-            details: {
-              runId,
-              workspaceId: workspace.id,
-              serial,
-              previousSerial: current?.serial ?? null,
-              before: { recoveryCapture: true },
-              after: { status: "finalized", intermediate: false, serial },
-            },
-            immutable: true,
-          }) as typeof auditLogs.$inferInsert);
-          committedSerial = serial;
-          return id;
-        }));
+      const { run, workspace } = await requireRecoverStateContext(runId, user, orgId, teamId);
+      const candidate = await resolveRecoverCandidate(runId, workspace, request);
+      if (candidate.kind === "promoted") {
+        (set as { status: number }).status = candidate.status;
+        return candidate.response;
       }
-      if (stateVersionId !== null && committedSerial !== null) {
-        // Keep the filesystem lock until the manifest is durable. This
-        // closes the commit-to-marker window where a concurrent retry could
-        // create a second state version from the same capture.
-        await markRecoveryPromoted(storageDir, runId, stateVersionId, committedSerial);
+      await requireRecoveryQuiesced(run, workspace, user, orgId, teamId);
+      const promotion = await promoteRecoveryCapture(runId, run, workspace, user?.id);
+      if (promotion.stateVersionId === null || promotion.committedSerial === null) {
+        (set as { status: number }).status = 500;
+        return { errors: [{ status: "500", title: "Internal Server Error" }] };
       }
-    } catch (error) {
-      if (!(error instanceof StateSerialConflictError) && !isUniqueConstraintError(error)) throw error;
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }] };
-    } finally {
-      await releaseRecoveryPromotionLock(storageDir, runId);
+      const stateVersion = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, promotion.stateVersionId) });
+      if (stateVersion === undefined) {
+        (set as { status: number }).status = 500;
+        return { errors: [{ status: "500", title: "Internal Server Error" }] };
+      }
+      scheduleExplorerInventory(workspace.id);
+      (set as { status: number }).status = promotion.idempotent ? 200 : 201;
+      return {
+        data: stateVersionResource(stateVersion, request, false, undefined, authorizedStateAccess(workspace.id, "admin")),
+        ...(promotion.idempotent ? { meta: { idempotent: true, evidenceRetained: true } } : {}),
+      };
+    } catch (error: unknown) {
+      if (error instanceof StateVersionRejected) {
+        (set as { status: number }).status = error.status;
+        return error.body;
+      }
+      throw error;
     }
-    if (stateVersionId === null || committedSerial === null) {
-      (set as { status: number }).status = 500;
-      return { errors: [{ status: "500", title: "Internal Server Error" }] };
-    }
-    const stateVersion = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (stateVersion === undefined) {
-      (set as { status: number }).status = 500;
-      return { errors: [{ status: "500", title: "Internal Server Error" }] };
-    }
-    scheduleExplorerInventory(workspace.id);
-    (set as { status: number }).status = idempotent ? 200 : 201;
-    return {
-      data: stateVersionResource(stateVersion, request, false, undefined, authorizedStateAccess(workspace.id, "admin")),
-      ...(idempotent ? { meta: { idempotent: true, evidenceRetained: true } } : {}),
-    };
   })
 
   .post("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
