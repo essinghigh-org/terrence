@@ -877,6 +877,52 @@ async function resolveRunConfigurationVersion(
   return { selection: { configurationVersion, cvId: resolvedCvId } };
 }
 
+type RunToolchain = Readonly<{
+  effectiveTool: string;
+  effectiveVersion: string | null;
+}>;
+
+async function resolveRunToolchain(
+  workspace: typeof workspaces.$inferSelect,
+  terraformVersion: string | undefined,
+  begin: IdempotencyBegin,
+  set: SetObj,
+): Promise<Readonly<{ toolchain: RunToolchain } | { failure: Record<string, unknown> }>> {
+  // Issue #599: backfill an unset binary from the org default (matching
+  // workspace creation), not a hardcoded terraform — otherwise a first run
+  // permanently flips a tofu-default org's workspace to terraform.
+  // Issue #602: the worker falls back to the org default version when the run
+  // and workspace both leave it unset, so load it here too for the preflight.
+  let effectiveTool = workspace.iacBinary;
+  let orgDefaultVersion: string | null = null;
+  if (effectiveTool === null || (terraformVersion === undefined && workspace.terraformVersion === null)) {
+    const org = await db.query.organizations.findFirst({
+      where: eq(organizations.id, workspace.orgId),
+      columns: { defaultIacBinary: true, defaultTerraformVersion: true },
+    });
+    orgDefaultVersion = org?.defaultTerraformVersion ?? null;
+    if (effectiveTool === null) {
+      effectiveTool = org?.defaultIacBinary ?? "terraform";
+      await db.update(workspaces).set({ iacBinary: effectiveTool }).where(eq(workspaces.id, workspace.id));
+    }
+  }
+  // Issue #602: fail fast on an exact version that can never resolve (typo'd
+  // or unpublished) instead of failing mid-run. The preflight is network-free
+  // and only rejects on affirmative knowledge; cold caches and
+  // constraints/"latest" defer to run-time resolution so on-demand download
+  // keeps working.
+  const effectiveVersion = terraformVersion ?? workspace.terraformVersion ?? orgDefaultVersion;
+  if (typeof effectiveVersion === "string") {
+    const preflight = await preflightBinaryAvailability(effectiveTool, effectiveVersion);
+    if (!preflight.ok) {
+      await abandonReservedIdempotency(begin);
+      (set as { status: number }).status = 422;
+      return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: preflight.detail }] } };
+    }
+  }
+  return { toolchain: { effectiveTool, effectiveVersion } };
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -964,38 +1010,9 @@ export async function createRun(
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No configuration version is available for this workspace. Upload a configuration version or connect a VCS repository first." }] };
   }
-  // Issue #599: backfill an unset binary from the org default (matching
-  // workspace creation), not a hardcoded terraform — otherwise a first run
-  // permanently flips a tofu-default org's workspace to terraform.
-  // Issue #602: the worker falls back to the org default version when the run
-  // and workspace both leave it unset, so load it here too for the preflight.
-  let effectiveTool = workspace.iacBinary;
-  let orgDefaultVersion: string | null = null;
-  if (effectiveTool === null || (terraformVersion === undefined && workspace.terraformVersion === null)) {
-    const org = await db.query.organizations.findFirst({
-      where: eq(organizations.id, workspace.orgId),
-      columns: { defaultIacBinary: true, defaultTerraformVersion: true },
-    });
-    orgDefaultVersion = org?.defaultTerraformVersion ?? null;
-    if (effectiveTool === null) {
-      effectiveTool = org?.defaultIacBinary ?? "terraform";
-      await db.update(workspaces).set({ iacBinary: effectiveTool }).where(eq(workspaces.id, workspace.id));
-    }
-  }
-  // Issue #602: fail fast on an exact version that can never resolve (typo'd
-  // or unpublished) instead of failing mid-run. The preflight is network-free
-  // and only rejects on affirmative knowledge; cold caches and
-  // constraints/"latest" defer to run-time resolution so on-demand download
-  // keeps working.
-  const effectiveVersion = terraformVersion ?? workspace.terraformVersion ?? orgDefaultVersion;
-  if (typeof effectiveVersion === "string") {
-    const preflight = await preflightBinaryAvailability(effectiveTool, effectiveVersion);
-    if (!preflight.ok) {
-      await abandonReservedIdempotency(idempotencyBegin);
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: preflight.detail }] };
-    }
-  }
+  const toolchain = await resolveRunToolchain(workspace, terraformVersion, idempotencyBegin, set);
+  if ("failure" in toolchain) return toolchain.failure;
+  const { effectiveTool, effectiveVersion } = toolchain.toolchain;
   const id = newRunId();
   const createdAt = Date.now();
   const logToken = crypto.randomUUID();
@@ -1024,7 +1041,7 @@ export async function createRun(
       ingressAttributes: configurationVersion?.ingressAttributes ?? null,
       createdAt: configurationVersion?.createdAt ?? null,
     })),
-    engine: effectiveTool ?? "terraform",
+    engine: effectiveTool,
     engineVersion: effectiveVersion ?? null,
     workspaceId: workspace.id,
     workingDirectory: workspace.workingDirectory,
