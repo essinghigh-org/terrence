@@ -1,8 +1,10 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import type { SyntheticEvent } from "react";
 import { RunDetail } from "../src/views/RunDetail";
 import { RunList } from "../src/views/RunList";
+import { useRunActions } from "../src/lib/use-run-actions";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
 import { anyPhaseLog, phaseLogResponse } from "./support/run-log-fixture";
@@ -296,8 +298,9 @@ test("destroy runs from the dialog confirm and pin auto-apply false (issue #586)
 }, 15000);
 
 
-test("starting apply opens its section while leaving the raw log collapsed", async () => {
+test("an explicit apply collapse survives the apply starting", async () => {
   let status = "planned";
+  let applyReads = 0;
   let emit: ((event: SseEvent) => void) | undefined;
   const streamFactory: EventStreamFactory = (listener) => {
     emit = listener;
@@ -305,7 +308,10 @@ test("starting apply opens its section while leaving the raw log collapsed", asy
   };
   globalThis.fetch = mock(baseMock("run-expand", runFixture({ id: "run-expand" }), (url) => {
     if (url === "/api/v2/runs/run-expand") return json(runFixture({ id: "run-expand", status }));
-    if (url === "/api/v2/applies/apply-run-expand") return json({ data: { attributes: { status: status === "applying" ? "running" : "pending" } } });
+    if (url === "/api/v2/applies/apply-run-expand") {
+      applyReads += 1;
+      return json({ data: { attributes: { status: status === "applying" ? "running" : "pending" } } });
+    }
     return null;
   }, [])) as unknown as typeof fetch;
   const view = render(
@@ -327,12 +333,68 @@ test("starting apply opens its section while leaving the raw log collapsed", asy
   expect(raw.open).toBe(false);
   fireEvent.click(summary);
   await waitFor((): void => { expect(section.open).toBe(false); });
+  const readsBeforeApply = applyReads;
   act((): void => {
     status = "applying";
     emit?.({ name: "run.status", data: { "run-id": "run-expand", status } });
   });
-  await waitFor((): void => { expect(section.open).toBe(true); });
+  // The refresh lands (the apply section re-reads and its heading reports
+  // the new Running state) but the explicit collapse is preserved instead
+  // of being forced back open.
+  await waitFor((): void => { expect(applyReads).toBeGreaterThan(readsBeforeApply); });
+  await waitFor((): void => { expect(within(section).getByText("Running")).toBeTruthy(); });
+  expect(section.open).toBe(false);
   expect(raw.open).toBe(false);
-  fireEvent.click(summary);
-  await waitFor((): void => { expect(section.open).toBe(false); });
+});
+
+test("double-submitting a comment sends one request", async () => {
+  const posts: string[] = [];
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = requestUrl(input);
+    if (init?.method === "POST") posts.push(`${init.method} ${url}`);
+    if (url === "/api/v2/runs/run-comment-guard/comments") return json({ data: { id: "c1", type: "comments" } });
+    return json({ data: [] });
+  }) as unknown as typeof fetch;
+
+  const hook = renderHook(() => useRunActions({
+    runId: "run-comment-guard",
+    markActionSent: (): void => undefined,
+    markActionSettled: (): void => undefined,
+    refreshAll: (): void => undefined,
+    refresh: (): void => undefined,
+  }));
+  act((): void => { hook.result.current.setCommentBody("Double-click guard"); });
+  const submit = hook.result.current.handleCommentSubmit;
+  const event = { preventDefault: (): void => undefined } as unknown as SyntheticEvent<HTMLFormElement>;
+  // Two submissions from the same render closure: the synchronous in-flight
+  // guard must drop the second one.
+  await act(async (): Promise<void> => {
+    await Promise.all([submit(event), submit(event)]);
+  });
+  expect(posts.filter((entry) => entry === "POST /api/v2/runs/run-comment-guard/comments")).toHaveLength(1);
+});
+
+test("double-confirming apply sends one action request", async () => {
+  const posts: string[] = [];
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = requestUrl(input);
+    if (init?.method === "POST") posts.push(`${init.method} ${url}`);
+    if (url === "/api/v2/runs/run-apply-guard/actions/apply") return new Response(null, { status: 202 });
+    return json({ data: [] });
+  }) as unknown as typeof fetch;
+
+  const hook = renderHook(() => useRunActions({
+    runId: "run-apply-guard",
+    markActionSent: (): void => undefined,
+    markActionSettled: (): void => undefined,
+    refreshAll: (): void => undefined,
+    refresh: (): void => undefined,
+  }));
+  const send = hook.result.current.performRunAction;
+  await act(async (): Promise<void> => {
+    const [first, second] = await Promise.all([send("apply", "Applied"), send("apply", "Applied")]);
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+  });
+  expect(posts.filter((entry) => entry === "POST /api/v2/runs/run-apply-guard/actions/apply")).toHaveLength(1);
 });

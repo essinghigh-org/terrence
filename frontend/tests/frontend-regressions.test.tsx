@@ -11,7 +11,7 @@ import {
   ProviderIcon,
 } from "../src/components/ProviderIcon";
 import { RunList } from "../src/views/RunList";
-import { waitForAbortableDelay } from "../src/views/RunDetail";
+import { waitForAbortableDelay } from "../src/lib/run-detail-format";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { EventProvider } from "../src/lib/event-provider";
 import type { EventStreamHandle, SseEvent } from "../src/lib/events";

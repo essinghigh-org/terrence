@@ -19,10 +19,18 @@ describe("log truncation #367, #590", (): void => {
   });
 
   test("RunDetail routes all four log views through the tail-keeping helper", async (): Promise<void> => {
-    const { readFile } = await import("node:fs/promises");
+    const { readFile, readdir } = await import("node:fs/promises");
     const { join } = await import("node:path");
-    const source = await readFile(join(import.meta.dir, "../src/views/RunDetail.tsx"), "utf8");
-    const uses = (source.match(/truncateLogForDisplay\(/g) || []).length;
+    const sectionDir = join(import.meta.dir, "../src/components/run-detail");
+    const sectionFiles = (await readdir(sectionDir, { recursive: true }))
+      .filter((file): boolean => file.endsWith(".tsx"))
+      .map((file): string => join(sectionDir, file));
+    const sources = await Promise.all(
+      [join(import.meta.dir, "../src/views/RunDetail.tsx"), ...sectionFiles]
+        .map((file): Promise<string> => readFile(file, "utf8")),
+    );
+    const source = sources.join("\n");
+    const uses = (source.match(/truncateLogForDisplay\(/g) ?? []).length;
     expect(uses).toBeGreaterThanOrEqual(4);
     expect(source).not.toContain("slice(0, MAX_LOG_DISPLAY_CHARS)");
   });
