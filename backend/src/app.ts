@@ -810,64 +810,108 @@ function applyDocumentEtag(
   return null;
 }
 
+type AuthBeforeHandleContext = {
+  readonly request: Request;
+  readonly token: { readonly id?: string; readonly scopes?: string | null } | null;
+  readonly user: { readonly id: string; readonly isSiteAdmin: boolean | null } | null;
+  readonly orgId?: string | null;
+  readonly teamId?: string | null;
+  readonly run?: { readonly runId: string } | null;
+  readonly systemToken?: { readonly id: string } | null;
+  readonly set: unknown;
+};
+
+function publishTokenScopes(
+  token: AuthBeforeHandleContext["token"],
+  set: AuthBeforeHandleContext["set"],
+): Record<string, unknown> | undefined {
+  // Publish fine-grained token scopes into request-scoped storage BEFORE
+  // handlers run, so permission helpers enforce them automatically. Legacy
+  // tokens (scopes null/absent) resolve to null = full permissions.
+  // A malformed scopes field is an auth failure: fail closed (401) rather
+  // than silently escalating a scoped token to full permissions.
+  if (token === null || typeof token.scopes !== "string" || token.scopes === "") {
+    setRequestTokenScopes(null);
+    return undefined;
+  }
+  let parsed: TokenScopes | null;
+  try {
+    parsed = parseTokenScopes(token.scopes);
+  } catch {
+    (set as Record<string, unknown>)["status"] = 401;
+    return { errors: [{ status: "401", title: "Unauthorized", detail: "Token scopes are malformed" }] };
+  }
+  setRequestTokenScopes(parsed);
+  return undefined;
+}
+
+function hasAuthPrincipal(
+  token: AuthBeforeHandleContext["token"],
+  user: AuthBeforeHandleContext["user"],
+  orgId: AuthBeforeHandleContext["orgId"],
+  teamId: AuthBeforeHandleContext["teamId"],
+  run: AuthBeforeHandleContext["run"],
+  systemToken: AuthBeforeHandleContext["systemToken"],
+): boolean {
+  if (token !== null && token !== undefined) return true;
+  if (user !== null && user !== undefined) return true;
+  if (orgId !== null && orgId !== undefined) return true;
+  if (teamId !== null && teamId !== undefined) return true;
+  if (run !== null && run !== undefined) return true;
+  if (systemToken !== null && systemToken !== undefined) return true;
+  return false;
+}
+
+function publishAuditPrincipal(
+  token: AuthBeforeHandleContext["token"],
+  user: AuthBeforeHandleContext["user"],
+  orgId: AuthBeforeHandleContext["orgId"],
+  teamId: AuthBeforeHandleContext["teamId"],
+  run: AuthBeforeHandleContext["run"],
+  systemToken: AuthBeforeHandleContext["systemToken"],
+): void {
+  // The auth derive already read the full user row; hand its site-admin flag
+  // to permission helpers so they skip a duplicate users read.
+  setRequestSiteAdmin(user?.id ?? null, user?.isSiteAdmin === true);
+  setAuditPrincipal({
+    userId: user?.id ?? null,
+    tokenId: token?.id ?? null,
+    orgId: orgId ?? null,
+    teamId: teamId ?? null,
+    runId: run?.runId ?? null,
+    systemTokenId: systemToken?.id ?? null,
+    scopes: currentTokenScopes(),
+    authenticated: hasAuthPrincipal(token, user, orgId, teamId, run, systemToken),
+  });
+}
+
+function rejectScopedSiteAdminAccess(
+  pathname: string,
+  set: AuthBeforeHandleContext["set"],
+): Record<string, unknown> | undefined {
+  const siteAdminPath = pathname === "/api/v2/admin"
+    || pathname.startsWith("/api/v2/admin/")
+    || pathname === "/api/v1/diagnostics"
+    || pathname === "/api/v1/usage/bundle"
+    || pathname === "/api/v1/support/bundle-requests"
+    || pathname.startsWith("/api/v1/support/bundle-requests/")
+    || pathname === "/api/v1/support-bundle-requests"
+    || pathname.startsWith("/api/v1/support-bundle-requests/");
+  if (currentTokenScopes() !== null && siteAdminPath) {
+    (set as Record<string, unknown>)["status"] = 403;
+    return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot access site-admin routes" }] };
+  }
+  return undefined;
+}
+
 export const app = new Elysia()
   .use(authPlugin)
-  .onBeforeHandle(({ request, token, user, orgId, teamId, run, systemToken, set }: {
-    readonly request: Request;
-    readonly token: { readonly id?: string; readonly scopes?: string | null } | null;
-    readonly user: { readonly id: string; readonly isSiteAdmin: boolean | null } | null;
-    readonly orgId?: string | null;
-    readonly teamId?: string | null;
-    readonly run?: { readonly runId: string } | null;
-    readonly systemToken?: { readonly id: string } | null;
-    readonly set: unknown;
-  }): Record<string, unknown> | undefined => {
-    // Publish fine-grained token scopes into request-scoped storage BEFORE
-    // handlers run, so permission helpers enforce them automatically. Legacy
-    // tokens (scopes null/absent) resolve to null = full permissions.
-    // A malformed scopes field is an auth failure: fail closed (401) rather
-    // than silently escalating a scoped token to full permissions.
-    if (token !== null && typeof token.scopes === "string" && token.scopes !== "") {
-      let parsed: TokenScopes | null;
-      try {
-        parsed = parseTokenScopes(token.scopes);
-      } catch {
-        (set as Record<string, unknown>)["status"] = 401;
-        return { errors: [{ status: "401", title: "Unauthorized", detail: "Token scopes are malformed" }] };
-      }
-      setRequestTokenScopes(parsed);
-    } else {
-      setRequestTokenScopes(null);
-    }
-    // The auth derive already read the full user row; hand its site-admin flag
-    // to permission helpers so they skip a duplicate users read.
-    setRequestSiteAdmin(user?.id ?? null, user?.isSiteAdmin === true);
-    setAuditPrincipal({
-      userId: user?.id ?? null,
-      tokenId: token?.id ?? null,
-      orgId: orgId ?? null,
-      teamId: teamId ?? null,
-      runId: run?.runId ?? null,
-      systemTokenId: systemToken?.id ?? null,
-      scopes: currentTokenScopes(),
-      authenticated: token !== null && token !== undefined || user !== null && user !== undefined
-        || orgId !== null && orgId !== undefined || teamId !== null && teamId !== undefined
-        || run !== null && run !== undefined || systemToken !== null && systemToken !== undefined,
-    });
+  .onBeforeHandle(({ request, token, user, orgId, teamId, run, systemToken, set }: AuthBeforeHandleContext): Record<string, unknown> | undefined => {
+    const scopesError = publishTokenScopes(token, set);
+    if (scopesError !== undefined) return scopesError;
+    publishAuditPrincipal(token, user, orgId, teamId, run, systemToken);
     const pathname = new URL(request.url).pathname;
-    const siteAdminPath = pathname === "/api/v2/admin"
-      || pathname.startsWith("/api/v2/admin/")
-      || pathname === "/api/v1/diagnostics"
-      || pathname === "/api/v1/usage/bundle"
-      || pathname === "/api/v1/support/bundle-requests"
-      || pathname.startsWith("/api/v1/support/bundle-requests/")
-      || pathname === "/api/v1/support-bundle-requests"
-      || pathname.startsWith("/api/v1/support-bundle-requests/");
-    if (currentTokenScopes() !== null && siteAdminPath) {
-      (set as Record<string, unknown>)["status"] = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot access site-admin routes" }] };
-    }
-    return undefined;
+    return rejectScopedSiteAdminAccess(pathname, set);
   })
   .onBeforeHandle(({ request, user, set }: PasswordGuardContext): Record<string, unknown> | undefined => {
     if (user?.mustChangePassword !== true) return;
