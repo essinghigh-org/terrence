@@ -441,6 +441,202 @@ async function validatedRemoteStateConsumerIds(
   const byId = new Map(candidates.map((candidate): [string, Readonly<{ id: string; orgId: string }>] => [candidate.id, candidate]));
   return uniqueIds.every((id): boolean => id !== workspaceId && byId.get(id)?.orgId === orgId) ? uniqueIds : null;
 }
+type LatestRunRow = Readonly<{
+  id: string;
+  workspaceId: string;
+  status: string;
+  message: string | null;
+  // SQLite returns raw 0/1 integers; postgres.js returns bigint columns
+  // as strings. Normalize with Number() at the consumption site.
+  isDestroy: number | string;
+  createdAt: number | string;
+  autoApply: number | string;
+}>;
+
+function csvParam(searchParams: URLSearchParams, name: string): string[] {
+  return [...new Set(searchParams.get(name)?.split(",").filter(Boolean) ?? [])];
+}
+
+function resolveListSortAndLocked(searchParams: URLSearchParams): { sort: string; locked: string | null } | { error: string } {
+  const sort = searchParams.get("sort") ?? "name";
+  const locked = searchParams.get("filter[locked]");
+  if (!["name", "-name"].includes(sort) || (locked !== null && locked !== "true" && locked !== "false")) {
+    return { error: "sort must be name or -name; filter[locked] must be true or false." };
+  }
+  return { sort, locked };
+}
+
+function allowedWorkspaceCondition(allowedWorkspaceIds: ReadonlySet<string> | null): unknown {
+  if (allowedWorkspaceIds === null) return null;
+  return allowedWorkspaceIds.size > 0
+    ? inArray(workspaces.id, [...allowedWorkspaceIds])
+    : eq(workspaces.id, "__no_authorized_workspace__");
+}
+
+function pageTotal(countRows: readonly { total: number }[]): number {
+  return countRows[0]?.total ?? 0;
+}
+
+function collectListTextFilters(searchParams: URLSearchParams): unknown[] {
+  const found: unknown[] = [];
+  const query = searchParams.get("search[query]")?.trim();
+  if (query !== undefined && query !== "") {
+    // An escaped literal substring matches the same names/tags as the list UI.
+    const pattern = `%${query.replace(/[!%_]/g, "!$&")}%`;
+    const match = isPostgres ? sql`ILIKE` : sql`LIKE`;
+    found.push(sql`(${workspaces.name} ${match} ${pattern} ESCAPE '!'
+      OR EXISTS (SELECT 1 FROM workspace_tags WHERE workspace_id = ${workspaces.id}
+        AND key ${match} ${pattern} ESCAPE '!'))`);
+  }
+  const search = searchParams.get("search[name]")?.trim() ?? searchParams.get("q")?.trim();
+  if (search !== undefined && search !== "") found.push(caseInsensitiveLike(workspaces.name, `%${search}%`));
+  return found;
+}
+
+async function collectListTagFilters(searchParams: URLSearchParams): Promise<unknown[]> {
+  const found: unknown[] = [];
+  const tags = csvParam(searchParams, "search[tags]");
+  if (tags.length > 0) {
+    const tagRows = await db.query.workspaceTags.findMany({
+      where: inArray(workspaceTags.key, [...new Set(tags)]),
+      columns: { key: true, workspaceId: true },
+    });
+    const idsByTag = new Map<string, string[]>();
+    for (const row of tagRows) {
+      const ids = idsByTag.get(row.key);
+      if (ids === undefined) idsByTag.set(row.key, [row.workspaceId]);
+      else ids.push(row.workspaceId);
+    }
+    for (const tag of tags) {
+      const workspaceIds = idsByTag.get(tag) ?? [];
+      found.push(workspaceIds.length > 0
+        ? inArray(workspaces.id, [...new Set(workspaceIds)])
+        : eq(workspaces.id, "__no_matching_workspace__"));
+    }
+  }
+  const excludeTags = csvParam(searchParams, "search[exclude-tags]");
+  if (excludeTags.length > 0) {
+    const excludedIds = (await db.query.workspaceTags.findMany({
+      where: inArray(workspaceTags.key, excludeTags),
+      columns: { workspaceId: true },
+    })).map((t: Readonly<{ workspaceId: string }>): string => t.workspaceId);
+    found.push(notInArray(workspaces.id, [...new Set(excludedIds)]));
+  }
+  const projectIds = csvParam(searchParams, "filter[project][id]");
+  if (projectIds.length > 0) found.push(inArray(workspaces.projectId, projectIds));
+  return found;
+}
+
+async function collectListTaggedBindingFilters(searchParams: URLSearchParams): Promise<unknown[]> {
+  const tagged = new Map<number, { key?: string; value?: string }>();
+  for (const [name, value] of searchParams) {
+    const match = /^filter\[tagged\]\[(\d+)\]\[(key|value)\]$/.exec(name);
+    if (match === null) continue;
+    const index = Number(match[1]);
+    const field = match[2];
+    if (!Number.isSafeInteger(index) || (field !== "key" && field !== "value")) continue;
+    tagged.set(index, { ...tagged.get(index), [field]: value });
+  }
+  const tagBindings = [...tagged.values()].filter(
+    (binding): binding is { key: string; value: string } =>
+      typeof binding.key === "string" && binding.key !== ""
+      && typeof binding.value === "string",
+  );
+  const bindingKeys = [...new Set(tagBindings.map((binding: Readonly<{ key: string }>): string => binding.key))];
+  const singleBinding = tagBindings.length === 1 ? tagBindings[0] : undefined;
+  const taggedWorkspaceTagRows = bindingKeys.length === 0
+    ? []
+    : (await db.query.workspaceTags.findMany({
+      where: singleBinding === undefined
+        ? inArray(workspaceTags.key, bindingKeys)
+        : and(eq(workspaceTags.key, singleBinding.key), eq(workspaceTags.value, singleBinding.value)),
+      columns: { workspaceId: true, key: true, value: true },
+    }));
+  // Index rows by "key\0value" so we need exactly one query regardless of
+  // how many tag bindings the caller supplied.
+  const workspaceIdsByTag = new Map<string, string[]>();
+  for (const row of taggedWorkspaceTagRows) {
+    const tag = `${row.key}\u0000${row.value ?? ""}`;
+    const list = workspaceIdsByTag.get(tag) ?? [];
+    list.push(row.workspaceId);
+    workspaceIdsByTag.set(tag, list);
+  }
+  const matchingTagIds = tagBindings.map((binding: Readonly<{ key: string; value: string }>): string[] =>
+    workspaceIdsByTag.get(`${binding.key}\u0000${binding.value}`) ?? [],
+  );
+  const found: unknown[] = [];
+  for (const workspaceIds of matchingTagIds) {
+    found.push(workspaceIds.length > 0
+      ? inArray(workspaces.id, [...new Set(workspaceIds)])
+      : eq(workspaces.id, "__no_matching_workspace__"));
+  }
+  return found;
+}
+
+type WorkspaceListPageData = Readonly<{
+  tagRows: DeepReadonly<typeof workspaceTags.$inferSelect>[];
+  latestRunRows: LatestRunRow[];
+  currentRunsByWorkspace: ReadonlyMap<string, LatestRunRow>;
+  tagsByWorkspace: ReadonlyMap<string, DeepReadonly<typeof workspaceTags.$inferSelect>[]>;
+}>;
+
+async function loadWorkspaceListPageData(
+  wsList: WsItem[],
+  includeCurrentRun: boolean,
+): Promise<WorkspaceListPageData> {
+  // Batch the per-row N+1 (workspace_tags + org name): one query for the
+  // whole page instead of two per workspace.
+  const tagRows = wsList.length === 0
+    ? []
+    : await db.query.workspaceTags.findMany({
+      where: inArray(workspaceTags.workspaceId, wsList.map((w: WsItem): string => w.id)),
+      orderBy: [asc(workspaceTags.key)],
+    });
+  // Server-side latest-run aggregation (10.1/10.4): when the caller asks
+  // for include=current_run, resolve the newest run per workspace of the
+  // current page IN SQL (ROW_NUMBER window over runs(workspace_id,
+  // created_at), rowid ASC tie-break) instead of transferring org-wide run
+  // history. The same query shape as the current-run status filter above.
+  const latestRunRows: LatestRunRow[] = includeCurrentRun && wsList.length > 0
+    ? await rawQueryAll<LatestRunRow>(sql`
+        SELECT id, workspace_id AS "workspaceId", status, message,
+               is_destroy AS "isDestroy", created_at AS "createdAt",
+               auto_apply AS "autoApply"
+        FROM (
+          SELECT id, workspace_id, status, message, is_destroy, created_at,
+                 auto_apply,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY workspace_id ORDER BY created_at DESC, id ASC
+                 ) AS rn
+          FROM runs
+          WHERE ${inArray(runs.workspaceId, wsList.map((w: WsItem): string => w.id))}
+        )
+        WHERE rn = 1
+      `)
+    : [];
+  const currentRunsByWorkspace = new Map(latestRunRows.map((row): [string, LatestRunRow] => [row.workspaceId, row]));
+  const tagsByWorkspace = new Map<string, DeepReadonly<typeof workspaceTags.$inferSelect>[]>();
+  for (const tag of tagRows) {
+    const list = tagsByWorkspace.get(tag.workspaceId) ?? [];
+    list.push(tag);
+    tagsByWorkspace.set(tag.workspaceId, list);
+  }
+  return { tagRows, latestRunRows, currentRunsByWorkspace, tagsByWorkspace };
+}
+
+function summarizeWorkspaceList(
+  summaryRows: readonly { locked: boolean | number; status: string | null; total: number | string }[],
+): { total: number; locked: number; "run-statuses": Record<string, number> } {
+  const summary = { total: 0, locked: 0, "run-statuses": {} as Record<string, number> };
+  for (const row of summaryRows) {
+    const total = Number(row.total);
+    summary.total += total;
+    if (row.locked === true || row.locked === 1) summary.locked += total;
+    if (row.status !== null) summary["run-statuses"][row.status] = (summary["run-statuses"][row.status] ?? 0) + total;
+  }
+  return summary;
+}
+
 export const workspaceRoutes = new Elysia({ name: "workspaces" })
   .use(authPlugin)
   // --- Organization Workspaces ---
@@ -448,117 +644,32 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkOrgPermission(user?.id, org.id, "member", principalOrgId ?? null, teamId ?? null))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const actor = actorScope(user, principalOrgId, teamId);
+    if (!(await checkOrgPermission(actor.actorId, org.id, "member", actor.actorOrgId, actor.actorTeamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const { number, size } = pageRequest(request);
     const searchParams = new URL(request.url).searchParams;
-    const csv = (name: string): string[] => [...new Set(searchParams.get(name)?.split(",").filter(Boolean) ?? [])];
     const conditions: unknown[] = [eq(workspaces.orgId, org.id)];
-    const permSets = await workspacePermissionSets(org.id, user?.id, principalOrgId ?? null, teamId ?? null);
+    const permSets = await workspacePermissionSets(org.id, actor.actorId, actor.actorOrgId, actor.actorTeamId);
     const allowedWorkspaceIds = permSets.read;
-    if (allowedWorkspaceIds !== null) {
-      conditions.push(allowedWorkspaceIds.size > 0
-        ? inArray(workspaces.id, [...allowedWorkspaceIds])
-        : eq(workspaces.id, "__no_authorized_workspace__"));
-    }
+    const allowedCondition = allowedWorkspaceCondition(allowedWorkspaceIds);
+    if (allowedCondition !== null) conditions.push(allowedCondition);
+    const sortAndLocked = resolveListSortAndLocked(searchParams);
+    if ("error" in sortAndLocked) return failWorkspaceUpdate(set, 400, sortAndLocked.error);
     const authorizedWhere = and(...(conditions as Parameters<typeof and>));
     const latestRunStatus = sql<string | null>`(
       SELECT status FROM runs WHERE workspace_id = ${workspaces.id}
       ORDER BY created_at DESC, id ASC LIMIT 1
     )`;
-    const sort = searchParams.get("sort") ?? "name";
-    const locked = searchParams.get("filter[locked]");
-    if (!["name", "-name"].includes(sort) || (locked !== null && locked !== "true" && locked !== "false")) {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "sort must be name or -name; filter[locked] must be true or false." }] };
-    }
-    if (locked !== null) conditions.push(eq(workspaces.locked, locked === "true"));
-    const query = searchParams.get("search[query]")?.trim();
-    if (query !== undefined && query !== "") {
-      // An escaped literal substring matches the same names/tags as the list UI.
-      const pattern = `%${query.replace(/[!%_]/g, "!$&")}%`;
-      const match = isPostgres ? sql`ILIKE` : sql`LIKE`;
-      conditions.push(sql`(${workspaces.name} ${match} ${pattern} ESCAPE '!'
-        OR EXISTS (SELECT 1 FROM workspace_tags WHERE workspace_id = ${workspaces.id}
-          AND key ${match} ${pattern} ESCAPE '!'))`);
-    }
-    const search = searchParams.get("search[name]")?.trim() ?? searchParams.get("q")?.trim();
-    if (search !== undefined && search !== "") conditions.push(caseInsensitiveLike(workspaces.name, `%${search}%`));
-    const tags = csv("search[tags]");
-    if (tags.length > 0) {
-      const tagRows = await db.query.workspaceTags.findMany({
-        where: inArray(workspaceTags.key, [...new Set(tags)]),
-        columns: { key: true, workspaceId: true },
-      });
-      const idsByTag = new Map<string, string[]>();
-      for (const row of tagRows) {
-        const ids = idsByTag.get(row.key);
-        if (ids === undefined) idsByTag.set(row.key, [row.workspaceId]);
-        else ids.push(row.workspaceId);
-      }
-      for (const tag of tags) {
-        const workspaceIds = idsByTag.get(tag) ?? [];
-        conditions.push(workspaceIds.length > 0
-          ? inArray(workspaces.id, [...new Set(workspaceIds)])
-          : eq(workspaces.id, "__no_matching_workspace__"));
-      }
-    }
-    const excludeTags = csv("search[exclude-tags]");
-    if (excludeTags.length > 0) {
-      const excludedIds = (await db.query.workspaceTags.findMany({
-        where: inArray(workspaceTags.key, excludeTags),
-        columns: { workspaceId: true },
-      })).map((t: Readonly<{ workspaceId: string }>): string => t.workspaceId);
-      conditions.push(notInArray(workspaces.id, [...new Set(excludedIds)]));
-    }
-    const projectIds = csv("filter[project][id]");
-    if (projectIds.length > 0) conditions.push(inArray(workspaces.projectId, projectIds));
-    const tagged = new Map<number, { key?: string; value?: string }>();
-    for (const [name, value] of searchParams) {
-      const match = /^filter\[tagged\]\[(\d+)\]\[(key|value)\]$/.exec(name);
-      if (match === null) continue;
-      const index = Number(match[1]);
-      const field = match[2];
-      if (!Number.isSafeInteger(index) || (field !== "key" && field !== "value")) continue;
-      tagged.set(index, { ...tagged.get(index), [field]: value });
-    }
-    const tagBindings = [...tagged.values()].filter(
-      (binding): binding is { key: string; value: string } =>
-        typeof binding.key === "string" && binding.key !== ""
-        && typeof binding.value === "string",
-    );
-    const bindingKeys = [...new Set(tagBindings.map((binding: Readonly<{ key: string }>): string => binding.key))];
-    const singleBinding = tagBindings.length === 1 ? tagBindings[0] : undefined;
-    const taggedWorkspaceTagRows = bindingKeys.length === 0
-      ? []
-      : (await db.query.workspaceTags.findMany({
-        where: singleBinding === undefined
-          ? inArray(workspaceTags.key, bindingKeys)
-          : and(eq(workspaceTags.key, singleBinding.key), eq(workspaceTags.value, singleBinding.value)),
-        columns: { workspaceId: true, key: true, value: true },
-      }));
-    // Index rows by "key\0value" so we need exactly one query regardless of
-    // how many tag bindings the caller supplied.
-    const workspaceIdsByTag = new Map<string, string[]>();
-    for (const row of taggedWorkspaceTagRows) {
-      const tag = `${row.key}\u0000${row.value ?? ""}`;
-      const list = workspaceIdsByTag.get(tag) ?? [];
-      list.push(row.workspaceId);
-      workspaceIdsByTag.set(tag, list);
-    }
-    const matchingTagIds = tagBindings.map((binding: Readonly<{ key: string; value: string }>): string[] =>
-      workspaceIdsByTag.get(`${binding.key}\u0000${binding.value}`) ?? [],
-    );
-    for (const workspaceIds of matchingTagIds) {
-      conditions.push(workspaceIds.length > 0
-        ? inArray(workspaces.id, [...new Set(workspaceIds)])
-        : eq(workspaces.id, "__no_matching_workspace__"));
-    }
-    const currentRunStatuses = csv("filter[current-run][status]");
+    if (sortAndLocked.locked !== null) conditions.push(eq(workspaces.locked, sortAndLocked.locked === "true"));
+    conditions.push(...collectListTextFilters(searchParams));
+    conditions.push(...(await collectListTagFilters(searchParams)));
+    conditions.push(...(await collectListTaggedBindingFilters(searchParams)));
+    const currentRunStatuses = csvParam(searchParams, "filter[current-run][status]");
     if (currentRunStatuses.length > 0) conditions.push(inArray(latestRunStatus, currentRunStatuses));
     const includeSummary = (searchParams.get("include") ?? "").split(",").includes("workspace_summary");
     const where = and(...(conditions as Parameters<typeof and>));
     const [wsList, countRows, summaryRows] = await Promise.all([
-      db.query.workspaces.findMany({ where, orderBy: [sort === "-name" ? desc(workspaces.name) : asc(workspaces.name), asc(workspaces.id)], limit: size, offset: (number - 1) * size }),
+      db.query.workspaces.findMany({ where, orderBy: [sortAndLocked.sort === "-name" ? desc(workspaces.name) : asc(workspaces.name), asc(workspaces.id)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(workspaces).where(where),
       includeSummary
         ? rawQueryAll<{ locked: boolean | number; status: string | null; total: number | string }>(sql`
@@ -569,61 +680,14 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
           `)
         : Promise.resolve([]),
     ]);
-    const totalCount = countRows[0]?.total ?? 0;
-    const canManageOrgRunTasks = await checkOrganizationPermission(org.id, user?.id, principalOrgId ?? null, teamId ?? null, "manage-run-tasks");
-    // Batch the per-row N+1 (workspace_tags + org name): one query for the
-    // whole page instead of two per workspace. `org` is already loaded, so
-    // the org name costs nothing extra.
-    const tagRows = wsList.length === 0
-      ? []
-      : await db.query.workspaceTags.findMany({
-        where: inArray(workspaceTags.workspaceId, wsList.map((w: WsItem): string => w.id)),
-        orderBy: [asc(workspaceTags.key)],
-      });
-    // Server-side latest-run aggregation (10.1/10.4): when the caller asks
-    // for include=current_run, resolve the newest run per workspace of the
-    // current page IN SQL (ROW_NUMBER window over runs(workspace_id,
-    // created_at), rowid ASC tie-break) instead of transferring org-wide run
-    // history. The same query shape as the current-run status filter above.
+    const totalCount = pageTotal(countRows);
+    const canManageOrgRunTasks = await checkOrganizationPermission(org.id, actor.actorId, actor.actorOrgId, actor.actorTeamId, "manage-run-tasks");
     const includeCurrentRun = (searchParams.get("include") ?? "")
       .split(",")
       .map((value: string): string => value.trim())
       .includes("current_run");
-    type LatestRunRow = Readonly<{
-      id: string;
-      workspaceId: string;
-      status: string;
-      message: string | null;
-      // SQLite returns raw 0/1 integers; postgres.js returns bigint columns
-      // as strings. Normalize with Number() at the consumption site.
-      isDestroy: number | string;
-      createdAt: number | string;
-      autoApply: number | string;
-    }>;
-    const latestRunRows: LatestRunRow[] = includeCurrentRun && wsList.length > 0
-      ? await rawQueryAll<LatestRunRow>(sql`
-          SELECT id, workspace_id AS "workspaceId", status, message,
-                 is_destroy AS "isDestroy", created_at AS "createdAt",
-                 auto_apply AS "autoApply"
-          FROM (
-            SELECT id, workspace_id, status, message, is_destroy, created_at,
-                   auto_apply,
-                   ROW_NUMBER() OVER (
-                     PARTITION BY workspace_id ORDER BY created_at DESC, id ASC
-                   ) AS rn
-            FROM runs
-            WHERE ${inArray(runs.workspaceId, wsList.map((w: WsItem): string => w.id))}
-          )
-          WHERE rn = 1
-        `)
-      : [];
-    const currentRunsByWorkspace = new Map(latestRunRows.map((row): [string, LatestRunRow] => [row.workspaceId, row]));
-    const tagsByWorkspace = new Map<string, DeepReadonly<typeof workspaceTags.$inferSelect>[]>();
-    for (const tag of tagRows) {
-      const list = tagsByWorkspace.get(tag.workspaceId) ?? [];
-      list.push(tag);
-      tagsByWorkspace.set(tag.workspaceId, list);
-    }
+    const pageData = await loadWorkspaceListPageData(wsList, includeCurrentRun);
+    const { latestRunRows, currentRunsByWorkspace, tagsByWorkspace } = pageData;
     const data = await Promise.all(wsList.map(async (w: WsItem): Promise<Record<string, unknown>> => {
       const baseOptions = {
         orgName: org.name,
@@ -663,13 +727,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         }))
       : undefined;
     const page = pagination(request, number, size, totalCount);
-    const summary = { total: 0, locked: 0, "run-statuses": {} as Record<string, number> };
-    for (const row of summaryRows) {
-      const total = Number(row.total);
-      summary.total += total;
-      if (row.locked === true || row.locked === 1) summary.locked += total;
-      if (row.status !== null) summary["run-statuses"][row.status] = (summary["run-statuses"][row.status] ?? 0) + total;
-    }
+    const summary = summarizeWorkspaceList(summaryRows);
     return {
       data, ...(included === undefined ? {} : { included }), ...page,
       meta: { ...page.meta, ...(includeSummary ? { "workspace-summary": summary } : {}) },
@@ -1958,12 +2016,16 @@ async function insertWorkspaceTx(tx: unknown, args: Readonly<{
 }
 
 type WorkspaceUpdateFailure = Readonly<{
-  errors: readonly Readonly<{ status: string; title: string; detail: string }>[];
+  errors: readonly Readonly<{ status: string; title: string; detail?: string }>[];
 }>;
 
-function failWorkspaceUpdate(set: SetObj, status: 422 | 409, detail: string): WorkspaceUpdateFailure {
+function failWorkspaceUpdate(set: SetObj, status: 422 | 409, detail: string): WorkspaceUpdateFailure;
+function failWorkspaceUpdate(set: SetObj, status: 400 | 403 | 404, detail?: string): WorkspaceUpdateFailure;
+function failWorkspaceUpdate(set: SetObj, status: 400 | 403 | 404 | 409 | 422, detail?: string): WorkspaceUpdateFailure {
   (set as { status: number }).status = status;
-  return { errors: [{ status: String(status), title: status === 422 ? "Unprocessable Entity" : "Conflict", detail }] };
+  const title = status === 422 ? "Unprocessable Entity" : status === 409 ? "Conflict" : status === 403 ? "Forbidden" : status === 404 ? "Not Found" : "Bad Request";
+  if (detail === undefined) return { errors: [{ status: String(status), title }] };
+  return { errors: [{ status: String(status), title, detail }] };
 }
 
 type ParsedWorkspaceUpdate = Readonly<{
