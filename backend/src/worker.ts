@@ -3550,14 +3550,17 @@ export function splitSentinelParams(
   return { configParams, argvParams };
 }
 
-export async function runPolicyChecks(
-  runId: string,
+type PlanPolicySets = {
+  allPolicies: (typeof policies.$inferSelect)[];
+  policySetsById: ReadonlyMap<string, Readonly<{ kind: string }>>;
+  parametersBySet: ReadonlyMap<string, (typeof policySetParameters.$inferSelect)[]>;
+  allSetIds: string[];
+};
+
+async function resolvePlanPolicySets(
   workspaceId: string,
   orgId: string,
-  executionDir?: string,
-  planBinaryPath?: string,
-  preloadedPlanJson?: JsonObject,
-): Promise<{ proceed: boolean; hardFailed: boolean; softFailed: boolean }> {
+): Promise<PlanPolicySets | null> {
   const workspace = await db.query.workspaces.findFirst({
     where: eq(workspaces.id, workspaceId),
     columns: { projectId: true },
@@ -3576,14 +3579,14 @@ export async function runPolicyChecks(
     ...projectAttached.map((link: Readonly<{ policySetId: string }>): string => link.policySetId),
     ...orgPolicySets.map((policySet: Readonly<{ id: string }>): string => policySet.id),
   ])].filter((policySetId: string): boolean => !excludedSetIds.has(policySetId));
-  if (allSetIds.length === 0) return { proceed: true, hardFailed: false, softFailed: false };
+  if (allSetIds.length === 0) return null;
 
   const [allPolicies, effectivePolicySets, setParameters] = await Promise.all([
     db.query.policies.findMany({ where: inArray(policies.policySetId, allSetIds) }),
     db.query.policySets.findMany({ where: inArray(policySets.id, allSetIds) }),
     db.query.policySetParameters.findMany({ where: inArray(policySetParameters.policySetId, allSetIds) }),
   ]);
-  if (allPolicies.length === 0) return { proceed: true, hardFailed: false, softFailed: false };
+  if (allPolicies.length === 0) return null;
   const policySetsById = new Map(effectivePolicySets.map((policySet: Readonly<{ id: string; kind: string }>): readonly [string, Readonly<{ kind: string }>] => [policySet.id, { kind: policySet.kind }]));
   const parametersBySet = new Map<string, (typeof policySetParameters.$inferSelect)[]>();
   for (const parameter of setParameters) {
@@ -3591,6 +3594,49 @@ export async function runPolicyChecks(
     current.push(parameter);
     parametersBySet.set(parameter.policySetId, current);
   }
+  return { allPolicies, policySetsById, parametersBySet, allSetIds };
+}
+
+async function failClosedPolicyChecks(
+  runId: string,
+  allPolicies: (typeof policies.$inferSelect)[],
+): Promise<{ proceed: boolean; hardFailed: boolean; softFailed: boolean }> {
+  // Fail closed (kanban t_282cf10b): policy evaluation must run against the
+  // CURRENT plan. Falling back to the latest state version would silently
+  // approve changes the policy never inspected. Without plan JSON every
+  // policy check errors and the run is blocked from applying.
+  await writeLog(runId, "plan", "[terrence ERROR] Plan JSON is unavailable; refusing to evaluate policies against stored state.");
+  const checkBatch: (typeof policyChecks.$inferInsert)[] = [];
+  let hardFailed = false;
+  let softFailed = false;
+  for (const policy of allPolicies) {
+    checkBatch.push({
+      id: newResourceId("pchk"),
+      runId,
+      policyId: policy.id,
+      policySetId: policy.policySetId,
+      status: "errored",
+      result: { error: "Plan JSON is unavailable; policy evaluation failed closed" },
+      createdAt: Date.now(),
+    });
+    if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
+    if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
+  }
+  if (checkBatch.length > 0) await db.insert(policyChecks).values(checkBatch);
+  return { proceed: !hardFailed && !softFailed, hardFailed, softFailed };
+}
+
+export async function runPolicyChecks(
+  runId: string,
+  workspaceId: string,
+  orgId: string,
+  executionDir?: string,
+  planBinaryPath?: string,
+  preloadedPlanJson?: JsonObject,
+): Promise<{ proceed: boolean; hardFailed: boolean; softFailed: boolean }> {
+  const resolved = await resolvePlanPolicySets(workspaceId, orgId);
+  if (resolved === null) return { proceed: true, hardFailed: false, softFailed: false };
+  const { allPolicies, policySetsById, parametersBySet, allSetIds } = resolved;
 
   const planTimeoutMs = await executionTimeoutMs("plan");
   const policyTimeoutMs = Math.min(planTimeoutMs, POLICY_EVALUATION_TIMEOUT_MS);
@@ -3605,27 +3651,8 @@ export async function runPolicyChecks(
   let softFailed = false;
   const checkBatch: (typeof policyChecks.$inferInsert)[] = [];
 
-  // Fail closed (kanban t_282cf10b): policy evaluation must run against the
-  // CURRENT plan. Falling back to the latest state version would silently
-  // approve changes the policy never inspected. Without plan JSON every
-  // policy check errors and the run is blocked from applying.
   if (planJsonPayload === null || planJsonPayload === "") {
-    await writeLog(runId, "plan", "[terrence ERROR] Plan JSON is unavailable; refusing to evaluate policies against stored state.");
-    for (const policy of allPolicies) {
-      checkBatch.push({
-        id: newResourceId("pchk"),
-        runId,
-        policyId: policy.id,
-        policySetId: policy.policySetId,
-        status: "errored",
-        result: { error: "Plan JSON is unavailable; policy evaluation failed closed" },
-        createdAt: Date.now(),
-      });
-      if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
-      if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
-    }
-    if (checkBatch.length > 0) await db.insert(policyChecks).values(checkBatch);
-    return { proceed: !hardFailed && !softFailed, hardFailed, softFailed };
+    return failClosedPolicyChecks(runId, allPolicies);
   }
 
   await writeLog(runId, "plan", `[terrence] Evaluating ${allPolicies.length} policies across ${allSetIds.length} policy sets...`);
