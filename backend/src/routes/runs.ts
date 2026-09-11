@@ -1910,6 +1910,70 @@ function commentHistoryResource(
   }];
 }
 
+async function authorizePolicyOverride(
+  params: ParamCtx["params"],
+  body: unknown,
+  user: ParamCtx["user"],
+  orgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ authorized: AuthorizedRun; justification: string } | { failure: unknown }>> {
+  const runId = params["run_id"] ?? "";
+  const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+  if (authorized === undefined) { (set as { status: number }).status = 404; return { failure: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"))) { (set as { status: number }).status = 403; return { failure: { errors: [{ status: "403", title: "Forbidden" }] } }; }
+  if (authorized.run.status !== "policy_soft_failed") { (set as { status: number }).status = 409; return { failure: { errors: [{ status: "409", title: "Conflict", detail: "Run must be policy_soft_failed to override" }] } }; }
+  // An override is an audited exception: the justification comment is
+  // required and persisted, so the audit trail states the reason at the
+  // moment it matters (CodeRabbit review).
+  const justification = actionComment(body);
+  if (justification === "") { (set as { status: number }).status = 422; return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Overriding a policy check requires a justification comment" }] } }; }
+  return { authorized, justification };
+}
+
+type PolicyOverrideInput = Readonly<{
+  runId: string;
+  justification: string;
+  commentId: string;
+  actorId: string | null;
+  workspace: AuthorizedRun["workspace"];
+  teamId: string | null | undefined;
+  now: number;
+}>;
+
+async function commitPolicyOverride(input: PolicyOverrideInput): Promise<typeof runs.$inferSelect[]> {
+  const { runId, justification, commentId, actorId, workspace, teamId, now } = input;
+  // One transaction for the whole override (CodeRabbit review): committing
+  // the status change before the justification comment, the policy-check
+  // update, and the audit record would leave a planned run without its
+  // required justification on a mid-flight failure, and a retry would find
+  // nothing left to override. Events publish only after commit.
+  return db.transaction(async (tx: unknown) => {
+    const t = tx as typeof db;
+    const rows = await t.update(runs).set({ status: "planned" }).where(and(eq(runs.id, runId), eq(runs.status, "policy_soft_failed"))).returning();
+    if (rows.length === 0) return rows;
+    await t.insert(runComments).values({ id: commentId, runId, userId: actorId, body: justification, createdAt: now });
+    await t.update(policyChecks).set({ status: "overridden" }).where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
+    await t.insert(auditLogs).values(auditLogValues({
+      orgId: workspace.orgId,
+      userId: actorId,
+      action: "override-policy",
+      resourceType: "runs",
+      resourceId: runId,
+      details: {
+        workspaceId: workspace.id,
+        fromStatus: "policy_soft_failed",
+        toStatus: "planned",
+        justification,
+        justificationBytes: Buffer.byteLength(justification, "utf8"),
+        ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+      },
+      createdAt: now,
+    }) as typeof auditLogs.$inferInsert);
+    return rows;
+  });
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -2703,50 +2767,13 @@ export const runRoutes = new Elysia({ name: "runs" })
     return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const authz = await authorizePolicyOverride(params, body, user, orgId, teamId, set);
+    if ("failure" in authz) return authz.failure;
+    const { authorized, justification } = authz;
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const run = authorized.run;
-    if (run.status !== "policy_soft_failed") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be policy_soft_failed to override" }] }; }
-    // An override is an audited exception: the justification comment is
-    // required and persisted, so the audit trail states the reason at the
-    // moment it matters (CodeRabbit review).
-    const justification = actionComment(body);
-    if (justification === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Overriding a policy check requires a justification comment" }] }; }
-    // One transaction for the whole override (CodeRabbit review): committing
-    // the status change before the justification comment, the policy-check
-    // update, and the audit record would leave a planned run without its
-    // required justification on a mid-flight failure, and a retry would find
-    // nothing left to override. Events publish only after commit.
-    const commentId = newResourceId("rc");
-    const actorId = user?.id ?? null;
     const workspace = authorized.workspace;
-    const now = Date.now();
-    const updated = await db.transaction(async (tx: unknown) => {
-      const t = tx as typeof db;
-      const rows = await t.update(runs).set({ status: "planned" }).where(and(eq(runs.id, runId), eq(runs.status, "policy_soft_failed"))).returning();
-      if (rows.length === 0) return rows;
-      await t.insert(runComments).values({ id: commentId, runId, userId: actorId, body: justification, createdAt: now });
-      await t.update(policyChecks).set({ status: "overridden" }).where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
-      await t.insert(auditLogs).values(auditLogValues({
-        orgId: workspace.orgId,
-        userId: actorId,
-        action: "override-policy",
-        resourceType: "runs",
-        resourceId: runId,
-        details: {
-          workspaceId: workspace.id,
-          fromStatus: "policy_soft_failed",
-          toStatus: "planned",
-          justification,
-          justificationBytes: Buffer.byteLength(justification, "utf8"),
-          ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
-        },
-        createdAt: now,
-      }) as typeof auditLogs.$inferInsert);
-      return rows;
-    });
+    const commentId = newResourceId("rc");
+    const updated = await commitPolicyOverride({ runId, justification, commentId, actorId: user?.id ?? null, workspace, teamId, now: Date.now() });
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is no longer awaiting policy override" }] }; }
     publish("comment.created", {
       "run-id": runId,
