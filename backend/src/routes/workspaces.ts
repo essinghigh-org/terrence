@@ -1161,25 +1161,12 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   })
   .post("/api/v2/workspaces/:workspace_id/relationships/tags", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "admin");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload["data"];
-    const entries = new Map<string, string>();
-    for (const item of Array.isArray(items) ? items : []) {
-      if (item !== null && typeof item === "object") {
-        const itemObj = item as Record<string, unknown>;
-        const attrs = typeof itemObj["attributes"] === "object" && itemObj["attributes"] !== null ? (itemObj["attributes"] as Record<string, unknown>) : {};
-        const keyVal = attrs["key"] ?? itemObj["id"];
-        const key = typeof keyVal === "string" ? keyVal : "";
-        if (key !== "") entries.set(key, typeof attrs["value"] === "string" ? attrs["value"] : "");
-      }
-    }
-    const lockedTagKey = await findLockedInheritedTagKey(ws.orgId, ws.projectId, [...entries.keys()]);
-    if (lockedTagKey !== undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Tag key "${lockedTagKey}" cannot override its inherited project tag` }] };
-    }
+    const actor = actorScope(user, principalOrgId, teamId);
+    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId, "admin");
+    if (ws === undefined) return failWorkspaceUpdate(set, 404);
+    const entries = parseTagEntries(body);
+    const lockedRefusal = await rejectLockedInheritedTag(ws, entries, set);
+    if (lockedRefusal !== null) return lockedRefusal;
     if (entries.size > 0) {
       await db.insert(workspaceTags).values([...entries].map(([key, value]): typeof workspaceTags.$inferInsert => ({
         id: crypto.randomUUID(),
@@ -2517,6 +2504,37 @@ function workspaceOrgOption(orgName: string | null | undefined): Readonly<{ orgN
   // exactOptionalPropertyTypes: the resource options omit orgName when it is
   // undefined but reject an explicit undefined, so normalize it here.
   return { orgName: orgName ?? null };
+}
+
+function tagEntryFromItem(item: unknown): Readonly<{ key: string; value: string }> | null {
+  if (item === null || typeof item !== "object") return null;
+  const itemObj = item as Record<string, unknown>;
+  const attrs = typeof itemObj["attributes"] === "object" && itemObj["attributes"] !== null ? (itemObj["attributes"] as Record<string, unknown>) : {};
+  const keyVal = attrs["key"] ?? itemObj["id"];
+  const key = typeof keyVal === "string" ? keyVal : "";
+  if (key === "") return null;
+  return { key, value: typeof attrs["value"] === "string" ? attrs["value"] : "" };
+}
+
+function parseTagEntries(body: unknown): Map<string, string> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const items = payload["data"];
+  const entries = new Map<string, string>();
+  for (const item of Array.isArray(items) ? items : []) {
+    const entry = tagEntryFromItem(item);
+    if (entry !== null) entries.set(entry.key, entry.value);
+  }
+  return entries;
+}
+
+async function rejectLockedInheritedTag(
+  ws: WsItem,
+  entries: ReadonlyMap<string, string>,
+  set: SetObj,
+): Promise<WorkspaceUpdateFailure | null> {
+  const lockedTagKey = await findLockedInheritedTagKey(ws.orgId, ws.projectId, [...entries.keys()]);
+  if (lockedTagKey === undefined) return null;
+  return failWorkspaceUpdate(set, 422, `Tag key "${lockedTagKey}" cannot override its inherited project tag`);
 }
 
 async function findNamedWorkspace(
