@@ -762,6 +762,58 @@ function parseRunOperationRequest(
   return { request: { requestedOperation, isDestroy, invokeActionAddrs } };
 }
 
+type RunPlanFlags = Readonly<{
+  requestedAutoApply: boolean | undefined;
+  requestedPlanOnly: boolean | undefined;
+  refresh: boolean;
+  refreshOnly: boolean;
+  allowEmptyApply: boolean;
+  savePlan: boolean;
+}>;
+
+function parseRunPlanFlags(
+  attributes: Readonly<Record<string, unknown>>,
+  requestedOperation: string | undefined,
+): RunPlanFlags {
+  return {
+    requestedAutoApply: typeof attributes["auto-apply"] === "boolean" ? attributes["auto-apply"] : undefined,
+    requestedPlanOnly: requestedOperation === "plan" || requestedOperation === "plan_only"
+      ? true
+      : typeof attributes["plan-only"] === "boolean" ? attributes["plan-only"] : undefined,
+    refresh: typeof attributes["refresh"] === "boolean" ? attributes["refresh"] : true,
+    refreshOnly: requestedOperation === "refresh_only" || requestedOperation === "action_only"
+      || (typeof attributes["refresh-only"] === "boolean" ? attributes["refresh-only"] : false),
+    allowEmptyApply: requestedOperation === "empty_apply"
+      ? true
+      : typeof attributes["allow-empty-apply"] === "boolean" ? attributes["allow-empty-apply"] : false,
+    savePlan: requestedOperation === "save_plan"
+      ? true
+      : typeof attributes["save-plan"] === "boolean" ? attributes["save-plan"] : false,
+  };
+}
+
+function resolveRunOperation(
+  requestedOperation: string | undefined,
+  invokeActionCount: number,
+  isDestroy: boolean,
+  refreshOnly: boolean,
+  savePlan: boolean,
+  allowEmptyApply: boolean,
+): string {
+  return requestedOperation
+    ?? (invokeActionCount > 0
+      ? "action_only"
+      : isDestroy
+        ? "destroy"
+        : refreshOnly
+          ? "refresh_only"
+          : savePlan
+            ? "save_plan"
+            : allowEmptyApply
+              ? "empty_apply"
+              : "plan_and_apply");
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -776,38 +828,15 @@ export async function createRun(
   const operationRequest = parseRunOperationRequest(attributes, set);
   if ("failure" in operationRequest) return operationRequest.failure;
   const { requestedOperation, isDestroy, invokeActionAddrs } = operationRequest.request;
-  const requestedAutoApply = typeof attributes["auto-apply"] === "boolean" ? attributes["auto-apply"] : undefined;
-  const requestedPlanOnly = requestedOperation === "plan" || requestedOperation === "plan_only"
-    ? true
-    : typeof attributes["plan-only"] === "boolean" ? attributes["plan-only"] : undefined;
-  const refresh = typeof attributes["refresh"] === "boolean" ? attributes["refresh"] : true;
-  const refreshOnly = requestedOperation === "refresh_only" || requestedOperation === "action_only"
-    || (typeof attributes["refresh-only"] === "boolean" ? attributes["refresh-only"] : false);
+  const { requestedAutoApply, requestedPlanOnly, refresh, refreshOnly, allowEmptyApply, savePlan } = parseRunPlanFlags(attributes, requestedOperation);
   const targetAddrs = Array.isArray(attributes["target-addrs"]) ? (attributes["target-addrs"] as string[]) : null;
   const replaceAddrs = Array.isArray(attributes["replace-addrs"]) ? (attributes["replace-addrs"] as string[]) : null;
   const runVariablesInput = Array.isArray(attributes["variables"]) ? attributes["variables"] : null;
   const terraformVersion = typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : undefined;
   const debuggingMode = typeof attributes["debugging-mode"] === "boolean" ? attributes["debugging-mode"] : false;
-  const allowEmptyApply = requestedOperation === "empty_apply"
-    ? true
-    : typeof attributes["allow-empty-apply"] === "boolean" ? attributes["allow-empty-apply"] : false;
-  const savePlan = requestedOperation === "save_plan"
-    ? true
-    : typeof attributes["save-plan"] === "boolean" ? attributes["save-plan"] : false;
   const allowConfigGeneration = typeof attributes["allow-config-generation"] === "boolean" ? attributes["allow-config-generation"] : false;
   const generatedConfiguration = typeof attributes["generated-configuration"] === "boolean" ? attributes["generated-configuration"] : false;
-  const operation = requestedOperation
-    ?? (invokeActionAddrs.length > 0
-      ? "action_only"
-      : isDestroy
-        ? "destroy"
-        : refreshOnly
-          ? "refresh_only"
-          : savePlan
-            ? "save_plan"
-            : allowEmptyApply
-              ? "empty_apply"
-              : "plan_and_apply");
+  const operation = resolveRunOperation(requestedOperation, invokeActionAddrs.length, isDestroy, refreshOnly, savePlan, allowEmptyApply);
   if (workspaceId === "") { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Workspace ID is required" }] }; }
   if (terraformVersion !== undefined && !validateVersion(terraformVersion)) {
     (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid run attributes" }] };
