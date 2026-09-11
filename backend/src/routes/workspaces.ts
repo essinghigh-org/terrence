@@ -1632,42 +1632,20 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   })
   .post("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const actor = actorScope(user, tokenOrgId, teamId);
+    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId, "admin");
+    if (ws === undefined) return failWorkspaceUpdate(set, 404);
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
-    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const { attributes: attrs } = updateBodySections(body);
     const existing = await db.query.dataRetentionPolicies.findFirst({ where: eq(dataRetentionPolicies.workspaceId, workspaceId) });
-    const pid = existing?.id ?? newResourceId("drp");
-    const policyType = typeof data?.["type"] === "string" ? data["type"] : null;
-    const rawDeleteOlderThanNDays = attrs["delete-older-than-n-days"] ?? attrs["deleteOlderThanNDays"];
-    const stateVersionsCount = typeof attrs["state-versions-count"] === "number"
-      ? attrs["state-versions-count"]
-      : existing?.stateVersionsCount ?? null;
-    const deleteOlderThanNDays = policyType === "data-retention-policy-dont-deletes"
-      ? null
-      : typeof rawDeleteOlderThanNDays === "number" && Number.isInteger(rawDeleteOlderThanNDays) && rawDeleteOlderThanNDays > 0
-        ? rawDeleteOlderThanNDays
-        : existing?.deleteOlderThanNDays ?? null;
-    const autoDestroyAt = typeof attrs["auto-destroy-at"] === "string" ? attrs["auto-destroy-at"] : existing?.autoDestroyAt ?? null;
-    const autoDestroyActivityDuration = typeof attrs["auto-destroy-activity-duration"] === "string"
-      ? attrs["auto-destroy-activity-duration"]
-      : existing?.autoDestroyActivityDuration ?? null;
-    const values = {
-      id: pid,
-      workspaceId,
-      stateVersionsCount,
-      deleteOlderThanNDays,
-      autoDestroyAt,
-      autoDestroyActivityDuration,
-      createdAt: existing?.createdAt ?? Date.now(),
-    };
-    if (existing !== undefined) { await db.update(dataRetentionPolicies).set(values).where(eq(dataRetentionPolicies.id, pid)); } else { await db.insert(dataRetentionPolicies).values(values); }
+    const values = resolveRetentionValues(attrs, data, existing, workspaceId);
+    if (existing !== undefined) { await db.update(dataRetentionPolicies).set(values).where(eq(dataRetentionPolicies.id, values.id)); } else { await db.insert(dataRetentionPolicies).values(values); }
     const gcSummary = await applyDataRetentionGarbageCollection(workspaceId);
     (set as { status: number }).status = existing !== undefined ? 200 : 201;
     return {
       data: {
-        id: pid,
+        id: values.id,
         type: values.deleteOlderThanNDays === null ? "data-retention-policy-dont-deletes" : "data-retention-policy-delete-olders",
         attributes: {
           "state-versions-count": values.stateVersionsCount,
@@ -2065,6 +2043,57 @@ function resolveVariableFields(
   const hcl = typeof attrs["hcl"] === "boolean" ? attrs["hcl"] : (variable.hcl ?? false);
   const description = typeof attrs["description"] === "string" ? attrs["description"] : variable.description;
   return { key, category, hcl, description };
+}
+
+type RetentionPolicyRow = typeof dataRetentionPolicies.$inferSelect;
+
+function resolveRetentionCounts(
+  attrs: Readonly<Record<string, unknown>>,
+  existing: RetentionPolicyRow | undefined,
+  policyType: string | null,
+): Readonly<{ stateVersionsCount: number | null; deleteOlderThanNDays: number | null }> {
+  const stateVersionsCount = typeof attrs["state-versions-count"] === "number"
+    ? attrs["state-versions-count"]
+    : existing?.stateVersionsCount ?? null;
+  const rawDeleteOlderThanNDays = attrs["delete-older-than-n-days"] ?? attrs["deleteOlderThanNDays"];
+  const deleteOlderThanNDays = policyType === "data-retention-policy-dont-deletes"
+    ? null
+    : typeof rawDeleteOlderThanNDays === "number" && Number.isInteger(rawDeleteOlderThanNDays) && rawDeleteOlderThanNDays > 0
+      ? rawDeleteOlderThanNDays
+      : existing?.deleteOlderThanNDays ?? null;
+  return { stateVersionsCount, deleteOlderThanNDays };
+}
+
+function resolveRetentionAutoDestroy(
+  attrs: Readonly<Record<string, unknown>>,
+  existing: RetentionPolicyRow | undefined,
+): Readonly<{ autoDestroyAt: string | null; autoDestroyActivityDuration: string | null }> {
+  const autoDestroyAt = typeof attrs["auto-destroy-at"] === "string" ? attrs["auto-destroy-at"] : existing?.autoDestroyAt ?? null;
+  const autoDestroyActivityDuration = typeof attrs["auto-destroy-activity-duration"] === "string"
+    ? attrs["auto-destroy-activity-duration"]
+    : existing?.autoDestroyActivityDuration ?? null;
+  return { autoDestroyAt, autoDestroyActivityDuration };
+}
+
+function resolveRetentionValues(
+  attrs: Readonly<Record<string, unknown>>,
+  data: Record<string, unknown> | undefined,
+  existing: RetentionPolicyRow | undefined,
+  workspaceId: string,
+) {
+  const pid = existing?.id ?? newResourceId("drp");
+  const policyType = typeof data?.["type"] === "string" ? data["type"] : null;
+  const { stateVersionsCount, deleteOlderThanNDays } = resolveRetentionCounts(attrs, existing, policyType);
+  const { autoDestroyAt, autoDestroyActivityDuration } = resolveRetentionAutoDestroy(attrs, existing);
+  return {
+    id: pid,
+    workspaceId,
+    stateVersionsCount,
+    deleteOlderThanNDays,
+    autoDestroyAt,
+    autoDestroyActivityDuration,
+    createdAt: existing?.createdAt ?? Date.now(),
+  };
 }
 
 function parseWorkspaceUpdateBody(body: unknown): ParsedWorkspaceUpdate {
