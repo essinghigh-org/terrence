@@ -1544,6 +1544,52 @@ function applyCommittedUpload(committed: Awaited<ReturnType<typeof commitStateVe
   if (committed.kind === "committed") scheduleExplorerInventory(workspaceId);
 }
 
+function assertOutputsUploadable(sv: ReservationUploadScope["sv"], ws: ReservationUploadScope["ws"]): void {
+  if (typeof sv.jsonStateOutputs === "string" && sv.jsonStateOutputs !== "") {
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "JSON state outputs were already uploaded" }] });
+  }
+  if (sv.status === "finalized") {
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "State version is finalized; outputs can no longer be uploaded" }] });
+  }
+  if (sv.status === "pending" && stateReservationObsolete(sv, ws)) {
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "State upload reservation expired or its workspace lock changed" }] });
+  }
+}
+
+async function readJsonOutputsBody(body: unknown, request: Request): Promise<string> {
+  const jsonStateOutputsResult = await requestBodyText(body, request);
+  if (!jsonStateOutputsResult.ok) {
+    throw new StateVersionRejected(
+      jsonStateOutputsResult.reason === "too-large" ? 413 : 400,
+      { errors: [{ status: String(jsonStateOutputsResult.reason === "too-large" ? 413 : 400), title: jsonStateOutputsResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] },
+    );
+  }
+  const jsonStateOutputs = jsonStateOutputsResult.text;
+  if (jsonStateOutputs === "" || parseStatePayload(jsonStateOutputs) === null) {
+    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: "JSON state outputs must be valid JSON" }] });
+  }
+  return jsonStateOutputs;
+}
+
+async function commitJsonOutputsUpload(args: {
+  stateVersionId: string;
+  sv: ReservationUploadScope["sv"];
+  ws: ReservationUploadScope["ws"];
+  encrypted: string | null;
+}): Promise<void> {
+  const uploaded = await db.transaction(async (tx) => {
+    if (!(await fenceStateWorkspace(tx, args.ws)) || stateReservationObsolete(args.sv, args.ws)) return [];
+    return tx.update(stateVersions).set({ jsonStateOutputs: args.encrypted }).where(and(
+      eq(stateVersions.id, args.stateVersionId),
+      eq(stateVersions.status, "pending"),
+      or(isNull(stateVersions.jsonStateOutputs), eq(stateVersions.jsonStateOutputs, "")),
+    )).returning({ id: stateVersions.id });
+  });
+  if (uploaded.length === 0) {
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "JSON state outputs were already uploaded" }] });
+  }
+}
+
 export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   .use(authPlugin)
   .get("/api/v2/state-versions", async ({ request, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -1940,57 +1986,33 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   })
   .put("/api/v2/state-versions/:state_version_id/json-outputs-upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
     const path = `/api/v2/state-versions/${stateVersionId}/json-outputs-upload`;
-    if (ws === undefined || (!validSignedApiURL(request, path, "PUT") && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-write")))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    // Issue #578: outputs are single-shot on a pending version. Rewriting a
-    // finalized version would silently mutate immutable history (and the old
-    // code appended those rows to the output index). The blob remains
-    // readable as an MCP fallback once set.
-    if (typeof sv.jsonStateOutputs === "string" && sv.jsonStateOutputs !== "") {
-      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "JSON state outputs were already uploaded" }] };
-    }
-    if (sv.status === "finalized") {
-      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State version is finalized; outputs can no longer be uploaded" }] };
-    }
-    if (sv.status === "pending" && stateReservationObsolete(sv, ws)) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "State upload reservation expired or its workspace lock changed" }] };
-    }
-    if (!tryAcquireStateUpload(stateVersionId)) {
-      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] };
-    }
     try {
-      const jsonStateOutputsResult = await requestBodyText(body, request);
-      if (!jsonStateOutputsResult.ok) {
-        (set as { status: number }).status = jsonStateOutputsResult.reason === "too-large" ? 413 : 400;
-        return { errors: [{ status: String(jsonStateOutputsResult.reason === "too-large" ? 413 : 400), title: jsonStateOutputsResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] };
+      const { sv, ws } = await resolveReservationUploadScope(stateVersionId, request, user?.id, orgId, teamId, path);
+      // Issue #578: outputs are single-shot on a pending version. Rewriting a
+      // finalized version would silently mutate immutable history (and the old
+      // code appended those rows to the output index). The blob remains
+      // readable as an MCP fallback once set.
+      assertOutputsUploadable(sv, ws);
+      if (!tryAcquireStateUpload(stateVersionId)) {
+        throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] });
       }
-      const jsonStateOutputs = jsonStateOutputsResult.text;
-      if (jsonStateOutputs === "" || parseStatePayload(jsonStateOutputs) === null) {
-        (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state outputs must be valid JSON" }] };
+      try {
+        const jsonStateOutputs = await readJsonOutputsBody(body, request);
+        const encrypted = await encryptStatePayload(jsonStateOutputs);
+        await commitJsonOutputsUpload({ stateVersionId, sv, ws, encrypted });
+        scheduleExplorerInventory(sv.workspaceId);
+        (set as { status: number }).status = 200;
+        return {};
+      } finally {
+        releaseStateUpload(stateVersionId);
       }
-      const encrypted = await encryptStatePayload(jsonStateOutputs);
-      const uploaded = await db.transaction(async (tx) => {
-        if (!(await fenceStateWorkspace(tx, ws)) || stateReservationObsolete(sv, ws)) return [];
-        return tx.update(stateVersions).set({ jsonStateOutputs: encrypted }).where(and(
-          eq(stateVersions.id, stateVersionId),
-          eq(stateVersions.status, "pending"),
-          or(isNull(stateVersions.jsonStateOutputs), eq(stateVersions.jsonStateOutputs, "")),
-        )).returning({ id: stateVersions.id });
-      });
-      if (uploaded.length === 0) {
-        (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "JSON state outputs were already uploaded" }] };
+    } catch (error: unknown) {
+      if (error instanceof StateVersionRejected) {
+        (set as { status: number }).status = error.status;
+        return error.body;
       }
-      scheduleExplorerInventory(sv.workspaceId);
-      (set as { status: number }).status = 200;
-      return {};
-    } finally {
-      releaseStateUpload(stateVersionId);
+      throw error;
     }
   })
   .post("/api/v2/state-versions/:state_version_id/actions/rollback", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
