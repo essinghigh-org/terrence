@@ -1306,6 +1306,75 @@ type TestConfigRow = DeepReadonly<typeof moduleTestConfigurations.$inferSelect>;
 
 type OrgRowForWrite = NonNullable<Awaited<ReturnType<typeof cachedOrgByName>>>;
 
+type NoCodeRow = typeof noCodeModules.$inferSelect;
+
+async function resolveOrgForNoCodeWrite(
+  orgName: string,
+  user: ParamCtx["user"],
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ org: OrgRowForWrite } | { failure: unknown }>> {
+  const org = await cachedOrgByName(orgName);
+  const hasSupportedPrincipal = user !== null && user !== undefined || teamId !== null && teamId !== undefined;
+  if (
+    org === undefined
+    || !hasSupportedPrincipal
+    || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+  ) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { org };
+}
+
+async function resolveNoCodeCreationTarget(
+  org: OrgRowForWrite,
+  input: NoCodeInput,
+  set: SetObj,
+): Promise<Readonly<{ mod: ModItem; version: ModVerItem } | { failure: unknown }>> {
+  if (input.moduleId === undefined) {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "registry-module relationship is required" }] } };
+  }
+  const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, input.moduleId) });
+  if (mod?.orgId !== org.id) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  const version = input.versionPin === undefined
+    ? (await availableModuleVersions(mod.id))[0]
+    : await db.query.registryModuleVersions.findFirst({
+        where: and(
+          eq(registryModuleVersions.moduleId, mod.id),
+          eq(registryModuleVersions.version, input.versionPin),
+        ),
+      });
+  if (version?.status !== "ok") {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "version-pin must identify a published version of the registry module" }] } };
+  }
+  return { mod, version };
+}
+
+async function upsertNoCodeRow(
+  existing: NoCodeRow | undefined,
+  mod: ModItem,
+  version: ModVerItem,
+  enabled: boolean | undefined,
+): Promise<NoCodeRow> {
+  const now = Date.now();
+  if (existing === undefined) {
+    const row: NoCodeRow = { id: newResourceId("nocode"), moduleId: mod.id, versionId: version.id, enabled: enabled ?? false, createdAt: now, updatedAt: now };
+    await db.insert(noCodeModules).values(row);
+    return row;
+  }
+  await db.update(noCodeModules)
+    .set({ versionId: version.id, enabled: enabled ?? false, updatedAt: now })
+    .where(eq(noCodeModules.id, existing.id));
+  return { ...existing, versionId: version.id, enabled: enabled ?? false, updatedAt: now };
+}
+
 async function resolveProviderByIdForWrite(
   providerId: string,
   userId: string | undefined,
@@ -2223,58 +2292,21 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   // --- No-Code Module Allowlist ---
   .post("/api/v2/organizations/:org_name/no-code-modules", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    const hasSupportedPrincipal = user !== null && user !== undefined || teamId !== null && teamId !== undefined;
-    if (
-      org === undefined
-      || !hasSupportedPrincipal
-      || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
-    ) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
+    const access = await resolveOrgForNoCodeWrite(params["org_name"] ?? "", user, tokenOrgId, teamId, set);
+    if ("failure" in access) return access.failure;
+    const { org } = access;
 
     const input = noCodeInput(body, true);
     if ("error" in input) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
     }
-    if (input.moduleId === undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "registry-module relationship is required" }] };
-    }
-
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, input.moduleId) });
-    if (mod?.orgId !== org.id) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const version = input.versionPin === undefined
-      ? (await availableModuleVersions(mod.id))[0]
-      : await db.query.registryModuleVersions.findFirst({
-          where: and(
-            eq(registryModuleVersions.moduleId, mod.id),
-            eq(registryModuleVersions.version, input.versionPin),
-          ),
-        });
-    if (version?.status !== "ok") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "version-pin must identify a published version of the registry module" }] };
-    }
+    const target = await resolveNoCodeCreationTarget(org, input, set);
+    if ("failure" in target) return target.failure;
+    const { mod, version } = target;
 
     const existing = await db.query.noCodeModules.findFirst({ where: eq(noCodeModules.moduleId, mod.id) });
-    const now = Date.now();
-    const noCode = existing === undefined
-      ? { id: newResourceId("nocode"), moduleId: mod.id, versionId: version.id, enabled: input.enabled ?? false, createdAt: now, updatedAt: now }
-      : { ...existing, versionId: version.id, enabled: input.enabled ?? false, updatedAt: now };
-    if (existing === undefined) {
-      await db.insert(noCodeModules).values(noCode);
-    } else {
-      await db.update(noCodeModules)
-        .set({ versionId: version.id, enabled: input.enabled ?? false, updatedAt: now })
-        .where(eq(noCodeModules.id, existing.id));
-    }
+    const noCode = await upsertNoCodeRow(existing, mod, version, input.enabled);
     if (input.variableOptions !== undefined) await replaceVariableOptions(noCode.id, input.variableOptions);
     const options = await db.query.noCodeVariableOptions.findMany({
       where: eq(noCodeVariableOptions.noCodeModuleId, noCode.id),
