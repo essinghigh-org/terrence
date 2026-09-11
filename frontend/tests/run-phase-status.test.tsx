@@ -160,6 +160,19 @@ test("apply auto-open preserves an explicit collapse when execution starts", () 
 });
 
 test("apply auto-opens when execution starts with no explicit choice", () => {
-  const hook = renderHook(() => usePhaseOpen("run-auto", "applying", "finished", "running"));
+  // applyStatus stays pending so only the runStatus branch can open it.
+  const hook = renderHook(() => usePhaseOpen("run-auto", "applying", "finished", "pending"));
+  expect(hook.result.current.applyIsOpen).toBe(true);
+});
+
+test("navigating to a new run resets an explicit collapse", () => {
+  const hook = renderHook(
+    ({ id }: { id: string }) => usePhaseOpen(id, "applying", "finished", "running"),
+    { initialProps: { id: "run-a" } },
+  );
+  act((): void => { hook.result.current.setApplyExpanded(false); });
+  expect(hook.result.current.applyIsOpen).toBe(false);
+  hook.rerender({ id: "run-b" });
+  // The new run has no explicit choice: execution-start auto-open applies.
   expect(hook.result.current.applyIsOpen).toBe(true);
 });

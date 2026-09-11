@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { SyntheticEvent } from "react";
 import { RunDetail } from "../src/views/RunDetail";
@@ -338,9 +338,11 @@ test("an explicit apply collapse survives the apply starting", async () => {
     status = "applying";
     emit?.({ name: "run.status", data: { "run-id": "run-expand", status } });
   });
-  // The refresh lands (the apply section re-reads) but the explicit
-  // collapse is preserved instead of being forced back open.
+  // The refresh lands (the apply section re-reads and its heading reports
+  // the new Running state) but the explicit collapse is preserved instead
+  // of being forced back open.
   await waitFor((): void => { expect(applyReads).toBeGreaterThan(readsBeforeApply); });
+  await waitFor((): void => { expect(within(section).getByText("Running")).toBeTruthy(); });
   expect(section.open).toBe(false);
   expect(raw.open).toBe(false);
 });

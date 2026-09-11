@@ -23,6 +23,13 @@ export function usePhaseOpen(
   const [planExpanded, setPlanExpanded] = useState<boolean | null>(null);
   const [applyExpanded, setApplyExpanded] = useState<boolean | null>(null);
   const applyExecutionStarted = runStatus === "applying" || applyStatus === "running";
+  // Same-route navigation (run A -> run B) keeps this hook mounted: an
+  // explicit choice made on A must not leak into B. Declared first so the
+  // auto-open rule below still applies to the fresh run in the same commit.
+  useEffect((): void => {
+    setPlanExpanded(null);
+    setApplyExpanded(null);
+  }, [runId]);
   useEffect((): void => {
     // Auto-open on execution start, but never override an explicit user
     // choice: a deliberate collapse stays collapsed.
