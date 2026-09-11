@@ -1325,6 +1325,82 @@ async function queueTotalQuery(cursorMode: boolean, base: SQL | undefined): Prom
   return db.select({ total: count() }).from(runs).where(base);
 }
 
+function parseRerunMode(body: unknown, set: SetObj): Readonly<{ mode: "original" | "current" } | { failure: unknown }> {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const mode = payload["mode"] === "original" ? "original" : payload["mode"] === "current" || payload["mode"] === undefined ? "current" : null;
+  if (mode === null) {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "mode must be original or current" }] } };
+  }
+  return { mode };
+}
+
+async function restoreRerunOriginal(
+  configuration: Readonly<Record<string, unknown>> | undefined,
+  engine: Readonly<Record<string, unknown>> | undefined,
+  executionMaterial: string,
+  set: SetObj,
+): Promise<Readonly<{ configurationId: string | undefined; attributes: Record<string, unknown> } | { failure: unknown }>> {
+  const configurationId = typeof configuration?.["versionId"] === "string" ? configuration["versionId"] : undefined;
+  if (configurationId === undefined) {
+    (set as { status: number }).status = 409;
+    return { failure: { errors: [{ status: "409", title: "Conflict", detail: "The original configuration version is no longer available" }] } };
+  }
+  const restored: Record<string, unknown> = {};
+  try {
+    const material = JSON.parse(await decryptSecret(executionMaterial)) as { effectiveVariables?: unknown; variables?: unknown };
+    restored["variables"] = normalizeRunVariables(material.effectiveVariables ?? material.variables ?? []);
+    if (typeof engine?.["version"] === "string") restored["terraform-version"] = engine["version"];
+  } catch {
+    (set as { status: number }).status = 409;
+    return { failure: { errors: [{ status: "409", title: "Conflict", detail: "Original encrypted execution material is unavailable" }] } };
+  }
+  return { configurationId, attributes: restored };
+}
+
+function extractCreatedRunData(
+  created: Record<string, unknown> | { errors: { status: string; title: string; detail?: string }[] },
+): { data: Record<string, unknown>; newRunId: string | null } | null {
+  if (!("data" in created)) return null;
+  const createdData = created["data"];
+  if (createdData === null || typeof createdData !== "object") return null;
+  const record = createdData as Record<string, unknown>;
+  return { data: record, newRunId: typeof record["id"] === "string" ? record["id"] : null };
+}
+
+async function stampRerunManifest(
+  data: Record<string, unknown>,
+  newRunId: string | null,
+  manifest: Readonly<Record<string, unknown>>,
+  sourceRunId: string,
+  mode: "original" | "current",
+): Promise<void> {
+  const afterCapsule = newRunId === null
+    ? undefined
+    : await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, newRunId) });
+  const createdAttributes = data["attributes"];
+  if (createdAttributes === null || typeof createdAttributes !== "object" || afterCapsule === undefined) return;
+  const changedSinceSource = provenanceDiff(manifest, afterCapsule.publicManifest);
+  const rerunManifest = {
+    ...afterCapsule.publicManifest,
+    rerun: { mode, sourceRunId, changedSinceSource },
+  };
+  const rerunSha256 = sha256Hex(canonicalJson(rerunManifest));
+  await db.update(runProvenanceCapsules).set({
+    publicManifest: rerunManifest,
+    manifestSha256: rerunSha256,
+  }).where(eq(runProvenanceCapsules.id, afterCapsule.id));
+  const createdProvenance = (createdAttributes as Record<string, unknown>)["provenance"];
+  if (createdProvenance !== null && typeof createdProvenance === "object") {
+    (createdProvenance as Record<string, unknown>)["sha256"] = rerunSha256;
+  }
+  (createdAttributes as Record<string, unknown>)["rerun"] = {
+    mode,
+    sourceRunId,
+    changedSinceSource,
+  };
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -1773,12 +1849,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "plan");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const mode = payload["mode"] === "original" ? "original" : payload["mode"] === "current" || payload["mode"] === undefined ? "current" : null;
-    if (mode === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "mode must be original or current" }] };
-    }
+    const parsedMode = parseRerunMode(body, set);
+    if ("failure" in parsedMode) return parsedMode.failure;
+    const { mode } = parsedMode;
     const capsule = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
     if (capsule === undefined) {
       (set as { status: number }).status = 409;
@@ -1790,52 +1863,15 @@ export const runRoutes = new Elysia({ name: "runs" })
     const attributes: Record<string, unknown> = { message: `Re-run of ${runId}` };
     let configurationId: string | undefined;
     if (mode === "original") {
-      configurationId = typeof configuration?.["versionId"] === "string" ? configuration["versionId"] : undefined;
-      if (configurationId === undefined) {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "The original configuration version is no longer available" }] };
-      }
-      try {
-        const material = JSON.parse(await decryptSecret(capsule.executionMaterial)) as { effectiveVariables?: unknown; variables?: unknown };
-        const originalVariables = normalizeRunVariables(material.effectiveVariables ?? material.variables ?? []);
-        attributes["variables"] = originalVariables;
-        if (typeof engine?.["version"] === "string") attributes["terraform-version"] = engine["version"];
-      } catch {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "Original encrypted execution material is unavailable" }] };
-      }
+      const restored = await restoreRerunOriginal(configuration, engine, capsule.executionMaterial, set);
+      if ("failure" in restored) return restored.failure;
+      configurationId = restored.configurationId;
+      Object.assign(attributes, restored.attributes);
     }
     const created = await createRun(authorized.workspace.id, attributes, configurationId, user, null, teamId ?? null, set);
-    if (!("data" in created)) return created;
-    const createdData = created["data"];
-    if (createdData === null || typeof createdData !== "object") return created;
-    const createdDataRecord = createdData as Record<string, unknown>;
-    const newRunId = typeof createdDataRecord["id"] === "string" ? createdDataRecord["id"] : null;
-    const afterCapsule = newRunId === null
-      ? undefined
-      : await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, newRunId) });
-    const createdAttributes = createdDataRecord["attributes"];
-    if (createdAttributes !== null && typeof createdAttributes === "object" && afterCapsule !== undefined) {
-      const changedSinceSource = provenanceDiff(manifest, afterCapsule.publicManifest);
-      const rerunManifest = {
-        ...afterCapsule.publicManifest,
-        rerun: { mode, sourceRunId: runId, changedSinceSource },
-      };
-      const rerunSha256 = sha256Hex(canonicalJson(rerunManifest));
-      await db.update(runProvenanceCapsules).set({
-        publicManifest: rerunManifest,
-        manifestSha256: rerunSha256,
-      }).where(eq(runProvenanceCapsules.id, afterCapsule.id));
-      const createdProvenance = (createdAttributes as Record<string, unknown>)["provenance"];
-      if (createdProvenance !== null && typeof createdProvenance === "object") {
-        (createdProvenance as Record<string, unknown>)["sha256"] = rerunSha256;
-      }
-      (createdAttributes as Record<string, unknown>)["rerun"] = {
-        mode,
-        sourceRunId: runId,
-        changedSinceSource,
-      };
-    }
+    const extracted = extractCreatedRunData(created);
+    if (extracted === null) return created;
+    await stampRerunManifest(extracted.data, extracted.newRunId, manifest, runId, mode);
     return created;
   })
   .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
