@@ -342,6 +342,72 @@ async function checkRegistryManagementRead(
     );
 }
 
+type TestConfigVersionRow = DeepReadonly<typeof moduleTestConfigurationVersions.$inferSelect>;
+
+async function resolveTestConfigVersionForUpload(
+  configurationVersionId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<Readonly<{ configuration: TestConfigVersionRow; mod: ModItem } | { failure: unknown }>> {
+  const configuration = await db.query.moduleTestConfigurationVersions.findFirst({ where: eq(moduleTestConfigurationVersions.id, configurationVersionId) });
+  const mod = configuration === undefined ? undefined : await db.query.registryModules.findFirst({ where: eq(registryModules.id, configuration.moduleId) });
+  const path = `/api/v2/module-test-configuration-versions/${configurationVersionId}/upload`;
+  const authorized = mod !== undefined && (await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"));
+  if (configuration === undefined || mod === undefined || (!authorized && !validSignedApiURL(request, path, "PUT"))) return { failure: registryNotFound(set) };
+  return { configuration, mod };
+}
+
+async function readAndValidateUploadArchive(
+  body: unknown,
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<Readonly<{ bytes: Uint8Array } | { failure: unknown }>> {
+  const contentLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > MAX_MODULE_ARCHIVE_BYTES) {
+    (set as { status: number }).status = 413;
+    return { failure: { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds the upload limit" }] } };
+  }
+  const bytes = await uploadedBytes(body, request);
+  if (bytes.byteLength === 0) {
+    (set as { status: number }).status = 400;
+    return { failure: { errors: [{ status: "400", title: "Bad Request", detail: "Configuration archive is empty" }] } };
+  }
+  if (bytes.byteLength > MAX_MODULE_ARCHIVE_BYTES) {
+    (set as { status: number }).status = 413;
+    return { failure: { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds the upload limit" }] } };
+  }
+  return { bytes };
+}
+
+async function claimAndStoreConfigArchive(
+  configurationId: string,
+  bytes: Uint8Array,
+): Promise<Readonly<{ alreadyUploaded: true } | { stored: true }>> {
+  const claimed = await db.update(moduleTestConfigurationVersions)
+    .set({ status: "uploading" })
+    .where(and(
+      eq(moduleTestConfigurationVersions.id, configurationId),
+      eq(moduleTestConfigurationVersions.status, "pending"),
+      isNull(moduleTestConfigurationVersions.archivePath),
+    ))
+    .returning({ id: moduleTestConfigurationVersions.id });
+  if (claimed.length !== 1) return { alreadyUploaded: true as const };
+  const archivePath = join(CV_STORAGE_DIR, `module-test-config-${configurationId}.tar.gz`);
+  try {
+    await mkdir(CV_STORAGE_DIR, { recursive: true, mode: 0o700 });
+    await writeFile(archivePath, bytes, { mode: 0o600 });
+    const uploadedAt = Date.now();
+    await db.update(moduleTestConfigurationVersions).set({ archivePath, status: "uploaded", uploadedAt }).where(eq(moduleTestConfigurationVersions.id, configurationId));
+  } catch (error: unknown) {
+    await db.update(moduleTestConfigurationVersions).set({ status: "pending" }).where(and(eq(moduleTestConfigurationVersions.id, configurationId), eq(moduleTestConfigurationVersions.status, "uploading")));
+    throw error;
+  }
+  return { stored: true as const };
+}
+
 async function uploadedBytes(body: unknown, request: ParamCtx["request"]): Promise<Uint8Array> {
   if (body instanceof Blob) return new Uint8Array(await body.arrayBuffer());
   if (body instanceof ArrayBuffer) return new Uint8Array(body);
@@ -3007,46 +3073,15 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: testConfigurationVersionResource({ id, moduleId: mod.id, archivePath: null, status: "pending", createdAt: now, uploadedAt: null }, mod.id, request) };
   })
   .put("/api/v2/module-test-configuration-versions/:configuration_version_id/upload", async ({ params, body, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const configuration = await db.query.moduleTestConfigurationVersions.findFirst({ where: eq(moduleTestConfigurationVersions.id, params["configuration_version_id"] ?? "") });
-    const mod = configuration === undefined ? undefined : await db.query.registryModules.findFirst({ where: eq(registryModules.id, configuration.moduleId) });
-    const path = `/api/v2/module-test-configuration-versions/${params["configuration_version_id"] ?? ""}/upload`;
-    const authorized = mod !== undefined && (await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"));
-    if (configuration === undefined || mod === undefined || (!authorized && !validSignedApiURL(request, path, "PUT"))) return registryNotFound(set);
-    const contentLength = Number(request.headers.get("content-length"));
-    if (Number.isFinite(contentLength) && contentLength > MAX_MODULE_ARCHIVE_BYTES) {
-      (set as { status: number }).status = 413;
-      return { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds the upload limit" }] };
-    }
-    const bytes = await uploadedBytes(body, request);
-    if (bytes.byteLength === 0) {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Configuration archive is empty" }] };
-    }
-    if (bytes.byteLength > MAX_MODULE_ARCHIVE_BYTES) {
-      (set as { status: number }).status = 413;
-      return { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds the upload limit" }] };
-    }
-    const claimed = await db.update(moduleTestConfigurationVersions)
-      .set({ status: "uploading" })
-      .where(and(
-        eq(moduleTestConfigurationVersions.id, configuration.id),
-        eq(moduleTestConfigurationVersions.status, "pending"),
-        isNull(moduleTestConfigurationVersions.archivePath),
-      ))
-      .returning({ id: moduleTestConfigurationVersions.id });
-    if (claimed.length !== 1) {
+    const access = await resolveTestConfigVersionForUpload(params["configuration_version_id"] ?? "", user?.id, tokenOrgId, teamId, request, set);
+    if ("failure" in access) return access.failure;
+    const { configuration, mod } = access;
+    const archive = await readAndValidateUploadArchive(body, request, set);
+    if ("failure" in archive) return archive.failure;
+    const stored = await claimAndStoreConfigArchive(configuration.id, archive.bytes);
+    if ("alreadyUploaded" in stored) {
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
-    }
-    const archivePath = join(CV_STORAGE_DIR, `module-test-config-${configuration.id}.tar.gz`);
-    try {
-      await mkdir(CV_STORAGE_DIR, { recursive: true, mode: 0o700 });
-      await writeFile(archivePath, bytes, { mode: 0o600 });
-      const uploadedAt = Date.now();
-      await db.update(moduleTestConfigurationVersions).set({ archivePath, status: "uploaded", uploadedAt }).where(eq(moduleTestConfigurationVersions.id, configuration.id));
-    } catch (error: unknown) {
-      await db.update(moduleTestConfigurationVersions).set({ status: "pending" }).where(and(eq(moduleTestConfigurationVersions.id, configuration.id), eq(moduleTestConfigurationVersions.status, "uploading")));
-      throw error;
     }
     const updated = await db.query.moduleTestConfigurationVersions.findFirst({ where: eq(moduleTestConfigurationVersions.id, configuration.id) });
     if (updated === undefined) return registryNotFound(set);
