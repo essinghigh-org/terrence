@@ -657,6 +657,365 @@ function isApplicationLogoutRequest(request: RequestInfo): boolean {
   }
 }
 
+class SamlAuthError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
+}
+
+function parseSamlCallbackInput(
+  body: unknown,
+  query: Readonly<Record<string, unknown>>,
+): { samlResponse: string; relayState: string | null } {
+  const form = (body !== null && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  const samlResponse = typeof form["SAMLResponse"] === "string"
+    ? form["SAMLResponse"]
+    : typeof query["SAMLResponse"] === "string"
+      ? query["SAMLResponse"]
+      : "";
+  const relayState = typeof form["RelayState"] === "string"
+    ? form["RelayState"]
+    : typeof query["RelayState"] === "string" ? query["RelayState"] : null;
+  if (samlResponse === "") {
+    throw new SamlAuthError(400, "Missing SAMLResponse.");
+  }
+  return { samlResponse, relayState };
+}
+
+function decodeSamlXml(samlResponse: string): string {
+  try {
+    return decodeSamlMessage(samlResponse);
+  } catch {
+    throw new SamlAuthError(400, "The SAML response could not be decoded.");
+  }
+}
+
+function parseSamlResponseDocument(xml: string): DomElement {
+  let responseDoc: ReturnType<DOMParser["parseFromString"]>;
+  try {
+    responseDoc = new DOMParser({ errorHandler: (): void => undefined }).parseFromString(xml, "text/xml");
+  } catch {
+    throw new SamlAuthError(400, "The SAML response could not be parsed.");
+  }
+  const responseElement = domElement(responseDoc, "Response");
+  if (responseElement === null) {
+    throw new SamlAuthError(400, "The SAML response could not be parsed.");
+  }
+  return responseElement;
+}
+
+async function assertSamlSuccessStatus(responseElement: DomElement): Promise<void> {
+  // Reject an explicitly failed response. Status is outside an
+  // assertion-only signature, so the signed assertion below remains the
+  // authentication gate when the IdP does not sign the Response element.
+  const statusCode = domElement(responseElement, "StatusCode")?.getAttribute("Value") ?? "";
+  if (statusCode !== SAML_SUCCESS_STATUS) {
+    await auditLog("sso-failure", "saml", null, null, null, { reason: "non-success status" });
+    throw new SamlAuthError(400, "The SAML response reports a failed authentication.");
+  }
+}
+
+async function verifySamlAssertionSignature(xml: string, settings: SamlRow): Promise<Extract<SignedAssertionResult, { valid: true }>> {
+  const certificates = [settings.idpCert, settings.oldIdpCert].filter((cert): cert is string => typeof cert === "string" && cert !== "");
+  const signature = signedAssertionResult(xml, certificates);
+  if (!signature.valid) {
+    await auditLog("sso-failure", "saml", null, null, null, { reason: signature.error });
+    throw new SamlAuthError(400, signature.error);
+  }
+  return signature;
+}
+
+function parseVerifiedAssertion(assertionXml: string): DomElement {
+  // Parse only the assertion that was actually covered by the verified
+  // signature — never the full untrusted document.
+  try {
+    const verifiedDoc = new DOMParser({ errorHandler: (): void => undefined }).parseFromString(assertionXml, "text/xml");
+    const assertion = domElement(verifiedDoc, "Assertion");
+    if (assertion === null) throw new Error("no assertion");
+    return assertion;
+  } catch {
+    throw new SamlAuthError(400, "The SAML response contains no assertion.");
+  }
+}
+
+function assertAssertionAudience(assertionElement: DomElement, entityId: string): void {
+  const audiences = domElements(assertionElement, "AudienceRestriction").flatMap((restriction): string[] =>
+    domElements(restriction, "Audience").map((audience): string => audience.textContent?.trim() ?? "")
+  );
+  if (audiences.length === 0 || !audiences.includes(entityId)) {
+    throw new SamlAuthError(400, "SAML assertion audience does not match this instance.");
+  }
+}
+
+function assertAssertionTimeWindow(conditionsElement: DomElement | null, now: number): void {
+  const notBefore = conditionsElement?.getAttribute("NotBefore") ?? undefined;
+  const notOnOrAfter = conditionsElement?.getAttribute("NotOnOrAfter") ?? undefined;
+  const parseInstant = (value: unknown): number | undefined =>
+    typeof value === "string" ? Date.parse(value) : undefined;
+  const notBeforeMs = parseInstant(notBefore);
+  if (notBeforeMs !== undefined && (Number.isNaN(notBeforeMs) || notBeforeMs - TIME_SKEW_MS > now)) {
+    throw new SamlAuthError(400, "SAML assertion is not yet valid.");
+  }
+  const notOnOrAfterMs = parseInstant(notOnOrAfter);
+  if (notOnOrAfterMs !== undefined && (Number.isNaN(notOnOrAfterMs) || notOnOrAfterMs + TIME_SKEW_MS < now)) {
+    throw new SamlAuthError(400, "SAML assertion has expired.");
+  }
+}
+
+function assertAssertionConstraints(args: {
+  assertionElement: DomElement;
+  responseElement: DomElement;
+  assertionConsumerService: string;
+  entityId: string;
+  now: number;
+}): string {
+  // Reject replays: an assertion whose ID we have already consumed within
+  // its validity window is a re-submission of a live assertion.
+  const assertionId = args.assertionElement.getAttribute("ID") ?? "";
+  if (assertionId === "") {
+    throw new SamlAuthError(400, "The SAML assertion has no ID.");
+  }
+  const responseDestination = args.responseElement.getAttribute("Destination");
+  if (typeof responseDestination === "string" && responseDestination !== "" && responseDestination !== args.assertionConsumerService) {
+    throw new SamlAuthError(400, "SAML assertion Destination does not match the ACS URL.");
+  }
+  assertAssertionTimeWindow(domElement(args.assertionElement, "Conditions"), args.now);
+  assertAssertionAudience(args.assertionElement, args.entityId);
+  return assertionId;
+}
+
+function assertSamlIssuer(assertionElement: DomElement, settings: SamlRow): void {
+  const assertionIssuerText = domText(assertionElement, "Issuer");
+  if (typeof settings.idpEntityId !== "string" || settings.idpEntityId === ""
+    || assertionIssuerText !== settings.idpEntityId) {
+    throw new SamlAuthError(400, "SAML assertion issuer does not match the configured identity provider.");
+  }
+}
+
+function resolveBearerSubject(args: {
+  assertionElement: DomElement;
+  assertionConsumerService: string;
+  now: number;
+}): { subjectElement: DomElement | null; nameIdText: string; inResponseTo: string } {
+  const subjectElement = domElement(args.assertionElement, "Subject");
+  const confirmationList = domElements(subjectElement, "SubjectConfirmation");
+  const validConfirmation = confirmationList.find((confirmation): boolean => {
+    if (confirmation.getAttribute("Method") !== BEARER) return false;
+    const data = domElement(confirmation, "SubjectConfirmationData");
+    if (data === null) return false;
+    const inResponseTo = data.getAttribute("InResponseTo") ?? "";
+    const recipient = data.getAttribute("Recipient") ?? "";
+    const notOnOrAfter = data.getAttribute("NotOnOrAfter") ?? "";
+    if (inResponseTo === "" || recipient !== args.assertionConsumerService || notOnOrAfter === "") return false;
+    const expiresAt = Date.parse(notOnOrAfter);
+    return !Number.isNaN(expiresAt) && expiresAt + TIME_SKEW_MS >= args.now;
+  });
+  if (validConfirmation === undefined) {
+    throw new SamlAuthError(400, "SAML subject confirmation is invalid or does not match this request.");
+  }
+  const subjectData = domElement(validConfirmation, "SubjectConfirmationData");
+  const inResponseTo = subjectData?.getAttribute("InResponseTo") ?? "";
+  const nameIdText = domText(subjectElement, "NameID");
+  if (nameIdText === "") {
+    throw new SamlAuthError(400, "The SAML assertion contains no NameID.");
+  }
+  return { subjectElement, nameIdText, inResponseTo };
+}
+
+async function assertSamlChallengeBinding(args: {
+  request: RequestInfo;
+  relayState: string | null;
+  inResponseTo: string;
+  assertionId: string;
+}): Promise<{ issuedTokenResponse: boolean }> {
+  if (cookieValue(args.request, SAML_STATE_COOKIE) !== args.inResponseTo) {
+    throw new SamlAuthError(400, "SAML response does not match the browser that started this sign-in.");
+  }
+  const authnChallenge = typeof args.inResponseTo === "string"
+    ? await consumeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, args.inResponseTo)
+    : undefined;
+  const issuedRelayState = authnChallenge?.["relayState"] === null || typeof authnChallenge?.["relayState"] === "string"
+    ? authnChallenge["relayState"]
+    : undefined;
+  if (issuedRelayState === undefined || issuedRelayState !== args.relayState) {
+    throw new SamlAuthError(400, "SAML response does not match an issuance from this instance.");
+  }
+  const issuedTokenResponse = authnChallenge?.["tokenResponse"] === true;
+  if (!(await claimSsoChallenge(
+    SAML_ASSERTION_CHALLENGE_KIND,
+    args.assertionId,
+    {},
+    Date.now() + TIME_SKEW_MS + 10 * 60 * 1000,
+  ))) {
+    throw new SamlAuthError(400, "SAML assertion has already been used.");
+  }
+  return { issuedTokenResponse };
+}
+
+async function resolveSamlIdentity(args: {
+  assertionElement: DomElement;
+  nameIdText: string;
+  settings: SamlRow;
+}): Promise<{
+  username: string;
+  email: string | undefined;
+  allowEmailLinking: boolean;
+  groups: string[];
+  siteAdminMatches: boolean;
+  attrGroupsConfigured: boolean;
+}> {
+  const attributesList = domElements(args.assertionElement, "AttributeStatement")
+    .flatMap((statement): SamlAttribute[] => samlAttributes(statement));
+  const usernameValues = namedAttribute(attributesList, args.settings.attrUsername);
+  const username = usernameValues[0] ?? args.nameIdText;
+  // Linking by email must be anchored to an explicitly configured attribute:
+  // guessing among well-known names could attach an identity by an attribute
+  // the administrator never vetted.
+  const attrEmailConfigured = typeof args.settings.attrEmail === "string" && args.settings.attrEmail !== "";
+  const emailAttributeNames = attrEmailConfigured
+    ? [args.settings.attrEmail]
+    : ["email", "mail", "Email", "EmailAddress"];
+  const emailValues = emailAttributeNames.flatMap((name): string[] => namedAttribute(attributesList, name));
+  const email = emailValues[0] ?? (args.nameIdText.includes("@") ? args.nameIdText : undefined);
+  // Group mapping runs only when attrGroups is configured: an empty setting
+  // (misconfiguration) must never wipe SAML-sourced memberships by treating
+  // the assertion as group-less. When configured, an assertion that omits
+  // the attribute synchronizes an empty set so stale memberships are pruned.
+  const attrGroupsConfigured = args.settings.attrGroups !== null && args.settings.attrGroups !== "";
+  const groups = attrGroupsConfigured
+    ? namedAttribute(attributesList, args.settings.attrGroups).flatMap((value): string[] =>
+        value.split(",").map((part): string => part.trim()).filter((part): boolean => part !== "")
+      )
+    : [];
+  const siteAdminMatches = args.settings.attrSiteAdmin !== null && args.settings.attrSiteAdmin !== ""
+    && namedAttribute(attributesList, args.settings.attrSiteAdmin).includes(args.settings.siteAdminRole);
+  const linkByEmailEnabled = (await getSettings("saml"))["link-by-email"] === true;
+  return {
+    username,
+    email,
+    allowEmailLinking: linkByEmailEnabled && attrEmailConfigured,
+    groups,
+    siteAdminMatches,
+    attrGroupsConfigured,
+  };
+}
+
+async function provisionSamlAccount(args: {
+  nameIdText: string;
+  username: string;
+  email: string | undefined;
+  allowEmailLinking: boolean;
+}) {
+  let result: Awaited<ReturnType<typeof provisionSsoUser>>;
+  try {
+    result = await provisionSsoUser({
+      provider: "saml",
+      subject: args.nameIdText,
+      username: args.username,
+      email: args.email ?? null,
+      // SAML attribute statements are signed with the IdP assertion, so
+      // the operator-controlled directory is the verification authority.
+      emailVerified: true,
+      allowEmailLinking: args.allowEmailLinking,
+    });
+  } catch (error: unknown) {
+    if (error instanceof SsoConflictError) {
+      await auditLog("sso-conflict", "saml", null, null, null, { username: error.username });
+      throw new SamlAuthError(409, error.message);
+    }
+    throw error;
+  }
+  const user = result.user;
+  // Do not synchronize groups or elevate a suspended, provisional, or
+  // tombstoned account while processing a signed assertion. Those writes must
+  // never happen before the account-availability check.
+  if (isUserLoginBlocked(user)) {
+    await auditLog("sso-failure", "saml", user.id, user.id, null, { reason: "account is suspended, provisional, or deleted" });
+    throw new SamlAuthError(403, "This account is not available.");
+  }
+  return user;
+}
+
+type SamlProvisionedUser = Awaited<ReturnType<typeof provisionSamlAccount>>;
+
+async function syncSamlAccountState(args: {
+  user: SamlProvisionedUser;
+  settings: SamlRow;
+  siteAdminMatches: boolean;
+  attrGroupsConfigured: boolean;
+  groups: string[];
+}) {
+  const user = args.user;
+  if (args.attrGroupsConfigured) {
+    await syncSamlGroupMappings(user.id, args.groups);
+  }    // The site-admin attribute is authoritative in both directions: matching
+  // promotes, and once an account's admin status is SAML-sourced, losing the
+  // role demotes it so the IdP can revoke elevated access. If the attribute
+  // is misconfigured (empty `attrSiteAdmin`), we never touch the flag.
+  if (args.settings.attrSiteAdmin !== null && args.settings.attrSiteAdmin !== "" && args.settings.siteAdminRole !== "") {
+    const noLongerSiteAdmin = user.isSiteAdmin && !args.siteAdminMatches;
+    if (args.siteAdminMatches && !user.isSiteAdmin) {
+      await db.update(users).set({ isSiteAdmin: true, ssoSiteAdmin: true }).where(eq(users.id, user.id));
+      await auditLog("sso-site-admin", "saml", user.id, user.id, null, { username: user.username, role: args.settings.siteAdminRole });
+    } else if (noLongerSiteAdmin && user.ssoSiteAdmin) {
+      await db.update(users).set({ isSiteAdmin: false, ssoSiteAdmin: false }).where(eq(users.id, user.id));
+      await auditLog("sso-site-admin-revoked", "saml", user.id, user.id, null, { username: user.username, role: args.settings.siteAdminRole });
+    }
+  }
+  const refreshedUser = await db.query.users.findFirst({ where: eq(users.id, user.id) });
+  if (refreshedUser === undefined) {
+    throw new SamlAuthError(500, "The signed-in account is unavailable.");
+  }
+  if (isUserLoginBlocked(refreshedUser)) {
+    await auditLog("sso-failure", "saml", refreshedUser.id, refreshedUser.id, null, { reason: "account is suspended or deleted" });
+    throw new SamlAuthError(403, "This account is not available.");
+  }
+  return refreshedUser;
+}
+
+async function completeSamlLogin(args: {
+  user: Awaited<ReturnType<typeof syncSamlAccountState>>;
+  settings: SamlRow;
+  issuedTokenResponse: boolean;
+  set: SetObj;
+  request: RequestInfo;
+  server?: unknown;
+}): Promise<unknown> {
+  const tokenTtlMs = typeof args.settings.ssoApiTokenSessionTimeout === "number" && args.settings.ssoApiTokenSessionTimeout > 0
+    ? args.settings.ssoApiTokenSessionTimeout * 1000
+    : DEFAULT_SSO_API_TOKEN_TTL_MS;
+  const session = await issueSsoLogin(args.user, { set: args.set, request: args.request, server: args.server }, {
+    tokenTtlMs,
+    wantsToken: args.issuedTokenResponse,
+  });
+  await auditLog("sso-login", "saml", args.user.id, args.user.id, null, { username: args.user.username });
+  // The browser-session refresh cookie is written into set.headers by
+  // issueLoginSession; attach it to the HTML response we return.
+  const respond = (body: string, status = 200): Response => {
+    const response = ssoHtmlResponse(body, status);
+    appendSetCookies(response, args.set.headers["Set-Cookie"]);
+    clearSamlStateCookie(args.request, response, args.server);
+    return response;
+  };
+  const sessionToken = sessionTokenValue(session);
+  if (args.issuedTokenResponse) {
+    if (sessionToken === null) {
+      await auditLog("sso-failure", "saml", args.user.id, args.user.id, null, { reason: "SSO token response was malformed" });
+      return respond(ssoHtmlPage("SAML SSO", "The sign-in token could not be issued.", { error: true }), 500);
+    }
+    const response = Response.json(session, {
+      headers: {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/vnd.api+json",
+      },
+    });
+    appendSetCookies(response, args.set.headers["Set-Cookie"]);
+    clearSamlStateCookie(args.request, response, args.server);
+    return response;
+  }
+  return respond(ssoHtmlPage("SAML SSO", "You are signed in.", { redirectUrl: "/app" }));
+}
+
 export const samlRoutes = new Elysia({ name: "saml-sso" })
   .get("/users/saml/metadata", async ({ request }: {
     request: RequestInfo;
@@ -752,281 +1111,28 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       return callbackResponse(request, set, ssoHtmlPage("SAML SSO", message), status, server);
     };
 
-    const form = (body !== null && typeof body === "object" ? body : {}) as Record<string, unknown>;
-    const samlResponse = typeof form["SAMLResponse"] === "string"
-      ? form["SAMLResponse"]
-      : typeof query["SAMLResponse"] === "string"
-        ? query["SAMLResponse"]
-        : "";
-    const relayState = typeof form["RelayState"] === "string"
-      ? form["RelayState"]
-      : typeof query["RelayState"] === "string" ? query["RelayState"] : null;
-    if (samlResponse === "") {
-      (set as { status: number }).status = 400;
-      return reject("Missing SAMLResponse.", 400);
-    }
-
-    let xml: string;
     try {
-      xml = decodeSamlMessage(samlResponse);
-    } catch {
-      (set as { status: number }).status = 400;
-      return reject("The SAML response could not be decoded.", 400);
-    }
+      const { samlResponse, relayState } = parseSamlCallbackInput(body, query);
+      const xml = decodeSamlXml(samlResponse);
+      const responseElement = parseSamlResponseDocument(xml);
+      await assertSamlSuccessStatus(responseElement);
+      const signature = await verifySamlAssertionSignature(xml, settings);
+      const assertionElement = parseVerifiedAssertion(signature.assertionXml);
+      const now = Date.now();
+      const assertionId = assertAssertionConstraints({ assertionElement, responseElement, assertionConsumerService, entityId, now });
 
-    // Parse the top-level response with the DOM parser so structure,
-    // attributes, and signatures all come from the same source.
-    let responseDoc: ReturnType<DOMParser["parseFromString"]>;
-    try {
-      responseDoc = new DOMParser({ errorHandler: (): void => undefined }).parseFromString(xml, "text/xml");
-    } catch {
-      (set as { status: number }).status = 400;
-      return reject("The SAML response could not be parsed.", 400);
-    }
-    const responseElement = domElement(responseDoc, "Response");
-    if (responseElement === null) {
-      (set as { status: number }).status = 400;
-      return reject("The SAML response could not be parsed.", 400);
-    }
+      assertSamlIssuer(assertionElement, settings);
+      const { nameIdText, inResponseTo } = resolveBearerSubject({ assertionElement, assertionConsumerService, now });
+      const { issuedTokenResponse } = await assertSamlChallengeBinding({ request, relayState, inResponseTo, assertionId });
+      const identity = await resolveSamlIdentity({ assertionElement, nameIdText, settings });
 
-    // Reject an explicitly failed response. Status is outside an
-    // assertion-only signature, so the signed assertion below remains the
-    // authentication gate when the IdP does not sign the Response element.
-    const statusCode = domElement(responseElement, "StatusCode")?.getAttribute("Value") ?? "";
-    if (statusCode !== SAML_SUCCESS_STATUS) {
-      await auditLog("sso-failure", "saml", null, null, null, { reason: "non-success status" });
-      (set as { status: number }).status = 400;
-      return reject("The SAML response reports a failed authentication.", 400);
-    }
-
-    const now = Date.now();
-
-    const certificates = [settings.idpCert, settings.oldIdpCert].filter((cert): cert is string => typeof cert === "string" && cert !== "");
-    const signature = signedAssertionResult(xml, certificates);
-    if (!signature.valid) {
-      await auditLog("sso-failure", "saml", null, null, null, { reason: signature.error });
-      (set as { status: number }).status = 400;
-      return reject(signature.error, 400);
-    }
-
-    // Parse only the assertion that was actually covered by the verified
-    // signature — never the full untrusted document.
-    let assertionElement: DomElement;
-    try {
-      const verifiedDoc = new DOMParser({ errorHandler: (): void => undefined }).parseFromString(signature.assertionXml, "text/xml");
-      const assertion = domElement(verifiedDoc, "Assertion");
-      if (assertion === null) throw new Error("no assertion");
-      assertionElement = assertion;
-    } catch {
-      (set as { status: number }).status = 400;
-      return reject("The SAML response contains no assertion.", 400);
-    }
-
-    // Reject replays: an assertion whose ID we have already consumed within
-    // its validity window is a re-submission of a live assertion.
-    const assertionIdElement = assertionElement.getAttribute("ID") ?? "";
-    if (assertionIdElement === "") {
-      (set as { status: number }).status = 400;
-      return reject("The SAML assertion has no ID.", 400);
-    }
-
-    const responseDestination = responseElement.getAttribute("Destination");
-    if (typeof responseDestination === "string" && responseDestination !== "" && responseDestination !== assertionConsumerService) {
-      return reject("SAML assertion Destination does not match the ACS URL.", 400);
-    }
-    const conditionsElement = domElement(assertionElement, "Conditions");
-    const notBefore = conditionsElement?.getAttribute("NotBefore") ?? undefined;
-    const notOnOrAfter = conditionsElement?.getAttribute("NotOnOrAfter") ?? undefined;
-    const parseInstant = (value: unknown): number | undefined =>
-      typeof value === "string" ? Date.parse(value) : undefined;
-    const notBeforeMs = parseInstant(notBefore);
-    if (notBeforeMs !== undefined && (Number.isNaN(notBeforeMs) || notBeforeMs - TIME_SKEW_MS > now)) {
-      return reject("SAML assertion is not yet valid.", 400);
-    }
-    const notOnOrAfterMs = parseInstant(notOnOrAfter);
-    if (notOnOrAfterMs !== undefined && (Number.isNaN(notOnOrAfterMs) || notOnOrAfterMs + TIME_SKEW_MS < now)) {
-      return reject("SAML assertion has expired.", 400);
-    }
-
-    const audiences = domElements(assertionElement, "AudienceRestriction").flatMap((restriction): string[] =>
-      domElements(restriction, "Audience").map((audience): string => audience.textContent?.trim() ?? "")
-    );
-    if (audiences.length === 0 || !audiences.includes(entityId)) {
-      return reject("SAML assertion audience does not match this instance.", 400);
-    }
-
-    const assertionIssuerText = domText(assertionElement, "Issuer");
-    if (typeof settings.idpEntityId !== "string" || settings.idpEntityId === ""
-      || assertionIssuerText !== settings.idpEntityId) {
-      return reject("SAML assertion issuer does not match the configured identity provider.", 400);
-    }
-
-    const subjectElement = domElement(assertionElement, "Subject");
-    const confirmationList = domElements(subjectElement, "SubjectConfirmation");
-    const validConfirmation = confirmationList.find((confirmation): boolean => {
-      if (confirmation.getAttribute("Method") !== BEARER) return false;
-      const data = domElement(confirmation, "SubjectConfirmationData");
-      if (data === null) return false;
-      const inResponseTo = data.getAttribute("InResponseTo") ?? "";
-      const recipient = data.getAttribute("Recipient") ?? "";
-      const notOnOrAfter = data.getAttribute("NotOnOrAfter") ?? "";
-      if (inResponseTo === "" || recipient !== assertionConsumerService || notOnOrAfter === "") return false;
-      const expiresAt = Date.parse(notOnOrAfter);
-      return !Number.isNaN(expiresAt) && expiresAt + TIME_SKEW_MS >= now;
-    });
-    if (validConfirmation === undefined) {
-      return reject("SAML subject confirmation is invalid or does not match this request.", 400);
-    }
-    const subjectData = domElement(validConfirmation, "SubjectConfirmationData");
-    const inResponseTo = subjectData?.getAttribute("InResponseTo") ?? "";
-
-    const nameIdText = domText(subjectElement, "NameID");
-    if (nameIdText === "") {
-      return reject("The SAML assertion contains no NameID.", 400);
-    }
-
-    if (cookieValue(request, SAML_STATE_COOKIE) !== inResponseTo) {
-      return reject("SAML response does not match the browser that started this sign-in.", 400);
-    }
-
-    const authnChallenge = typeof inResponseTo === "string"
-      ? await consumeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, inResponseTo)
-      : undefined;
-    const issuedRelayState = authnChallenge?.["relayState"] === null || typeof authnChallenge?.["relayState"] === "string"
-      ? authnChallenge["relayState"]
-      : undefined;
-    if (issuedRelayState === undefined || issuedRelayState !== relayState) {
-      return reject("SAML response does not match an issuance from this instance.", 400);
-    }
-    const issuedTokenResponse = authnChallenge?.["tokenResponse"] === true;
-    if (!(await claimSsoChallenge(
-      SAML_ASSERTION_CHALLENGE_KIND,
-      assertionIdElement,
-      {},
-      Date.now() + TIME_SKEW_MS + 10 * 60 * 1000,
-    ))) {
-      return reject("SAML assertion has already been used.", 400);
-    }
-
-    const attributesList = domElements(assertionElement, "AttributeStatement")
-      .flatMap((statement): SamlAttribute[] => samlAttributes(statement));
-  const usernameValues = namedAttribute(attributesList, settings.attrUsername);
-  const username = usernameValues[0] ?? nameIdText;
-  // Linking by email must be anchored to an explicitly configured attribute:
-  // guessing among well-known names could attach an identity by an attribute
-  // the administrator never vetted.
-  const attrEmailConfigured = typeof settings.attrEmail === "string" && settings.attrEmail !== "";
-  const emailAttributeNames = attrEmailConfigured
-    ? [settings.attrEmail]
-    : ["email", "mail", "Email", "EmailAddress"];
-  const emailValues = emailAttributeNames.flatMap((name): string[] => namedAttribute(attributesList, name));
-  const email = emailValues[0] ?? (nameIdText.includes("@") ? nameIdText : undefined);
-  // Group mapping runs only when attrGroups is configured: an empty setting
-  // (misconfiguration) must never wipe SAML-sourced memberships by treating
-  // the assertion as group-less. When configured, an assertion that omits
-  // the attribute synchronizes an empty set so stale memberships are pruned.
-  const attrGroupsConfigured = settings.attrGroups !== null && settings.attrGroups !== "";
-  const groups = attrGroupsConfigured
-    ? namedAttribute(attributesList, settings.attrGroups).flatMap((value): string[] =>
-        value.split(",").map((part): string => part.trim()).filter((part): boolean => part !== "")
-      )
-    : [];
-  const siteAdminMatches = settings.attrSiteAdmin !== null && settings.attrSiteAdmin !== ""
-    && namedAttribute(attributesList, settings.attrSiteAdmin).includes(settings.siteAdminRole);
-  const linkByEmailEnabled = (await getSettings("saml"))["link-by-email"] === true;
-
-    let result: Awaited<ReturnType<typeof provisionSsoUser>>;
-    try {
-      result = await provisionSsoUser({
-        provider: "saml",
-        subject: nameIdText,
-        username,
-        email: email ?? null,
-        // SAML attribute statements are signed with the IdP assertion, so
-        // the operator-controlled directory is the verification authority.
-        emailVerified: true,
-        allowEmailLinking: linkByEmailEnabled && attrEmailConfigured,
-      });
+      const user = await provisionSamlAccount({ nameIdText, username: identity.username, email: identity.email, allowEmailLinking: identity.allowEmailLinking });
+      const activeUser = await syncSamlAccountState({ user, settings, siteAdminMatches: identity.siteAdminMatches, attrGroupsConfigured: identity.attrGroupsConfigured, groups: identity.groups });
+      return await completeSamlLogin({ user: activeUser, settings, issuedTokenResponse, set, request, server });
     } catch (error: unknown) {
-      if (error instanceof SsoConflictError) {
-        await auditLog("sso-conflict", "saml", null, null, null, { username: error.username });
-        return reject(error.message, 409);
-      }
+      if (error instanceof SamlAuthError) return reject(error.message, error.status);
       throw error;
     }
-    let user = result.user;
-
-    // Do not synchronize groups or elevate a suspended, provisional, or
-    // tombstoned account while processing a signed assertion. Those writes must
-    // never happen before the account-availability check.
-    if (isUserLoginBlocked(user)) {
-      await auditLog("sso-failure", "saml", user.id, user.id, null, { reason: "account is suspended, provisional, or deleted" });
-      return reject("This account is not available.", 403);
-    }
-
-    if (attrGroupsConfigured) {
-      await syncSamlGroupMappings(user.id, groups);
-    }    // The site-admin attribute is authoritative in both directions: matching
-    // promotes, and once an account's admin status is SAML-sourced, losing the
-    // role demotes it so the IdP can revoke elevated access. If the attribute
-    // is misconfigured (empty `attrSiteAdmin`), we never touch the flag.
-    if (settings.attrSiteAdmin !== null && settings.attrSiteAdmin !== "" && settings.siteAdminRole !== "") {
-      const noLongerSiteAdmin = user.isSiteAdmin && !siteAdminMatches;
-      if (siteAdminMatches && !user.isSiteAdmin) {
-        await db.update(users).set({ isSiteAdmin: true, ssoSiteAdmin: true }).where(eq(users.id, user.id));
-        await auditLog("sso-site-admin", "saml", user.id, user.id, null, { username: user.username, role: settings.siteAdminRole });
-      } else if (noLongerSiteAdmin && user.ssoSiteAdmin) {
-        await db.update(users).set({ isSiteAdmin: false, ssoSiteAdmin: false }).where(eq(users.id, user.id));
-        await auditLog("sso-site-admin-revoked", "saml", user.id, user.id, null, { username: user.username, role: settings.siteAdminRole });
-      }
-    }
-    const refreshedUser = await db.query.users.findFirst({ where: eq(users.id, user.id) });
-    if (refreshedUser === undefined) {
-      (set as { status: number }).status = 500;
-      return reject("The signed-in account is unavailable.", 500);
-    }
-    user = refreshedUser;
-    if (isUserLoginBlocked(user)) {
-      await auditLog("sso-failure", "saml", user.id, user.id, null, { reason: "account is suspended or deleted" });
-      return reject("This account is not available.", 403);
-    }
-
-    const tokenTtlMs = typeof settings.ssoApiTokenSessionTimeout === "number" && settings.ssoApiTokenSessionTimeout > 0
-      ? settings.ssoApiTokenSessionTimeout * 1000
-      : DEFAULT_SSO_API_TOKEN_TTL_MS;
-    const wantsTokenResponse = issuedTokenResponse;
-    const session = await issueSsoLogin(user, { set, request, server }, {
-      tokenTtlMs,
-      wantsToken: wantsTokenResponse,
-    });
-    await auditLog("sso-login", "saml", user.id, user.id, null, { username: user.username });
-
-    // The browser-session refresh cookie is written into set.headers by
-    // issueLoginSession; attach it to the HTML response we return.
-    const respond = (body: string, status = 200): Response => {
-      const response = ssoHtmlResponse(body, status);
-      appendSetCookies(response, set.headers["Set-Cookie"]);
-      clearSamlStateCookie(request, response, server);
-      return response;
-    };
-
-    const sessionToken = sessionTokenValue(session);
-    if (wantsTokenResponse) {
-      if (sessionToken === null) {
-        await auditLog("sso-failure", "saml", user.id, user.id, null, { reason: "SSO token response was malformed" });
-        return respond(ssoHtmlPage("SAML SSO", "The sign-in token could not be issued.", { error: true }), 500);
-      }
-      const response = Response.json(session, {
-        headers: {
-          "Cache-Control": "no-store",
-          "Content-Type": "application/vnd.api+json",
-        },
-      });
-      appendSetCookies(response, set.headers["Set-Cookie"]);
-      clearSamlStateCookie(request, response, server);
-      return response;
-    }
-    return respond(ssoHtmlPage("SAML SSO", "You are signed in.", { redirectUrl: "/app" }));
   })
   .get("/users/saml/slo", async ({ set, request, query }: {
     set: SetObj;
