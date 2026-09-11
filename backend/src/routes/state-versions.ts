@@ -994,6 +994,205 @@ async function promoteRecoveryCapture(
   return { stateVersionId, committedSerial, idempotent };
 }
 
+type UploadWorkspace = Awaited<ReturnType<typeof resolveUploadWorkspace>>;
+
+async function resolveUploadWorkspace(
+  workspaceId: string,
+  run: ParamCtx["run"],
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+) {
+  const ws = run !== null && run.workspaceId === workspaceId
+    ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
+    : await findAuthorizedWorkspace(workspaceId, userId, orgId, teamId, "state-write");
+  if (ws === undefined) {
+    throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  if (orgId !== null && orgId !== undefined) {
+    throw new StateVersionRejected(403, { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot upload state" }] });
+  }
+  if (run === null && !ownsWorkspaceLock(ws, lockPrincipal(userId, orgId, teamId))) {
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before writing state" }] });
+  }
+  return ws;
+}
+
+async function readUploadState(body: unknown, request: Request): Promise<string> {
+  const contentLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > MAX_IMPORTED_STATE_BYTES) {
+    throw new StateVersionRejected(413, { errors: [{ status: "413", title: "Payload Too Large", detail: "Terraform state exceeds the 100 MiB maximum" }] });
+  }
+  const rawStateResult = await requestBodyText(body, request);
+  if (!rawStateResult.ok) {
+    throw new StateVersionRejected(
+      rawStateResult.reason === "too-large" ? 413 : 400,
+      { errors: [{ status: String(rawStateResult.reason === "too-large" ? 413 : 400), title: rawStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] },
+    );
+  }
+  const rawState = rawStateResult.text;
+  if (Buffer.byteLength(rawState, "utf8") > MAX_IMPORTED_STATE_BYTES) {
+    throw new StateVersionRejected(413, { errors: [{ status: "413", title: "Payload Too Large", detail: "Terraform state exceeds the 100 MiB maximum" }] });
+  }
+  return rawState;
+}
+
+function parseUploadState(rawState: string): { parsed: NonNullable<ReturnType<typeof parseTerraformStatePayload>>; incomingSerial: number } {
+  const parsed = parseTerraformStatePayload(rawState);
+  if (parsed === null) {
+    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(rawState) }] });
+  }
+  // Migrating an existing state file into an empty workspace must accept
+  // its serial as-is (issue #569): real-world files carry serials like 12
+  // or 45, not 1. The record stores the payload serial so later uploads
+  // and CLI round-trips increment naturally from it.
+  const incomingSerial = parsed["serial"];
+  if (typeof incomingSerial !== "number" || !Number.isInteger(incomingSerial) || incomingSerial <= 0) {
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "State serial must be a positive integer" }] });
+  }
+  return { parsed, incomingSerial };
+}
+
+function assertUploadMd5(request: Request, rawState: string): void {
+  const contentMd5 = request.headers.get("content-md5");
+  if (contentMd5 !== null && contentMd5 !== createHash("md5").update(rawState).digest("base64")) {
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Content-MD5 does not match the state payload" }] });
+  }
+}
+
+async function assertUploadPreconditions(
+  workspaceId: string,
+  incomingSerial: number,
+  parsed: NonNullable<ReturnType<typeof parseTerraformStatePayload>>,
+  idempotencyBegin: Awaited<ReturnType<typeof beginIdempotency>>,
+): Promise<void> {
+  const latestImportedState = await db.query.stateVersions.findFirst({
+    where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
+    orderBy: [desc(stateVersions.serial)],
+    columns: { serial: true, statePayload: true },
+  });
+  if (latestImportedState !== undefined && incomingSerial !== latestImportedState.serial + 1) {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial must be the next workspace state serial" }] });
+  }
+  const lineageError = stateLineageError(latestImportedState, parsed);
+  if (lineageError !== null) {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] });
+  }
+}
+
+async function commitUploadedState(args: {
+  workspaceId: string;
+  ws: UploadWorkspace;
+  rawState: string;
+  parsed: NonNullable<ReturnType<typeof parseTerraformStatePayload>>;
+  incomingSerial: number;
+  run: ParamCtx["run"];
+  runCreatedBy: string | null;
+  userId: string | undefined;
+  idempotencyBegin: Awaited<ReturnType<typeof beginIdempotency>>;
+}): Promise<string> {
+  try {
+    return await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<string> => {
+      const t = tx as typeof db;
+      const latest = await t.query.stateVersions.findFirst({
+        where: and(eq(stateVersions.workspaceId, args.workspaceId), eq(stateVersions.status, "finalized")),
+        orderBy: [desc(stateVersions.serial)],
+      });
+      // Race-safe serial assignment (issue #569): a concurrent first import
+      // may have landed between the pre-check and this transaction. When a
+      // latest exists, this payload must be its successor.
+      if (latest !== undefined && args.incomingSerial !== latest.serial + 1) throw new StateSerialConflictError();
+      const serial = latest === undefined ? args.incomingSerial : latest.serial + 1;
+      const id = crypto.randomUUID();
+      await t.insert(stateVersions).values({
+        id,
+        workspaceId: args.workspaceId,
+        serial,
+        uploadSha256: createHash("sha256").update(args.rawState).digest("hex"),
+        statePayload: await encryptStatePayload(args.rawState),
+        jsonState: await encryptStatePayload(args.rawState),
+        jsonStateOutputs: await encryptStatePayload(args.parsed["outputs"] === undefined ? null : JSON.stringify(args.parsed["outputs"])),
+        runId: args.run?.runId ?? null,
+        createdBy: args.runCreatedBy ?? args.userId ?? null,
+        status: "finalized",
+        terraformVersion: typeof args.parsed["terraform_version"] === "string" ? args.parsed["terraform_version"] : null,
+        intermediate: false,
+        createdAt: Date.now(),
+      });
+      await insertStateOutputIndex(t, id, args.workspaceId, args.rawState, args.rawState);
+      await t.insert(auditLogs).values(auditLogValues({
+        action: "promote",
+        resourceType: "state-version",
+        resourceId: id,
+        orgId: args.ws.orgId,
+        userId: args.userId ?? null,
+        details: {
+          workspaceId: args.workspaceId,
+          runId: args.run?.runId ?? null,
+          serial,
+          stateBytes: Buffer.byteLength(args.rawState, "utf8"),
+          after: { status: "finalized", intermediate: false, serial },
+        },
+        immutable: true,
+      }) as typeof auditLogs.$inferInsert);
+      return id;
+    }));
+  } catch (error: unknown) {
+    if (error instanceof StateSerialConflictError || isUniqueConstraintError(error)) {
+      if (args.idempotencyBegin.kind === "reserved") await abandonIdempotency(args.idempotencyBegin.id);
+      throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] });
+    }
+    throw error;
+  }
+}
+
+function buildStateVersionInsert(args: {
+  id: string;
+  workspaceId: string;
+  serial: number;
+  parsed: ReturnType<typeof parseStateVersionPayload>;
+  bodies: ReturnType<typeof decodeStateVersionBodies>;
+  runId: Parameters<typeof insertStateVersionRecord>[0]["runId"];
+  relatedRunCreatedBy: Parameters<typeof insertStateVersionRecord>[0]["relatedRunCreatedBy"];
+  userId: string | undefined;
+  ws: Parameters<typeof insertStateVersionRecord>[0]["ws"];
+}): Parameters<typeof insertStateVersionRecord>[0] {
+  return {
+    id: args.id,
+    workspaceId: args.workspaceId,
+    serial: args.serial,
+    expectedMd5: typeof args.parsed.expectedMd5 === "string" ? args.parsed.expectedMd5 : null,
+    expectedLineage: typeof args.parsed.expectedLineage === "string" ? args.parsed.expectedLineage : null,
+    statePayload: args.bodies.statePayload,
+    runId: args.runId,
+    jsonState: args.bodies.jsonState,
+    jsonStateOutputs: args.bodies.jsonStateOutputs,
+    relatedRunCreatedBy: args.relatedRunCreatedBy,
+    createdBy: args.relatedRunCreatedBy ?? args.userId ?? null,
+    intermediate: args.parsed.intermediate,
+    ws: args.ws,
+  };
+}
+
+async function findUploadRunCreatedBy(run: ParamCtx["run"]): Promise<string | null> {
+  if (run === null) return null;
+  return (await db.query.runs.findFirst({ where: eq(runs.id, run.runId), columns: { createdBy: true } }))?.createdBy ?? null;
+}
+
+async function requireUploadedStateVersion(
+  stateVersionId: string,
+  idempotencyBegin: Awaited<ReturnType<typeof beginIdempotency>>,
+) {
+  const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+  if (sv === undefined) {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+    throw new StateVersionRejected(500, { errors: [{ status: "500", title: "Internal Server Error" }] });
+  }
+  return sv;
+}
+
 export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   .use(authPlugin)
   .get("/api/v2/state-versions", async ({ request, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -1867,21 +2066,17 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
       await assertStateVersionAdvances(workspaceId, serial, parsedTerraformState, bodies.jsonState);
       const id = crypto.randomUUID();
-      await insertStateVersionRecord({
+      await insertStateVersionRecord(buildStateVersionInsert({
         id,
         workspaceId,
         serial,
-        expectedMd5: typeof parsed.expectedMd5 === "string" ? parsed.expectedMd5 : null,
-        expectedLineage: typeof parsed.expectedLineage === "string" ? parsed.expectedLineage : null,
-        statePayload: bodies.statePayload,
+        parsed,
+        bodies,
         runId,
-        jsonState: bodies.jsonState,
-        jsonStateOutputs: bodies.jsonStateOutputs,
         relatedRunCreatedBy,
-        createdBy: relatedRunCreatedBy ?? user?.id ?? null,
-        intermediate: parsed.intermediate,
+        userId: user?.id,
         ws,
-      });
+      }));
       return await completeStateVersionCreation(id, workspaceId, request, ws, user?.id, orgId, teamId, set, idempotencyBegin);
     } catch (error: unknown) {
       if (error instanceof StateVersionRejected) {
@@ -1894,151 +2089,55 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   })
   .post("/api/v2/workspaces/:workspace_id/state-versions/upload", async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = run !== null && run.workspaceId === workspaceId
-      ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
-      : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-write");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot upload state" }] }; }
-    if (run === null && !ownsWorkspaceLock(ws, lockPrincipal(user?.id, orgId, teamId))) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before writing state" }] };
-    }
-    const contentLength = Number(request.headers.get("content-length"));
-    if (Number.isFinite(contentLength) && contentLength > MAX_IMPORTED_STATE_BYTES) {
-      (set as { status: number }).status = 413;
-      return { errors: [{ status: "413", title: "Payload Too Large", detail: "Terraform state exceeds the 100 MiB maximum" }] };
-    }
-    const rawStateResult = await requestBodyText(body, request);
-    if (!rawStateResult.ok) {
-      (set as { status: number }).status = rawStateResult.reason === "too-large" ? 413 : 400;
-      return { errors: [{ status: String(rawStateResult.reason === "too-large" ? 413 : 400), title: rawStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] };
-    }
-    const rawState = rawStateResult.text;
-    if (Buffer.byteLength(rawState, "utf8") > MAX_IMPORTED_STATE_BYTES) {
-      (set as { status: number }).status = 413;
-      return { errors: [{ status: "413", title: "Payload Too Large", detail: "Terraform state exceeds the 100 MiB maximum" }] };
-    }
-    const parsed = parseTerraformStatePayload(rawState);
-    if (parsed === null) {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(rawState) }] };
-    }
-    // Migrating an existing state file into an empty workspace must accept
-    // its serial as-is (issue #569): real-world files carry serials like 12
-    // or 45, not 1. The record stores the payload serial so later uploads
-    // and CLI round-trips increment naturally from it.
-    const incomingSerial = parsed["serial"];
-    if (typeof incomingSerial !== "number" || !Number.isInteger(incomingSerial) || incomingSerial <= 0) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "State serial must be a positive integer" }] };
-    }
-    const contentMd5 = request.headers.get("content-md5");
-    if (contentMd5 !== null && contentMd5 !== createHash("md5").update(rawState).digest("base64")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Content-MD5 does not match the state payload" }] };
-    }
-    const idempotency = idempotencyContext(
-      request,
-      `state-versions-upload:${workspaceId}`,
-      idempotencyPrincipal({ userId: user?.id, orgId, teamId, runId: run?.runId }),
-      { rawState, contentMd5 },
-      set as unknown as { status?: number | string; headers: Record<string, string | number> },
-    );
-    if (idempotency === "invalid") {
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
-    }
-    const idempotencyBegin = await beginIdempotency(
-      idempotency,
-      "state-versions-upload",
-      set as unknown as { status?: number | string; headers: Record<string, string | number> },
-    );
-    if (idempotencyBegin.kind === "replay") return replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
-    if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
-
-    const latestImportedState = await db.query.stateVersions.findFirst({
-      where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
-      orderBy: [desc(stateVersions.serial)],
-      columns: { serial: true, statePayload: true },
-    });
-    if (latestImportedState !== undefined && incomingSerial !== latestImportedState.serial + 1) {
-      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial must be the next workspace state serial" }] };
-    }
-    const lineageError = stateLineageError(latestImportedState, parsed);
-    if (lineageError !== null) {
-      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] };
-    }
-    const runCreatedBy = run === null
-      ? null
-      : (await db.query.runs.findFirst({ where: eq(runs.id, run.runId), columns: { createdBy: true } }))?.createdBy ?? null;
-
-    let stateVersionId: string;
     try {
-      stateVersionId = await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<string> => {
-        const t = tx as typeof db;
-        const latest = await t.query.stateVersions.findFirst({
-          where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
-          orderBy: [desc(stateVersions.serial)],
-        });
-        // Race-safe serial assignment (issue #569): a concurrent first import
-        // may have landed between the pre-check and this transaction. When a
-        // latest exists, this payload must be its successor.
-        if (latest !== undefined && incomingSerial !== latest.serial + 1) throw new StateSerialConflictError();
-        const serial = latest === undefined ? incomingSerial : latest.serial + 1;
-        const id = crypto.randomUUID();
-        await t.insert(stateVersions).values({
-          id,
-          workspaceId,
-          serial,
-          uploadSha256: createHash("sha256").update(rawState).digest("hex"),
-          statePayload: await encryptStatePayload(rawState),
-          jsonState: await encryptStatePayload(rawState),
-          jsonStateOutputs: await encryptStatePayload(parsed["outputs"] === undefined ? null : JSON.stringify(parsed["outputs"])),
-          runId: run?.runId ?? null,
-          createdBy: runCreatedBy ?? user?.id ?? null,
-          status: "finalized",
-          terraformVersion: typeof parsed["terraform_version"] === "string" ? parsed["terraform_version"] : null,
-          intermediate: false,
-          createdAt: Date.now(),
-        });
-        await insertStateOutputIndex(t, id, workspaceId, rawState, rawState);
-        await t.insert(auditLogs).values(auditLogValues({
-          action: "promote",
-          resourceType: "state-version",
-          resourceId: id,
-          orgId: ws.orgId,
-          userId: user?.id ?? null,
-          details: {
-            workspaceId,
-            runId: run?.runId ?? null,
-            serial,
-            stateBytes: Buffer.byteLength(rawState, "utf8"),
-            after: { status: "finalized", intermediate: false, serial },
-          },
-          immutable: true,
-        }) as typeof auditLogs.$inferInsert);
-        return id;
-      }));
+      const ws = await resolveUploadWorkspace(workspaceId, run, user?.id, orgId, teamId);
+      const rawState = await readUploadState(body, request);
+      const { parsed, incomingSerial } = parseUploadState(rawState);
+      assertUploadMd5(request, rawState);
+      const contentMd5 = request.headers.get("content-md5");
+      const idempotency = idempotencyContext(
+        request,
+        `state-versions-upload:${workspaceId}`,
+        idempotencyPrincipal({ userId: user?.id, orgId, teamId, runId: run?.runId }),
+        { rawState, contentMd5 },
+        set,
+      );
+      if (idempotency === "invalid") {
+        return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+      }
+      const idempotencyBegin = await beginIdempotency(
+        idempotency,
+        "state-versions-upload",
+        set,
+      );
+      if (idempotencyBegin.kind === "replay") return await replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
+      if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
+
+      await assertUploadPreconditions(workspaceId, incomingSerial, parsed, idempotencyBegin);
+      const runCreatedBy = await findUploadRunCreatedBy(run);
+
+      const stateVersionId = await commitUploadedState({
+        workspaceId,
+        ws,
+        rawState,
+        parsed,
+        incomingSerial,
+        run,
+        runCreatedBy,
+        userId: user?.id,
+        idempotencyBegin,
+      });
+      const sv = await requireUploadedStateVersion(stateVersionId, idempotencyBegin);
+      scheduleExplorerInventory(sv.workspaceId);
+      (set as { status: number }).status = 201;
+      const responseBody = { data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
+      if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, stateVersionId);
+      return responseBody;
     } catch (error: unknown) {
-      if (error instanceof StateSerialConflictError || isUniqueConstraintError(error)) {
-        if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] };
+      if (error instanceof StateVersionRejected) {
+        (set as { status: number }).status = error.status;
+        return error.body;
       }
       throw error;
     }
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) {
-      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-      (set as { status: number }).status = 500;
-      return { errors: [{ status: "500", title: "Internal Server Error" }] };
-    }
-    scheduleExplorerInventory(sv.workspaceId);
-    (set as { status: number }).status = 201;
-     const responseBody = { data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
-     if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, stateVersionId);
-     return responseBody;
   });
