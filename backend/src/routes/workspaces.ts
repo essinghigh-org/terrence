@@ -886,26 +886,17 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const orgName = params["org_name"] ?? "";
     const workspaceName = params["workspace_name"] ?? "";
     const org = await cachedOrgByName(orgName);
-    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
-    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    {
-      const ifMatch = request.headers.get("if-match");
-      if (ifMatch !== null && ifMatch.trim() !== "*") {
-        const currentResource = await workspaceResource(
-          ws,
-          org.defaultIacBinary,
-          await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
-          { orgName: org.name },
-        );
-        if (!ifMatchSatisfied(request, { data: currentResource })) { (set as { status: number }).status = 412; return { errors: [{ status: "412", title: "Precondition Failed" }] }; }
-      }
-    }
+    if (org === undefined) return failWorkspaceUpdate(set, 404);
+    const actor = actorScope(user, principalOrgId, teamId);
+    const ws = await findNamedWorkspace(org.id, workspaceName, actor);
+    if (ws === undefined) return failWorkspaceUpdate(set, 404);
+    if (!(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "admin"))) return failWorkspaceUpdate(set, 403);
+    const ifMatchFailure = await workspaceIfMatchFailure(request, ws, org, actor, set);
+    if (ifMatchFailure !== null) return ifMatchFailure;
     return updateWorkspaceResponse(
       ws,
       org.defaultIacBinary,
-      { userId: user?.id, principalOrgId: principalOrgId ?? null, teamId: teamId ?? null },
+      { userId: actor.actorId, principalOrgId: actor.actorOrgId, teamId: actor.actorTeamId },
       body,
       set,
       org.name,
@@ -2526,6 +2517,17 @@ function workspaceOrgOption(orgName: string | null | undefined): Readonly<{ orgN
   // exactOptionalPropertyTypes: the resource options omit orgName when it is
   // undefined but reject an explicit undefined, so normalize it here.
   return { orgName: orgName ?? null };
+}
+
+async function findNamedWorkspace(
+  orgId: string,
+  workspaceName: string,
+  actor: ActorScope,
+): Promise<WsItem | undefined> {
+  const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, orgId), eq(workspaces.name, workspaceName)) });
+  if (ws === undefined) return undefined;
+  const hasRead = await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "read");
+  return hasRead ? ws : undefined;
 }
 
 async function workspaceIfMatchFailure(
