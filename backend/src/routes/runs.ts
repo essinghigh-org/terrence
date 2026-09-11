@@ -1017,6 +1017,60 @@ function resolveRunDisplayFields(
   };
 }
 
+type RunScalarAttributes = Readonly<{
+  targetAddrs: string[] | null;
+  replaceAddrs: string[] | null;
+  runVariablesInput: Parameters<typeof runVariablesForWrite>[0] | null;
+  terraformVersion: string | undefined;
+  debuggingMode: boolean;
+  allowConfigGeneration: boolean;
+  generatedConfiguration: boolean;
+}>;
+
+function parseRunScalarAttributes(attributes: Readonly<Record<string, unknown>>): RunScalarAttributes {
+  return {
+    targetAddrs: Array.isArray(attributes["target-addrs"]) ? (attributes["target-addrs"] as string[]) : null,
+    replaceAddrs: Array.isArray(attributes["replace-addrs"]) ? (attributes["replace-addrs"] as string[]) : null,
+    runVariablesInput: Array.isArray(attributes["variables"]) ? attributes["variables"] : null,
+    terraformVersion: typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : undefined,
+    debuggingMode: typeof attributes["debugging-mode"] === "boolean" ? attributes["debugging-mode"] : false,
+    allowConfigGeneration: typeof attributes["allow-config-generation"] === "boolean" ? attributes["allow-config-generation"] : false,
+    generatedConfiguration: typeof attributes["generated-configuration"] === "boolean" ? attributes["generated-configuration"] : false,
+  };
+}
+
+function validateRunCreateAttributes(
+  attributes: Readonly<Record<string, unknown>>,
+  workspaceId: string,
+  terraformVersion: string | undefined,
+  set: SetObj,
+): { errors: { status: string; title: string; detail?: string }[] } | null {
+  if (workspaceId === "") {
+    (set as { status: number }).status = 400;
+    return { errors: [{ status: "400", title: "Bad Request", detail: "Workspace ID is required" }] };
+  }
+  if (terraformVersion !== undefined && !validateVersion(terraformVersion)) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid run attributes" }] };
+  }
+  return validateRunInputs(attributes["variables"], attributes["target-addrs"], attributes["replace-addrs"], set);
+}
+
+function resolveRunAutoApply(
+  canApply: boolean,
+  requestedAutoApply: boolean | undefined,
+  workspaceAutoApply: boolean,
+  operation: string,
+): Readonly<{ autoApply: boolean; autoApplySuppressed: boolean }> {
+  // Issue #601: inheriting the workspace default while lacking apply rights
+  // silently drops auto-apply (explicit requests already 403 above). Flag it
+  // on the created run so planners see why their run waits for confirmation.
+  return {
+    autoApply: operation === "action_only" ? canApply : canApply && (requestedAutoApply ?? workspaceAutoApply),
+    autoApplySuppressed: !canApply && requestedAutoApply === undefined && workspaceAutoApply && operation !== "action_only",
+  };
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -1032,24 +1086,9 @@ export async function createRun(
   if ("failure" in operationRequest) return operationRequest.failure;
   const { requestedOperation, isDestroy, invokeActionAddrs } = operationRequest.request;
   const { requestedAutoApply, requestedPlanOnly, refresh, refreshOnly, allowEmptyApply, savePlan } = parseRunPlanFlags(attributes, requestedOperation);
-  const targetAddrs = Array.isArray(attributes["target-addrs"]) ? (attributes["target-addrs"] as string[]) : null;
-  const replaceAddrs = Array.isArray(attributes["replace-addrs"]) ? (attributes["replace-addrs"] as string[]) : null;
-  const runVariablesInput = Array.isArray(attributes["variables"]) ? attributes["variables"] : null;
-  const terraformVersion = typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : undefined;
-  const debuggingMode = typeof attributes["debugging-mode"] === "boolean" ? attributes["debugging-mode"] : false;
-  const allowConfigGeneration = typeof attributes["allow-config-generation"] === "boolean" ? attributes["allow-config-generation"] : false;
-  const generatedConfiguration = typeof attributes["generated-configuration"] === "boolean" ? attributes["generated-configuration"] : false;
+  const { targetAddrs, replaceAddrs, runVariablesInput, terraformVersion, debuggingMode, allowConfigGeneration, generatedConfiguration } = parseRunScalarAttributes(attributes);
   const operation = resolveRunOperation(requestedOperation, invokeActionAddrs.length, isDestroy, refreshOnly, savePlan, allowEmptyApply);
-  if (workspaceId === "") { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Workspace ID is required" }] }; }
-  if (terraformVersion !== undefined && !validateVersion(terraformVersion)) {
-    (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid run attributes" }] };
-  }
-  const invalidInputs = validateRunInputs(
-    attributes["variables"],
-    attributes["target-addrs"],
-    attributes["replace-addrs"],
-    set,
-  );
+  const invalidInputs = validateRunCreateAttributes(attributes, workspaceId, terraformVersion, set);
   if (invalidInputs !== null) return invalidInputs;
   const workspaceAccess = await findAuthorizedRunWorkspace(workspaceId, user, orgId, teamId, set);
   if ("failure" in workspaceAccess) return workspaceAccess.failure;
@@ -1062,11 +1101,7 @@ export async function createRun(
   const guardCheck = await checkRunCreationGuards(workspace, user?.id, teamId, { isDestroy, requestedAutoApply, allowEmptyApply, operation }, idempotencyBegin, set);
   if ("failure" in guardCheck) return guardCheck.failure;
   const { canApply } = guardCheck;
-  const autoApply = operation === "action_only" ? canApply : canApply && (requestedAutoApply ?? workspace.autoApply === true);
-  // Issue #601: inheriting the workspace default while lacking apply rights
-  // silently drops auto-apply (explicit requests already 403 above). Flag it
-  // on the created run so planners see why their run waits for confirmation.
-  const autoApplySuppressed = !canApply && requestedAutoApply === undefined && workspace.autoApply === true && operation !== "action_only";
+  const { autoApply, autoApplySuppressed } = resolveRunAutoApply(canApply, requestedAutoApply, workspace.autoApply === true, operation);
   const configurationSelection = await resolveRunConfigurationVersion(workspace, workspaceId, cvId, idempotencyBegin, set);
   if ("failure" in configurationSelection) return configurationSelection.failure;
   const { configurationVersion } = configurationSelection.selection;
