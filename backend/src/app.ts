@@ -249,38 +249,60 @@ type ErrorContext = Readonly<{
   set: unknown;
 }>;
 
-export function handleAppError(context: ErrorContext & { request: { url: string } }): { errors: { status: string; title: string; detail?: string }[] } | string | undefined {
-  const { code, error, set, request } = context;
-  const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
-  const pathname = new URL(request.url).pathname;
+type MutableErrorSet = { status?: number | string; headers: Record<string, string | number> };
+
+type AppErrorDocument = { errors: { status: string; title: string; detail?: string }[] };
+
+function applyDurableJobBudgetStatus(error: DurableJobBudgetError, mutableSet: MutableErrorSet): void {
+  mutableSet.status = error.status;
+  if (error.status === 429 && error.admission.retryAfterMs !== null) {
+    mutableSet.headers["Retry-After"] = Math.ceil(error.admission.retryAfterMs / 1_000);
+  }
+}
+
+function resolveBodyTooLarge(error: unknown, code: unknown): BodyTooLargeError | null {
+  // Elysia wraps onParse failures in its own ParseError; the original is
+  // preserved as `cause` (elysia/dist/error.js ParseError).
+  if (error instanceof BodyTooLargeError) return error;
+  if (code === "PARSE" && error instanceof Error && error.cause instanceof BodyTooLargeError) return error.cause;
+  return null;
+}
+
+function applyAppErrorStatus(
+  error: unknown,
+  code: unknown,
+  mutableSet: MutableErrorSet,
+): { constraint: string | null; bodyTooLarge: BodyTooLargeError | null } {
   const constraint = databaseConstraint(error);
   if (constraint !== null) mutableSet.status = 409;
   if (error instanceof SettingsValidationError) mutableSet.status = error.status;
-  if (error instanceof DurableJobBudgetError) {
-    mutableSet.status = error.status;
-    if (error.status === 429 && error.admission.retryAfterMs !== null) {
-      mutableSet.headers["Retry-After"] = Math.ceil(error.admission.retryAfterMs / 1_000);
-    }
-  }
-  // Elysia wraps onParse failures in its own ParseError; the original is
-  // preserved as `cause` (elysia/dist/error.js ParseError).
-  const bodyTooLarge = error instanceof BodyTooLargeError ? error
-    : code === "PARSE" && error instanceof Error && error.cause instanceof BodyTooLargeError ? error.cause : null;
+  if (error instanceof DurableJobBudgetError) applyDurableJobBudgetStatus(error, mutableSet);
+  return { constraint, bodyTooLarge: resolveBodyTooLarge(error, code) };
+}
+
+function settleErrorRequestMetrics(
+  request: { url: string },
+  code: unknown,
+  setStatus: number | string | undefined,
+  bodyTooLarge: BodyTooLargeError | null,
+): void {
   // Error path: the request never reached onAfterHandle, so settle the
   // in-flight counter here instead (same WeakMap consumption rule). The
   // status mirrors the branch logic below so 404/422/400/413 do not count
   // as 5xx.
   const errored = requestMeta.get(request as unknown as Request);
-  if (errored !== undefined) {
-    const status = code === "NOT_FOUND" ? 404
-      : code === "VALIDATION" ? 422
-        : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? (bodyTooLarge !== null ? 413 : 400)
-          : typeof mutableSet.status === "number" ? mutableSet.status : 500;
-    recordRequestLatency(errored.path, Date.now() - errored.startTime);
-    requestFinished(status);
-    requestMeta.delete(request as unknown as Request);
-    resetAuditRequest();
-  }
+  if (errored === undefined) return;
+  const status = code === "NOT_FOUND" ? 404
+    : code === "VALIDATION" ? 422
+      : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? (bodyTooLarge !== null ? 413 : 400)
+        : typeof setStatus === "number" ? setStatus : 500;
+  recordRequestLatency(errored.path, Date.now() - errored.startTime);
+  requestFinished(status);
+  requestMeta.delete(request as unknown as Request);
+  resetAuditRequest();
+}
+
+function formatKnownAppError(error: unknown): AppErrorDocument | null {
   if (error instanceof SettingsValidationError) {
     return { errors: [{ status: String(error.status), title: error.status === 422 ? "Unprocessable Entity" : "Service Unavailable", detail: error.message }] };
   }
@@ -293,45 +315,42 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
       }],
     };
   }
-  if (constraint !== null) {
-    mutableSet.headers["Content-Type"] = "application/vnd.api+json";
-    return { errors: [{ status: "409", title: "Conflict", detail: constraint === "unique" ? "A resource with these unique attributes already exists" : "The operation conflicts with a related resource" }] };
-  }
-  if (code === "NOT_FOUND") {
-    if (!(pathname === "/api" || pathname.startsWith("/api/"))) {
-      mutableSet.status = 404;
-      mutableSet.headers["Content-Type"] = "text/html; charset=utf-8";
-      return frontend404Html ?? "Not Found";
-    }
-    mutableSet.headers["Content-Type"] = "application/vnd.api+json";
+  return null;
+}
+
+function formatNotFoundAppError(pathname: string, mutableSet: MutableErrorSet): AppErrorDocument | string {
+  if (!(pathname === "/api" || pathname.startsWith("/api/"))) {
     mutableSet.status = 404;
-    // Issue #643: unknown API paths are usually provider clients probing
-    // for TFE surface Terrence never promised; say the scope outright.
-    return { errors: [{ status: "404", title: "Not Found", detail: COMPATIBILITY_PROMISE }] };
+    mutableSet.headers["Content-Type"] = "text/html; charset=utf-8";
+    return frontend404Html ?? "Not Found";
   }
   mutableSet.headers["Content-Type"] = "application/vnd.api+json";
-  if (bodyTooLarge !== null) {
-    mutableSet.status = 413;
-    return {
-      errors: [{
-        status: "413",
-        title: "Payload Too Large",
-        detail: `${bodyTooLarge.message} for this endpoint`,
-      }],
-    };
-  }
+  mutableSet.status = 404;
+  // Issue #643: unknown API paths are usually provider clients probing
+  // for TFE surface Terrence never promised; say the scope outright.
+  return { errors: [{ status: "404", title: "Not Found", detail: COMPATIBILITY_PROMISE }] };
+}
+
+function formatClientAppError(code: unknown, mutableSet: MutableErrorSet): AppErrorDocument | null {
   const clientStatus = code === "VALIDATION" ? 422
     : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? 400
       : null;
-  if (clientStatus !== null) {
-    mutableSet.status = clientStatus;
-    return {
-      errors: [{
-        status: String(clientStatus),
-        title: clientStatus === 422 ? "Unprocessable Content" : "Bad Request",
-      }],
-    };
-  }
+  if (clientStatus === null) return null;
+  mutableSet.status = clientStatus;
+  return {
+    errors: [{
+      status: String(clientStatus),
+      title: clientStatus === 422 ? "Unprocessable Content" : "Bad Request",
+    }],
+  };
+}
+
+function formatFallbackAppError(
+  code: unknown,
+  pathname: string,
+  error: unknown,
+  mutableSet: MutableErrorSet,
+): AppErrorDocument {
   mutableSet.status = 500;
   log.error("Unhandled request error", {
     code,
@@ -346,6 +365,48 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
       detail: "An unexpected error occurred",
     }],
   };
+}
+
+function formatAppErrorResponse(
+  error: unknown,
+  code: unknown,
+  pathname: string,
+  constraint: string | null,
+  bodyTooLarge: BodyTooLargeError | null,
+  mutableSet: MutableErrorSet,
+): AppErrorDocument | string | undefined {
+  const known = formatKnownAppError(error);
+  if (known !== null) return known;
+  if (constraint !== null) {
+    mutableSet.headers["Content-Type"] = "application/vnd.api+json";
+    return { errors: [{ status: "409", title: "Conflict", detail: constraint === "unique" ? "A resource with these unique attributes already exists" : "The operation conflicts with a related resource" }] };
+  }
+  if (code === "NOT_FOUND") {
+    return formatNotFoundAppError(pathname, mutableSet);
+  }
+  mutableSet.headers["Content-Type"] = "application/vnd.api+json";
+  if (bodyTooLarge !== null) {
+    mutableSet.status = 413;
+    return {
+      errors: [{
+        status: "413",
+        title: "Payload Too Large",
+        detail: `${bodyTooLarge.message} for this endpoint`,
+      }],
+    };
+  }
+  const client = formatClientAppError(code, mutableSet);
+  if (client !== null) return client;
+  return formatFallbackAppError(code, pathname, error, mutableSet);
+}
+
+export function handleAppError(context: ErrorContext & { request: { url: string } }): { errors: { status: string; title: string; detail?: string }[] } | string | undefined {
+  const { code, error, set, request } = context;
+  const mutableSet = set as MutableErrorSet;
+  const pathname = new URL(request.url).pathname;
+  const { constraint, bodyTooLarge } = applyAppErrorStatus(error, code, mutableSet);
+  settleErrorRequestMetrics(request, code, mutableSet.status, bodyTooLarge);
+  return formatAppErrorResponse(error, code, pathname, constraint, bodyTooLarge, mutableSet);
 }
 
 type PasswordGuardContext = Readonly<{
