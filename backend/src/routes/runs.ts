@@ -49,7 +49,7 @@ import { workspaceRunHistoryWhere, organizationRunHistoryWhere, FINAL_RUN_STATUS
 import type { WorkspacePermission } from "../lib/authorization";
 import type { DeepReadonly } from "../lib/types";
 import { inspectRecoveryCopy } from "../lib/recovery-files";
-import { abandonIdempotency, beginIdempotency, completeIdempotency, idempotencyContext, idempotencyError, idempotencyPrincipal, type IdempotencyContext } from "../lib/idempotency";
+import { abandonIdempotency, beginIdempotency, completeIdempotency, idempotencyContext, idempotencyError, idempotencyPrincipal, type IdempotencyBegin, type IdempotencyContext } from "../lib/idempotency";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
 
@@ -814,6 +814,69 @@ function resolveRunOperation(
               : "plan_and_apply");
 }
 
+type RunConfigurationSelection = Readonly<{
+  configurationVersion: typeof configurationVersions.$inferSelect | undefined;
+  cvId: string | undefined;
+}>;
+
+async function abandonReservedIdempotency(begin: IdempotencyBegin): Promise<void> {
+  if (begin.kind === "reserved") await abandonIdempotency(begin.id);
+}
+
+async function resolveRunConfigurationVersion(
+  workspace: typeof workspaces.$inferSelect,
+  workspaceId: string,
+  cvId: string | undefined,
+  begin: IdempotencyBegin,
+  set: SetObj,
+): Promise<Readonly<{ selection: RunConfigurationSelection } | { failure: Record<string, unknown> }>> {
+  let configurationVersion: typeof configurationVersions.$inferSelect | undefined;
+  let resolvedCvId = cvId;
+  if (resolvedCvId !== undefined) {
+    configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, resolvedCvId) });
+    if (configurationVersion === undefined) {
+      await abandonReservedIdempotency(begin);
+      (set as { status: number }).status = 422;
+      return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version was not found" }] } };
+    }
+    if (configurationVersion?.workspaceId !== workspaceId) {
+      await abandonReservedIdempotency(begin);
+      (set as { status: number }).status = 422;
+      return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version does not belong to workspace" }] } };
+    }
+    const pendingVcs = configurationVersion.status === "pending" && ["github", "gitlab", "bitbucket"].includes(configurationVersion.source ?? "");
+    if (configurationVersion.status !== "uploaded" && !pendingVcs) {
+      await abandonReservedIdempotency(begin);
+      (set as { status: number }).status = 409;
+      return { failure: { errors: [{ status: "409", title: "Conflict", detail: "Configuration version is not ready for a run" }] } };
+    }
+  } else if (workspace.vcsRepo?.identifier !== undefined) {
+    // Auto-create a configuration version from VCS for manual runs
+    const result = await createConfigurationVersionFromVcs(workspace);
+    if (typeof result === "object" && "error" in result) {
+      await abandonReservedIdempotency(begin);
+      (set as { status: number }).status = 422;
+      return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: result.error }] } };
+    }
+    resolvedCvId = result;
+    configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, resolvedCvId) });
+  } else {
+    // Manual runs without an explicit configuration version use the workspace's
+    // latest uploaded configuration version (matches the reference format behaviour; tfe_workspace_run
+    // creates runs without claiming a config version, and the worker only plans
+    // runs that have one).
+    const latest = await db.query.configurationVersions.findFirst({
+      where: and(eq(configurationVersions.workspaceId, workspaceId), eq(configurationVersions.status, "uploaded")),
+      orderBy: [desc(configurationVersions.createdAt)],
+    });
+    if (latest !== undefined) {
+      resolvedCvId = latest.id;
+      configurationVersion = latest;
+    }
+  }
+  return { selection: { configurationVersion, cvId: resolvedCvId } };
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -860,7 +923,7 @@ export async function createRun(
   if (idempotencyBegin.kind === "replay") return idempotencyBegin.body;
   if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
   if (workspace.locked === true) {
-    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+    await abandonReservedIdempotency(idempotencyBegin);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(workspace.lockedReason) }] };
   }
@@ -868,18 +931,18 @@ export async function createRun(
   // plans and applies on the operator machine and the server only stores
   // state. This matches the reference behavior for local workspaces.
   if (workspace.executionMode === "local") {
-    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+    await abandonReservedIdempotency(idempotencyBegin);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote runs cannot be created for workspaces with local execution mode" }] };
   }
   if (isDestroy && workspace.allowDestroyPlan === false) {
-    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+    await abandonReservedIdempotency(idempotencyBegin);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Destroy plans are disabled for this workspace" }] };
   }
   const canApply = await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "apply");
   if (!canApply && (requestedAutoApply === true || allowEmptyApply || operation === "action_only")) {
-    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+    await abandonReservedIdempotency(idempotencyBegin);
     (set as { status: number }).status = 403;
     return { errors: [{ status: "403", title: "Forbidden" }] };
   }
@@ -888,55 +951,16 @@ export async function createRun(
   // silently drops auto-apply (explicit requests already 403 above). Flag it
   // on the created run so planners see why their run waits for confirmation.
   const autoApplySuppressed = !canApply && requestedAutoApply === undefined && workspace.autoApply === true && operation !== "action_only";
-  let configurationVersion: typeof configurationVersions.$inferSelect | undefined;
-  if (cvId !== undefined) {
-    configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
-    if (configurationVersion === undefined) {
-      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version was not found" }] };
-    }
-    if (configurationVersion?.workspaceId !== workspaceId) {
-      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version does not belong to workspace" }] };
-    }
-    const pendingVcs = configurationVersion.status === "pending" && ["github", "gitlab", "bitbucket"].includes(configurationVersion.source ?? "");
-    if (configurationVersion.status !== "uploaded" && !pendingVcs) {
-      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Configuration version is not ready for a run" }] };
-    }
-  } else if (workspace.vcsRepo?.identifier !== undefined) {
-    // Auto-create a configuration version from VCS for manual runs
-    const result = await createConfigurationVersionFromVcs(workspace);
-    if (typeof result === "object" && "error" in result) {
-      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: result.error }] };
-    }
-    cvId = result;
-    configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
-  } else {
-    // Manual runs without an explicit configuration version use the workspace's
-    // latest uploaded configuration version (matches the reference format behaviour; tfe_workspace_run
-    // creates runs without claiming a config version, and the worker only plans
-    // runs that have one).
-    const latest = await db.query.configurationVersions.findFirst({
-      where: and(eq(configurationVersions.workspaceId, workspaceId), eq(configurationVersions.status, "uploaded")),
-      orderBy: [desc(configurationVersions.createdAt)],
-    });
-    if (latest !== undefined) {
-      cvId = latest.id;
-      configurationVersion = latest;
-    }
-  }
+  const configurationSelection = await resolveRunConfigurationVersion(workspace, workspaceId, cvId, idempotencyBegin, set);
+  if ("failure" in configurationSelection) return configurationSelection.failure;
+  const { configurationVersion } = configurationSelection.selection;
+  cvId = configurationSelection.selection.cvId;
   // A run with no configuration to plan against only fails deep in the
   // worker log (issue #574). Reject it here with an actionable message,
   // except for VCS-backed workspaces (handled above) and local-path
   // workspaces whose source lives on disk.
   if (cvId === undefined && workspace.vcsRepo?.identifier === undefined && workspace.source !== "local") {
-    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+    await abandonReservedIdempotency(idempotencyBegin);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No configuration version is available for this workspace. Upload a configuration version or connect a VCS repository first." }] };
   }
@@ -967,7 +991,7 @@ export async function createRun(
   if (typeof effectiveVersion === "string") {
     const preflight = await preflightBinaryAvailability(effectiveTool, effectiveVersion);
     if (!preflight.ok) {
-      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      await abandonReservedIdempotency(idempotencyBegin);
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: preflight.detail }] };
     }
@@ -1048,7 +1072,7 @@ export async function createRun(
     return null;
   });
   if (lockConflict !== null) {
-    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+    await abandonReservedIdempotency(idempotencyBegin);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(lockConflict.lockedReason) }] };
   }
