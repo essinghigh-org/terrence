@@ -1304,6 +1304,48 @@ function assembleTestVariableResult(
 
 type TestConfigRow = DeepReadonly<typeof moduleTestConfigurations.$inferSelect>;
 
+type ProviderPlatformFields = Readonly<{
+  os: string;
+  arch: string;
+  filename: string;
+  downloadUrl: string;
+  shasum: string;
+}>;
+
+function jsonApiAttributes(body: unknown): Record<string, unknown> {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  return data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+}
+
+function parsePlatformFields(body: unknown): ProviderPlatformFields | Readonly<{ error: string }> {
+  const attrs = jsonApiAttributes(body);
+  const os = typeof attrs["os"] === "string" ? attrs["os"] : "";
+  const arch = typeof attrs["arch"] === "string" ? attrs["arch"] : "";
+  const filename = typeof attrs["filename"] === "string" ? attrs["filename"] : "";
+  const downloadUrl = typeof attrs["download-url"] === "string" ? attrs["download-url"] : "";
+  const shasum = typeof attrs["shasum"] === "string" ? attrs["shasum"] : "";
+  if (os === "" || arch === "" || filename === "" || downloadUrl === "" || shasum === "") {
+    return { error: "os, arch, filename, download-url, and shasum are required" };
+  }
+  return { os, arch, filename, downloadUrl, shasum };
+}
+
+async function resolveProviderVersionForWrite(
+  params: Readonly<Record<string, string>>,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ version: ProvVerItem } | { failure: unknown }>> {
+  if (params["registry_name"] !== "private") return { failure: registryNotFound(set) };
+  const org = await cachedOrgByName(params["org_name"] ?? "");
+  const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
+  const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
+  if (org === undefined || provider === undefined || version === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-providers"))) return { failure: registryNotFound(set) };
+  return { version };
+}
+
 async function resolveTestConfigModule(
   params: Readonly<Record<string, string>>,
   userId: string | undefined,
@@ -2409,23 +2451,17 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return {};
   })
   .post("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
-    if (org === undefined || provider === undefined || version === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return registryNotFound(set);
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const os = typeof attrs["os"] === "string" ? attrs["os"] : "";
-    const arch = typeof attrs["arch"] === "string" ? attrs["arch"] : "";
-    const filename = typeof attrs["filename"] === "string" ? attrs["filename"] : "";
-    const downloadUrl = typeof attrs["download-url"] === "string" ? attrs["download-url"] : "";
-    const shasum = typeof attrs["shasum"] === "string" ? attrs["shasum"] : "";
-    if (os === "" || arch === "" || filename === "" || downloadUrl === "" || shasum === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "os, arch, filename, download-url, and shasum are required" }] }; }
+    const resolved = await resolveProviderVersionForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { version } = resolved;
+    const fields = parsePlatformFields(body);
+    if ("error" in fields) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
+    }
     const id = newResourceId("provplat");
     try {
-      await db.insert(registryProviderPlatforms).values({ id, versionId: version.id, os, arch, filename, downloadUrl, shasum, createdAt: Date.now() });
+      await db.insert(registryProviderPlatforms).values({ id, versionId: version.id, os: fields.os, arch: fields.arch, filename: fields.filename, downloadUrl: fields.downloadUrl, shasum: fields.shasum, createdAt: Date.now() });
     } catch (error: unknown) {
       if (!isUniqueConstraintError(error)) throw error;
       (set as { status: number }).status = 422;
