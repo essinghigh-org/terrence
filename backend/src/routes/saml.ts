@@ -452,71 +452,97 @@ type SignedAssertionResult =
   | Readonly<{ valid: true; error: ""; assertionXml: string }>
   | Readonly<{ valid: false; error: string }>;
 
-function signedAssertionResult(
-  xml: string,
-  certificates: readonly string[],
-): SignedAssertionResult {
-  if (certificates.length === 0) {
-    return { valid: false, error: "No IdP certificate configured" };
-  }
+function parseSamlAssertionNode(xml: string): { doc: ReturnType<DOMParser["parseFromString"]>; assertionNode: DomElement } {
   let doc: ReturnType<DOMParser["parseFromString"]>;
   try {
     doc = new DOMParser({ errorHandler: (): void => undefined })
       .parseFromString(xml, "text/xml");
   } catch {
-    return { valid: false, error: "SAML response is not valid XML" };
+    throw new SamlAuthError(400, "SAML response is not valid XML");
   }
-
   // Exactly one SignedXml reference, and it must resolve to the assertion we
   // consume. Multiple references, no reference, or a reference to something
   // other than the assertion are all rejected — this is the core defense
   // against wrapping attacks.
   const assertions = doc.getElementsByTagNameNS("*", "Assertion");
   if (assertions.length !== 1) {
-    return { valid: false, error: "SAML response must contain exactly one Assertion element" };
+    throw new SamlAuthError(400, "SAML response must contain exactly one Assertion element");
   }
   const assertionNode = assertions.item(0);
   if (assertionNode === null) {
-    return { valid: false, error: "SAML response must contain exactly one Assertion element" };
+    throw new SamlAuthError(400, "SAML response must contain exactly one Assertion element");
   }
+  return { doc, assertionNode };
+}
 
+function collectSignatureNodes(doc: ReturnType<DOMParser["parseFromString"]>): DomElement[] {
   const signatureNodes = doc.getElementsByTagNameNS("*", "Signature");
-  if (signatureNodes.length === 0) return { valid: false, error: "SAML response is not signed" };
+  if (signatureNodes.length === 0) throw new SamlAuthError(400, "SAML response is not signed");
   // An attacker can stuff a document with signature elements to exhaust CPU;
   // the single verified signature is all the flow ever needs.
   if (signatureNodes.length > MAX_SAML_SIGNATURE_NODES) {
-    return { valid: false, error: "SAML response contains too many signatures" };
+    throw new SamlAuthError(400, "SAML response contains too many signatures");
   }
-
+  const out: DomElement[] = [];
   for (let index = 0; index < signatureNodes.length; index += 1) {
-    const signatureElement = signatureNodes.item(index);
-    if (signatureElement === null) continue;
-    for (const certificate of certificates) {
-      try {
-        const signed = new SignedXml();
-        signed.getCertFromKeyInfo = (): string => pemCertificate(certificate);
-        signed.loadSignature(signatureElement as unknown as Parameters<SignedXml["loadSignature"]>[0]);
-        if (!supportedXmlSignature(signed)) continue;
-        if (!signed.checkSignature(xml)) continue;
-        const references = signed.getReferences();
-        // The references type from xml-crypto exposes `uri`; tolerate shaped
-        // variants without losing type-safety.
-        const uris = references.map((ref): string => (ref as { uri?: string }).uri ?? "");
-        if (uris.length !== 1) continue;
-        const uri = uris[0]?.replace(/^#/, "") ?? "";
-        if (uri === "") continue;
-        const assertionId = assertionNode.getAttribute("ID");
-        if (assertionId !== uri) continue;
-        const signedReferences = signed.getSignedReferences();
-        if (signedReferences.length !== 1 || signedReferences[0] === undefined) continue;
-        // The signature covers exactly the assertion we will consume.
-        return { valid: true, error: "", assertionXml: signedReferences[0] };
-      } catch {
-        // Try the next signature and certificate (e.g. during rotation).
+    const node = signatureNodes.item(index);
+    if (node !== null) out.push(node);
+  }
+  return out;
+}
+
+function tryVerifyAssertionSignature(args: {
+  xml: string;
+  certificate: string;
+  signatureElement: DomElement;
+  assertionId: string | null;
+}): string | null {
+  try {
+    const signed = new SignedXml();
+    signed.getCertFromKeyInfo = (): string => pemCertificate(args.certificate);
+    signed.loadSignature(args.signatureElement as unknown as Parameters<SignedXml["loadSignature"]>[0]);
+    if (!supportedXmlSignature(signed)) return null;
+    if (!signed.checkSignature(args.xml)) return null;
+    const references = signed.getReferences();
+    // The references type from xml-crypto exposes `uri`; tolerate shaped
+    // variants without losing type-safety.
+    const uris = references.map((ref): string => (ref as { uri?: string }).uri ?? "");
+    if (uris.length !== 1) return null;
+    const uri = uris[0]?.replace(/^#/, "") ?? "";
+    if (uri === "") return null;
+    if (args.assertionId !== uri) return null;
+    const signedReferences = signed.getSignedReferences();
+    if (signedReferences.length !== 1 || signedReferences[0] === undefined) return null;
+    // The signature covers exactly the assertion we will consume.
+    return signedReferences[0];
+  } catch {
+    // Try the next signature and certificate (e.g. during rotation).
+    return null;
+  }
+}
+
+function signedAssertionResult(
+  xml: string,
+  certificates: readonly string[],
+): SignedAssertionResult {
+  try {
+    if (certificates.length === 0) {
+      throw new SamlAuthError(400, "No IdP certificate configured");
+    }
+    const { doc, assertionNode } = parseSamlAssertionNode(xml);
+    const signatureElements = collectSignatureNodes(doc);
+    const assertionId = assertionNode.getAttribute("ID");
+    for (const signatureElement of signatureElements) {
+      for (const certificate of certificates) {
+        const assertionXml = tryVerifyAssertionSignature({ xml, certificate, signatureElement, assertionId });
+        if (assertionXml !== null) return { valid: true, error: "", assertionXml };
       }
     }
+    return { valid: false, error: "SAML signature verification failed" };
+  } catch (error: unknown) {
+    if (error instanceof SamlAuthError) return { valid: false, error: error.message };
+    throw error;
   }
-  return { valid: false, error: "SAML signature verification failed" };
 }
 
 async function currentSamlSettings(): Promise<SamlRow> {
