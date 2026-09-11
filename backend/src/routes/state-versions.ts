@@ -1493,6 +1493,57 @@ function parseActionRollbackSource(sv: ActionRollbackScope["sv"]): { sourcePaylo
   return { sourcePayload, parsedSource };
 }
 
+type ReservationUploadScope = Awaited<ReturnType<typeof resolveReservationUploadScope>>;
+
+async function resolveReservationUploadScope(
+  stateVersionId: string,
+  request: Request,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+  uploadPath: string,
+) {
+  const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+  if (sv === undefined) {
+    throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+  if (ws === undefined || (!validSignedApiURL(request, uploadPath, "PUT") && !(await checkWorkspacePermission(ws, userId, orgId, teamId, "state-write")))) {
+    throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  return { sv, ws };
+}
+
+async function readReservationUploadBody(
+  body: unknown,
+  request: Request,
+  sv: ReservationUploadScope["sv"],
+): Promise<string> {
+  const rawStateResult = await requestBodyText(body, request);
+  if (!rawStateResult.ok) {
+    const status = rawStateResult.reason === "too-large" ? 413 : 400;
+    const title = sv.status === "finalized" && typeof sv.statePayload === "string" && sv.statePayload !== ""
+      ? "Invalid state upload body"
+      : status === 413 ? "Payload Too Large" : "Bad Request";
+    throw new StateVersionRejected(status, { errors: [{ status: String(status), title }] });
+  }
+  return rawStateResult.text;
+}
+
+function applyCommittedUpload(committed: Awaited<ReturnType<typeof commitStateVersion>>, workspaceId: string): void {
+  if (committed.kind === "not-found") {
+    throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  if (committed.kind === "invalid") {
+    const status = committed.reason === "state-payload" ? 400 : 422;
+    throw new StateVersionRejected(status, { errors: [{ status: String(status), title: status === 400 ? "Bad Request" : "Unprocessable Entity", detail: committed.detail }] });
+  }
+  if (committed.kind === "conflict") {
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: committed.detail }] });
+  }
+  if (committed.kind === "committed") scheduleExplorerInventory(workspaceId);
+}
+
 export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   .use(authPlugin)
   .get("/api/v2/state-versions", async ({ request, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -1804,49 +1855,30 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   })
   .put("/api/v2/state-versions/:state_version_id/upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
     const path = `/api/v2/state-versions/${stateVersionId}/upload`;
-    if (ws === undefined || (!validSignedApiURL(request, path, "PUT") && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-write")))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    // Issue #578: claim before the network-bound body transfer so two
-    // simultaneous PUTs do not both stream bodies. The domain command below
-    // remains the cross-process atomic backstop.
-    if (!tryAcquireStateUpload(stateVersionId)) {
-      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] };
-    }
     try {
-      const rawStateResult = await requestBodyText(body, request);
-      if (!rawStateResult.ok) {
-        const status = rawStateResult.reason === "too-large" ? 413 : 400;
-        (set as { status: number }).status = status;
-        const title = sv.status === "finalized" && typeof sv.statePayload === "string" && sv.statePayload !== ""
-          ? "Invalid state upload body"
-          : status === 413 ? "Payload Too Large" : "Bad Request";
-        return { errors: [{ status: String(status), title }] };
+      const { sv } = await resolveReservationUploadScope(stateVersionId, request, user?.id, orgId, teamId, path);
+      // Issue #578: claim before the network-bound body transfer so two
+      // simultaneous PUTs do not both stream bodies. The domain command below
+      // remains the cross-process atomic backstop.
+      if (!tryAcquireStateUpload(stateVersionId)) {
+        throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] });
       }
-      const rawState = rawStateResult.text;
-      const committed = await commitStateVersion({ stateVersionId, rawState });
-      if (committed.kind === "not-found") {
-        (set as { status: number }).status = 404;
-        return { errors: [{ status: "404", title: "Not Found" }] };
+      try {
+        const rawState = await readReservationUploadBody(body, request, sv);
+        const committed = await commitStateVersion({ stateVersionId, rawState });
+        applyCommittedUpload(committed, sv.workspaceId);
+        (set as { status: number }).status = 200;
+        return {};
+      } finally {
+        releaseStateUpload(stateVersionId);
       }
-      if (committed.kind === "invalid") {
-        const status = committed.reason === "state-payload" ? 400 : 422;
-        (set as { status: number }).status = status;
-        return { errors: [{ status: String(status), title: status === 400 ? "Bad Request" : "Unprocessable Entity", detail: committed.detail }] };
+    } catch (error: unknown) {
+      if (error instanceof StateVersionRejected) {
+        (set as { status: number }).status = error.status;
+        return error.body;
       }
-      if (committed.kind === "conflict") {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: committed.detail }] };
-      }
-      if (committed.kind === "committed") scheduleExplorerInventory(sv.workspaceId);
-      (set as { status: number }).status = 200;
-      return {};
-    } finally {
-      releaseStateUpload(stateVersionId);
+      throw error;
     }
   })
   .put("/api/v2/state-versions/:state_version_id/json-upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
