@@ -1974,6 +1974,36 @@ async function commitPolicyOverride(input: PolicyOverrideInput): Promise<typeof 
   });
 }
 
+function queuePositionResources(
+  queue: readonly RunItem[],
+  applyIds: readonly string[] | null,
+  origins: ReadonlyMap<string, RunOrigin>,
+  linkage: ReadonlyMap<string, RunRelationshipLinkage>,
+  startPosition: number,
+): Record<string, unknown>[] {
+  let position = startPosition;
+  const applySet = new Set(applyIds ?? []);
+  return queue.map((r: RunItem): Record<string, unknown> => {
+    const resource = runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id), undefined, undefined, linkage.get(r.id));
+    const isPending = CAPACITY_PENDING_STATUSES.some((s: string): boolean => s === r.status);
+    if (isPending) { position += 1; }
+    const attrs = typeof resource["attributes"] === "object" && resource["attributes"] !== null ? (resource["attributes"] as Record<string, unknown>) : {};
+    return { ...resource, attributes: { ...attrs, "position-in-queue": isPending ? position : 0 } };
+  });
+}
+
+function emptyOrgQueueResponse(
+  request: ParamCtx["request"],
+  cursorMode: boolean,
+  number: number,
+  size: number,
+): Record<string, unknown> {
+  return {
+    data: [],
+    ...(cursorMode ? cursorPagination(request, null, size, false) : pagination(request, number, size, 0)),
+  };
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -2235,10 +2265,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     if ("failure" in parsedCursor) return parsedCursor.failure;
     const { cursorMode, cursor } = parsedCursor;
     if (orgWorkspaces.length === 0) {
-      return {
-        data: [],
-        ...(cursorMode ? cursorPagination(request, null, size, false) : pagination(request, number, size, 0)),
-      };
+      return emptyOrgQueueResponse(request, cursorMode, number, size);
     }
     const workspaceIds = orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id);
     const { base: baseQueueWhere, where: queueWhere } = runQueueWhere(workspaceIds, cursor);
@@ -2259,17 +2286,8 @@ export const runRoutes = new Elysia({ name: "runs" })
     const hasMore = cursorMode && queueWithCursor.length > size;
     const queue = hasMore ? queueWithCursor.slice(0, size) : queueWithCursor;
     const pendingBefore = await countPendingBeforeQueue(workspaceIds, queue[0]);
-    let position = (runningRows[0]?.total ?? 0) + pendingBefore;
-    const applySet = new Set(applyIds ?? []);
-    const origins = await originsForRuns(queue);
-    const linkage = await linkageForRuns(queue);
-    const data = queue.map((r: RunItem): Record<string, unknown> => {
-      const resource = runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id), undefined, undefined, linkage.get(r.id));
-      const isPending = CAPACITY_PENDING_STATUSES.some((s: string): boolean => s === r.status);
-      if (isPending) { position += 1; }
-      const attrs = typeof resource["attributes"] === "object" && resource["attributes"] !== null ? (resource["attributes"] as Record<string, unknown>) : {};
-      return { ...resource, attributes: { ...attrs, "position-in-queue": isPending ? position : 0 } };
-    });
+    const [origins, linkage] = await Promise.all([originsForRuns(queue), linkageForRuns(queue)]);
+    const data = queuePositionResources(queue, applyIds, origins, linkage, (runningRows[0]?.total ?? 0) + pendingBefore);
     const included = await includedRunResources(queue, request, requestedRunIncludes(request));
     const pageMeta = runQueuePageMeta(request, cursorMode, hasMore, queue.at(-1), size, number, countRows);
     return { data, ...(included.length > 0 ? { included } : {}), ...pageMeta };
