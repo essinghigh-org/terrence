@@ -2064,78 +2064,10 @@ async function executeRunImpl(runId: string): Promise<void> {
     await writeLog(runId, "plan", `[terrence] Initializing run environment in ${workDir}`);
 
     if (run.configurationVersionId !== null) {
-      let cv = await db.query.configurationVersions.findFirst({
-        where: eq(configurationVersions.id, run.configurationVersionId),
-      });
-
-      // Push webhooks can create the run before the tarball download settles
-      // (see waitForVcsConfigurationDownload): wait for it rather than
-      // planning against an empty workdir.
-      if (cv !== undefined && VCS_CONFIGURATION_SOURCES.includes(cv.source as VcsConfigurationSource)) {
-        cv = await waitForVcsConfigurationDownload(runId, cv);
-      }
-
-      if (
-        cv !== undefined
-        && ["github", "gitlab", "bitbucket"].includes(cv.source ?? "")
-        && ["archived", "backing_data_soft_deleted"].includes(cv.status)
-        && (
-          typeof cv.archivePath !== "string"
-          || cv.archivePath === ""
-          || !(await exists(cv.archivePath))
-        )
-      ) {
-        await writeLog(runId, "plan", `[terrence] Re-fetching archived VCS configuration ${cv.id}.`);
-        if (!(await refetchConfigurationVersion(cv.id))) {
-          throw new Error(`Unable to re-fetch archived VCS configuration '${cv.id}'.`);
-        }
-        cv = await db.query.configurationVersions.findFirst({
-          where: eq(configurationVersions.id, run.configurationVersionId),
-        });
-      }
-
-      if (cv !== undefined && typeof cv.archivePath === "string" && cv.archivePath !== "" && (await exists(cv.archivePath))) {
-        await writeLog(runId, "plan", `[terrence] Extracting configuration archive ${cv.archivePath}`);
-        const ok = await extractTarArchive(
-          cv.archivePath,
-          workDir,
-          workspace.workingDirectory,
-          { runId, phase: "plan" },
-        );
-        if (!ok) {
-          await writeRunDiagnostic(
-            runId,
-            "plan",
-            "error",
-            "run.plan.archive_restore_failed",
-            "The configuration archive could not be restored for planning.",
-            {
-              failureReason: "configuration_archive_restore_failed",
-              archivePath: cv.archivePath,
-              executionDirectory: workDir,
-            },
-          );
-          throw new Error("Configuration archive extraction failed or contained invalid path components.");
-        }
-      }
+      const cv = await waitForPlanConfigurationArchive(run.configurationVersionId, runId);
+      await extractPlanConfigurationArchive(cv, workspace, runId, workDir);
     } else if (workspace.source === "local") {
-      const wsName = workspace.name;
-      if (wsName.includes("..") || wsName.startsWith("/") || wsName.includes("\\")) {
-        throw new Error(`Invalid workspace name: contains path traversal characters`);
-      }
-      const localPath = join("/app/backend/storage/local", org?.name ?? workspace.orgId, workspace.projectId ?? "default", wsName);
-      
-      await writeLog(runId, "plan", `[terrence] Using local source directory: ${localPath}`);
-      if (!(await exists(localPath))) {
-        throw new Error(`Local source directory does not exist: ${localPath}`);
-      }
-      
-      // Copy files to workDir using cp
-      const cpProc = spawn(["cp", "-r", localPath + "/.", workDir]);
-      const cpExit = await cpProc.exited;
-      if (cpExit !== 0) {
-        throw new Error(`Failed to copy local source directory to working directory.`);
-      }
+      await preparePlanLocalSource(workspace, org, runId, workDir);
     }
 
     await updateRunStatus(runId, "fetching_completed");
@@ -2883,6 +2815,99 @@ async function enforcePlanExecutorPolicy(
   queueRunNotification(runId, "run:errored", "errored");
   void reportRunVcsStatus(runId, "errored");
   return false;
+}
+
+async function waitForPlanConfigurationArchive(
+  configurationVersionId: string,
+  runId: string,
+): Promise<typeof configurationVersions.$inferSelect | undefined> {
+  let cv = await db.query.configurationVersions.findFirst({
+    where: eq(configurationVersions.id, configurationVersionId),
+  });
+
+  // Push webhooks can create the run before the tarball download settles
+  // (see waitForVcsConfigurationDownload): wait for it rather than
+  // planning against an empty workdir.
+  if (cv !== undefined && VCS_CONFIGURATION_SOURCES.includes(cv.source as VcsConfigurationSource)) {
+    cv = await waitForVcsConfigurationDownload(runId, cv);
+  }
+
+  if (
+    cv !== undefined
+    && ["github", "gitlab", "bitbucket"].includes(cv.source ?? "")
+    && ["archived", "backing_data_soft_deleted"].includes(cv.status)
+    && (
+      typeof cv.archivePath !== "string"
+      || cv.archivePath === ""
+      || !(await exists(cv.archivePath))
+    )
+  ) {
+    await writeLog(runId, "plan", `[terrence] Re-fetching archived VCS configuration ${cv.id}.`);
+    if (!(await refetchConfigurationVersion(cv.id))) {
+      throw new Error(`Unable to re-fetch archived VCS configuration '${cv.id}'.`);
+    }
+    cv = await db.query.configurationVersions.findFirst({
+      where: eq(configurationVersions.id, configurationVersionId),
+    });
+  }
+  return cv;
+}
+
+async function extractPlanConfigurationArchive(
+  cv: typeof configurationVersions.$inferSelect | undefined,
+  workspace: typeof workspaces.$inferSelect,
+  runId: string,
+  workDir: string,
+): Promise<void> {
+  if (cv !== undefined && typeof cv.archivePath === "string" && cv.archivePath !== "" && (await exists(cv.archivePath))) {
+    await writeLog(runId, "plan", `[terrence] Extracting configuration archive ${cv.archivePath}`);
+    const ok = await extractTarArchive(
+      cv.archivePath,
+      workDir,
+      workspace.workingDirectory,
+      { runId, phase: "plan" },
+    );
+    if (!ok) {
+      await writeRunDiagnostic(
+        runId,
+        "plan",
+        "error",
+        "run.plan.archive_restore_failed",
+        "The configuration archive could not be restored for planning.",
+        {
+          failureReason: "configuration_archive_restore_failed",
+          archivePath: cv.archivePath,
+          executionDirectory: workDir,
+        },
+      );
+      throw new Error("Configuration archive extraction failed or contained invalid path components.");
+    }
+  }
+}
+
+async function preparePlanLocalSource(
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  runId: string,
+  workDir: string,
+): Promise<void> {
+  const wsName = workspace.name;
+  if (wsName.includes("..") || wsName.startsWith("/") || wsName.includes("\\")) {
+    throw new Error(`Invalid workspace name: contains path traversal characters`);
+  }
+  const localPath = join("/app/backend/storage/local", org?.name ?? workspace.orgId, workspace.projectId ?? "default", wsName);
+
+  await writeLog(runId, "plan", `[terrence] Using local source directory: ${localPath}`);
+  if (!(await exists(localPath))) {
+    throw new Error(`Local source directory does not exist: ${localPath}`);
+  }
+
+  // Copy files to workDir using cp
+  const cpProc = spawn(["cp", "-r", localPath + "/.", workDir]);
+  const cpExit = await cpProc.exited;
+  if (cpExit !== 0) {
+    throw new Error(`Failed to copy local source directory to working directory.`);
+  }
 }
 
 async function executeApplyImpl(runId: string): Promise<void> {
