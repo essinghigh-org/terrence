@@ -1186,12 +1186,13 @@ async function assembleRunProvenance(
 
 type AuthorizedRun = NonNullable<Awaited<ReturnType<typeof findAuthorizedRun>>>;
 
-async function authorizeRunApply(
+async function authorizeRunAction(
   runId: string,
   user: ParamCtx["user"],
   orgId: string | null | undefined,
   teamId: string | null | undefined,
   set: SetObj,
+  permission: "apply" | "discard" | "cancel" = "apply",
 ): Promise<Readonly<{ authorized: AuthorizedRun } | { failure: Record<string, unknown> }>> {
   const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
   if (authorized === undefined) {
@@ -1202,7 +1203,7 @@ async function authorizeRunApply(
     (set as { status: number }).status = 403;
     return { failure: { errors: [{ status: "403", title: "Forbidden" }] } };
   }
-  if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "apply"))) {
+  if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, permission))) {
     (set as { status: number }).status = 403;
     return { failure: { errors: [{ status: "403", title: "Forbidden" }] } };
   }
@@ -2262,7 +2263,7 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   .post("/api/v2/runs/:run_id/actions/apply", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const access = await authorizeRunApply(runId, user, orgId, teamId, set);
+    const access = await authorizeRunAction(runId, user, orgId, teamId, set);
     if ("failure" in access) return access.failure;
     const { authorized } = access;
     if (authorized.workspace.locked === true) {
@@ -2309,7 +2310,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     // The worker applies the run when scheduled-at arrives; the manual apply
     // action clears the schedule and applies immediately.
     const runId = params["run_id"] ?? "";
-    const access = await authorizeRunApply(runId, user, orgId, teamId, set);
+    const access = await authorizeRunAction(runId, user, orgId, teamId, set);
     if ("failure" in access) return access.failure;
     const { authorized } = access;
     if (authorized.workspace.locked === true) {
@@ -2343,10 +2344,9 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   .post("/api/v2/runs/:run_id/actions/discard", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "discard"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const access = await authorizeRunAction(runId, user, orgId, teamId, set, "discard");
+    if ("failure" in access) return access.failure;
+    const { authorized } = access;
     const updated = await db.update(runs).set({ status: "discarded" }).where(and(
       eq(runs.id, runId),
       eq(runs.status, authorized.run.status),
@@ -2371,10 +2371,9 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   .post("/api/v2/runs/:run_id/actions/cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "cancel"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const access = await authorizeRunAction(runId, user, orgId, teamId, set, "cancel");
+    if ("failure" in access) return access.failure;
+    const { authorized } = access;
     const canceledAt = new Date().toISOString();
     const updated = await db.update(runs).set({
       status: "canceled",
