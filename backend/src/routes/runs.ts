@@ -10,6 +10,7 @@ import { db } from "../db";
 import { storageDir } from "../db/driver";
 import { agentJobs, agentPools, runs, runProvenanceCapsules, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users, organizations, notificationConfigurations, notificationConfigurationWorkspaceExclusions } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource, taskStageResource, type RunRelationshipLinkage } from "../lib/response";
 import { tfPolicyEvaluationResource, tfStageTypesForEvaluations } from "./policy-evaluations";
 import { configurationVersionResource, configurationVersionIngressResource } from "./configuration-versions";
@@ -1269,6 +1270,61 @@ async function rejectMissingConfiguration(
   return null;
 }
 
+function parseRunQueueCursor(
+  request: RequestWithUrl,
+  set: SetObj,
+): Readonly<{ cursorMode: boolean; cursor: RunCursor | null } | { failure: unknown }> {
+  const rawCursor = new URL(request.url).searchParams.get("page[cursor]");
+  const cursorMode = rawCursor !== null;
+  const cursor = rawCursor === null ? null : decodeRunCursor(rawCursor);
+  if (cursorMode && cursor === null) {
+    (set as { status: number }).status = 400;
+    return { failure: { errors: [{ status: "400", title: "Bad Request", detail: "page[cursor] is invalid" }] } };
+  }
+  return { cursorMode, cursor };
+}
+
+function runQueueWhere(
+  workspaceIds: readonly string[],
+  cursor: RunCursor | null,
+): Readonly<{ base: SQL | undefined; where: SQL | undefined }> {
+  const base = and(
+    inArray(runs.workspaceId, [...workspaceIds]),
+    inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES]),
+  );
+  return {
+    base,
+    where: and(
+      base,
+      cursor === null ? undefined : or(
+        gt(runs.createdAt, cursor.createdAt),
+        and(eq(runs.createdAt, cursor.createdAt), gt(runs.id, cursor.id)),
+      ),
+    ),
+  };
+}
+
+async function countPendingBeforeQueue(
+  workspaceIds: readonly string[],
+  first: RunItem | undefined,
+): Promise<number> {
+  if (first === undefined) return 0;
+  const rowsBefore = await db.select({ total: count() }).from(runs).where(and(
+    inArray(runs.workspaceId, [...workspaceIds]),
+    inArray(runs.status, [...CAPACITY_PENDING_STATUSES]),
+    or(
+      lt(runs.createdAt, first.createdAt),
+      and(eq(runs.createdAt, first.createdAt), lt(runs.id, first.id)),
+    ),
+  ));
+  return rowsBefore[0]?.total ?? 0;
+}
+
+async function queueTotalQuery(cursorMode: boolean, base: SQL | undefined): Promise<readonly { total: number }[]> {
+  if (cursorMode) return [{ total: 0 }];
+  return db.select({ total: count() }).from(runs).where(base);
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -1524,30 +1580,17 @@ export const runRoutes = new Elysia({ name: "runs" })
       workspaceIdsForPermission(organization.id, user?.id, orgId ?? null, teamId ?? null, "apply"),
     ]);
     const { number, size } = pageRequest(request);
-    const rawCursor = new URL(request.url).searchParams.get("page[cursor]");
-    const cursorMode = rawCursor !== null;
-    const cursor = rawCursor === null ? null : decodeRunCursor(rawCursor);
-    if (cursorMode && cursor === null) {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "page[cursor] is invalid" }] };
-    }
+    const parsedCursor = parseRunQueueCursor(request, set);
+    if ("failure" in parsedCursor) return parsedCursor.failure;
+    const { cursorMode, cursor } = parsedCursor;
     if (orgWorkspaces.length === 0) {
       return {
         data: [],
         ...(cursorMode ? cursorPagination(request, null, size, false) : pagination(request, number, size, 0)),
       };
     }
-    const baseQueueWhere = and(
-      inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)),
-      inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES]),
-    );
-    const queueWhere = and(
-      baseQueueWhere,
-      cursor === null ? undefined : or(
-        gt(runs.createdAt, cursor.createdAt),
-        and(eq(runs.createdAt, cursor.createdAt), gt(runs.id, cursor.id)),
-      ),
-    );
+    const workspaceIds = orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id);
+    const { base: baseQueueWhere, where: queueWhere } = runQueueWhere(workspaceIds, cursor);
     const [queueWithCursor, countRows, runningRows] = await Promise.all([
       db.query.runs.findMany({
         where: queueWhere,
@@ -1555,7 +1598,7 @@ export const runRoutes = new Elysia({ name: "runs" })
         limit: cursorMode ? size + 1 : size,
         offset: cursorMode ? undefined : (number - 1) * size,
       }),
-      cursorMode ? Promise.resolve([{ total: 0 }]) : db.select({ total: count() }).from(runs).where(baseQueueWhere),
+      queueTotalQuery(cursorMode, baseQueueWhere),
       db.select({ total: count() }).from(runs).where(and(
         baseQueueWhere,
         inArray(runs.status, [...CAPACITY_RUNNING_STATUSES]),
@@ -1563,19 +1606,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     ]);
     const hasMore = cursorMode && queueWithCursor.length > size;
     const queue = hasMore ? queueWithCursor.slice(0, size) : queueWithCursor;
-    const first = queue[0];
-    let pendingBefore = 0;
-    if (first !== undefined) {
-      const rowsBefore = await db.select({ total: count() }).from(runs).where(and(
-        inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)),
-        inArray(runs.status, [...CAPACITY_PENDING_STATUSES]),
-        or(
-          lt(runs.createdAt, first.createdAt),
-          and(eq(runs.createdAt, first.createdAt), lt(runs.id, first.id)),
-        ),
-      ));
-      pendingBefore = rowsBefore[0]?.total ?? 0;
-    }
+    const pendingBefore = await countPendingBeforeQueue(workspaceIds, queue[0]);
     let position = (runningRows[0]?.total ?? 0) + pendingBefore;
     const applySet = new Set(applyIds ?? []);
     const origins = await originsForRuns(queue);
