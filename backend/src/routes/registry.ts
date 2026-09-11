@@ -1306,6 +1306,57 @@ type TestConfigRow = DeepReadonly<typeof moduleTestConfigurations.$inferSelect>;
 
 type OrgRowForWrite = NonNullable<Awaited<ReturnType<typeof cachedOrgByName>>>;
 
+type TestRunArchiveSelection = Readonly<{
+  archivePath: string;
+  version: ModVerItem;
+  moduleConfigurationVersionId: string | null;
+}>;
+
+async function resolveTestRunModuleForWrite(
+  params: ParamCtx["params"],
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ mod: ModItem } | { failure: unknown }>> {
+  const mod = await findTestRunModule(params);
+  if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"))) return { failure: registryNotFound(set) };
+  return { mod };
+}
+
+function parseTestRunConfigurationVersion(body: unknown): { configurationVersionId: string | undefined } {
+  const rawPayload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = rawPayload["data"] !== null && typeof rawPayload["data"] === "object" ? rawPayload["data"] as Record<string, unknown> : {};
+  const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
+  const configurationRelationship = relationships["configuration-version"];
+  const configurationData = configurationRelationship !== null && typeof configurationRelationship === "object" ? (configurationRelationship as Record<string, unknown>)["data"] : undefined;
+  const configurationVersionId = configurationData !== null && typeof configurationData === "object" && typeof (configurationData as Record<string, unknown>)["id"] === "string"
+    ? (configurationData as Record<string, unknown>)["id"] as string
+    : undefined;
+  return { configurationVersionId };
+}
+
+async function selectTestRunArchive(
+  moduleId: string,
+  configurationVersionId: string | undefined,
+  orgId: string,
+): Promise<TestRunArchiveSelection | Readonly<{ error: string }>> {
+  const selected = await testRunConfigurationArchive(moduleId, configurationVersionId, orgId);
+  if (configurationVersionId !== undefined && selected.archivePath === null) {
+    return { error: "The configuration version is not uploaded or is not available to this module" };
+  }
+  const versions = await availableModuleVersions(moduleId);
+  const version = versions[0];
+  if (version === undefined) {
+    return { error: "The module has no published version available for testing" };
+  }
+  const archivePath = selected.archivePath ?? version.archivePath;
+  if (archivePath === null || !(await Bun.file(archivePath).exists())) {
+    return { error: "The module archive is not available for testing" };
+  }
+  return { archivePath, version, moduleConfigurationVersionId: selected.moduleConfigurationVersionId };
+}
+
 async function resolveModuleVersionForWrite(
   params: Readonly<Record<string, string>>,
   userId: string | undefined,
@@ -2835,44 +2886,27 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: testConfigurationVersionResource(updated, mod.id, request) };
   })
   .post("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const mod = await findTestRunModule(params);
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
+    const resolved = await resolveTestRunModuleForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { mod } = resolved;
     const configuration = moduleTestConfiguration(body);
     if ("error" in configuration) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: configuration.error }] };
     }
-    const rawPayload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = rawPayload["data"] !== null && typeof rawPayload["data"] === "object" ? rawPayload["data"] as Record<string, unknown> : {};
-    const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
-    const configurationRelationship = relationships["configuration-version"];
-    const configurationData = configurationRelationship !== null && typeof configurationRelationship === "object" ? (configurationRelationship as Record<string, unknown>)["data"] : undefined;
-    const configurationVersionId = configurationData !== null && typeof configurationData === "object" && typeof (configurationData as Record<string, unknown>)["id"] === "string"
-      ? (configurationData as Record<string, unknown>)["id"] as string
-      : undefined;
-    const selected = await testRunConfigurationArchive(mod.id, configurationVersionId, mod.orgId);
-    if (configurationVersionId !== undefined && selected.archivePath === null) {
+    const { configurationVersionId } = parseTestRunConfigurationVersion(body);
+    const selection = await selectTestRunArchive(mod.id, configurationVersionId, mod.orgId);
+    if ("error" in selection) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The configuration version is not uploaded or is not available to this module" }] };
-    }
-    const versions = await availableModuleVersions(mod.id);
-    const version = versions[0];
-    if (version === undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The module has no published version available for testing" }] };
-    }
-    const archivePath = selected.archivePath ?? version.archivePath;
-    if (archivePath === null || !(await Bun.file(archivePath).exists())) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The module archive is not available for testing" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: selection.error }] };
     }
     const now = Date.now();
     const id = newResourceId("trun");
     const runValues: typeof moduleTestRuns.$inferInsert = {
       id,
       moduleId: mod.id,
-      versionId: version.id,
-      configurationVersionId: selected.moduleConfigurationVersionId,
+      versionId: selection.version.id,
+      configurationVersionId: selection.moduleConfigurationVersionId,
       status: "queued",
       testStatus: null,
       testsPassed: null,
@@ -2900,7 +2934,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const created = await db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, id) });
     if (created === undefined) throw new Error("Created module test run could not be loaded");
     (set as { status: number }).status = 201;
-    return { data: testRunResource(created, mod.id, version.version) };
+    return { data: testRunResource(created, mod.id, selection.version.version) };
   })
   .get("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs", async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const mod = await findTestRunModule(params);
