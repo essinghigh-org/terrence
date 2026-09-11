@@ -1584,6 +1584,52 @@ async function confirmDirectApply(
   return new Response(null, { status: 202 });
 }
 
+type RunCreateEnvelope = Readonly<{
+  payload: Record<string, unknown>;
+  attributes: Record<string, unknown>;
+  rels: Record<string, unknown>;
+  cvId: string | undefined;
+}>;
+
+function parseRunCreateEnvelope(body: unknown): RunCreateEnvelope {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+  const cvRel = typeof rels["configuration-version"] === "object" && rels["configuration-version"] !== null ? (rels["configuration-version"] as Record<string, unknown>) : {};
+  const cvData = typeof cvRel["data"] === "object" && cvRel["data"] !== null ? (cvRel["data"] as Record<string, unknown>) : {};
+  const cvId = typeof cvData["id"] === "string" ? cvData["id"] : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
+  return { payload, attributes, rels, cvId };
+}
+
+function runCreateWorkspaceId(rels: Record<string, unknown>): string {
+  const wsRel = typeof rels["workspace"] === "object" && rels["workspace"] !== null ? (rels["workspace"] as Record<string, unknown>) : {};
+  const wsData = typeof wsRel["data"] === "object" && wsRel["data"] !== null ? (wsRel["data"] as Record<string, unknown>) : {};
+  return typeof wsData["id"] === "string" ? wsData["id"] : "";
+}
+
+function resolveRunCreateIdempotency(
+  request: ParamCtx["request"],
+  scope: string,
+  userId: string | undefined,
+  orgId: string | null | undefined,
+  teamId: string | null | undefined,
+  payload: Record<string, unknown>,
+  set: SetObj,
+): Readonly<{ idempotency: IdempotencyContext | null } | { failure: unknown }> {
+  const idempotency = idempotencyContext(
+    request,
+    scope,
+    idempotencyPrincipal({ userId, orgId, teamId }),
+    payload,
+    set as unknown as { status?: number | string; headers: Record<string, string | number> },
+  );
+  if (idempotency === "invalid") {
+    return { failure: { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] } };
+  }
+  return { idempotency };
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -1900,43 +1946,17 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   .post("/api/v2/workspaces/:workspace_id/runs", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const wsId = params["workspace_id"] ?? "";
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-    const cvRel = typeof rels["configuration-version"] === "object" && rels["configuration-version"] !== null ? (rels["configuration-version"] as Record<string, unknown>) : {};
-    const cvData = typeof cvRel["data"] === "object" && cvRel["data"] !== null ? (cvRel["data"] as Record<string, unknown>) : {};
-    const cvId = typeof cvData["id"] === "string" ? cvData["id"] : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
-    const idempotency = idempotencyContext(
-      request,
-      `runs:workspace:${wsId}`,
-      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
-      payload,
-      set as unknown as { status?: number | string; headers: Record<string, string | number> },
-    );
-    if (idempotency === "invalid") return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
-    return createRun(wsId, attributes, cvId, user, orgId, teamId, set, idempotency);
+    const envelope = parseRunCreateEnvelope(body);
+    const resolved = resolveRunCreateIdempotency(request, `runs:workspace:${wsId}`, user?.id, orgId, teamId, envelope.payload, set);
+    if ("failure" in resolved) return resolved.failure;
+    return createRun(wsId, envelope.attributes, envelope.cvId, user, orgId, teamId, set, resolved.idempotency);
   })
   .post("/api/v2/runs", async ({ body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-    const wsRel = typeof rels["workspace"] === "object" && rels["workspace"] !== null ? (rels["workspace"] as Record<string, unknown>) : {};
-    const wsData = typeof wsRel["data"] === "object" && wsRel["data"] !== null ? (wsRel["data"] as Record<string, unknown>) : {};
-    const cvRel = typeof rels["configuration-version"] === "object" && rels["configuration-version"] !== null ? (rels["configuration-version"] as Record<string, unknown>) : {};
-    const cvData = typeof cvRel["data"] === "object" && cvRel["data"] !== null ? (cvRel["data"] as Record<string, unknown>) : {};
-    const workspaceId = typeof wsData["id"] === "string" ? wsData["id"] : "";
-    const cvId = typeof cvData["id"] === "string" ? cvData["id"] : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
-    const idempotency = idempotencyContext(
-      request,
-      `runs:generic:${workspaceId}`,
-      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
-      payload,
-      set as unknown as { status?: number | string; headers: Record<string, string | number> },
-    );
-    if (idempotency === "invalid") return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
-    return createRun(workspaceId, attributes, cvId, user, orgId, teamId, set, idempotency);
+    const envelope = parseRunCreateEnvelope(body);
+    const workspaceId = runCreateWorkspaceId(envelope.rels);
+    const resolved = resolveRunCreateIdempotency(request, `runs:generic:${workspaceId}`, user?.id, orgId, teamId, envelope.payload, set);
+    if ("failure" in resolved) return resolved.failure;
+    return createRun(workspaceId, envelope.attributes, envelope.cvId, user, orgId, teamId, set, resolved.idempotency);
   })
   .get("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
