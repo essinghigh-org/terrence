@@ -504,6 +504,251 @@ const RATE_LIMIT_ERROR_RESPONSE = new Response(
 
 
 
+function classifyResponseDocument(
+  response: AfterHandleContext["response"],
+): { isJsonDocument: boolean; isErrorDocument: boolean; responseObject: Record<string, unknown> | null; responseHeaders: Headers | null } {
+  const isJsonDocument = response !== null
+    && typeof response === "object"
+    && (Array.isArray(response) || Object.getPrototypeOf(response) === Object.prototype);
+  const responseObject = isJsonDocument ? response as Record<string, unknown> : null;
+  const isErrorDocument = responseObject !== null && Array.isArray(responseObject["errors"]);
+  const responseHeaders = response instanceof Response ? response.headers : null;
+  return { isJsonDocument, isErrorDocument, responseObject, responseHeaders };
+}
+
+function resolveResponseContentType(
+  set: AfterHandleContext["set"],
+  responseHeaders: Headers | null,
+): string | null {
+  const configuredContentType = set.headers["Content-Type"] ?? set.headers["content-type"];
+  return responseHeaders?.get("content-type")
+    ?? (configuredContentType === undefined ? null : String(configuredContentType));
+}
+
+function resolveAfterHandleStatus(
+  response: AfterHandleContext["response"],
+  set: AfterHandleContext["set"],
+): number {
+  return response instanceof Response
+    ? response.status
+    : typeof set.status === "number" ? set.status : Number.parseInt(String(set.status), 10) || 200;
+}
+
+function checkJsonApiResponse(
+  pathname: string,
+  isJsonDocument: boolean,
+  isErrorDocument: boolean,
+  declaredContentType: string | null,
+  responseStatus: number,
+  acceptHeader: string | null,
+): { isJsonApiDocument: boolean; isJsonApiResponse: boolean; unacceptable: boolean } {
+  const isJsonApiDocument = (isJsonApiResponsePath(pathname) || isErrorDocument)
+    && isJsonDocument
+    && (declaredContentType === null || isJsonApiResponseContentType(declaredContentType));
+  const isExplicitJsonApiResponse = isJsonApiResponseContentType(declaredContentType);
+  const isJsonApiResponse = isJsonApiResponsePath(pathname)
+    && responseStatus !== 204
+    && !(responseStatus >= 300 && responseStatus < 400)
+    && (isJsonApiDocument || isExplicitJsonApiResponse);
+  const unacceptable = isJsonApiResponse && !acceptsJsonApi(acceptHeader);
+  return { isJsonApiDocument, isJsonApiResponse, unacceptable };
+}
+
+function recordAfterHandleMetrics(
+  request: AfterHandleContext["request"],
+  response: AfterHandleContext["response"],
+  set: AfterHandleContext["set"],
+  unacceptable: boolean,
+): void {
+  const meta = requestMeta.get(request as unknown as Request);
+  if (meta === undefined) return;
+  const duration = Date.now() - meta.startTime;
+  const method = meta.method;
+  const path = meta.path;
+  const status = unacceptable ? 406 : set.status ?? (response instanceof Response ? response.status : 200);
+  const numericStatus = typeof status === "number" ? status : Number.parseInt(String(status), 10) || 200;
+  recordRequestLatency(path, duration);
+  requestFinished(numericStatus);
+  // Idempotent bookkeeping: the WeakMap entry is consumed here so an
+  // error path (onError) can never double-count the same request.
+  requestMeta.delete(request as unknown as Request);
+  resetAuditRequest();
+  if (path.startsWith("/api/")) {
+    // Canonical log line (loggingsucks.com wide-event pattern): one
+    // context-rich record per request instead of scattered statements.
+    log.info("request completed", {
+      requestId: meta.correlationId,
+      http: {
+        method,
+        path: redactPathSecrets(path),
+        status: numericStatus,
+        durationMs: duration,
+      },
+      // High-cardinality route bucket (no ids) so aggregations group
+      // cleanly; the raw path stays available for exact search except
+      // for redacted bearer segments (issue #609).
+      routeBucket: method + " " + pathnameBucket(path),
+      outcome: numericStatus < 400 ? "success" : numericStatus < 500 ? "client-error" : "server-error",
+    });
+  }
+}
+
+function applyTransportSecurityHeaders(
+  headers: Record<string, string | number>,
+  pathname: string,
+  request: AfterHandleContext["request"],
+): void {
+  try {
+    if (shouldSendHsts(request)) {
+      if (headers["Strict-Transport-Security"] === undefined) headers["Strict-Transport-Security"] = HSTS_VALUE;
+    }
+  } catch { /* HSTS is best-effort */ }
+  if (headers["Content-Type"] === undefined) {
+    const mime = staticMimeFor(pathname);
+    if (mime !== undefined) headers["Content-Type"] = mime;
+  }
+}
+
+function applyCacheVaryHeaders(
+  headers: Record<string, string | number>,
+  pathname: string,
+  request: AfterHandleContext["request"],
+): void {
+  const cacheControl = staticCacheControl(pathname);
+  if (cacheControl !== undefined) {
+    headers["Cache-Control"] = cacheControl;
+  } else if ((pathname === "/api" || pathname.startsWith("/api/")) && headers["Cache-Control"] === undefined) {
+    // Control-plane API responses can carry secrets/state; never let a
+    // browser or shared cache persist them (avatar images set their own
+    // Cache-Control intentionally, so we don't override those).
+    headers["Cache-Control"] = "no-store";
+  }
+
+  // When an Origin is reflected (or the server may vary by origin), the
+  // response MUST advertise that with Vary: Origin or shared caches will
+  // serve one origin's CORS decision to everyone.
+  const originHeader = request.headers.get("origin");
+  const corsConfigured = executionSetting("CORS_ORIGIN").length > 0;
+  if (originHeader !== null || corsConfigured) {
+    const { Vary: existingVary } = headers;
+    headers["Vary"] = existingVary === undefined ? "Origin" : `${String(existingVary)}, Origin`;
+  }
+}
+
+function applyDeprecationHeaders(headers: Record<string, string | number>, pathname: string): void {
+  if (pathname.startsWith("/api/v1/support-bundle-requests")) {
+    if (headers["Deprecation"] === undefined) headers["Deprecation"] = "true";
+    if (headers["Sunset"] === undefined) headers["Sunset"] = "Sat, 31 Dec 2028 23:59:59 GMT";
+    if (headers["Link"] === undefined) headers["Link"] = "</api/v1/support/bundle-requests>; rel=\"successor-version\"";
+  }
+}
+
+function enforceJsonApiAccept(
+  headers: Record<string, string | number>,
+  set: AfterHandleContext["set"],
+  isJsonApiDocument: boolean,
+  unacceptable: boolean,
+): Response | null {
+  if (isJsonApiDocument) {
+    headers["Content-Type"] = JSON_API_MEDIA_TYPE;
+  }
+  if (!unacceptable) return null;
+  headers["Content-Type"] = JSON_API_MEDIA_TYPE;
+  const vary = String(headers["Vary"] ?? "");
+  if (!vary.split(",").some((value): boolean => value.trim().toLowerCase() === "accept")) {
+    headers["Vary"] = vary === "" ? "Accept" : `${vary}, Accept`;
+  }
+  (set as { status: number }).status = 406;
+  const errorHeaders = new Headers();
+  for (const [name, value] of Object.entries(headers)) errorHeaders.set(name, String(value));
+  return new Response(JSON.stringify(mediaTypeError(406, `The Accept header must allow ${JSON_API_MEDIA_TYPE}`)), {
+    status: 406,
+    headers: errorHeaders,
+  });
+}
+
+function applyRateLimitStandardHeaders(
+  headers: Record<string, string | number>,
+  set: AfterHandleContext["set"],
+  responseHeaders: Headers | null,
+): void {
+  const limit = responseHeaders?.get("RateLimit-Limit") ?? set.headers["RateLimit-Limit"];
+  const remaining = responseHeaders?.get("RateLimit-Remaining") ?? set.headers["RateLimit-Remaining"];
+  if (limit !== undefined && limit !== null) headers["X-RateLimit-Limit"] = limit;
+  if (remaining !== undefined && remaining !== null) headers["X-RateLimit-Remaining"] = remaining;
+}
+
+function passthroughRateLimitRetryAfter(
+  headers: Record<string, string | number>,
+  responseHeaders: Headers | null,
+): void {
+  const responseRetryAfter = responseHeaders?.get("Retry-After");
+  if (responseRetryAfter !== undefined && responseRetryAfter !== null && headers["Retry-After"] === undefined) {
+    headers["Retry-After"] = responseRetryAfter;
+  }
+}
+
+function resolveRateLimitReset(
+  set: AfterHandleContext["set"],
+  responseHeaders: Headers | null,
+): string | number | null | undefined {
+  return responseHeaders?.get("RateLimit-Reset") ?? set.headers["RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset-At"];
+}
+
+function resolveRetryAfterSeconds(reset: string | number | null | undefined): number | null {
+  if (reset === undefined || reset === null) return null;
+  const asNum = Number(reset);
+  if (Number.isFinite(asNum) && asNum > 0) {
+    return asNum > 1_000_000_000 ? Math.max(1, Math.ceil((asNum - Date.now()) / 1000)) : Math.max(1, Math.ceil(asNum));
+  }
+  const asDate = Date.parse(String(reset));
+  if (!Number.isNaN(asDate)) return Math.max(1, Math.ceil((asDate - Date.now()) / 1000));
+  return null;
+}
+
+function applyRetryAfterFallback(
+  headers: Record<string, string | number>,
+  set: AfterHandleContext["set"],
+  responseHeaders: Headers | null,
+): void {
+  if ((set.status === 429 || String(set.status) === "429") && headers["Retry-After"] === undefined) {
+    const reset = resolveRateLimitReset(set, responseHeaders);
+    headers["Retry-After"] = String(resolveRetryAfterSeconds(reset) ?? 60);
+    if (headers["X-RateLimit-Reset"] === undefined && reset !== undefined && reset !== null) headers["X-RateLimit-Reset"] = String(reset);
+  }
+}
+
+function handleIfNoneMatch(
+  request: AfterHandleContext["request"],
+  headers: Record<string, string | number>,
+  etag: string,
+): Response | null {
+  if (request.method !== "GET") return null;
+  const inm = request.headers.get("if-none-match");
+  if (inm === null || (inm !== etag && inm !== "*")) return null;
+  headers["ETag"] = etag;
+  return new Response(null, { status: 304, headers: headers as Record<string, string> });
+}
+
+function applyDocumentEtag(
+  request: AfterHandleContext["request"],
+  headers: Record<string, string | number>,
+  pathname: string,
+  isJsonDocument: boolean,
+  response: AfterHandleContext["response"],
+): Response | null {
+  if (!isJsonDocument || (pathname !== "/api" && !pathname.startsWith("/api/"))) return null;
+  try {
+    const etag = strongDocumentEtag(response);
+    if (headers["ETag"] === undefined) headers["ETag"] = etag;
+    return handleIfNoneMatch(request, headers, etag);
+  } catch (error: unknown) {
+    // ETag generation must never silently mask a failure — log at debug so operators can observe.
+    try { log.debug("ETag generation failed", { error: String(error) }); } catch {}
+  }
+  return null;
+}
+
 export const app = new Elysia()
   .use(authPlugin)
   .onBeforeHandle(({ request, token, user, orgId, teamId, run, systemToken, set }: {
@@ -737,60 +982,12 @@ export const app = new Elysia()
     headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,Retry-After,Idempotency-Replayed,X-Request-Id,ETag,Deprecation,Sunset";
   })
   .onAfterHandle(({ request, response, set }: AfterHandleContext): Response | void => {
+    const doc = classifyResponseDocument(response);
     const pathname = new URL(request.url).pathname;
-    const isJsonDocument = response !== null
-      && typeof response === "object"
-      && (Array.isArray(response) || Object.getPrototypeOf(response) === Object.prototype);
-    const responseObject = isJsonDocument ? response as Record<string, unknown> : null;
-    const isErrorDocument = responseObject !== null && Array.isArray(responseObject["errors"]);
-    const responseHeaders = response instanceof Response ? response.headers : null;
-    const configuredContentType = set.headers["Content-Type"] ?? set.headers["content-type"];
-    const declaredContentType = responseHeaders?.get("content-type")
-      ?? (configuredContentType === undefined ? null : String(configuredContentType));
-    const isJsonApiDocument = (isJsonApiResponsePath(pathname) || isErrorDocument)
-      && isJsonDocument
-      && (declaredContentType === null || isJsonApiResponseContentType(declaredContentType));
-    const isExplicitJsonApiResponse = isJsonApiResponseContentType(declaredContentType);
-    const responseStatus = response instanceof Response
-      ? response.status
-      : typeof set.status === "number" ? set.status : Number.parseInt(String(set.status), 10) || 200;
-    const isJsonApiResponse = isJsonApiResponsePath(pathname)
-      && responseStatus !== 204
-      && !(responseStatus >= 300 && responseStatus < 400)
-      && (isJsonApiDocument || isExplicitJsonApiResponse);
-    const unacceptable = isJsonApiResponse && !acceptsJsonApi(request.headers.get("accept"));
-    const meta = requestMeta.get(request as unknown as Request);
-    if (meta !== undefined) {
-      const duration = Date.now() - meta.startTime;
-      const method = meta.method;
-      const path = meta.path;
-      const status = unacceptable ? 406 : set.status ?? (response instanceof Response ? response.status : 200);
-      const numericStatus = typeof status === "number" ? status : Number.parseInt(String(status), 10) || 200;
-      recordRequestLatency(path, duration);
-      requestFinished(numericStatus);
-      // Idempotent bookkeeping: the WeakMap entry is consumed here so an
-      // error path (onError) can never double-count the same request.
-      requestMeta.delete(request as unknown as Request);
-      resetAuditRequest();
-      if (path.startsWith("/api/")) {
-        // Canonical log line (loggingsucks.com wide-event pattern): one
-        // context-rich record per request instead of scattered statements.
-        log.info("request completed", {
-          requestId: meta.correlationId,
-          http: {
-            method,
-            path: redactPathSecrets(path),
-            status: numericStatus,
-            durationMs: duration,
-          },
-          // High-cardinality route bucket (no ids) so aggregations group
-          // cleanly; the raw path stays available for exact search except
-          // for redacted bearer segments (issue #609).
-          routeBucket: method + " " + pathnameBucket(path),
-          outcome: numericStatus < 400 ? "success" : numericStatus < 500 ? "client-error" : "server-error",
-        });
-      }
-    }
+    const declaredContentType = resolveResponseContentType(set, doc.responseHeaders);
+    const responseStatus = resolveAfterHandleStatus(response, set);
+    const api = checkJsonApiResponse(pathname, doc.isJsonDocument, doc.isErrorDocument, declaredContentType, responseStatus, request.headers.get("accept"));
+    recordAfterHandleMetrics(request, response, set, api.unacceptable);
     const headers = set.headers as Record<string, string | number>;
 
     // Browser/document shell hardening (CSP, clickjacking, referrer, robots,
@@ -799,82 +996,16 @@ export const app = new Elysia()
     applySecurityHeaders(headers);
     // HSTS (137): only when Terrence knows it is behind HTTPS, so plain HTTP
     // dev/test deployments are not forced into HTTPS by a cached header.
-    try {
-      if (shouldSendHsts(request)) {
-        if (headers["Strict-Transport-Security"] === undefined) headers["Strict-Transport-Security"] = HSTS_VALUE;
-      }
-    } catch { /* HSTS is best-effort */ }
-    if (headers["Content-Type"] === undefined) {
-      const mime = staticMimeFor(pathname);
-      if (mime !== undefined) headers["Content-Type"] = mime;
-    }
-    const cacheControl = staticCacheControl(pathname);
-    if (cacheControl !== undefined) {
-      headers["Cache-Control"] = cacheControl;
-    } else if ((pathname === "/api" || pathname.startsWith("/api/")) && headers["Cache-Control"] === undefined) {
-      // Control-plane API responses can carry secrets/state; never let a
-      // browser or shared cache persist them (avatar images set their own
-      // Cache-Control intentionally, so we don't override those).
-      headers["Cache-Control"] = "no-store";
-    }
-
-    // When an Origin is reflected (or the server may vary by origin), the
-    // response MUST advertise that with Vary: Origin or shared caches will
-    // serve one origin's CORS decision to everyone.
-    const originHeader = request.headers.get("origin");
-    const corsConfigured = executionSetting("CORS_ORIGIN").length > 0;
-    if (originHeader !== null || corsConfigured) {
-      const { Vary: existingVary } = headers;
-      headers["Vary"] = existingVary === undefined ? "Origin" : `${String(existingVary)}, Origin`;
-    }
-
+    applyTransportSecurityHeaders(headers, pathname, request);
+    applyCacheVaryHeaders(headers, pathname, request);
     // 458: emit deprecation headers for compat-legacy support-bundle path.
-    if (pathname.startsWith("/api/v1/support-bundle-requests")) {
-      if (headers["Deprecation"] === undefined) headers["Deprecation"] = "true";
-      if (headers["Sunset"] === undefined) headers["Sunset"] = "Sat, 31 Dec 2028 23:59:59 GMT";
-      if (headers["Link"] === undefined) headers["Link"] = "</api/v1/support/bundle-requests>; rel=\"successor-version\"";
-    }
-    if (isJsonApiDocument) {
-      headers["Content-Type"] = JSON_API_MEDIA_TYPE;
-    }
-    if (unacceptable) {
-      headers["Content-Type"] = JSON_API_MEDIA_TYPE;
-      const vary = String(headers["Vary"] ?? "");
-      if (!vary.split(",").some((value): boolean => value.trim().toLowerCase() === "accept")) {
-        headers["Vary"] = vary === "" ? "Accept" : `${vary}, Accept`;
-      }
-      (set as { status: number }).status = 406;
-      const errorHeaders = new Headers();
-      for (const [name, value] of Object.entries(headers)) errorHeaders.set(name, String(value));
-      return new Response(JSON.stringify(mediaTypeError(406, `The Accept header must allow ${JSON_API_MEDIA_TYPE}`)), {
-        status: 406,
-        headers: errorHeaders,
-      });
-    }
-    const limit = responseHeaders?.get("RateLimit-Limit") ?? set.headers["RateLimit-Limit"];
-    const remaining = responseHeaders?.get("RateLimit-Remaining") ?? set.headers["RateLimit-Remaining"];
-    if (limit !== undefined && limit !== null) headers["X-RateLimit-Limit"] = limit;
-    if (remaining !== undefined && remaining !== null) headers["X-RateLimit-Remaining"] = remaining;
+    applyDeprecationHeaders(headers, pathname);
+    const notAcceptable = enforceJsonApiAccept(headers, set, api.isJsonApiDocument, api.unacceptable);
+    if (notAcceptable !== null) return notAcceptable;
     // 461/462: standardize Retry-After + legacy X-RateLimit-Reset on 429; honor any explicit Retry-After already set.
-    const responseRetryAfter = responseHeaders?.get("Retry-After");
-    if (responseRetryAfter !== undefined && responseRetryAfter !== null && headers["Retry-After"] === undefined) {
-      headers["Retry-After"] = responseRetryAfter;
-    }
-    if ((set.status === 429 || String(set.status) === "429") && headers["Retry-After"] === undefined) {
-      const reset = responseHeaders?.get("RateLimit-Reset") ?? set.headers["RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset-At"];
-      let seconds: number | null = null;
-      if (reset !== undefined && reset !== null) {
-        const asNum = Number(reset);
-        if (Number.isFinite(asNum) && asNum > 0) {
-          seconds = asNum > 1_000_000_000 ? Math.max(1, Math.ceil((asNum - Date.now()) / 1000)) : Math.max(1, Math.ceil(asNum));
-        } else {
-          const asDate = Date.parse(String(reset));
-          if (!Number.isNaN(asDate)) seconds = Math.max(1, Math.ceil((asDate - Date.now()) / 1000));
-        }
-      }
-      headers["Retry-After"] = String(seconds ?? 60);
-      if (headers["X-RateLimit-Reset"] === undefined && reset !== undefined && reset !== null) headers["X-RateLimit-Reset"] = String(reset);
-    }
+    applyRateLimitStandardHeaders(headers, set, doc.responseHeaders);
+    passthroughRateLimitRetryAfter(headers, doc.responseHeaders);
+    applyRetryAfterFallback(headers, set, doc.responseHeaders);
     // Always clear the internal precondition marker — it is server-internal state, never a client header.
     // 452-454: ETag + conditional request handling.
     // Generates a 64-bit ETag (Bun.hash) so If-None-Match collisions are negligible;
@@ -883,22 +1014,8 @@ export const app = new Elysia()
     // NOTE: a post-response 412 cannot prevent the lost-update (the handler already wrote the row);
     // real lost-update protection requires the handler to load the current entity and check If-Match
     // before mutating state. This layer provides best-effort enforcement and marker hygiene.
-    if (isJsonDocument && (pathname === "/api" || pathname.startsWith("/api/"))) {
-      try {
-        const etag = strongDocumentEtag(response);
-        if (headers["ETag"] === undefined) headers["ETag"] = etag;
-        if (request.method === "GET") {
-          const inm = request.headers.get("if-none-match");
-          if (inm !== null && (inm === etag || inm === "*")) {
-            headers["ETag"] = etag;
-            return new Response(null, { status: 304, headers: headers as Record<string, string> });
-          }
-        }
-      } catch (error: unknown) {
-        // ETag generation must never silently mask a failure — log at debug so operators can observe.
-        try { log.debug("ETag generation failed", { error: String(error) }); } catch {}
-      }
-    }
+    const etagResponse = applyDocumentEtag(request, headers, pathname, doc.isJsonDocument, response);
+    if (etagResponse !== null) return etagResponse;
   })
   .onParse(async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | string | null | undefined> => {
     const pathname = new URL(request.url).pathname;
