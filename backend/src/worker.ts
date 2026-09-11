@@ -4048,31 +4048,54 @@ async function isExecutableFile(candidate: string): Promise<boolean> {
   }
 }
 
-export async function probePolicyEngine(
-  kind: "opa" | "sentinel",
-  options?: { managed?: boolean },
-): Promise<{ path: string } | { missing: string }> {
+function resolvePolicyEngineCandidates(kind: "opa" | "sentinel"): { candidates: Iterable<string>; overridePath: string | null } {
   const override = kind === "opa" ? process.env["OPA_BINARY_PATH"] : process.env["SENTINEL_BINARY_PATH"];
   const overridePath = override !== undefined && override.trim() !== "" ? override.trim() : null;
   const candidates = overridePath !== null && overridePath.includes("/")
     ? [resolve(overridePath)]
     : executableCandidates(overridePath ?? kind);
+  return { candidates, overridePath };
+}
+
+async function findExecutableCandidate(candidates: Iterable<string>): Promise<string | null> {
   for (const candidate of candidates) {
-    if (await isExecutableFile(candidate)) return { path: candidate };
+    if (await isExecutableFile(candidate)) return candidate;
   }
-  let managedAttempted = false;
+  return null;
+}
+
+async function tryManagedOpaBinary(
+  kind: "opa" | "sentinel",
+  overridePath: string | null,
+  options: { managed?: boolean } | undefined,
+): Promise<{ attempted: boolean; binaryPath: string | null }> {
   if (kind === "opa" && overridePath === null && (options?.managed ?? true)) {
-    managedAttempted = true;
     const managed = await resolveManagedOpaBinary();
-    if (managed !== null) return { path: managed.binaryPath };
+    return { attempted: true, binaryPath: managed?.binaryPath ?? null };
   }
+  return { attempted: false, binaryPath: null };
+}
+
+function buildPolicyEngineMissingMessage(kind: "opa" | "sentinel", managedAttempted: boolean): string {
   const install = kind === "opa"
     ? "Install OPA (https://www.openpolicyagent.org/docs/latest/#running-opa) and ensure the `opa` binary is on PATH, or set OPA_BINARY_PATH to its location."
     : "Install Sentinel and ensure the `sentinel` binary is on PATH, or set SENTINEL_BINARY_PATH to its location.";
   const managedNote = managedAttempted
     ? " The automatic on-demand download (version selected by OPA_VERSION) was attempted and failed; check network access to github.com or pin a working OPA_VERSION."
     : "";
-  return { missing: `${kind === "opa" ? "OPA" : "Sentinel"} policy engine is not available. ${install}${managedNote}` };
+  return `${kind === "opa" ? "OPA" : "Sentinel"} policy engine is not available. ${install}${managedNote}`;
+}
+
+export async function probePolicyEngine(
+  kind: "opa" | "sentinel",
+  options?: { managed?: boolean },
+): Promise<{ path: string } | { missing: string }> {
+  const { candidates, overridePath } = resolvePolicyEngineCandidates(kind);
+  const found = await findExecutableCandidate(candidates);
+  if (found !== null) return { path: found };
+  const managed = await tryManagedOpaBinary(kind, overridePath, options);
+  if (managed.binaryPath !== null) return { path: managed.binaryPath };
+  return { missing: buildPolicyEngineMissingMessage(kind, managed.attempted) };
 }
 
 async function requirePolicyEngine(kind: "opa" | "sentinel"): Promise<string> {
