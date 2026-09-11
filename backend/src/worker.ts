@@ -3425,14 +3425,18 @@ async function runPostApplyStage(
   if (savedPlanRequired) await cleanupSavedPlan(runId);
 }
 
-async function executeApplyImpl(runId: string): Promise<void> {
+async function loadApplyExecutionScope(runId: string): Promise<{
+  run: typeof runs.$inferSelect;
+  workspace: typeof workspaces.$inferSelect;
+  org: typeof organizations.$inferSelect | undefined;
+} | null> {
   assertRunSandboxAvailable();
   const run = await db.query.runs.findFirst({
     where: eq(runs.id, runId),
   });
 
-  if (run === undefined) return;
-  if (run.status === "canceled" || run.status === "force_canceled") return;
+  if (run === undefined) return null;
+  if (run.status === "canceled" || run.status === "force_canceled") return null;
 
   const workspace = await db.query.workspaces.findFirst({
     where: eq(workspaces.id, run.workspaceId),
@@ -3440,239 +3444,417 @@ async function executeApplyImpl(runId: string): Promise<void> {
 
   if (workspace === undefined) {
     log.error("Workspace missing for run", { runId });
-    return;
+    return null;
   }
 
   const org = await db.query.organizations.findFirst({
     where: eq(organizations.id, workspace.orgId),
   });
+  return { run, workspace, org };
+}
 
-  // Re-check executor policy at apply entry too (admin may have tightened policy between plan and apply).
-  if (!(await enforceApplyExecutorPolicy(workspace, org, run, runId))) return;
-
+async function acquireApplyWorkspaceLock(
+  workspace: typeof workspaces.$inferSelect,
+  run: typeof runs.$inferSelect,
+  runId: string,
+): Promise<boolean> {
   if (!(await acquireRunWorkspaceLock(workspace.id, runId))) {
     await deferApplyForWorkspaceLock(workspace, run, runId);
-    return;
+    return false;
   }
   scheduledBlockReasons.delete(`workspace-lock:${runId}`);
-  let workspaceRunLock = true;
+  return true;
+}
 
-  try {
-    if (!(await runPreApplyPhase(workspace, org, run, runId))) return;
-    await updateRunStatus(runId, "apply_queued");
-    await updateRunStatus(runId, "applying");
-    if (await runWasCanceled(runId)) return;
-  const workDir = runWorkDir(runId);
+async function enterApplyPhase(
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  run: typeof runs.$inferSelect,
+  runId: string,
+): Promise<boolean> {
+  if (!(await runPreApplyPhase(workspace, org, run, runId))) return false;
+  await updateRunStatus(runId, "apply_queued");
+  await updateRunStatus(runId, "applying");
+  if (await runWasCanceled(runId)) return false;
+  return true;
+}
 
-  let applySuccess = false;
-  let applyStarted = false;
-  let applyCanceled = false;
-  // Issue #579: when a recovery capture fails after finding state, the
-  // work directory is the only remaining source and must be preserved for
-  // manual recovery instead of deleted by the failed-apply cleanup below.
-  let recoveryCaptureFailed = false;
-  let recoveryPreservationLogged = false;
+async function listApplyDirFiles(executionDir: string): Promise<{ dirFiles: string[]; hasTfFiles: boolean }> {
+  const dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
+  const hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
+  return { dirFiles, hasTfFiles };
+}
 
-  try {
-    const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
-    await writeLog(runId, "apply", `[terrence] Starting apply phase for run ${runId}`);
+type ApplyExecutionContext = {
+  executionDir: string;
+  savedPlanRequired: boolean;
+  savedPlan: SavedPlanMetadata | undefined;
+  requestedTool: string;
+  requestedVersion: string;
+  dirFiles: string[];
+  resolved: Awaited<ReturnType<typeof ensureBinary>>;
+  executionDirectoryExists: boolean;
+  configurationFiles: string[];
+  hasTfFiles: boolean;
+  isSimulatedAllowed: boolean;
+};
 
-    let applyStatePayload: string | null = null;
-    let savedPlan: SavedPlanMetadata | undefined;
-    // The saved-plan file is restored after the archive block below, so an
-    // uploaded stale `tfplan` bookmark can never shadow the verified plan.
-    // Validation of the restored plan lives alongside the restore.
-    const savedPlanRequired = await isApplySavedPlanRequired(run, runId);
+async function prepareApplyExecutionContext(
+  runId: string,
+  run: typeof runs.$inferSelect,
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  workDir: string,
+): Promise<ApplyExecutionContext> {
+  const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
+  await writeLog(runId, "apply", `[terrence] Starting apply phase for run ${runId}`);
 
-    const requestedTool = workspace.iacBinary ?? org?.defaultIacBinary ?? "terraform";
-    const requestedVersion = run.terraformVersion ?? workspace.terraformVersion ?? org?.defaultTerraformVersion ?? "latest";
+  let applyStatePayload: string | null = null;
+  let savedPlan: SavedPlanMetadata | undefined;
+  // The saved-plan file is restored after the archive block below, so an
+  // uploaded stale `tfplan` bookmark can never shadow the verified plan.
+  // Validation of the restored plan lives alongside the restore.
+  const savedPlanRequired = await isApplySavedPlanRequired(run, runId);
 
-    let dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
-    let hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
-    const restored = await restoreApplyConfigurationArchive(run, workspace, workDir, executionDir, runId, dirFiles, hasTfFiles, savedPlanRequired);
-    dirFiles = restored.dirFiles;
-    hasTfFiles = restored.hasTfFiles;
-    const configurationArchivePath = restored.configurationArchivePath;
-    const archiveRestored = restored.archiveRestored;
-    if (savedPlanRequired) {
-      savedPlan = await restoreSavedPlanForApply(runId, executionDir);
-      const planState = await loadApplyStateForSavedPlan(run, workspace, runId, savedPlan);
-      applyStatePayload = planState.applyStatePayload;
-      await assertSavedPlanFresh(runId, savedPlan, planState.currentStateId, planState.currentStateSerial);
-    }
+  const requestedTool = workspace.iacBinary ?? org?.defaultIacBinary ?? "terraform";
+  const requestedVersion = run.terraformVersion ?? workspace.terraformVersion ?? org?.defaultTerraformVersion ?? "latest";
 
-    await seedApplyExecutionDir(runId, executionDir, savedPlanRequired, applyStatePayload);
-    // Refresh the listing: the restore/seed/override writes above happened
-    // after the archive-time snapshot, and preflight must describe the
-    // directory `terraform apply` is about to see.
-    dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
-    hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
-    const isSimulatedAllowed = envFlag("SIMULATED_RUNS") || Reflect.get(process.env, "NODE_ENV") === "test";
-    const resolved = await resolveApplyBinary(runId, requestedTool, requestedVersion, isSimulatedAllowed);
+  const initialListing = await listApplyDirFiles(executionDir);
+  const restored = await restoreApplyConfigurationArchive(run, workspace, workDir, executionDir, runId, initialListing.dirFiles, initialListing.hasTfFiles, savedPlanRequired);
+  if (savedPlanRequired) {
+    savedPlan = await restoreSavedPlanForApply(runId, executionDir);
+    const planState = await loadApplyStateForSavedPlan(run, workspace, runId, savedPlan);
+    applyStatePayload = planState.applyStatePayload;
+    await assertSavedPlanFresh(runId, savedPlan, planState.currentStateId, planState.currentStateSerial);
+  }
 
-    const preflight = await writeApplyPreflightDiagnostic(runId, executionDir, dirFiles, requestedTool, requestedVersion, resolved, isSimulatedAllowed, savedPlanRequired, savedPlan !== undefined, configurationArchivePath, archiveRestored);
-    const executionDirectoryExists = preflight.executionDirectoryExists;
-    const configurationFiles = preflight.configurationFiles;
+  await seedApplyExecutionDir(runId, executionDir, savedPlanRequired, applyStatePayload);
+  // Refresh the listing: the restore/seed/override writes above happened
+  // after the archive-time snapshot, and preflight must describe the
+  // directory `terraform apply` is about to see.
+  const currentListing = await listApplyDirFiles(executionDir);
+  const isSimulatedAllowed = envFlag("SIMULATED_RUNS") || Reflect.get(process.env, "NODE_ENV") === "test";
+  const resolved = await resolveApplyBinary(runId, requestedTool, requestedVersion, isSimulatedAllowed);
 
-    if (resolved !== null && executionDirectoryExists && hasTfFiles) {
-      if (await runWasCanceled(runId)) return;
-      const binary = resolved.binaryPath;
-      if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
-      const envVars = await buildApplyEnvVars(runId, workspace, run.variables, run.debuggingMode);
-      const applyTimeoutMs = await executionTimeoutMs("apply");
+  const preflight = await writeApplyPreflightDiagnostic(runId, executionDir, currentListing.dirFiles, requestedTool, requestedVersion, resolved, isSimulatedAllowed, savedPlanRequired, savedPlan !== undefined, restored.configurationArchivePath, restored.archiveRestored);
+  return {
+    executionDir,
+    savedPlanRequired,
+    savedPlan,
+    requestedTool,
+    requestedVersion,
+    dirFiles: currentListing.dirFiles,
+    resolved,
+    executionDirectoryExists: preflight.executionDirectoryExists,
+    configurationFiles: preflight.configurationFiles,
+    hasTfFiles: currentListing.hasTfFiles,
+    isSimulatedAllowed,
+  };
+}
 
-      if (!(await runApplyInit(runId, resolved, executionDir, envVars, applyTimeoutMs, savedPlanRequired))) return;
-
-      await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} apply ---`);
-      if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
-      const hasPlanFile = await exists(join(executionDir, "tfplan"));
-      if (!hasPlanFile) {
-        await writeRunDiagnostic(
-          runId,
-          "apply",
-          "error",
-          "run.apply.plan_file_missing",
-          "Terraform configuration was restored, but the plan file is missing.",
-          {
-            failureReason: "tfplan_missing_before_process_start",
-            executionDirectory: executionDir,
-            rootEntryNames: dirFiles.slice(0, 64),
-          },
-        );
-        throw new Error("Saved plan file 'tfplan' is missing; cannot apply run.");
-      }
-      if (await runWasCanceled(runId)) return;
-      const applyArgs = [binary, "apply", "-no-color", "-input=false", "tfplan"];
-
-      // Record the state file produced by the apply. terraform writes the
-      // state on failure too (with the successfully applied resources), and
-      // the reference format saves that partial state so a follow-up run does not try to
-      // recreate resources that already exist.
-      const stateFilePath = join(executionDir, "terraform.tfstate");
-
-      applyStarted = true;
-      const applyProc = spawnRunProcess(
-        runId,
-        applyArgs,
-        {
-          cwd: executionDir,
-          env: envVars,
-          stdout: "pipe",
-          stderr: "pipe",
-        },
-        runSandbox,
-      );
-
-      const applyOutput = Promise.all([
-        streamLog(runId, "apply", applyProc.stdout),
-        streamLog(runId, "apply", applyProc.stderr),
-      ]);
-      const [applyExit] = await waitForTrackedProcess(runId, "apply", applyProc, applyOutput, applyTimeoutMs);
-
-      if (await runWasCanceled(runId)) {
-        applyCanceled = true;
-        const recovery = await handleCanceledApply(runId);
-        recoveryCaptureFailed = recoveryCaptureFailed || recovery.captureFailed;
-        if (recoveryCaptureFailed) recoveryPreservationLogged = true;
-        return;
-      }
-      if (applyExit !== 0) {
-        // Failed applies still record partial state (anything that applied
-        // successfully), so a follow-up run does not recreate existing
-        // resources.
-        try {
-          await saveApplyStateVersion(runId, workspace.id, run.configurationVersionId, run.createdBy, resolved.version, stateFilePath);
-        } catch (saveError: unknown) {
-          await writeLog(runId, "apply", `[terrence] Could not record partial state after failed apply: ${saveError instanceof Error ? saveError.message : String(saveError)}`);
-          if (await tryCaptureInterruptedApplyState(runId, "Could not capture state after partial apply persistence failure")) recoveryCaptureFailed = true;
-        }
-        throw new Error(`${resolved.tool} apply failed with exit code ${applyExit}`);
-      }
-
-      try {
-        await saveApplyStateVersion(runId, workspace.id, run.configurationVersionId, run.createdBy, resolved.version, stateFilePath);
-      } catch (saveError: unknown) {
-        if (await tryCaptureInterruptedApplyState(runId, "Could not capture state after apply state persistence failure")) recoveryCaptureFailed = true;
-        throw saveError;
-      }
-
-    } else if (isSimulatedAllowed) {
-      await writeLog(runId, "apply", `[terrence] Execution engine: Simulated apply completed successfully.`);
-    } else {
-      const failedChecks = applyPreflightFailedChecks(resolved, executionDirectoryExists, hasTfFiles);
-      await throwApplyPreflightFailure(runId, executionDir, dirFiles, configurationFiles, requestedTool, requestedVersion, executionDirectoryExists, failedChecks);
-    }
-
-    // Parse resource counts from the apply summary line (issue #618): match
-    // only those rows in SQL instead of loading the whole apply log.
-    const applyResourceCounts = parseResourceCounts((await findSummaryLogRows(runId, "apply")).join("\n"));
-
-    await updateRunStatus(runId, "applied", {
-      applyResourceAdditions: applyResourceCounts.additions,
-      applyResourceChanges: applyResourceCounts.changes,
-      applyResourceDestructions: applyResourceCounts.destructions,
-      applyResourceImports: applyResourceCounts.imports,
-    });
-    applySuccess = true;
-    await writeLog(runId, "apply", `[terrence] Run status updated to 'applied'.`);
-    await runPostApplyStage(runId, workspace, org, savedPlanRequired);
-  } catch (error: unknown) {
-    if (await runWasCanceled(runId)) {
-      applyCanceled = true;
-      if (applyStarted) {
-        await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId)).catch((captureError: unknown): void => {
-          recoveryCaptureFailed = true;
-          log.error("Could not capture state after canceled apply", { runId, error: captureError });
-        });
-      }
-      return;
-    }
-    const errMsg = error instanceof Error ? error.message : String(error);
-    log.error("Run apply failed", { runId, error });
+async function assertApplyPlanFile(runId: string, executionDir: string, dirFiles: string[]): Promise<void> {
+  const hasPlanFile = await exists(join(executionDir, "tfplan"));
+  if (!hasPlanFile) {
     await writeRunDiagnostic(
       runId,
       "apply",
       "error",
-      "run.apply.failed",
-      "Apply failed.",
-      { failureReason: "apply_failed", error },
+      "run.apply.plan_file_missing",
+      "Terraform configuration was restored, but the plan file is missing.",
+      {
+        failureReason: "tfplan_missing_before_process_start",
+        executionDirectory: executionDir,
+        rootEntryNames: dirFiles.slice(0, 64),
+      },
     );
-    await writeLog(runId, "apply", `[terrence ERROR] ${errMsg}`);
-    await updateRunStatus(runId, "errored");
-    await cleanupSavedPlan(runId);
-  } finally {
-    if (applySuccess) {
-      try {
-        if (runSandbox !== null) {
-          await removeSandboxWorkDir(runId);
-        } else {
-          await rm(workDir, { recursive: true, force: true });
-        }
-      } catch (error: unknown) {
-        logBestEffortFailure("Run workdir cleanup failed after successful apply", { runId }, error);
-        scheduleRunWorkDirCleanup(runId);
-      }
-    } else {
-      if (applyStarted && !applyCanceled) {
-        await writeLog(runId, "apply", `[terrence] Apply failed; partial state was journaled before cleaning the execution directory.`);
-      }
-      if (recoveryCaptureFailed) {
-        preserveRunWorkDirForRecovery(runId);
-        if (!recoveryPreservationLogged) {
-          await writeLog(runId, "apply", `[terrence] Recovery copy failed; the run work directory was preserved at ${workDir} for manual recovery.`);
-        }
-      } else {
-        try {
-          if (runSandbox !== null) await removeSandboxWorkDir(runId);
-          else await rm(workDir, { recursive: true, force: true });
-        } catch (error: unknown) {
-          logBestEffortFailure("Run workdir cleanup failed after failed apply", { runId }, error);
-          scheduleRunWorkDirCleanup(runId);
-        }
-      }
-    }
+    throw new Error("Saved plan file 'tfplan' is missing; cannot apply run.");
   }
-} finally {
+}
+
+type ApplyProcessOutcome = Readonly<{
+  kind: "canceled" | "applyFailed" | "saveFailed" | "completed";
+  captureFailed: boolean;
+  started: boolean;
+  exitCode: number;
+  tool: string;
+  error: unknown;
+}>;
+
+async function spawnAndWaitApply(
+  runId: string,
+  workspaceId: string,
+  configurationVersionId: string | null,
+  createdBy: typeof runs.$inferSelect["createdBy"],
+  resolved: NonNullable<Awaited<ReturnType<typeof ensureBinary>>>,
+  executionDir: string,
+  envVars: Record<string, string>,
+  applyTimeoutMs: number,
+): Promise<ApplyProcessOutcome> {
+  // Record the state file produced by the apply. terraform writes the
+  // state on failure too (with the successfully applied resources), and
+  // the reference format saves that partial state so a follow-up run does not try to
+  // recreate resources that already exist.
+  const stateFilePath = join(executionDir, "terraform.tfstate");
+  const applyArgs = [resolved.binaryPath, "apply", "-no-color", "-input=false", "tfplan"];
+
+  const applyProc = spawnRunProcess(
+    runId,
+    applyArgs,
+    {
+      cwd: executionDir,
+      env: envVars,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+    runSandbox,
+  );
+
+  const applyOutput = Promise.all([
+    streamLog(runId, "apply", applyProc.stdout),
+    streamLog(runId, "apply", applyProc.stderr),
+  ]);
+  const [applyExit] = await waitForTrackedProcess(runId, "apply", applyProc, applyOutput, applyTimeoutMs);
+
+  if (await runWasCanceled(runId)) {
+    const recovery = await handleCanceledApply(runId);
+    return { kind: "canceled", captureFailed: recovery.captureFailed, started: true, exitCode: -1, tool: "", error: undefined };
+  }
+  if (applyExit !== 0) {
+    // Failed applies still record partial state (anything that applied
+    // successfully), so a follow-up run does not recreate existing
+    // resources.
+    let captureFailed = false;
+    try {
+      await saveApplyStateVersion(runId, workspaceId, configurationVersionId, createdBy, resolved.version, stateFilePath);
+    } catch (saveError: unknown) {
+      await writeLog(runId, "apply", `[terrence] Could not record partial state after failed apply: ${saveError instanceof Error ? saveError.message : String(saveError)}`);
+      captureFailed = await tryCaptureInterruptedApplyState(runId, "Could not capture state after partial apply persistence failure");
+    }
+    return { kind: "applyFailed", captureFailed, started: true, exitCode: applyExit, tool: resolved.tool, error: undefined };
+  }
+
+  try {
+    await saveApplyStateVersion(runId, workspaceId, configurationVersionId, createdBy, resolved.version, stateFilePath);
+  } catch (saveError: unknown) {
+    const captureFailed = await tryCaptureInterruptedApplyState(runId, "Could not capture state after apply state persistence failure");
+    return { kind: "saveFailed", captureFailed, started: true, exitCode: -1, tool: "", error: saveError };
+  }
+  return { kind: "completed", captureFailed: false, started: true, exitCode: -1, tool: "", error: undefined };
+}
+
+async function executeApplyProcess(
+  runId: string,
+  workspace: typeof workspaces.$inferSelect,
+  run: typeof runs.$inferSelect,
+  ctx: ApplyExecutionContext,
+): Promise<ApplyProcessOutcome> {
+  if (ctx.resolved !== null && ctx.executionDirectoryExists && ctx.hasTfFiles) {
+    if (await runWasCanceled(runId)) return { kind: "canceled", captureFailed: false, started: false, exitCode: -1, tool: "", error: undefined };
+    const binary = ctx.resolved.binaryPath;
+    if (runSandbox !== null) await runSandbox.ensureTool(ctx.resolved.tool, ctx.resolved.version, binary);
+    const envVars = await buildApplyEnvVars(runId, workspace, run.variables, run.debuggingMode);
+    const applyTimeoutMs = await executionTimeoutMs("apply");
+
+    if (!(await runApplyInit(runId, ctx.resolved, ctx.executionDir, envVars, applyTimeoutMs, ctx.savedPlanRequired))) {
+      return { kind: "canceled", captureFailed: false, started: false, exitCode: -1, tool: "", error: undefined };
+    }
+
+    await writeLog(runId, "apply", `\n--- Executing ${ctx.resolved.tool} apply ---`);
+    if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
+    await assertApplyPlanFile(runId, ctx.executionDir, ctx.dirFiles);
+    if (await runWasCanceled(runId)) return { kind: "canceled", captureFailed: false, started: false, exitCode: -1, tool: "", error: undefined };
+    return spawnAndWaitApply(runId, workspace.id, run.configurationVersionId, run.createdBy, ctx.resolved, ctx.executionDir, envVars, applyTimeoutMs);
+  }
+  if (ctx.isSimulatedAllowed) {
+    await writeLog(runId, "apply", `[terrence] Execution engine: Simulated apply completed successfully.`);
+    return { kind: "completed", captureFailed: false, started: false, exitCode: -1, tool: "", error: undefined };
+  }
+  const failedChecks = applyPreflightFailedChecks(ctx.resolved, ctx.executionDirectoryExists, ctx.hasTfFiles);
+  return throwApplyPreflightFailure(runId, ctx.executionDir, ctx.dirFiles, ctx.configurationFiles, ctx.requestedTool, ctx.requestedVersion, ctx.executionDirectoryExists, failedChecks);
+}
+
+async function completeSuccessfulApply(
+  runId: string,
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  savedPlanRequired: boolean,
+): Promise<void> {
+  // Parse resource counts from the apply summary line (issue #618): match
+  // only those rows in SQL instead of loading the whole apply log.
+  const applyResourceCounts = parseResourceCounts((await findSummaryLogRows(runId, "apply")).join("\n"));
+
+  await updateRunStatus(runId, "applied", {
+    applyResourceAdditions: applyResourceCounts.additions,
+    applyResourceChanges: applyResourceCounts.changes,
+    applyResourceDestructions: applyResourceCounts.destructions,
+    applyResourceImports: applyResourceCounts.imports,
+  });
+  await writeLog(runId, "apply", `[terrence] Run status updated to 'applied'.`);
+  await runPostApplyStage(runId, workspace, org, savedPlanRequired);
+}
+
+async function runApplySequence(
+  runId: string,
+  run: typeof runs.$inferSelect,
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  workDir: string,
+  progress: { captureFailed: boolean },
+): Promise<{ success: boolean; canceled: boolean; started: boolean }> {
+  const ctx = await prepareApplyExecutionContext(runId, run, workspace, org, workDir);
+  const outcome = await executeApplyProcess(runId, workspace, run, ctx);
+  if (outcome.captureFailed) progress.captureFailed = true;
+  if (outcome.kind === "canceled") {
+    return { success: false, canceled: true, started: outcome.started };
+  }
+  if (outcome.kind === "applyFailed") {
+    throw new Error(`${outcome.tool} apply failed with exit code ${outcome.exitCode}`);
+  }
+  if (outcome.kind === "saveFailed") {
+    throw outcome.error;
+  }
+  await completeSuccessfulApply(runId, workspace, org, ctx.savedPlanRequired);
+  return { success: true, canceled: false, started: outcome.started };
+}
+
+async function captureCanceledApplyState(storageDir: string, runId: string): Promise<boolean> {
+  try {
+    await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId));
+    return false;
+  } catch (captureError: unknown) {
+    log.error("Could not capture state after canceled apply", { runId, error: captureError });
+    return true;
+  }
+}
+
+async function handleCanceledApplyFailure(
+  runId: string,
+  storageDir: string,
+  applyStarted: boolean,
+  recoveryCaptureFailed: boolean,
+): Promise<{ canceled: boolean; captureFailed: boolean }> {
+  if (!(await runWasCanceled(runId))) return { canceled: false, captureFailed: recoveryCaptureFailed };
+  const captureFailed = recoveryCaptureFailed || (applyStarted ? await captureCanceledApplyState(storageDir, runId) : false);
+  return { canceled: true, captureFailed };
+}
+
+async function reportApplyFailure(runId: string, error: unknown): Promise<void> {
+  const errMsg = error instanceof Error ? error.message : String(error);
+  log.error("Run apply failed", { runId, error });
+  await writeRunDiagnostic(
+    runId,
+    "apply",
+    "error",
+    "run.apply.failed",
+    "Apply failed.",
+    { failureReason: "apply_failed", error },
+  );
+  await writeLog(runId, "apply", `[terrence ERROR] ${errMsg}`);
+  await updateRunStatus(runId, "errored");
+  await cleanupSavedPlan(runId);
+}
+
+async function cleanupSuccessfulApplyWorkDir(runId: string, workDir: string): Promise<void> {
+  try {
+    if (runSandbox !== null) {
+      await removeSandboxWorkDir(runId);
+    } else {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  } catch (error: unknown) {
+    logBestEffortFailure("Run workdir cleanup failed after successful apply", { runId }, error);
+    scheduleRunWorkDirCleanup(runId);
+  }
+}
+
+async function cleanupFailedApplyWorkDir(
+  runId: string,
+  workDir: string,
+  applyStarted: boolean,
+  applyCanceled: boolean,
+  recoveryCaptureFailed: boolean,
+  recoveryPreservationLogged: boolean,
+): Promise<boolean> {
+  if (applyStarted && !applyCanceled) {
+    await writeLog(runId, "apply", `[terrence] Apply failed; partial state was journaled before cleaning the execution directory.`);
+  }
+  if (recoveryCaptureFailed) {
+    preserveRunWorkDirForRecovery(runId);
+    if (!recoveryPreservationLogged) {
+      await writeLog(runId, "apply", `[terrence] Recovery copy failed; the run work directory was preserved at ${workDir} for manual recovery.`);
+    }
+    return true;
+  }
+  try {
+    if (runSandbox !== null) await removeSandboxWorkDir(runId);
+    else await rm(workDir, { recursive: true, force: true });
+  } catch (error: unknown) {
+    logBestEffortFailure("Run workdir cleanup failed after failed apply", { runId }, error);
+    scheduleRunWorkDirCleanup(runId);
+  }
+  return recoveryPreservationLogged;
+}
+
+async function finalizeApplyWorkDir(
+  runId: string,
+  workDir: string,
+  applySuccess: boolean,
+  applyStarted: boolean,
+  applyCanceled: boolean,
+  recoveryCaptureFailed: boolean,
+  recoveryPreservationLogged: boolean,
+): Promise<boolean> {
+  if (applySuccess) {
+    await cleanupSuccessfulApplyWorkDir(runId, workDir);
+    return recoveryPreservationLogged;
+  }
+  return cleanupFailedApplyWorkDir(runId, workDir, applyStarted, applyCanceled, recoveryCaptureFailed, recoveryPreservationLogged);
+}
+
+async function executeApplyImpl(runId: string): Promise<void> {
+  const scope = await loadApplyExecutionScope(runId);
+  if (scope === null) return;
+  const { run, workspace, org } = scope;
+
+  // Re-check executor policy at apply entry too (admin may have tightened policy between plan and apply).
+  if (!(await enforceApplyExecutorPolicy(workspace, org, run, runId))) return;
+
+  if (!(await acquireApplyWorkspaceLock(workspace, run, runId))) return;
+  let workspaceRunLock = true;
+
+  try {
+    if (!(await enterApplyPhase(workspace, org, run, runId))) return;
+    const workDir = runWorkDir(runId);
+
+    let applySuccess = false;
+    let applyStarted = false;
+    let applyCanceled = false;
+    // Issue #579: when a recovery capture fails after finding state, the
+    // work directory is the only remaining source and must be preserved for
+    // manual recovery instead of deleted by the failed-apply cleanup below.
+    let recoveryCaptureFailed = false;
+    let recoveryPreservationLogged = false;
+    const progress = { captureFailed: false };
+
+    try {
+      const sequence = await runApplySequence(runId, run, workspace, org, workDir, progress);
+      applySuccess = sequence.success;
+      applyCanceled = sequence.canceled;
+      applyStarted = sequence.started;
+      recoveryCaptureFailed = progress.captureFailed;
+      recoveryPreservationLogged = sequence.canceled && recoveryCaptureFailed;
+    } catch (error: unknown) {
+      const cancellation = await handleCanceledApplyFailure(runId, storageDir, applyStarted, recoveryCaptureFailed);
+      recoveryCaptureFailed = cancellation.captureFailed;
+      if (cancellation.canceled) {
+        applyCanceled = true;
+        return;
+      }
+      await reportApplyFailure(runId, error);
+    } finally {
+      await finalizeApplyWorkDir(runId, workDir, applySuccess, applyStarted, applyCanceled, recoveryCaptureFailed, recoveryPreservationLogged);
+    }
+  } finally {
   if (workspaceRunLock) {
     workspaceRunLock = false;
     await releaseRunWorkspaceLock(workspace.id, runId).catch((error: unknown): void => {
