@@ -1443,6 +1443,50 @@ function runQueuePageMeta(
     : pagination(request, number, size, countRows[0]?.total ?? 0);
 }
 
+function runLockAttributes(
+  locked: boolean,
+  lockedReason: string | null | undefined,
+): Readonly<{ "workspace-locked": boolean; "workspace-locked-reason": string | null }> {
+  return {
+    "workspace-locked": locked,
+    "workspace-locked-reason": locked !== true
+      ? null
+      : lockedReason !== undefined && lockedReason !== null && lockedReason !== ""
+        ? lockedReason
+        : "Locked manually",
+  };
+}
+
+async function runRecoveryAttributes(storageRoot: string, runId: string): Promise<Record<string, unknown>> {
+  const attributes: Record<string, unknown> = {};
+  attributes["has-recovery-state"] = await exists(join(storageRoot, "recovery", runId, ".recovered"));
+  if (attributes["has-recovery-state"] === true) {
+    const recovery = await inspectRecoveryCopy(storageRoot, runId);
+    const parsedRecovery = recovery.status === "candidate" || recovery.status === "promoted";
+    attributes["recovery-state-format-supported"] = parsedRecovery;
+    attributes["recovery-state-representation"] = recovery.status === "opaque"
+      ? "opentofu-encrypted"
+      : parsedRecovery ? "terraform-v4" : "invalid";
+    attributes["recovery-state-unavailable-reason"] = parsedRecovery
+      ? null
+      : recovery.status === "opaque"
+        ? "Client-encrypted OpenTofu state requires its original client keys and cannot be promoted."
+        : recovery.status === "incomplete"
+          ? "The recovery capture is incomplete and cannot be promoted."
+          : statePayloadError(null);
+  }
+  return attributes;
+}
+
+async function runProvenanceAttribute(runId: string): Promise<Record<string, unknown> | null> {
+  const provenance = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
+  return provenance === undefined ? null : {
+    "schema-version": provenance.schemaVersion,
+    sha256: provenance.manifestSha256,
+    "manifest-url": `/api/v2/runs/${runId}/provenance`,
+  };
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -1801,54 +1845,28 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const tokenOrgId = orgId ?? null;
+    const tokenTeamId = teamId ?? null;
     const [canApply, canOverridePolicy, canAdmin, origins, baseline] = await Promise.all([
-      checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "apply"),
-      checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"),
-      checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"),
+      checkWorkspacePermission(authorized.workspace, user?.id, tokenOrgId, tokenTeamId, "apply"),
+      checkWorkspacePermission(authorized.workspace, user?.id, tokenOrgId, tokenTeamId, "policy-override"),
+      checkWorkspacePermission(authorized.workspace, user?.id, tokenOrgId, tokenTeamId, "admin"),
       originsForRuns([authorized.run]),
       runDurationBaseline(authorized.run),
     ]);
     const linkage = await linkageForRuns([authorized.run]);
     const data = runResource(authorized.run, canApply, canOverridePolicy, origins.get(authorized.run.id), baseline, canAdmin, linkage.get(authorized.run.id));
     const detailAttributes = data["attributes"] as Record<string, unknown>;
-    const lockedReason = authorized.workspace.lockedReason;
-    detailAttributes["workspace-locked"] = authorized.workspace.locked === true;
     // Mirror lockedWorkspaceDetail: an absent or empty reason reads as
     // manually locked rather than leaking a bare empty string.
-    detailAttributes["workspace-locked-reason"] = authorized.workspace.locked !== true
-      ? null
-      : lockedReason !== undefined && lockedReason !== null && lockedReason !== ""
-        ? lockedReason
-        : "Locked manually";
+    Object.assign(detailAttributes, runLockAttributes(authorized.workspace.locked === true, authorized.workspace.lockedReason));
     // Issue #580/#761: run-page recovery signal. A verified recovery copy
     // (capture completion marker present) may be the only record of the
     // infrastructure state after an interrupted apply.
-    detailAttributes["has-recovery-state"] = await exists(join(storageDir, "recovery", runId, ".recovered"));
-    if (detailAttributes["has-recovery-state"] === true) {
-      const recovery = await inspectRecoveryCopy(storageDir, runId);
-      const parsedRecovery = recovery.status === "candidate" || recovery.status === "promoted";
-      detailAttributes["recovery-state-format-supported"] = parsedRecovery;
-      detailAttributes["recovery-state-representation"] = recovery.status === "opaque"
-        ? "opentofu-encrypted"
-        : parsedRecovery ? "terraform-v4" : "invalid";
-      detailAttributes["recovery-state-unavailable-reason"] = parsedRecovery
-        ? null
-        : recovery.status === "opaque"
-          ? "Client-encrypted OpenTofu state requires its original client keys and cannot be promoted."
-          : recovery.status === "incomplete"
-            ? "The recovery capture is incomplete and cannot be promoted."
-            : statePayloadError(null);
-    }
+    Object.assign(detailAttributes, await runRecoveryAttributes(storageDir, runId));
     const includes = requestedRunIncludes(request);
     const included = await includedRunResources([authorized.run], request, includes);
-    const provenance = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
-    detailAttributes["provenance"] = provenance === undefined
-      ? null
-      : {
-          "schema-version": provenance.schemaVersion,
-          sha256: provenance.manifestSha256,
-          "manifest-url": `/api/v2/runs/${runId}/provenance`,
-        };
+    detailAttributes["provenance"] = await runProvenanceAttribute(runId);
     return { data, ...(included.length > 0 ? { included } : {}) };
   })
   .get("/api/v2/runs/:run_id/provenance", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
