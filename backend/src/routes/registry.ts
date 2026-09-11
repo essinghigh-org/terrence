@@ -1050,13 +1050,19 @@ async function testRunConfigurationArchive(
     : { archivePath: null, moduleConfigurationVersionId: null };
 }
 
-function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null }> | Readonly<{ error: string }> {
+function testVariableAttributes(body: unknown): Readonly<{ attrs: Record<string, unknown> } | { error: string }> {
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
   const data = payload["data"];
   if (data === null || typeof data !== "object") return { error: "data is required" };
   const attributes = (data as Record<string, unknown>)["attributes"];
   if (attributes === null || typeof attributes !== "object") return { error: "data.attributes is required" };
-  const attrs = attributes as Record<string, unknown>;
+  return { attrs: attributes as Record<string, unknown> };
+}
+
+function validateTestVariableKeyCategory(
+  attrs: Readonly<Record<string, unknown>>,
+  requireKey: boolean,
+): Readonly<{ key: unknown; category: unknown; cat: string } | { error: string }> {
   const key = attrs["key"];
   const category = attrs["category"];
   if (typeof category !== "undefined" && category !== null && typeof category !== "string") return { error: "category must be a string" };
@@ -1064,6 +1070,15 @@ function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?:
   if (typeof key !== "undefined" && key !== null && typeof key !== "string") return { error: "key must be a string" };
   const cat = typeof category === "string" ? category : "terraform";
   if (cat !== "terraform" && cat !== "env") return { error: "category must be terraform or env" };
+  return { key, category, cat };
+}
+
+function assembleTestVariableResult(
+  attrs: Readonly<Record<string, unknown>>,
+  key: unknown,
+  category: unknown,
+  cat: string,
+): { key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null } {
   const result: { key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null } = {};
   // Only set category when the caller provided it, so a PATCH that omits
   // category preserves the stored one (create defaults to "terraform").
@@ -1074,6 +1089,14 @@ function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?:
   if (typeof attrs["hcl"] === "boolean") result.hcl = attrs["hcl"];
   if (typeof attrs["description"] === "string") result.description = attrs["description"];
   return result;
+}
+
+function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null }> | Readonly<{ error: string }> {
+  const envelope = testVariableAttributes(body);
+  if ("error" in envelope) return envelope;
+  const checked = validateTestVariableKeyCategory(envelope.attrs, requireKey);
+  if ("error" in checked) return checked;
+  return assembleTestVariableResult(envelope.attrs, checked.key, checked.category, checked.cat);
 }
 
 type NoCodeDetails = Readonly<{
