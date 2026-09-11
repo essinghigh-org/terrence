@@ -2070,65 +2070,16 @@ async function executeRunImpl(runId: string): Promise<void> {
       await preparePlanLocalSource(workspace, org, runId, workDir);
     }
 
-    await updateRunStatus(runId, "fetching_completed");
-    if (await returnIfRunCanceled(runId)) return;
-    await updateRunStatus(runId, "pre_plan_running");
-    if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "pre_plan"))) {
-      throw new Error("Run blocked by mandatory pre-plan task failure.");
-    }
-    await updateRunStatus(runId, "pre_plan_completed");
-    if (run.operation === "action_only") {
-      await writeLog(runId, "plan", "[terrence] Action-only run will refresh state and invoke the requested Terraform action.");
-    }
-    await updateRunStatus(runId, "queuing");
-    await updateRunStatus(runId, "plan_queued");
-    await updateRunStatus(runId, "planning");
-    if (await returnIfRunCanceled(runId)) return;
+    if (!(await runPrePlanGate(runId, workspace, org, run.operation))) return;
 
-    const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
-    try {
-      await readdir(executionDir);
-    } catch {
-      throw new Error(`Working directory '${workspace.workingDirectory ?? ""}' does not exist in the configuration.`);
-    }
-    await writeLog(runId, "plan", `[terrence] Executing from ${executionDir}`);
-    await writeLocalBackendOverride(executionDir);
+    const prepared = await seedPlanExecutionState(runId, workspace, workDir);
+    const executionDir = prepared.executionDir;
+    plannedAgainstState = prepared.plannedState;
 
-    const latestState = await db.query.stateVersions.findFirst({
-      where: and(
-        eq(stateVersions.workspaceId, workspace.id),
-        eq(stateVersions.status, "finalized"),
-        eq(stateVersions.intermediate, false),
-      ),
-      orderBy: [desc(stateVersions.serial)],
-    });
-    plannedAgainstState = { id: latestState?.id ?? null, serial: latestState?.serial ?? 0 };
-    if (latestState !== undefined && typeof latestState.statePayload === "string" && latestState.statePayload !== "") {
-      await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(latestState.statePayload), { mode: 0o600 });
-      await writeLog(runId, "plan", `[terrence] Seeded workspace state serial #${latestState.serial}.`);
-    }
-
-    const vars = await executionVariables(
-      workspace.id,
-      workspace.orgId,
-      workspace.projectId,
-    );
-
-    const envVars = buildRunPhaseEnv(vars, run.variables, await runTerraformEnv(run.id, workspace, "plan", vars));
-    if (run.debuggingMode) envVars["TF_LOG"] = "TRACE";
-    const tfVarsLines = vars
-      .filter((variable: { readonly category: string }): boolean => variable.category === "terraform")
-      .map((variable: { readonly key: string; readonly hcl: boolean; readonly value: string }): string => terraformVariableLine(variable.key, variable.value, variable.hcl));
-
-    if (tfVarsLines.length > 0) {
-      await writeFile(join(executionDir, "terrence.workspace.tfvars"), tfVarsLines.join("\n"), { mode: 0o600 });
-      await writeLog(runId, "plan", `[terrence] Injected ${tfVarsLines.length} workspace Terraform variables.`);
-    }
-    const runTfVarsLines = runTerraformVariableLines(run.variables, vars);
-    if (runTfVarsLines.length > 0) {
-      await writeFile(join(executionDir, "terrence.run.tfvars"), runTfVarsLines.join("\n"), { mode: 0o600 });
-      await writeLog(runId, "plan", `[terrence] Injected ${runTfVarsLines.length} run Terraform variables.`);
-    }
+    const planFiles = await buildPlanExecutionFiles(runId, workspace, executionDir, run.variables, run.debuggingMode);
+    const envVars = planFiles.envVars;
+    const tfVarsLines = planFiles.tfVarsLines;
+    const runTfVarsLines = planFiles.runTfVarsLines;
 
     const requestedTool = workspace.iacBinary ?? org?.defaultIacBinary ?? "terraform";
     const requestedVersion = run.terraformVersion ?? workspace.terraformVersion ?? org?.defaultTerraformVersion ?? "latest";
@@ -2908,6 +2859,90 @@ async function preparePlanLocalSource(
   if (cpExit !== 0) {
     throw new Error(`Failed to copy local source directory to working directory.`);
   }
+}
+
+async function runPrePlanGate(
+  runId: string,
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  operation: string,
+): Promise<boolean> {
+  await updateRunStatus(runId, "fetching_completed");
+  if (await returnIfRunCanceled(runId)) return false;
+  await updateRunStatus(runId, "pre_plan_running");
+  if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "pre_plan"))) {
+    throw new Error("Run blocked by mandatory pre-plan task failure.");
+  }
+  await updateRunStatus(runId, "pre_plan_completed");
+  if (operation === "action_only") {
+    await writeLog(runId, "plan", "[terrence] Action-only run will refresh state and invoke the requested Terraform action.");
+  }
+  await updateRunStatus(runId, "queuing");
+  await updateRunStatus(runId, "plan_queued");
+  await updateRunStatus(runId, "planning");
+  if (await returnIfRunCanceled(runId)) return false;
+  return true;
+}
+
+async function seedPlanExecutionState(
+  runId: string,
+  workspace: typeof workspaces.$inferSelect,
+  workDir: string,
+): Promise<{ executionDir: string; plannedState: { id: string | null; serial: number } }> {
+  const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
+  try {
+    await readdir(executionDir);
+  } catch {
+    throw new Error(`Working directory '${workspace.workingDirectory ?? ""}' does not exist in the configuration.`);
+  }
+  await writeLog(runId, "plan", `[terrence] Executing from ${executionDir}`);
+  await writeLocalBackendOverride(executionDir);
+
+  const latestState = await db.query.stateVersions.findFirst({
+    where: and(
+      eq(stateVersions.workspaceId, workspace.id),
+      eq(stateVersions.status, "finalized"),
+      eq(stateVersions.intermediate, false),
+    ),
+    orderBy: [desc(stateVersions.serial)],
+  });
+  const plannedState = { id: latestState?.id ?? null, serial: latestState?.serial ?? 0 };
+  if (latestState !== undefined && typeof latestState.statePayload === "string" && latestState.statePayload !== "") {
+    await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(latestState.statePayload), { mode: 0o600 });
+    await writeLog(runId, "plan", `[terrence] Seeded workspace state serial #${latestState.serial}.`);
+  }
+  return { executionDir, plannedState };
+}
+
+async function buildPlanExecutionFiles(
+  runId: string,
+  workspace: typeof workspaces.$inferSelect,
+  executionDir: string,
+  runVariables: unknown,
+  debuggingMode: boolean,
+): Promise<{ envVars: Record<string, string>; tfVarsLines: string[]; runTfVarsLines: string[] }> {
+  const vars = await executionVariables(
+    workspace.id,
+    workspace.orgId,
+    workspace.projectId,
+  );
+
+  const envVars = buildRunPhaseEnv(vars, runVariables, await runTerraformEnv(runId, workspace, "plan", vars));
+  if (debuggingMode) envVars["TF_LOG"] = "TRACE";
+  const tfVarsLines = vars
+    .filter((variable: { readonly category: string }): boolean => variable.category === "terraform")
+    .map((variable: { readonly key: string; readonly hcl: boolean; readonly value: string }): string => terraformVariableLine(variable.key, variable.value, variable.hcl));
+
+  if (tfVarsLines.length > 0) {
+    await writeFile(join(executionDir, "terrence.workspace.tfvars"), tfVarsLines.join("\n"), { mode: 0o600 });
+    await writeLog(runId, "plan", `[terrence] Injected ${tfVarsLines.length} workspace Terraform variables.`);
+  }
+  const runTfVarsLines = runTerraformVariableLines(runVariables, vars);
+  if (runTfVarsLines.length > 0) {
+    await writeFile(join(executionDir, "terrence.run.tfvars"), runTfVarsLines.join("\n"), { mode: 0o600 });
+    await writeLog(runId, "plan", `[terrence] Injected ${runTfVarsLines.length} run Terraform variables.`);
+  }
+  return { envVars, tfVarsLines, runTfVarsLines };
 }
 
 async function executeApplyImpl(runId: string): Promise<void> {
