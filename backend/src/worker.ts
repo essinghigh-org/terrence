@@ -1132,7 +1132,10 @@ async function infracostEnvironment(gcpCredentialsPath: string): Promise<Record<
   return environment;
 }
 
-async function executeCostEstimate(runId: string, executionDir: string): Promise<void> {
+async function loadCostEstimateScope(runId: string): Promise<{
+  timestamps: CostEstimateTimestamps;
+  enabled: boolean;
+}> {
   const run = await db.query.runs.findFirst({
     where: eq(runs.id, runId),
     columns: { statusTimestamps: true, workspaceId: true },
@@ -1148,12 +1151,128 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
     ? undefined
     : await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId), columns: { orgId: true } });
   if (workspace === undefined || !(await costEstimationEnabledForOrganization(workspace.orgId))) {
-    await writeLog(runId, "plan", "[terrence] Cost estimation is disabled. Skipping.");
-    const estimate = emptyCostEstimate("skipped_due_to_targeting", {
+    return { timestamps, enabled: false };
+  }
+  return { timestamps, enabled: true };
+}
+
+async function writeDisabledCostEstimate(runId: string, timestamps: CostEstimateTimestamps): Promise<void> {
+  await writeLog(runId, "plan", "[terrence] Cost estimation is disabled. Skipping.");
+  const estimate = emptyCostEstimate("skipped_due_to_targeting", {
+    ...timestamps,
+    "finished-at": new Date().toISOString(),
+  });
+  await writeCostEstimateArtifact(runId, estimate);
+}
+
+async function resolveCostEstimateBinary(
+  runId: string,
+  timestamps: CostEstimateTimestamps,
+): Promise<NonNullable<Awaited<ReturnType<typeof resolveInfracostBinary>>> | null> {
+  // Resolve the Infracost binary: an explicit INFRACOST_BINARY override wins,
+  // otherwise a version-pinned binary managed under <storage>/binaries/
+  // (selected by INFRACOST_VERSION) is installed on demand and digest-verified.
+  // A null here means no binary could be resolved/installed. That is
+  // permanent for this image, not a transient failure (issue #605): record
+  // a distinct unavailable status with a one-line explanation for the run
+  // page instead of an errored estimate.
+  const managed = await resolveInfracostBinary();
+  if (managed === null) {
+    await writeCostEstimateArtifact(runId, emptyCostEstimate("unavailable", {
       ...timestamps,
       "finished-at": new Date().toISOString(),
-    });
-    await writeCostEstimateArtifact(runId, estimate);
+    }, "Cost estimation is not installed in this image (no Infracost binary override and managed install failed)."));
+    await writeLog(runId, "plan", "[terrence] Cost estimation unavailable: Infracost binary is not installed in this image. Skipping.");
+    return null;
+  }
+  return managed;
+}
+
+async function runInfracostBreakdown(
+  runId: string,
+  executionDir: string,
+  inputPath: string,
+  gcpCredentialsPath: string,
+  secretsDir: string,
+  managed: NonNullable<Awaited<ReturnType<typeof resolveInfracostBinary>>>,
+  timestamps: CostEstimateTimestamps,
+): Promise<void> {
+  const costEnv = await infracostEnvironment(gcpCredentialsPath);
+  const costProcess = spawnRunProcess(
+    runId,
+    [managed.binaryPath, "breakdown", "--path", inputPath, "--format", "json", "--no-color"],
+    {
+      cwd: executionDir,
+      env: costEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+      // Issue #605: GCP credentials live outside the workdir (which holds
+      // untrusted configuration) but the Landlock sandbox denies reads
+      // outside its allow-list. Expose just the creds file read-only so
+      // GOOGLE_APPLICATION_CREDENTIALS resolves inside the sandbox.
+      extraRo: (await exists(gcpCredentialsPath)) ? [gcpCredentialsPath] : [],
+    },
+    runSandbox,
+  );
+  const costOutput = captureProcessOutput(costProcess.stdout, costProcess.stderr, secretsDir, "infracost");
+  const [exitCode, capturedOutput] = await waitForTrackedProcess(
+    runId,
+    "cost-estimate",
+    costProcess,
+    costOutput,
+    await executionTimeoutMs("plan"),
+  );
+  if (exitCode !== 0) {
+    const detail = capturedOutput.stderr.preview.trim().slice(0, 2_000);
+    throw new Error(`Infracost exited with code ${exitCode}${detail === "" ? "" : `: ${detail}`}`);
+  }
+
+  const estimate = parseInfracostOutput(JSON.parse(await readCapturedJson(capturedOutput, "Infracost output")) as unknown, {
+    ...timestamps,
+    "finished-at": new Date().toISOString(),
+  });
+  await writeCostEstimateArtifact(runId, estimate);
+  await writeLog(
+    runId,
+    "plan",
+    `[terrence] Infracost estimated ${estimate["proposed-monthly-cost"]} per month across ${estimate["matched-resources-count"]} matched resources.`,
+  );
+}
+
+async function reportCostEstimateFailure(runId: string, timestamps: CostEstimateTimestamps, error: unknown): Promise<void> {
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    await writeCostEstimateArtifact(runId, emptyCostEstimate("errored", {
+      ...timestamps,
+      "finished-at": new Date().toISOString(),
+    }, message));
+  } catch (artifactError: unknown) {
+    const artifactMessage = artifactError instanceof Error ? artifactError.message : String(artifactError);
+    await writeLog(runId, "plan", `[terrence] Could not persist errored cost estimate: ${artifactMessage}`);
+  }
+  await writeLog(runId, "plan", `[terrence] Cost estimation errored: ${message}`);
+}
+
+async function cleanupCostEstimateTempFiles(runId: string, inputPath: string, secretsDir: string): Promise<void> {
+  const cleanupTargets: readonly { label: string; operation: Promise<void> }[] = [
+    { label: "plan input", operation: rm(inputPath, { force: true }) },
+    { label: "credentials directory", operation: rm(secretsDir, { recursive: true, force: true }) },
+  ];
+  const cleanupResults = await Promise.allSettled(cleanupTargets.map(async (target) => target.operation));
+  for (const [index, result] of cleanupResults.entries()) {
+    if (result.status === "rejected") {
+      const target = cleanupTargets[index];
+      if (target !== undefined) {
+        logBestEffortFailure("Could not clean up cost-estimate temporary files", { runId, artifact: target.label }, result.reason);
+      }
+    }
+  }
+}
+
+async function executeCostEstimate(runId: string, executionDir: string): Promise<void> {
+  const scope = await loadCostEstimateScope(runId);
+  if (!scope.enabled) {
+    await writeDisabledCostEstimate(runId, scope.timestamps);
     return;
   }
 
@@ -1167,93 +1286,18 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
   const gcpCredentialsPath = join(secretsDir, "gcp-credentials.json");
 
   try {
-    await writeCostEstimateArtifact(runId, emptyCostEstimate("pending", timestamps));
+    await writeCostEstimateArtifact(runId, emptyCostEstimate("pending", scope.timestamps));
     const planJson = await readPlanJsonArtifact(runId);
     if (planJson === undefined) throw new Error("Persisted Terraform plan JSON is unavailable.");
     await writeFile(inputPath, JSON.stringify(planJson), { mode: 0o600 });
 
-    // Resolve the Infracost binary: an explicit INFRACOST_BINARY override wins,
-    // otherwise a version-pinned binary managed under <storage>/binaries/
-    // (selected by INFRACOST_VERSION) is installed on demand and digest-verified.
-    // A null here means no binary could be resolved/installed. That is
-    // permanent for this image, not a transient failure (issue #605): record
-    // a distinct unavailable status with a one-line explanation for the run
-    // page instead of an errored estimate.
-    const managed = await resolveInfracostBinary();
-    if (managed === null) {
-      await writeCostEstimateArtifact(runId, emptyCostEstimate("unavailable", {
-        ...timestamps,
-        "finished-at": new Date().toISOString(),
-      }, "Cost estimation is not installed in this image (no Infracost binary override and managed install failed)."));
-      await writeLog(runId, "plan", "[terrence] Cost estimation unavailable: Infracost binary is not installed in this image. Skipping.");
-      return;
-    }
-    const costEnv = await infracostEnvironment(gcpCredentialsPath);
-    const costProcess = spawnRunProcess(
-      runId,
-      [managed.binaryPath, "breakdown", "--path", inputPath, "--format", "json", "--no-color"],
-      {
-        cwd: executionDir,
-        env: costEnv,
-        stdout: "pipe",
-        stderr: "pipe",
-        // Issue #605: GCP credentials live outside the workdir (which holds
-        // untrusted configuration) but the Landlock sandbox denies reads
-        // outside its allow-list. Expose just the creds file read-only so
-        // GOOGLE_APPLICATION_CREDENTIALS resolves inside the sandbox.
-        extraRo: (await exists(gcpCredentialsPath)) ? [gcpCredentialsPath] : [],
-      },
-      runSandbox,
-    );
-    const costOutput = captureProcessOutput(costProcess.stdout, costProcess.stderr, secretsDir, "infracost");
-    const [exitCode, capturedOutput] = await waitForTrackedProcess(
-      runId,
-      "cost-estimate",
-      costProcess,
-      costOutput,
-      await executionTimeoutMs("plan"),
-    );
-    if (exitCode !== 0) {
-      const detail = capturedOutput.stderr.preview.trim().slice(0, 2_000);
-      throw new Error(`Infracost exited with code ${exitCode}${detail === "" ? "" : `: ${detail}`}`);
-    }
-
-    const estimate = parseInfracostOutput(JSON.parse(await readCapturedJson(capturedOutput, "Infracost output")) as unknown, {
-      ...timestamps,
-      "finished-at": new Date().toISOString(),
-    });
-    await writeCostEstimateArtifact(runId, estimate);
-    await writeLog(
-      runId,
-      "plan",
-      `[terrence] Infracost estimated ${estimate["proposed-monthly-cost"]} per month across ${estimate["matched-resources-count"]} matched resources.`,
-    );
+    const managed = await resolveCostEstimateBinary(runId, scope.timestamps);
+    if (managed === null) return;
+    await runInfracostBreakdown(runId, executionDir, inputPath, gcpCredentialsPath, secretsDir, managed, scope.timestamps);
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    try {
-      await writeCostEstimateArtifact(runId, emptyCostEstimate("errored", {
-        ...timestamps,
-        "finished-at": new Date().toISOString(),
-      }, message));
-    } catch (artifactError: unknown) {
-      const artifactMessage = artifactError instanceof Error ? artifactError.message : String(artifactError);
-      await writeLog(runId, "plan", `[terrence] Could not persist errored cost estimate: ${artifactMessage}`);
-    }
-    await writeLog(runId, "plan", `[terrence] Cost estimation errored: ${message}`);
+    await reportCostEstimateFailure(runId, scope.timestamps, error);
   } finally {
-    const cleanupTargets: readonly { label: string; operation: Promise<void> }[] = [
-      { label: "plan input", operation: rm(inputPath, { force: true }) },
-      { label: "credentials directory", operation: rm(secretsDir, { recursive: true, force: true }) },
-    ];
-    const cleanupResults = await Promise.allSettled(cleanupTargets.map((target) => target.operation));
-    for (const [index, result] of cleanupResults.entries()) {
-      if (result.status === "rejected") {
-        const target = cleanupTargets[index];
-        if (target !== undefined) {
-          logBestEffortFailure("Could not clean up cost-estimate temporary files", { runId, artifact: target.label }, result.reason);
-        }
-      }
-    }
+    await cleanupCostEstimateTempFiles(runId, inputPath, secretsDir);
   }
 }
 
