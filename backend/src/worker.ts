@@ -1679,12 +1679,13 @@ function runTaskTransportError(taskUrl: string, stage: RunTaskStage, isGlobal: b
   }
 }
 
-async function executeRunTasks(
-  runId: string,
-  workspace: Readonly<{ id: string; name: string; orgId: string; workingDirectory: string | null }>,
-  orgName: string,
+type PendingRunTaskEntry = RunTaskExecution & Readonly<{ resultId: string }>;
+type RunTaskDelivery = Readonly<{ status: string; message: string | null; resultUrl: string | null }>;
+
+async function collectRunTaskExecutions(
+  workspace: Readonly<{ id: string; orgId: string }>,
   stage: RunTaskStage,
-): Promise<boolean> {
+): Promise<Map<string, RunTaskExecution>> {
   const [bindings, globalTasks] = await Promise.all([
     db.query.workspaceRunTasks.findMany({
       where: and(eq(workspaceRunTasks.workspaceId, workspace.id), eq(workspaceRunTasks.stage, stage)),
@@ -1710,26 +1711,16 @@ async function executeRunTasks(
       : "advisory";
     executions.set(task.id, { task, enforcementLevel, isGlobal: true });
   }
-  if (executions.size === 0) return true;
+  return executions;
+}
 
-  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-  const taskAccessToken = (await runTokenStateFor(runId, workspace)).token;
-  let proceed = true;
-  const timeoutMs = integerSetting("RUN_TASK_TIMEOUT_MS");
-
+async function insertPendingRunTaskResults(
+  runId: string,
+  executions: ReadonlyMap<string, RunTaskExecution>,
+): Promise<PendingRunTaskEntry[]> {
   // Batch-insert all pending run-task results in one statement instead of
   // issuing one INSERT per binding inside the loop below.
-  const entryList: Readonly<{
-    enforcementLevel: string;
-    isGlobal: boolean;
-    task: Readonly<typeof runTasks.$inferSelect>;
-    resultId: string;
-  }>[] = [...executions.values()].map(({ task, enforcementLevel, isGlobal }): Readonly<{
-    enforcementLevel: string;
-    isGlobal: boolean;
-    task: Readonly<typeof runTasks.$inferSelect>;
-    resultId: string;
-  }> => ({ enforcementLevel, isGlobal, task, resultId: newResourceId("taskrs") }));
+  const entryList: PendingRunTaskEntry[] = [...executions.values()].map(({ task, enforcementLevel, isGlobal }): PendingRunTaskEntry => ({ enforcementLevel, isGlobal, task, resultId: newResourceId("taskrs") }));
   if (entryList.length > 0) {
     await db.insert(runTaskResults).values(
       entryList.map((entry): typeof runTaskResults.$inferInsert => ({
@@ -1741,138 +1732,231 @@ async function executeRunTasks(
       })),
     );
   }
+  return entryList;
+}
+
+async function buildRunTaskPayload(
+  runId: string,
+  workspace: Readonly<{ id: string; name: string; workingDirectory: string | null }>,
+  orgName: string,
+  stage: RunTaskStage,
+  run: typeof runs.$inferSelect | undefined,
+  taskAccessToken: string,
+  enforcementLevel: string,
+  resultId: string,
+  timeoutMs: number,
+): Promise<{ payload: string; headers: Record<string, string> }> {
+  const port = process.env["PORT"] ?? "3000";
+  const callbackBase = process.env["PUBLIC_URL"] ?? `http://localhost:${port}`;
+  const callbackPath = `/api/v2/task-results/${resultId}/callback`;
+  const callbackUrl = signedApiURL(
+    { url: callbackBase },
+    callbackPath,
+    "PATCH",
+    Math.ceil(timeoutMs / 1000) + 60,
+  );
+  const planJsonApiUrl = apiURL({ url: callbackBase }, `/api/v2/plans/plan-${runId}/json-output`);
+  const payload = JSON.stringify({
+    payload_version: 1,
+    stage,
+    capabilities: { outcomes: false },
+    configuration_version_id: run?.configurationVersionId ?? null,
+    is_speculative: run?.planOnly === true,
+    organization_name: orgName,
+    access_token: taskAccessToken,
+    plan_json_api_url: planJsonApiUrl,
+    run_created_at: new Date(run?.createdAt ?? Date.now()).toISOString(),
+    run_id: runId,
+    run_message: run?.message ?? "",
+    task_result_callback_url: callbackUrl,
+    task_result_enforcement_level: enforcementLevel,
+    task_result_id: resultId,
+    workspace_id: workspace.id,
+    workspace_name: workspace.name,
+    workspace_working_directory: workspace.workingDirectory ?? "",
+  });
+  return { payload, headers: { "Content-Type": "application/json" } };
+}
+
+async function signRunTaskPayload(
+  task: Readonly<typeof runTasks.$inferSelect>,
+  payload: string,
+  headers: Record<string, string>,
+): Promise<void> {
+  if (typeof task.hmacKey === "string" && task.hmacKey !== "") {
+    const hmacKey = await decryptSecret(task.hmacKey);
+    headers["X-Tfc-Task-Signature"] = createHmac("sha512", hmacKey).update(payload).digest("hex");
+  }
+}
+
+function asRecordOrSelf(value: unknown, fallback: Record<string, unknown>): Record<string, unknown> {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : fallback;
+}
+
+function extractRunTaskResultFields(
+  runId: string,
+  resultId: string,
+  taskId: string,
+  responseText: string,
+): { status: string | null; message: string | null; resultUrl: string | null } | null {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(responseText) as Record<string, unknown>;
+  } catch (error: unknown) {
+    logBestEffortFailure(
+      "Run task returned an invalid JSON response; using its HTTP status",
+      { runId, resultId, taskId },
+      error,
+    );
+    return null;
+  }
+  const data = asRecordOrSelf(parsed["data"], parsed);
+  const attributes = asRecordOrSelf(data["attributes"], data);
+  return {
+    status: ["running", "passed", "failed"].includes(String(attributes["status"])) ? String(attributes["status"]) : null,
+    message: typeof attributes["message"] === "string" ? attributes["message"] : null,
+    resultUrl: typeof attributes["url"] === "string" ? attributes["url"] : null,
+  };
+}
+
+async function postRunTaskRequest(
+  runId: string,
+  resultId: string,
+  taskId: string,
+  target: Parameters<typeof fetchResolvedExternalUrl>[0],
+  payload: string,
+  headers: Record<string, string>,
+): Promise<RunTaskDelivery> {
+  let status = "running";
+  let message: string | null = null;
+  let resultUrl: string | null = null;
+  try {
+    const response = await fetchResolvedExternalUrl(target, {
+      method: "POST",
+      headers,
+      body: payload,
+      timeoutMs: 10_000,
+    });
+    const responseText = await response.text();
+    status = response.ok ? "running" : "failed";
+    message = response.ok ? null : `Run task returned HTTP ${response.status}`;
+    if (responseText !== "") {
+      const fields = extractRunTaskResultFields(runId, resultId, taskId, responseText);
+      if (fields !== null) {
+        if (fields.status !== null) status = fields.status;
+        if (fields.message !== null) message = fields.message;
+        if (fields.resultUrl !== null) resultUrl = fields.resultUrl;
+      }
+    }
+  } catch (error: unknown) {
+    status = "failed";
+    message = error instanceof Error ? error.message : String(error);
+  }
+  return { status, message, resultUrl };
+}
+
+async function deliverRunTaskRequest(
+  runId: string,
+  resultId: string,
+  taskId: string,
+  taskUrl: string,
+  stage: RunTaskStage,
+  isGlobal: boolean,
+  payload: string,
+  headers: Record<string, string>,
+): Promise<RunTaskDelivery> {
+  const transportError = runTaskTransportError(taskUrl, stage, isGlobal);
+  const destination = transportError === undefined
+    ? await resolveExternalUrl(taskUrl, envFlag("TERRENCE_ALLOW_PRIVATE_URLS"))
+    : { error: transportError };
+  if ("error" in destination) return { status: "failed", message: destination.error, resultUrl: null };
+  const resolvedTransportError = runTaskTransportError(destination.target.url, stage, isGlobal);
+  if (resolvedTransportError !== undefined) return { status: "failed", message: resolvedTransportError, resultUrl: null };
+  return postRunTaskRequest(runId, resultId, taskId, destination.target, payload, headers);
+}
+
+async function settleRunTaskResult(
+  runId: string,
+  resultId: string,
+  status: string,
+  message: string | null,
+  resultUrl: string | null,
+  timeoutMs: number,
+): Promise<RunTaskDelivery> {
+  const callbackResult = await db.query.runTaskResults.findFirst({ where: eq(runTaskResults.id, resultId) });
+  if (callbackResult !== undefined && ["passed", "failed"].includes(callbackResult.status)) {
+    return { status: callbackResult.status, message: callbackResult.message, resultUrl: callbackResult.url };
+  }
+  await db.update(runTaskResults).set({ status, message, url: resultUrl }).where(eq(runTaskResults.id, resultId));
+  if (status !== "running") return { status, message, resultUrl };
+  const latest = await waitForTaskSettlement(resultId, timeoutMs, runId);
+  if (latest === "canceled") {
+    const canceledMessage = "Run task canceled with its run.";
+    await db.update(runTaskResults).set({ status: "canceled", message: canceledMessage }).where(eq(runTaskResults.id, resultId));
+    return { status: "canceled", message: canceledMessage, resultUrl };
+  }
+  if (latest !== undefined && ["passed", "failed"].includes(latest.status)) {
+    return { status: latest.status, message: latest.message, resultUrl: latest.url };
+  }
+  const timeoutMessage = `Run task callback timed out after ${phaseTimeoutDetail("run-task", timeoutMs)}`;
+  await db.update(runTaskResults).set({ status: "failed", message: timeoutMessage }).where(eq(runTaskResults.id, resultId));
+  return { status: "failed", message: timeoutMessage, resultUrl };
+}
+
+async function executeSingleRunTask(
+  runId: string,
+  workspace: Readonly<{ id: string; name: string; workingDirectory: string | null }>,
+  orgName: string,
+  stage: RunTaskStage,
+  run: typeof runs.$inferSelect | undefined,
+  taskAccessToken: string,
+  timeoutMs: number,
+  entry: PendingRunTaskEntry,
+  entryList: readonly PendingRunTaskEntry[],
+  index: number,
+): Promise<{ canceled: boolean; blockingFailed: boolean }> {
+  const { enforcementLevel, isGlobal, task, resultId } = entry;
+  // Issue #584: a cancel during a run-task wait must stop the wait instead
+  // of holding the workspace lock/concurrency slot until the 1h timeout.
+  // Mark this and all not-yet-run results canceled and bail; the caller
+  // treats a false return as blocking, and the phase catch turns it into a
+  // clean "Run canceled." log line for an already-canceled run.
+  if (await runWasCanceled(runId)) {
+    await db.update(runTaskResults).set({ status: "canceled", message: "Run task canceled with its run." }).where(
+      inArray(runTaskResults.id, entryList.slice(index).map((remaining): string => remaining.resultId)),
+    );
+    return { canceled: true, blockingFailed: false };
+  }
+  const { payload, headers } = await buildRunTaskPayload(runId, workspace, orgName, stage, run, taskAccessToken, enforcementLevel, resultId, timeoutMs);
+  await signRunTaskPayload(task, payload, headers);
+  const delivery = await deliverRunTaskRequest(runId, resultId, task.id, task.url, stage, isGlobal, payload, headers);
+  const settled = await settleRunTaskResult(runId, resultId, delivery.status, delivery.message, delivery.resultUrl, timeoutMs);
+  const taskLogPhase = stage === "pre_apply" || stage === "post_apply" ? "apply" : "plan";
+  await writeLog(runId, taskLogPhase, `[terrence] ${stage} run task "${task.name}" ${settled.status}.`);
+  if (settled.status === "canceled") return { canceled: true, blockingFailed: false };
+  return { canceled: false, blockingFailed: settled.status === "failed" && (enforcementLevel === "mandatory" || enforcementLevel === "must_pass") };
+}
+
+async function executeRunTasks(
+  runId: string,
+  workspace: Readonly<{ id: string; name: string; orgId: string; workingDirectory: string | null }>,
+  orgName: string,
+  stage: RunTaskStage,
+): Promise<boolean> {
+  const executions = await collectRunTaskExecutions(workspace, stage);
+  if (executions.size === 0) return true;
+
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+  const taskAccessToken = (await runTokenStateFor(runId, workspace)).token;
+  let proceed = true;
+  const timeoutMs = integerSetting("RUN_TASK_TIMEOUT_MS");
+
+  const entryList = await insertPendingRunTaskResults(runId, executions);
 
   for (const [index, entry] of entryList.entries()) {
-    const { enforcementLevel, isGlobal, task, resultId } = entry;
-    // Issue #584: a cancel during a run-task wait must stop the wait instead
-    // of holding the workspace lock/concurrency slot until the 1h timeout.
-    // Mark this and all not-yet-run results canceled and bail; the caller
-    // treats a false return as blocking, and the phase catch turns it into a
-    // clean "Run canceled." log line for an already-canceled run.
-    if (await runWasCanceled(runId)) {
-      await db.update(runTaskResults).set({ status: "canceled", message: "Run task canceled with its run." }).where(
-        inArray(runTaskResults.id, entryList.slice(index).map((remaining): string => remaining.resultId)),
-      );
-      return false;
-    }
-    const port = process.env["PORT"] ?? "3000";
-    const callbackBase = process.env["PUBLIC_URL"] ?? `http://localhost:${port}`;
-    const callbackPath = `/api/v2/task-results/${resultId}/callback`;
-    const callbackUrl = signedApiURL(
-      { url: callbackBase },
-      callbackPath,
-      "PATCH",
-      Math.ceil(timeoutMs / 1000) + 60,
-    );
-    const planJsonApiUrl = apiURL({ url: callbackBase }, `/api/v2/plans/plan-${runId}/json-output`);
-    const payload = JSON.stringify({
-      payload_version: 1,
-      stage,
-      capabilities: { outcomes: false },
-      configuration_version_id: run?.configurationVersionId ?? null,
-      is_speculative: run?.planOnly === true,
-      organization_name: orgName,
-      access_token: taskAccessToken,
-      plan_json_api_url: planJsonApiUrl,
-      run_created_at: new Date(run?.createdAt ?? Date.now()).toISOString(),
-      run_id: runId,
-      run_message: run?.message ?? "",
-      task_result_callback_url: callbackUrl,
-      task_result_enforcement_level: enforcementLevel,
-      task_result_id: resultId,
-      workspace_id: workspace.id,
-      workspace_name: workspace.name,
-      workspace_working_directory: workspace.workingDirectory ?? "",
-    });
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (typeof task.hmacKey === "string" && task.hmacKey !== "") {
-      const hmacKey = await decryptSecret(task.hmacKey);
-      headers["X-Tfc-Task-Signature"] = createHmac("sha512", hmacKey).update(payload).digest("hex");
-    }
-
-    let status = "running";
-    let message: string | null = null;
-    let resultUrl: string | null = null;
-    const transportError = runTaskTransportError(task.url, stage, isGlobal);
-    const destination = transportError === undefined
-      ? await resolveExternalUrl(task.url, envFlag("TERRENCE_ALLOW_PRIVATE_URLS"))
-      : { error: transportError };
-    if ("error" in destination) {
-      status = "failed";
-      message = destination.error;
-    } else {
-      const resolvedTransportError = runTaskTransportError(destination.target.url, stage, isGlobal);
-      if (resolvedTransportError !== undefined) {
-        status = "failed";
-        message = resolvedTransportError;
-      } else try {
-        const response = await fetchResolvedExternalUrl(destination.target, {
-        method: "POST",
-        headers,
-        body: payload,
-        timeoutMs: 10_000,
-        });
-        const responseText = await response.text();
-        status = response.ok ? "running" : "failed";
-        message = response.ok ? null : `Run task returned HTTP ${response.status}`;
-        if (responseText !== "") {
-          try {
-            const parsed = JSON.parse(responseText) as Record<string, unknown>;
-            const rawData = parsed["data"];
-            const data = rawData !== null && typeof rawData === "object"
-              ? rawData as Record<string, unknown>
-              : parsed;
-            const rawAttributes = data["attributes"];
-            const attributes = rawAttributes !== null && typeof rawAttributes === "object"
-              ? rawAttributes as Record<string, unknown>
-              : data;
-            if (["running", "passed", "failed"].includes(String(attributes["status"]))) status = String(attributes["status"]);
-            if (typeof attributes["message"] === "string") message = attributes["message"];
-            if (typeof attributes["url"] === "string") resultUrl = attributes["url"];
-          } catch (error: unknown) {
-            logBestEffortFailure(
-              "Run task returned an invalid JSON response; using its HTTP status",
-              { runId, resultId, taskId: task.id },
-              error,
-            );
-          }
-        }
-      } catch (error: unknown) {
-        status = "failed";
-        message = error instanceof Error ? error.message : String(error);
-      }
-    }
-
-    const callbackResult = await db.query.runTaskResults.findFirst({ where: eq(runTaskResults.id, resultId) });
-    if (callbackResult !== undefined && ["passed", "failed"].includes(callbackResult.status)) {
-      status = callbackResult.status;
-      message = callbackResult.message;
-      resultUrl = callbackResult.url;
-    } else {
-      await db.update(runTaskResults).set({ status, message, url: resultUrl }).where(eq(runTaskResults.id, resultId));
-    }
-    if (status === "running") {
-      const latest = await waitForTaskSettlement(resultId, timeoutMs, runId);
-      if (latest === "canceled") {
-        status = "canceled";
-        message = "Run task canceled with its run.";
-        await db.update(runTaskResults).set({ status, message }).where(eq(runTaskResults.id, resultId));
-      } else if (latest !== undefined && ["passed", "failed"].includes(latest.status)) {
-        status = latest.status;
-        message = latest.message;
-        resultUrl = latest.url;
-      } else {
-        status = "failed";
-        message = `Run task callback timed out after ${phaseTimeoutDetail("run-task", timeoutMs)}`;
-        await db.update(runTaskResults).set({ status, message }).where(eq(runTaskResults.id, resultId));
-      }
-    }
-    const taskLogPhase = stage === "pre_apply" || stage === "post_apply" ? "apply" : "plan";
-    await writeLog(runId, taskLogPhase, `[terrence] ${stage} run task "${task.name}" ${status}.`);
-    if (status === "canceled") return false;
-    if (status === "failed" && (enforcementLevel === "mandatory" || enforcementLevel === "must_pass")) {
-      proceed = false;
-    }
+    const outcome = await executeSingleRunTask(runId, workspace, orgName, stage, run, taskAccessToken, timeoutMs, entry, entryList, index);
+    if (outcome.canceled) return false;
+    if (outcome.blockingFailed) proceed = false;
   }
 
   return proceed;
