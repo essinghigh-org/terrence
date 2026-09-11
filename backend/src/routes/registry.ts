@@ -1375,6 +1375,23 @@ async function upsertNoCodeRow(
   return { ...existing, versionId: version.id, enabled: enabled ?? false, updatedAt: now };
 }
 
+async function resolveProviderVersionByIdForWrite(
+  versionId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ version: ProvVerItem } | { failure: unknown }>> {
+  const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, versionId) });
+  if (ver === undefined) { (set as { status: number }).status = 404; return { failure: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
+  if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, userId, tokenOrgId, teamId ?? null, "manage-providers"))) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { version: ver };
+}
+
 async function resolveProviderByIdForWrite(
   providerId: string,
   userId: string | undefined,
@@ -2534,12 +2551,10 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: { id, type: "registry-provider-versions", attributes: { version: fields.version, "key-id": fields.keyId, protocols: fields.protocols, "shasums-url": fields.shasumsUrl, "shasums-signature-url": fields.shasumsSignatureUrl, "created-at": new Date().toISOString() } } };
   })
   .delete("/api/v2/registry-provider-versions/:version_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const versionId = params["version_id"] ?? "";
-    const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, versionId) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
-    if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(registryProviderVersions).where(eq(registryProviderVersions.id, versionId));
+    const resolved = await resolveProviderVersionByIdForWrite(params["version_id"] ?? "", user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
+    const { version } = resolved;
+    await db.delete(registryProviderVersions).where(eq(registryProviderVersions.id, version.id));
     (set as { status: number }).status = 204;
     return {};
   })
@@ -2554,26 +2569,18 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: platforms.map((p: PlatItem): Record<string, unknown> => ({ id: p.id, type: "registry-provider-platforms", attributes: { os: p.os, arch: p.arch, filename: p.filename, "download-url": p.downloadUrl, shasum: p.shasum } })) };
   })
   .post("/api/v2/registry-provider-versions/:version_id/platforms", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
-    const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, versionId) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
-    if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const os = typeof attributes["os"] === "string" ? attributes["os"] : "";
-    const arch = typeof attributes["arch"] === "string" ? attributes["arch"] : "";
-    const filename = typeof attributes["filename"] === "string" ? attributes["filename"] : "";
-    const downloadUrl = typeof attributes["download-url"] === "string" ? attributes["download-url"] : "";
-    const shasum = typeof attributes["shasum"] === "string" ? attributes["shasum"] : "";
-    if (os === "" || arch === "" || filename === "" || downloadUrl === "" || shasum === "") {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "os, arch, filename, download-url, and shasum are required" }] };
+    const resolved = await resolveProviderVersionByIdForWrite(params["version_id"] ?? "", user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { version } = resolved;
+    const fields = parsePlatformFields(body);
+    if ("error" in fields) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
     }
     const id = newResourceId("provplat");
-    await db.insert(registryProviderPlatforms).values({ id, versionId, os, arch, filename, downloadUrl, shasum, createdAt: Date.now() });
+    await db.insert(registryProviderPlatforms).values({ id, versionId: version.id, os: fields.os, arch: fields.arch, filename: fields.filename, downloadUrl: fields.downloadUrl, shasum: fields.shasum, createdAt: Date.now() });
     (set as { status: number }).status = 201;
-    return { data: { id, type: "registry-provider-platforms", attributes: { os, arch, filename, "download-url": downloadUrl, shasum } } };
+    return { data: { id, type: "registry-provider-platforms", attributes: { os: fields.os, arch: fields.arch, filename: fields.filename, "download-url": fields.downloadUrl, shasum: fields.shasum } } };
   })
   .delete("/api/v2/registry-provider-platforms/:platform_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const platformId = params["platform_id"] ?? "";
