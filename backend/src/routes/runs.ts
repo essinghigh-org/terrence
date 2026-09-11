@@ -2004,6 +2004,42 @@ function emptyOrgQueueResponse(
   };
 }
 
+type OrgRunsScope = Readonly<{
+  organization: NonNullable<Awaited<ReturnType<typeof cachedOrgByName>>>;
+  orgWorkspaces: Awaited<ReturnType<typeof authorizedOrgWorkspaces>>;
+  applyIds: Awaited<ReturnType<typeof workspaceIdsForPermission>>;
+  number: number;
+  size: number;
+}>;
+
+async function resolveOrgRunsScope(
+  orgName: string,
+  user: ParamCtx["user"],
+  orgId: string | null | undefined,
+  teamId: string | null | undefined,
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<OrgRunsScope | { failure: unknown }> {
+  const organization = await cachedOrgByName(orgName);
+  if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { failure: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  const [orgWorkspaces, applyIds] = await Promise.all([
+    authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null),
+    workspaceIdsForPermission(organization.id, user?.id, orgId ?? null, teamId ?? null, "apply"),
+  ]);
+  const { number, size } = pageRequest(request);
+  return { organization, orgWorkspaces, applyIds, number, size };
+}
+
+function orgRunsResources(
+  orgRuns: readonly RunItem[],
+  applyIds: readonly string[] | null,
+  origins: ReadonlyMap<string, RunOrigin>,
+  linkage: ReadonlyMap<string, RunRelationshipLinkage>,
+): Record<string, unknown>[] {
+  const applySet = new Set(applyIds ?? []);
+  return orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id), undefined, undefined, linkage.get(r.id)));
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -2229,14 +2265,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organizations/:org_name/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const organization = await cachedOrgByName(orgName);
-    if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const [orgWorkspaces, applyIds] = await Promise.all([
-      authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null),
-      workspaceIdsForPermission(organization.id, user?.id, orgId ?? null, teamId ?? null, "apply"),
-    ]);
-    const { number, size } = pageRequest(request);
+    const scope = await resolveOrgRunsScope(params["org_name"] ?? "", user, orgId, teamId, request, set);
+    if ("failure" in scope) return scope.failure;
+    const { orgWorkspaces, applyIds, number, size } = scope;
     if (orgWorkspaces.length === 0) { return { data: [], ...pagination(request, number, size, 0) }; }
     const where = organizationRunHistoryWhere(request, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id));
     const [orgRuns, countRows] = await Promise.all([
@@ -2244,9 +2275,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       db.select({ total: count() }).from(runs).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    const applySet = new Set(applyIds ?? []);
     const [origins, linkage] = await Promise.all([originsForRuns(orgRuns), linkageForRuns(orgRuns)]);
-    const data = orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id), undefined, undefined, linkage.get(r.id)));
+    const data = orgRunsResources(orgRuns, applyIds, origins, linkage);
     const included = await includedRunResources(orgRuns, request, requestedRunIncludes(request));
     return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
   })
