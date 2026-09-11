@@ -1592,6 +1592,28 @@ async function upsertNoCodeRow(
   return { ...existing, versionId: version.id, enabled: enabled ?? false, updatedAt: now };
 }
 
+type ProviderPlatformChain = Readonly<{
+  org: OrgRowForWrite;
+  provider: ProvItem;
+  version: ProvVerItem;
+  platform: PlatItem;
+}>;
+
+async function resolveProviderPlatformChain(
+  params: ParamCtx["params"],
+  set: SetObj,
+): Promise<Readonly<{ chain: ProviderPlatformChain } | { failure: unknown }>> {
+  if (params["registry_name"] !== "private") return { failure: registryNotFound(set) };
+  const org = await cachedOrgByName(params["org_name"] ?? "");
+  const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
+  const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
+  const platform = version === undefined ? undefined : await db.query.registryProviderPlatforms.findFirst({ where: and(eq(registryProviderPlatforms.versionId, version.id), eq(registryProviderPlatforms.os, params["os"] ?? ""), eq(registryProviderPlatforms.arch, params["arch"] ?? "")) });
+  if (org === undefined || provider === undefined || version === undefined || platform === undefined) {
+    return { failure: registryNotFound(set) };
+  }
+  return { chain: { org, provider, version, platform } };
+}
+
 async function resolveProviderVersionByIdForWrite(
   versionId: string,
   userId: string | undefined,
@@ -2846,22 +2868,18 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: platforms.map(registryProviderPlatformResource) };
   })
   .get("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms/:os/:arch", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
-    const platform = version === undefined ? undefined : await db.query.registryProviderPlatforms.findFirst({ where: and(eq(registryProviderPlatforms.versionId, version.id), eq(registryProviderPlatforms.os, params["os"] ?? ""), eq(registryProviderPlatforms.arch, params["arch"] ?? "")) });
-    if (org === undefined || provider === undefined || version === undefined || platform === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) return registryNotFound(set);
-    return { data: registryProviderPlatformResource(platform) };
+    const resolved = await resolveProviderPlatformChain(params, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { chain } = resolved;
+    if (!(await checkRegistryManagementRead(user?.id, chain.org.id, "providers", tokenOrgId, teamId ?? null))) return registryNotFound(set);
+    return { data: registryProviderPlatformResource(chain.platform) };
   })
   .delete("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms/:os/:arch", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
-    const platform = version === undefined ? undefined : await db.query.registryProviderPlatforms.findFirst({ where: and(eq(registryProviderPlatforms.versionId, version.id), eq(registryProviderPlatforms.os, params["os"] ?? ""), eq(registryProviderPlatforms.arch, params["arch"] ?? "")) });
-    if (org === undefined || provider === undefined || version === undefined || platform === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return registryNotFound(set);
-    await db.delete(registryProviderPlatforms).where(eq(registryProviderPlatforms.id, platform.id));
+    const resolved = await resolveProviderPlatformChain(params, set);
+    if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
+    const { chain } = resolved;
+    if (!(await checkOrganizationPermission(chain.org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return registryNotFound(set);
+    await db.delete(registryProviderPlatforms).where(eq(registryProviderPlatforms.id, chain.platform.id));
     (set as { status: number }).status = 204;
     return {};
   })
