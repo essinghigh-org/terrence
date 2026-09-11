@@ -199,15 +199,14 @@ export default tseslint.config(
       'frontend/src/components/WorkspaceVcs.tsx',
       'frontend/src/views/Registry.tsx',
       'frontend/src/views/RunList.tsx',
-      'frontend/src/views/RunDetail.tsx',
     ],
     rules: {
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/no-floating-promises': 'off',
       '@typescript-eslint/no-empty-function': 'off',
       '@typescript-eslint/no-unnecessary-condition': 'off',
-      // Known monolith (complexity 239); exempt until it is split into
-      // focused subcomponents. Tracked for the complexity rollout.
+      // Legacy views still above the complexity gate; exempt until each is
+      // split into focused subcomponents. Tracked for the complexity rollout.
       complexity: 'off',
     },
   },

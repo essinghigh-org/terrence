@@ -1,7 +1,8 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { RunDetail, runExecutionDurationMilliseconds } from "../src/views/RunDetail";
+import { RunDetail } from "../src/views/RunDetail";
+import { runExecutionDurationMilliseconds } from "../src/lib/run-detail-format";
 import { OperationFilterDropdown } from "../src/components/OperationFilterDropdown";
 import type { Operation } from "../src/lib/plan-operations";
 import { isString } from "../src/lib/type-guards";
