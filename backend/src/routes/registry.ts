@@ -1306,6 +1306,53 @@ type TestConfigRow = DeepReadonly<typeof moduleTestConfigurations.$inferSelect>;
 
 type OrgRowForWrite = NonNullable<Awaited<ReturnType<typeof cachedOrgByName>>>;
 
+async function resolveNoCodeDetailsForWrite(
+  id: string,
+  user: ParamCtx["user"],
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ details: NoCodeDetails } | { failure: unknown }>> {
+  const details = await noCodeDetails(id);
+  const hasSupportedPrincipal = user !== null && user !== undefined || teamId !== null && teamId !== undefined;
+  if (
+    details === undefined
+    || !hasSupportedPrincipal
+    || !(await checkOrganizationPermission(details.org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+  ) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { details };
+}
+
+async function resolveNoCodeTarget(
+  details: NoCodeDetails,
+  input: NoCodeInput,
+  set: SetObj,
+): Promise<Readonly<{ targetModule: ModItem; targetVersion: ModVerItem } | { failure: unknown }>> {
+  const targetModule = input.moduleId === undefined
+    ? details.mod
+    : await db.query.registryModules.findFirst({ where: eq(registryModules.id, input.moduleId) });
+  if (targetModule?.orgId !== details.org.id) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  const targetVersion = input.versionPin === undefined
+    ? (await availableModuleVersions(targetModule.id))[0]
+    : await db.query.registryModuleVersions.findFirst({
+        where: and(
+          eq(registryModuleVersions.moduleId, targetModule.id),
+          eq(registryModuleVersions.version, input.versionPin),
+        ),
+      });
+  if (targetVersion?.status !== "ok") {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "version-pin must identify a published version of the registry module" }] } };
+  }
+  return { targetModule, targetVersion };
+}
+
 type TestRunArchiveSelection = Readonly<{
   archivePath: string;
   version: ModVerItem;
@@ -2277,40 +2324,17 @@ export const registryRoutes = new Elysia({ name: "registry" })
     };
   })
   .patch("/api/v2/no-code-modules/:id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const details = await noCodeDetails(params["id"] ?? "");
-    const hasSupportedPrincipal = user !== null && user !== undefined || teamId !== null && teamId !== undefined;
-    if (
-      details === undefined
-      || !hasSupportedPrincipal
-      || !(await checkOrganizationPermission(details.org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
-    ) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
+    const access = await resolveNoCodeDetailsForWrite(params["id"] ?? "", user, tokenOrgId, teamId, set);
+    if ("failure" in access) return access.failure;
+    const { details } = access;
     const input = noCodeInput(body, false);
     if ("error" in input) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
     }
-    const targetModule = input.moduleId === undefined
-      ? details.mod
-      : await db.query.registryModules.findFirst({ where: eq(registryModules.id, input.moduleId) });
-    if (targetModule?.orgId !== details.org.id) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const targetVersion = input.versionPin === undefined
-      ? (await availableModuleVersions(targetModule.id))[0]
-      : await db.query.registryModuleVersions.findFirst({
-          where: and(
-            eq(registryModuleVersions.moduleId, targetModule.id),
-            eq(registryModuleVersions.version, input.versionPin),
-          ),
-        });
-    if (targetVersion?.status !== "ok") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "version-pin must identify a published version of the registry module" }] };
-    }
+    const target = await resolveNoCodeTarget(details, input, set);
+    if ("failure" in target) return target.failure;
+    const { targetModule, targetVersion } = target;
     const duplicate = await db.query.noCodeModules.findFirst({ where: eq(noCodeModules.moduleId, targetModule.id) });
     if (duplicate !== undefined && duplicate.id !== details.noCode.id) {
       (set as { status: number }).status = 422;
