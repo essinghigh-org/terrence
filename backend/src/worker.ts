@@ -5758,12 +5758,11 @@ export async function pollWorkerQueue(): Promise<string[]> {
  * batch. Gate semantics mirror the auto-apply path: a blocked apply stays
  * confirmed and is retried on the next poll.
  */
-export async function applyDueScheduledRuns(): Promise<string[]> {
-  if (isMaintenanceActive()) return [];
-  if (workerQueueDraining()) return [];
-  if (isStorageDegraded()) return [];
-  const now = Date.now();
-  const dueRuns = await db.query.runs.findMany({
+type DueScheduledRun = Pick<typeof runs.$inferSelect, "id" | "workspaceId" | "planOnly" | "savePlan" | "statusTimestamps">;
+type ScheduledWorkspaceRow = Pick<typeof workspaces.$inferSelect, "id" | "orgId" | "locked" | "lockedReason" | "executionMode" | "agentPoolId" | "projectId">;
+
+async function fetchDueScheduledRuns(now: number): Promise<DueScheduledRun[]> {
+  return await db.query.runs.findMany({
     columns: { id: true, workspaceId: true, planOnly: true, savePlan: true, statusTimestamps: true },
     where: and(
       eq(runs.status, "confirmed"),
@@ -5773,134 +5772,181 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
     ),
     limit: 50,
   });
-  // Prune block-reason bookkeeping for runs that left the due set (applied,
-  // canceled, or rescheduled).
-  const dueIds = new Set(dueRuns.map((run): string => run.id));
+}
+
+function pruneScheduledBlockReasons(dueIds: ReadonlySet<string>): void {
   for (const key of scheduledBlockReasons.keys()) {
     const runId = key.startsWith("scheduled:") || key.startsWith("agent-pool:") || key.startsWith("workspace-lock:")
       ? key.slice(key.indexOf(":") + 1)
       : "";
     if (runId !== "" && !dueIds.has(runId)) scheduledBlockReasons.delete(key);
   }
+}
+
+async function fetchScheduledWorkspaces(workspaceIds: string[]): Promise<ScheduledWorkspaceRow[]> {
+  return await db.query.workspaces.findMany({
+    columns: { id: true, orgId: true, locked: true, lockedReason: true, executionMode: true, agentPoolId: true, projectId: true },
+    where: inArray(workspaces.id, workspaceIds),
+  });
+}
+
+async function handleLockedScheduledWorkspace(runId: string, lockedReason: ScheduledWorkspaceRow["lockedReason"]): Promise<void> {
+  const reason = typeof lockedReason === "string" && lockedReason !== ""
+    ? lockedReason
+    : "locked";
+  const key = `scheduled:${runId}`;
+  if (scheduledBlockReasons.get(key) !== `workspace-locked:${reason}`) {
+    scheduledBlockReasons.set(key, `workspace-locked:${reason}`);
+    await writeLog(runId, "apply", `[terrence] Apply is waiting: the workspace is locked (${reason}). Unlock the workspace or cancel this run.`);
+  }
+}
+
+async function errorLocalModeScheduledRun(run: DueScheduledRun): Promise<void> {
+  // Local-execution workspaces never run on the server (issue #567):
+  // a confirmed row here predates the creation gate. Error it with
+  // an explanation instead of dispatching or leaving it confirmed
+  // forever.
+  const blocked = await db.update(runs).set({
+    status: "errored",
+    statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+  }).where(and(eq(runs.id, run.id), eq(runs.status, "confirmed"))).returning({ id: runs.id });
+  if (blocked.length > 0) {
+    await writeLog(run.id, "apply", "[terrence ERROR] Remote runs cannot execute on workspaces with local execution mode. This apply predates local-execution enforcement.");
+    queueRunNotification(run.id, "run:errored", "errored");
+    void reportRunVcsStatus(run.id, "errored");
+  }
+}
+
+async function checkScheduledApplyGate(runId: string): Promise<boolean> {
+  const gateBlockReason = await applyGateBlockReason(new Date());
+  if (gateBlockReason === null) {
+    scheduledBlockReasons.delete(`scheduled:${runId}`);
+    return false;
+  }
+  // Log the deferral only when the block reason changes so a closed
+  // maintenance window cannot spam the run log on every poll.
+  const key = `scheduled:${runId}`;
+  if (scheduledBlockReasons.get(key) !== gateBlockReason) {
+    scheduledBlockReasons.set(key, gateBlockReason);
+    await writeLog(runId, "apply", `[terrence] Scheduled apply blocked: ${gateBlockReason}`);
+  }
+  return true;
+}
+
+async function dispatchAgentScheduledRun(run: DueScheduledRun, workspace: ScheduledWorkspaceRow): Promise<boolean> {
+  const pool = workspace.agentPoolId === null
+    ? undefined
+    : await db.query.agentPools.findFirst({ where: eq(agentPools.id, workspace.agentPoolId) });
+  if (
+    pool?.orgId !== workspace.orgId
+    || !(await agentPoolAllowsWorkspace(pool, workspace.id, workspace.projectId))
+  ) {
+    // Persistent pool failures must not spam the run log on every
+    // poll; log once per reason like the gate-block path. The run
+    // stays confirmed and is retried once the pool is reachable.
+    const key = `agent-pool:${run.id}`;
+    if (scheduledBlockReasons.get(key) !== "pool-unreachable") {
+      scheduledBlockReasons.set(key, "pool-unreachable");
+      await writeLog(run.id, "apply", "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.");
+    }
+    return false;
+  }
+  scheduledBlockReasons.delete(`agent-pool:${run.id}`);
+  // Claim (confirmed -> apply_queued) and job insert are ONE
+  // transaction (kanban t_c5f59537): a crash cannot leave the run
+  // apply_queued without a job. Concurrent polls see zero rows. Any
+  // failure throws and rolls back the whole transaction; the outer
+  // catch keeps the run confirmed for the next poll.
+  const job = await db.transaction(async (transaction): Promise<AgentJob | undefined> => {
+    const tx = transaction as unknown as typeof db;
+    return insertAgentApplyJobTx(tx, run.id, pool.id, run.statusTimestamps);
+  });
+  if (job === undefined) return false;
+  return true;
+}
+
+async function dispatchLocalScheduledRun(run: DueScheduledRun): Promise<boolean> {
+  // Atomic claim: only the poll that flips confirmed -> apply_queued
+  // may dispatch; concurrent polls see zero rows and skip.
+  const localReservation = reserveLocalRunExecution(run.id);
+  if (!localReservation) return false;
+  const claimed = await db.update(runs).set({
+    status: "apply_queued",
+    statusTimestamps: {
+      ...(run.statusTimestamps ?? {}),
+      "apply-queued-at": new Date().toISOString(),
+    },
+  }).where(and(eq(runs.id, run.id), eq(runs.status, "confirmed"))).returning({ id: runs.id });
+  if (claimed.length === 0) {
+    releaseLocalRunReservation(run.id);
+    return false;
+  }
+  // Fire-and-forget like the manual-apply dispatch: the poll cycle must
+  // keep moving; executeApply owns its own lifecycle and errors are
+  // logged, with the claim already taken so nothing re-dispatches.
+  void executeApply(run.id).catch((error: unknown): void => {
+    log.error("Scheduled executeApply failed", { runId: run.id, error });
+  });
+  return true;
+}
+
+async function restoreFailedScheduledRun(runId: string, error: unknown): Promise<void> {
+  if (localExecutionLifecycle.hasReservation(runId)) releaseLocalRunReservation(runId);
+  log.error("Scheduled apply failed", { runId, error });
+  // Keep the run confirmed so a transient failure retries next poll.
+  try {
+    await db.update(runs).set({ status: "confirmed" }).where(and(eq(runs.id, runId), eq(runs.status, "apply_queued")));
+  } catch (restoreError: unknown) {
+    logBestEffortFailure("Failed to restore scheduled run after apply dispatch failure", { runId }, restoreError);
+  }
+}
+
+async function processDueScheduledRun(
+  run: DueScheduledRun,
+  workspacesById: ReadonlyMap<string, ScheduledWorkspaceRow>,
+): Promise<boolean> {
+  if (run.planOnly === true) return false;
+  try {
+    const workspace = workspacesById.get(run.workspaceId);
+    if (workspace === undefined) return false;
+    // A lock acquired after the apply was confirmed parks the run
+    // silently (issue #575). Log the block throttled like the other
+    // deferral reasons instead of parking with no signal.
+    if (workspace.locked === true) {
+      await handleLockedScheduledWorkspace(run.id, workspace.lockedReason);
+      return false;
+    }
+    if (workspace.executionMode === "local") {
+      await errorLocalModeScheduledRun(run);
+      return false;
+    }
+    if (await checkScheduledApplyGate(run.id)) return false;
+    if (workspace.executionMode === "agent") {
+      return await dispatchAgentScheduledRun(run, workspace);
+    }
+    return await dispatchLocalScheduledRun(run);
+  } catch (error: unknown) {
+    await restoreFailedScheduledRun(run.id, error);
+    return false;
+  }
+}
+
+export async function applyDueScheduledRuns(): Promise<string[]> {
+  if (isMaintenanceActive()) return [];
+  if (workerQueueDraining()) return [];
+  if (isStorageDegraded()) return [];
+  const now = Date.now();
+  const dueRuns = await fetchDueScheduledRuns(now);
+  // Prune block-reason bookkeeping for runs that left the due set (applied,
+  // canceled, or rescheduled).
+  pruneScheduledBlockReasons(new Set(dueRuns.map((run): string => run.id)));
   const scheduledWorkspaceRows = dueRuns.length === 0
     ? []
-    : await db.query.workspaces.findMany({
-        columns: { id: true, orgId: true, locked: true, lockedReason: true, executionMode: true, agentPoolId: true, projectId: true },
-        where: inArray(workspaces.id, [...new Set(dueRuns.map((run): string => run.workspaceId))]),
-      });
+    : await fetchScheduledWorkspaces([...new Set(dueRuns.map((run): string => run.workspaceId))]);
   const workspacesById = new Map(scheduledWorkspaceRows.map((workspace): readonly [string, typeof workspace] => [workspace.id, workspace]));
   const applied: string[] = [];
   for (const run of dueRuns) {
-    if (run.planOnly === true) continue;
-    try {
-      const workspace = workspacesById.get(run.workspaceId);
-      if (workspace === undefined) continue;
-      // A lock acquired after the apply was confirmed parks the run
-      // silently (issue #575). Log the block throttled like the other
-      // deferral reasons instead of parking with no signal.
-      if (workspace.locked === true) {
-        const reason = typeof workspace.lockedReason === "string" && workspace.lockedReason !== ""
-          ? workspace.lockedReason
-          : "locked";
-        const key = `scheduled:${run.id}`;
-        if (scheduledBlockReasons.get(key) !== `workspace-locked:${reason}`) {
-          scheduledBlockReasons.set(key, `workspace-locked:${reason}`);
-          await writeLog(run.id, "apply", `[terrence] Apply is waiting: the workspace is locked (${reason}). Unlock the workspace or cancel this run.`);
-        }
-        continue;
-      }
-      if (workspace.executionMode === "local") {
-        // Local-execution workspaces never run on the server (issue #567):
-        // a confirmed row here predates the creation gate. Error it with
-        // an explanation instead of dispatching or leaving it confirmed
-        // forever.
-        const blocked = await db.update(runs).set({
-          status: "errored",
-          statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
-        }).where(and(eq(runs.id, run.id), eq(runs.status, "confirmed"))).returning({ id: runs.id });
-        if (blocked.length > 0) {
-          await writeLog(run.id, "apply", "[terrence ERROR] Remote runs cannot execute on workspaces with local execution mode. This apply predates local-execution enforcement.");
-          queueRunNotification(run.id, "run:errored", "errored");
-          void reportRunVcsStatus(run.id, "errored");
-        }
-        continue;
-      }
-      const gateBlockReason = await applyGateBlockReason(new Date());
-      if (gateBlockReason !== null) {
-        // Log the deferral only when the block reason changes so a closed
-        // maintenance window cannot spam the run log on every poll.
-        const key = `scheduled:${run.id}`;
-        if (scheduledBlockReasons.get(key) !== gateBlockReason) {
-          scheduledBlockReasons.set(key, gateBlockReason);
-          await writeLog(run.id, "apply", `[terrence] Scheduled apply blocked: ${gateBlockReason}`);
-        }
-        continue;
-      }
-      scheduledBlockReasons.delete(`scheduled:${run.id}`);
-      if (workspace.executionMode === "agent") {
-        const pool = workspace.agentPoolId === null
-          ? undefined
-          : await db.query.agentPools.findFirst({ where: eq(agentPools.id, workspace.agentPoolId) });
-        if (
-          pool?.orgId !== workspace.orgId
-          || !(await agentPoolAllowsWorkspace(pool, workspace.id, workspace.projectId))
-        ) {
-          // Persistent pool failures must not spam the run log on every
-          // poll; log once per reason like the gate-block path. The run
-          // stays confirmed and is retried once the pool is reachable.
-          const key = `agent-pool:${run.id}`;
-          if (scheduledBlockReasons.get(key) !== "pool-unreachable") {
-            scheduledBlockReasons.set(key, "pool-unreachable");
-            await writeLog(run.id, "apply", "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.");
-          }
-          continue;
-        }
-        scheduledBlockReasons.delete(`agent-pool:${run.id}`);
-        // Claim (confirmed -> apply_queued) and job insert are ONE
-        // transaction (kanban t_c5f59537): a crash cannot leave the run
-        // apply_queued without a job. Concurrent polls see zero rows. Any
-        // failure throws and rolls back the whole transaction; the outer
-        // catch keeps the run confirmed for the next poll.
-        const job = await db.transaction(async (transaction): Promise<AgentJob | undefined> => {
-          const tx = transaction as unknown as typeof db;
-          return insertAgentApplyJobTx(tx, run.id, pool.id, run.statusTimestamps);
-        });
-        if (job === undefined) continue;
-        applied.push(run.id);
-        continue;
-      }
-      // Atomic claim: only the poll that flips confirmed -> apply_queued
-      // may dispatch; concurrent polls see zero rows and skip.
-      const localReservation = reserveLocalRunExecution(run.id);
-      if (!localReservation) continue;
-      const claimed = await db.update(runs).set({
-        status: "apply_queued",
-        statusTimestamps: {
-          ...(run.statusTimestamps ?? {}),
-          "apply-queued-at": new Date().toISOString(),
-        },
-      }).where(and(eq(runs.id, run.id), eq(runs.status, "confirmed"))).returning({ id: runs.id });
-      if (claimed.length === 0) {
-        releaseLocalRunReservation(run.id);
-        continue;
-      }
-      // Fire-and-forget like the manual-apply dispatch: the poll cycle must
-      // keep moving; executeApply owns its own lifecycle and errors are
-      // logged, with the claim already taken so nothing re-dispatches.
-      void executeApply(run.id).catch((error: unknown): void => {
-        log.error("Scheduled executeApply failed", { runId: run.id, error });
-      });
-      applied.push(run.id);
-    } catch (error: unknown) {
-      if (localExecutionLifecycle.hasReservation(run.id)) releaseLocalRunReservation(run.id);
-      log.error("Scheduled apply failed", { runId: run.id, error });
-      // Keep the run confirmed so a transient failure retries next poll.
-      try {
-        await db.update(runs).set({ status: "confirmed" }).where(and(eq(runs.id, run.id), eq(runs.status, "apply_queued")));
-      } catch (restoreError: unknown) {
-        logBestEffortFailure("Failed to restore scheduled run after apply dispatch failure", { runId: run.id }, restoreError);
-      }
-    }
+    if (await processDueScheduledRun(run, workspacesById)) applied.push(run.id);
   }
   return applied;
 }
@@ -5917,12 +5963,7 @@ export function clearScheduledBlockReasonsForTests(): void {
 }
 
 export function pruneScheduledBlockReasonsForTests(dueIds: ReadonlySet<string>): void {
-  for (const key of scheduledBlockReasons.keys()) {
-    const runId = key.startsWith("scheduled:") || key.startsWith("agent-pool:") || key.startsWith("workspace-lock:")
-      ? key.slice(key.indexOf(":") + 1)
-      : "";
-    if (runId !== "" && !dueIds.has(runId)) scheduledBlockReasons.delete(key);
-  }
+  pruneScheduledBlockReasons(dueIds);
 }
 
 /**
