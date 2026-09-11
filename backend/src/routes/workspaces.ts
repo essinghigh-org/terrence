@@ -1738,6 +1738,457 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     return { data: { id: workspaceId, type: "workspaces", relationships: { "ssh-key": { data: sshKeyId !== null ? { id: sshKeyId, type: "ssh-keys" } : null } } } };
   });
 
+type WorkspaceUpdateFailure = Readonly<{
+  errors: readonly Readonly<{ status: string; title: string; detail: string }>[];
+}>;
+
+function failWorkspaceUpdate(set: SetObj, status: 422 | 409, detail: string): WorkspaceUpdateFailure {
+  (set as { status: number }).status = status;
+  return { errors: [{ status: String(status), title: status === 422 ? "Unprocessable Entity" : "Conflict", detail }] };
+}
+
+type ParsedWorkspaceUpdate = Readonly<{
+  attributes: Record<string, unknown>;
+  rels: Record<string, unknown>;
+  tagBindingsData: unknown;
+  tagBindings: { key: string; value: string }[] | undefined;
+  rawAgentPoolId: unknown;
+  executionMode: unknown;
+  name: string | undefined;
+}>;
+
+function updateBodySections(body: unknown): Readonly<{
+  attributes: Record<string, unknown>;
+  rels: Record<string, unknown>;
+}> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+  return { attributes, rels };
+}
+
+function parseWorkspaceUpdateBody(body: unknown): ParsedWorkspaceUpdate {
+  const { attributes, rels } = updateBodySections(body);
+  const rawTagBindings = rels["tag-bindings"] as Record<string, unknown> | undefined;
+  const tagBindingsData = rawTagBindings !== undefined ? rawTagBindings["data"] : undefined;
+  const tagBindings = tagBindingsData === undefined ? undefined : parseTagBindings(tagBindingsData);
+  const rawAgentPoolId = attributes["agent-pool-id"] === "" ? null : attributes["agent-pool-id"];
+  let executionMode = attributes["execution-mode"];
+  if (executionMode === undefined && typeof attributes["operations"] === "boolean") {
+    executionMode = attributes["operations"] ? "remote" : "local";
+  }
+  const name = typeof attributes["name"] === "string" ? attributes["name"] : undefined;
+  return { attributes, rels, tagBindingsData, tagBindings, rawAgentPoolId, executionMode, name };
+}
+
+type WorkspaceUpdateScalars = Readonly<{
+  attributes: Readonly<Record<string, unknown>>;
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>;
+  tagBindingsData: unknown;
+  tagBindings: readonly { key: string; value: string }[] | undefined;
+  rawAgentPoolId: unknown;
+  executionMode: unknown;
+  name: string | undefined;
+}>;
+
+function validateRemoteStateFlags(
+  attributes: Readonly<Record<string, unknown>>,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+): string | null {
+  const newGlobal = typeof attributes["global-remote-state"] === "boolean" ? attributes["global-remote-state"] : workspace.globalRemoteState;
+  const newProject = typeof attributes["project-remote-state"] === "boolean" ? attributes["project-remote-state"] : workspace.projectRemoteState;
+  if (newGlobal === true && newProject === true) return "global-remote-state and project-remote-state cannot both be true";
+  return null;
+}
+
+function validateWorkspaceNameField(name: string | undefined): string | null {
+  if (name !== undefined && !/^[A-Za-z0-9_-]+$/.test(name)) return "Invalid workspace name";
+  return null;
+}
+
+function validateDescriptionField(attributes: Readonly<Record<string, unknown>>): string | null {
+  const description = attributes["description"];
+  if (description !== undefined && description !== null && typeof description !== "string") return "description must be a string or null";
+  return null;
+}
+
+function validateSourceFields(attributes: Readonly<Record<string, unknown>>): string | null {
+  const sourceName = attributes["source-name"];
+  const sourceUrl = attributes["source-url"];
+  if ((sourceName !== undefined && sourceName !== null && typeof sourceName !== "string") || (sourceUrl !== undefined && sourceUrl !== null && typeof sourceUrl !== "string")) {
+    return "source-name and source-url must be strings or null";
+  }
+  return null;
+}
+
+function validateVersionExecutionAndDestroy(
+  attributes: Readonly<Record<string, unknown>>,
+  rawAgentPoolId: unknown,
+  executionMode: unknown,
+): string | null {
+  const terraformVersion = typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : undefined;
+  if (terraformVersion !== undefined && !validateVersion(terraformVersion)) return "Invalid terraformVersion format";
+  if (executionMode !== undefined && !isExecutionMode(executionMode)) return "execution-mode must be remote, local, or agent";
+  const iacBinary = attributes["iac-binary"];
+  if (iacBinary !== undefined && iacBinary !== null && typeof iacBinary === "string" && !["tofu", "terraform"].includes(iacBinary)) {
+    return "iac-binary must be tofu or terraform";
+  }
+  if (rawAgentPoolId !== undefined && rawAgentPoolId !== null && typeof rawAgentPoolId !== "string") {
+    return "agent-pool-id must be a string or null";
+  }
+  const rawAutoDestroyActivityDuration = attributes["auto-destroy-activity-duration"];
+  if (rawAutoDestroyActivityDuration !== undefined && rawAutoDestroyActivityDuration !== null && !isAutoDestroyDuration(rawAutoDestroyActivityDuration)) {
+    return "auto-destroy-activity-duration must be null or a duration such as 14d or 24h";
+  }
+  const rawInheritsProjectAutoDestroy = attributes["inherits-project-auto-destroy"];
+  if (rawInheritsProjectAutoDestroy !== undefined && typeof rawInheritsProjectAutoDestroy !== "boolean") {
+    return "inherits-project-auto-destroy must be a boolean";
+  }
+  if (rawAutoDestroyActivityDuration !== undefined && rawInheritsProjectAutoDestroy === true) {
+    return "An auto-destroy override cannot also inherit from the project";
+  }
+  return null;
+}
+
+function validateOwnershipFields(attributes: Readonly<Record<string, unknown>>): string | null {
+  const rawOwnedByType = attributes["owned-by-type"];
+  if (rawOwnedByType !== undefined && rawOwnedByType !== null && !["team", "user", "service"].includes(rawOwnedByType as string)) {
+    return "owned-by-type must be team, user, or service";
+  }
+  const rawOwnedById = attributes["owned-by-id"];
+  if (rawOwnedById !== undefined && rawOwnedById !== null && typeof rawOwnedById !== "string") {
+    return "owned-by-id must be a string or null";
+  }
+  const rawContactEmail = attributes["contact-email"];
+  if (rawContactEmail !== undefined && rawContactEmail !== null && (typeof rawContactEmail !== "string" || rawContactEmail.length > 254)) {
+    return "contact-email must be a string under 255 characters";
+  }
+  return null;
+}
+
+function validateWorkspaceUpdateScalars(args: WorkspaceUpdateScalars): string | null {
+  const flagsError = validateRemoteStateFlags(args.attributes, args.workspace);
+  if (flagsError !== null) return flagsError;
+  if (args.tagBindingsData !== undefined && args.tagBindings === undefined) return "Invalid tag bindings";
+  const nameError = validateWorkspaceNameField(args.name);
+  if (nameError !== null) return nameError;
+  const descriptionError = validateDescriptionField(args.attributes);
+  if (descriptionError !== null) return descriptionError;
+  const sourceError = validateSourceFields(args.attributes);
+  if (sourceError !== null) return sourceError;
+  const versionError = validateVersionExecutionAndDestroy(args.attributes, args.rawAgentPoolId, args.executionMode);
+  if (versionError !== null) return versionError;
+  return validateOwnershipFields(args.attributes);
+}
+
+async function resolveUpdateWorkingDirectory(
+  attributes: Readonly<Record<string, unknown>>,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+): Promise<{ dir: string | null } | { error: string }> {
+  const workingDirectory = attributes["working-directory"];
+  let dir = workspace.workingDirectory;
+  if (workingDirectory !== undefined && typeof workingDirectory === "string") {
+    try {
+      dir = normalizeWorkingDirectory(workingDirectory);
+    } catch (error: unknown) {
+      return { error: error instanceof Error ? error.message : "Invalid working directory" };
+    }
+  }
+  if (workingDirectory === undefined || dir === null) return { dir };
+  const latestCv = await db.query.configurationVersions.findFirst({
+    where: and(
+      eq(configurationVersions.workspaceId, workspace.id),
+      eq(configurationVersions.status, "uploaded"),
+    ),
+    orderBy: [desc(configurationVersions.createdAt)],
+    columns: { archivePath: true },
+  });
+  const cvArchivePath = latestCv?.archivePath;
+  if (typeof cvArchivePath !== "string" || cvArchivePath === "" || !(await Bun.file(cvArchivePath).exists())) return { dir };
+  const members = await listArchiveMembers(cvArchivePath);
+  if (members === null) {
+    return { error: "working-directory could not be validated: the latest configuration archive cannot be listed" };
+  }
+  // Issue #628: fail at save when an explicitly set directory matches
+  // nothing in the latest configuration instead of failing mid-plan.
+  // Skipped when no readable configuration exists yet; drift after save
+  // still surfaces the worker error naming the directory.
+  if (!archiveContainsWorkingDir(members, dir)) {
+    const tops = summarizeTopLevelEntries(members);
+    return { error: "working-directory " + JSON.stringify(dir) + " matches no directory in the latest configuration version" + (tops.length === 0 ? "." : " (top-level entries: " + tops.join(", ") + ")") };
+  }
+  return { dir };
+}
+
+async function checkDuplicateWorkspaceName(
+  name: string | undefined,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+): Promise<string | null> {
+  if (name === undefined || name === workspace.name) return null;
+  const duplicate = await findWorkspaceByName(workspace.orgId, name);
+  if (duplicate !== undefined && duplicate.id !== workspace.id) return "Workspace name already exists in this organization";
+  return null;
+}
+
+async function resolveCurrentProject(orgId: string, projectId: string): Promise<{ project: typeof projects.$inferSelect } | { error: string }> {
+  const current = await db.query.projects.findFirst({
+    where: and(eq(projects.id, projectId), eq(projects.orgId, orgId)),
+  });
+  if (current === undefined) return { error: "Project must belong to the workspace organization" };
+  return { project: current };
+}
+
+function updateProjectIdFromRel(projectRel: unknown): { id: string } | { error: string } {
+  const relationship = typeof projectRel === "object" && projectRel !== null ? projectRel as Record<string, unknown> : {};
+  const projectData = typeof relationship["data"] === "object" && relationship["data"] !== null ? relationship["data"] as Record<string, unknown> : {};
+  if (projectData["type"] !== undefined && projectData["type"] !== "projects") {
+    return { error: "Invalid project relationship" };
+  }
+  return { id: typeof projectData["id"] === "string" ? projectData["id"] : "" };
+}
+
+async function resolveUpdateProject(
+  rels: Readonly<Record<string, unknown>>,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+): Promise<{ project: typeof projects.$inferSelect } | { error: string }> {
+  const projectRel = rels["project"];
+  if (projectRel === undefined && workspace.projectId !== null) {
+    return resolveCurrentProject(workspace.orgId, workspace.projectId);
+  }
+  if (
+    projectRel === undefined
+    || (typeof projectRel === "object" && projectRel !== null && (projectRel as Record<string, unknown>)["data"] === null)
+  ) {
+    return { project: await ensureDefaultProject(workspace.orgId) };
+  }
+  const idOrError = updateProjectIdFromRel(projectRel);
+  if ("error" in idOrError) return idOrError;
+  const found = await db.query.projects.findFirst({
+    where: and(eq(projects.id, idOrError.id), eq(projects.orgId, workspace.orgId)),
+  });
+  if (found === undefined) return { error: "Project must belong to the workspace organization" };
+  return { project: found };
+}
+
+type ResolvedEffectiveExecution = Readonly<{
+  mode: string;
+  poolId: string | null;
+}>;
+
+function resolveEffectiveExecution(args: Readonly<{
+  executionMode: unknown;
+  rawAgentPoolId: string | null | undefined;
+  overwritesExecutionMode: boolean;
+  overwritesAgentPool: boolean;
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>;
+  project: typeof projects.$inferSelect;
+}>): ResolvedEffectiveExecution | { error: string } {
+  const mode = args.overwritesExecutionMode
+    ? typeof args.executionMode === "string" ? args.executionMode : args.workspace.executionMode
+    : args.project.defaultExecutionMode ?? "remote";
+  const poolId = mode === "agent"
+    ? args.overwritesAgentPool
+      ? args.rawAgentPoolId !== undefined ? args.rawAgentPoolId : args.workspace.agentPoolId
+      : args.project.defaultAgentPoolId
+    : null;
+  if (mode === "agent" && poolId === null) return { error: "An agent pool is required for agent execution mode" };
+  if (mode !== "agent" && typeof args.rawAgentPoolId === "string") return { error: "agent-pool-id is only valid for agent execution mode" };
+  return { mode, poolId };
+}
+
+async function checkAgentPoolAccess(
+  poolId: string | null,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  projectId: string,
+): Promise<string | null> {
+  if (poolId === null) return null;
+  const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, poolId) });
+  if (pool?.orgId !== workspace.orgId) return "Agent pool must belong to the workspace organization";
+  if (!(await agentPoolAllowsWorkspace(pool, workspace.id, projectId))) return "Agent pool is not allowed for this workspace or project";
+  return null;
+}
+
+type ResolvedAutoDestroy = Readonly<{
+  inherits: boolean;
+  duration: string | null | undefined;
+}>;
+
+function resolveAutoDestroyFields(
+  rawDuration: string | null | undefined,
+  rawInherits: unknown,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  project: typeof projects.$inferSelect,
+): ResolvedAutoDestroy {
+  const inherits = rawDuration !== undefined
+    ? false
+    : rawInherits === true
+      ? true
+      : rawInherits === false
+        ? false
+        : workspace.inheritsProjectAutoDestroy;
+  const duration = rawDuration !== undefined
+    ? rawDuration
+    : inherits
+      ? project.autoDestroyActivityDuration
+      : workspace.autoDestroyActivityDuration;
+  return { inherits, duration };
+}
+
+async function checkLockedInheritedTag(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  newProjectId: string,
+  tagBindings: readonly { key: string; value: string }[] | undefined,
+): Promise<string | null> {
+  const overrideKeys = tagBindings !== undefined
+    ? tagBindings.map((binding): string => binding.key)
+    : newProjectId !== workspace.projectId
+      ? (await db.query.workspaceTags.findMany({
+          where: eq(workspaceTags.workspaceId, workspace.id),
+          columns: { key: true },
+        })).map((tag: Readonly<{ key: string }>): string => tag.key)
+      : [];
+  const lockedTagKey = await findLockedInheritedTagKey(workspace.orgId, newProjectId, overrideKeys);
+  if (lockedTagKey !== undefined) return `Tag key "${lockedTagKey}" cannot override its inherited project tag`;
+  return null;
+}
+
+function validateTriggerFields(attributes: Readonly<Record<string, unknown>>): string | null {
+  // Issue #628: fail at save on trigger entries that can never match
+  // (non-strings, blanks) instead of silently matching nothing at webhook
+  // time. Well-typed patterns stay accepted: preview them below.
+  if (Array.isArray(attributes["trigger-prefixes"])) {
+    const badPrefixes = invalidTriggerPrefixIndexes(attributes["trigger-prefixes"] as unknown[]);
+    if (badPrefixes.length > 0) {
+      return "trigger-prefixes entries must be non-blank strings (indexes: " + badPrefixes.join(", ") + ")";
+    }
+  }
+  if (Array.isArray(attributes["trigger-patterns"])) {
+    const badPatterns = invalidTriggerPatternIndexes(attributes["trigger-patterns"] as unknown[]);
+    if (badPatterns.length > 0) {
+      return "trigger-patterns entries must be non-blank strings (indexes: " + badPatterns.join(", ") + ")";
+    }
+  }
+  return null;
+}
+
+function booleanUpdateField(value: unknown, fallback: boolean | null): boolean | null {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function nullableStringUpdateField(value: unknown, fallback: string | null): string | null {
+  if (typeof value === "string") return value;
+  if (value === null) return null;
+  return fallback;
+}
+
+function stringArrayUpdateField(value: unknown, fallback: readonly string[] | null): string[] | null {
+  if (Array.isArray(value)) return value as string[];
+  if (fallback === null) return null;
+  return [...fallback];
+}
+
+type WorkspaceUpdateRowArgs = Readonly<{
+  attributes: Readonly<Record<string, unknown>>;
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>;
+  name: string | undefined;
+  executionMode: string;
+  agentPoolId: string | null;
+  newProjectId: string;
+  autoDestroy: ResolvedAutoDestroy;
+  workspaceSettingOverwrites: Record<string, boolean>;
+  normalizedWorkingDirectory: string | null;
+}>;
+
+function buildWorkspaceUpdateRow(args: WorkspaceUpdateRowArgs): Partial<typeof workspaces.$inferInsert> {
+  const { attributes, workspace } = args;
+  return {
+    name: args.name ?? workspace.name,
+    description: nullableStringUpdateField(attributes["description"], workspace.description),
+    projectId: args.newProjectId,
+    autoApply: booleanUpdateField(attributes["auto-apply"], workspace.autoApply),
+    autoApplyRunTrigger: booleanUpdateField(attributes["auto-apply-run-trigger"], workspace.autoApplyRunTrigger),
+    fileTriggersEnabled: booleanUpdateField(attributes["file-triggers-enabled"], workspace.fileTriggersEnabled),
+    triggerPrefixes: stringArrayUpdateField(attributes["trigger-prefixes"], workspace.triggerPrefixes),
+    triggerPatterns: stringArrayUpdateField(attributes["trigger-patterns"], workspace.triggerPatterns),
+    vcsRepo: workspace.vcsRepo,
+    queueAllRuns: booleanUpdateField(attributes["queue-all-runs"], workspace.queueAllRuns),
+    speculativeEnabled: booleanUpdateField(attributes["speculative-enabled"], workspace.speculativeEnabled),
+    allowDestroyPlan: booleanUpdateField(attributes["allow-destroy-plan"], workspace.allowDestroyPlan),
+    globalRemoteState: booleanUpdateField(attributes["global-remote-state"], workspace.globalRemoteState),
+    projectRemoteState: booleanUpdateField(attributes["project-remote-state"], workspace.projectRemoteState),
+    executionMode: args.executionMode,
+    agentPoolId: args.agentPoolId,
+    assessmentsEnabled: booleanUpdateField(attributes["assessments-enabled"], workspace.assessmentsEnabled),
+    autoDestroyAt: typeof attributes["auto-destroy-at"] === "string" ? attributes["auto-destroy-at"] : workspace.autoDestroyAt,
+    autoDestroyActivityDuration: args.autoDestroy.duration,
+    inheritsProjectAutoDestroy: args.autoDestroy.inherits,
+    settingOverwrites: args.workspaceSettingOverwrites,
+    terraformVersion: typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : workspace.terraformVersion,
+    workingDirectory: args.normalizedWorkingDirectory,
+    sourceName: nullableStringUpdateField(attributes["source-name"], workspace.sourceName),
+    sourceUrl: nullableStringUpdateField(attributes["source-url"], workspace.sourceUrl),
+    source: typeof attributes["source"] === "string" ? attributes["source"] : workspace.source,
+    iacBinary: nullableStringUpdateField(attributes["iac-binary"], workspace.iacBinary),
+    ownedByType: nullableStringUpdateField(attributes["owned-by-type"], workspace.ownedByType),
+    ownedById: nullableStringUpdateField(attributes["owned-by-id"], workspace.ownedById),
+    contactEmail: nullableStringUpdateField(attributes["contact-email"], workspace.contactEmail),
+  };
+}
+
+type WorkspaceUpdateTxArgs = Readonly<{
+  row: Partial<typeof workspaces.$inferInsert>;
+  vcsRepo: unknown;
+  orgId: string;
+  vcsRepoFallback: DeepReadonly<WorkspaceVcsRepo> | null | undefined;
+  tagBindings: readonly { key: string; value: string }[] | undefined;
+  workspaceId: string;
+}>;
+
+async function applyWorkspaceUpdateTx(tx: unknown, args: WorkspaceUpdateTxArgs): Promise<string | null> {
+  const database = tx as typeof db;
+  if (args.vcsRepo !== undefined) {
+    const normalized = await normalizeVcsRepo(args.vcsRepo, args.orgId, args.vcsRepoFallback ?? undefined, database);
+    if ("error" in normalized) return normalized.error;
+    args.row.vcsRepo = normalized.value;
+  }
+  await database.update(workspaces).set(args.row).where(eq(workspaces.id, args.workspaceId));
+  if (args.tagBindings !== undefined) {
+    await database.delete(workspaceTags).where(eq(workspaceTags.workspaceId, args.workspaceId));
+    if (args.tagBindings.length > 0) {
+      await database.insert(workspaceTags).values(args.tagBindings.map((b: Readonly<{ key: string; value: string }>): { id: string; workspaceId: string; key: string; value: string } => ({ id: crypto.randomUUID(), workspaceId: args.workspaceId, ...b })));
+    }
+  }
+  return null;
+}
+
+async function persistWorkspaceUpdate(
+  args: WorkspaceUpdateTxArgs,
+): Promise<{ saved: typeof workspaces.$inferSelect } | { error: string }> {
+  const vcsError = await db.transaction((tx): Promise<string | null> => applyWorkspaceUpdateTx(tx, args));
+  if (vcsError !== null) return { error: vcsError };
+  const saved = await db.query.workspaces.findFirst({ where: eq(workspaces.id, args.workspaceId) });
+  if (saved === undefined) throw new Error("Unable to update workspace");
+  scheduleExplorerInventory(saved.id);
+  return { saved };
+}
+
+function applyExecutionOverwrites(
+  overwrites: Record<string, boolean>,
+  executionMode: unknown,
+  rawAgentPoolId: unknown,
+  suppliedOverwrites: Record<string, unknown> | undefined,
+): void {
+  if (executionMode !== undefined) overwrites["execution-mode"] = true;
+  if (rawAgentPoolId !== undefined && suppliedOverwrites?.["agent-pool"] === undefined) overwrites["agent-pool"] = true;
+}
+
+function workspaceOrgOption(orgName: string | null | undefined): Readonly<{ orgName: string | null }> {
+  // exactOptionalPropertyTypes: the resource options omit orgName when it is
+  // undefined but reject an explicit undefined, so normalize it here.
+  return { orgName: orgName ?? null };
+}
+
 async function updateWorkspaceResponse(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   defaultIacBinary: string | null | undefined,
@@ -1750,270 +2201,95 @@ async function updateWorkspaceResponse(
   set: SetObj,
   orgName?: string | null,
 ): Promise<unknown> {
-  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const data = payload["data"] as Record<string, unknown> | undefined;
-  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-  const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-  const rawTagBindings = rels["tag-bindings"] as Record<string, unknown> | undefined;
-  const tagBindingsData = rawTagBindings !== undefined ? rawTagBindings["data"] : undefined;
-  const tagBindings = tagBindingsData === undefined ? undefined : parseTagBindings(tagBindingsData);
-  const name = typeof attributes["name"] === "string" ? attributes["name"] : undefined;
-  const description = attributes["description"];
-  const autoApply = typeof attributes["auto-apply"] === "boolean" ? attributes["auto-apply"] : undefined;
-  const terraformVersion = typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : undefined;
-  const workingDirectory = attributes["working-directory"];
-  const sourceName = attributes["source-name"];
-  const sourceUrl = attributes["source-url"];
-    const source = typeof attributes["source"] === "string" ? attributes["source"] : undefined;
-  const iacBinary = attributes["iac-binary"];
-  let executionMode = attributes["execution-mode"];
-  if (executionMode === undefined && typeof attributes["operations"] === "boolean") {
-    executionMode = attributes["operations"] ? "remote" : "local";
-  }
-  const rawAgentPoolId = attributes["agent-pool-id"] === "" ? null : attributes["agent-pool-id"];
-  const rawAutoDestroyActivityDuration = attributes["auto-destroy-activity-duration"];
-  const rawInheritsProjectAutoDestroy = attributes["inherits-project-auto-destroy"];
+  const parsed = parseWorkspaceUpdateBody(body);
+  const attributes = parsed.attributes;
+  const scalarsError = validateWorkspaceUpdateScalars({
+    attributes,
+    workspace,
+    tagBindingsData: parsed.tagBindingsData,
+    tagBindings: parsed.tagBindings,
+    rawAgentPoolId: parsed.rawAgentPoolId,
+    executionMode: parsed.executionMode,
+    name: parsed.name,
+  });
+  if (scalarsError !== null) return failWorkspaceUpdate(set, 422, scalarsError);
+
+  const workingDir = await resolveUpdateWorkingDirectory(attributes, workspace);
+  if ("error" in workingDir) return failWorkspaceUpdate(set, 422, workingDir.error);
+  const normalizedWorkingDirectory = workingDir.dir;
+  const duplicateError = await checkDuplicateWorkspaceName(parsed.name, workspace);
+  if (duplicateError !== null) return failWorkspaceUpdate(set, 409, duplicateError);
+  const project = await resolveUpdateProject(parsed.rels, workspace);
+  if ("error" in project) return failWorkspaceUpdate(set, 422, project.error);
+  const newProjectId = project.project.id;
   const rawSettingOverwrites = attributes["setting-overwrites"];
-  const rawVcsRepo = attributes["vcs-repo"];
-
-  const newGlobal = typeof attributes["global-remote-state"] === "boolean" ? attributes["global-remote-state"] : workspace.globalRemoteState;
-  const newProject = typeof attributes["project-remote-state"] === "boolean" ? attributes["project-remote-state"] : workspace.projectRemoteState;
-  if (newGlobal === true && newProject === true) {
-    (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "global-remote-state and project-remote-state cannot both be true" }] };
-  }
-
-  if (tagBindingsData !== undefined && tagBindings === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid tag bindings" }] }; }
-  if (name !== undefined && !/^[A-Za-z0-9_-]+$/.test(name)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid workspace name" }] }; }
-  if (description !== undefined && description !== null && typeof description !== "string") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "description must be a string or null" }] }; }
-  if ((sourceName !== undefined && sourceName !== null && typeof sourceName !== "string") || (sourceUrl !== undefined && sourceUrl !== null && typeof sourceUrl !== "string")) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "source-name and source-url must be strings or null" }] }; }
-  if (terraformVersion !== undefined && !validateVersion(terraformVersion)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid terraformVersion format" }] }; }
-  if (executionMode !== undefined && !isExecutionMode(executionMode)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "execution-mode must be remote, local, or agent" }] }; }
-  if (iacBinary !== undefined && iacBinary !== null && typeof iacBinary === "string" && !["tofu", "terraform"].includes(iacBinary)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binary must be tofu or terraform" }] }; }
-  if (rawAgentPoolId !== undefined && rawAgentPoolId !== null && typeof rawAgentPoolId !== "string") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "agent-pool-id must be a string or null" }] }; }
-  if (rawAutoDestroyActivityDuration !== undefined && rawAutoDestroyActivityDuration !== null && !isAutoDestroyDuration(rawAutoDestroyActivityDuration)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "auto-destroy-activity-duration must be null or a duration such as 14d or 24h" }] }; }
-  if (rawInheritsProjectAutoDestroy !== undefined && typeof rawInheritsProjectAutoDestroy !== "boolean") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "inherits-project-auto-destroy must be a boolean" }] }; }
-  if (rawAutoDestroyActivityDuration !== undefined && rawInheritsProjectAutoDestroy === true) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "An auto-destroy override cannot also inherit from the project" }] }; }
-  const rawOwnedByType = attributes["owned-by-type"];
-  if (rawOwnedByType !== undefined && rawOwnedByType !== null && !["team", "user", "service"].includes(rawOwnedByType as string)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "owned-by-type must be team, user, or service" }] }; }
-  const rawOwnedById = attributes["owned-by-id"];
-  if (rawOwnedById !== undefined && rawOwnedById !== null && typeof rawOwnedById !== "string") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "owned-by-id must be a string or null" }] }; }
-  const rawContactEmail = attributes["contact-email"];
-  if (rawContactEmail !== undefined && rawContactEmail !== null && (typeof rawContactEmail !== "string" || rawContactEmail.length > 254)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "contact-email must be a string under 255 characters" }] }; }
-
-  let normalizedWorkingDirectory = workspace.workingDirectory;
-  if (workingDirectory !== undefined && typeof workingDirectory === "string") {
-    try { normalizedWorkingDirectory = normalizeWorkingDirectory(workingDirectory); } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : "Invalid working directory";
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: msg }] };
-    }
-  }
-  // Issue #628: fail at save when an explicitly set directory matches
-  // nothing in the latest configuration instead of failing mid-plan.
-  // Skipped when no readable configuration exists yet; drift after save
-  // still surfaces the worker error naming the directory.
-  if (workingDirectory !== undefined && normalizedWorkingDirectory !== null) {
-    const latestCv = await db.query.configurationVersions.findFirst({
-      where: and(
-        eq(configurationVersions.workspaceId, workspace.id),
-        eq(configurationVersions.status, "uploaded"),
-      ),
-      orderBy: [desc(configurationVersions.createdAt)],
-      columns: { archivePath: true },
-    });
-    const cvArchivePath = latestCv?.archivePath;
-    if (typeof cvArchivePath === "string" && cvArchivePath !== "" && await Bun.file(cvArchivePath).exists()) {
-      const members = await listArchiveMembers(cvArchivePath);
-      if (members === null) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "working-directory could not be validated: the latest configuration archive cannot be listed" }] };
-      }
-      if (!archiveContainsWorkingDir(members, normalizedWorkingDirectory)) {
-        const tops = summarizeTopLevelEntries(members);
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "working-directory " + JSON.stringify(normalizedWorkingDirectory) + " matches no directory in the latest configuration version" + (tops.length === 0 ? "." : " (top-level entries: " + tops.join(", ") + ")") }] };
-      }
-    }
-  }
-
-  if (name !== undefined && name !== workspace.name) {
-    const duplicate = await findWorkspaceByName(workspace.orgId, name);
-    if (duplicate !== undefined && duplicate.id !== workspace.id) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace name already exists in this organization" }] }; }
-  }
-
-  const projectRel = rels["project"];
-  let project: typeof projects.$inferSelect | undefined;
-  if (projectRel === undefined && workspace.projectId !== null) {
-    project = await db.query.projects.findFirst({
-      where: and(eq(projects.id, workspace.projectId), eq(projects.orgId, workspace.orgId)),
-    });
-  } else if (
-    projectRel === undefined
-    || (typeof projectRel === "object" && projectRel !== null && (projectRel as Record<string, unknown>)["data"] === null)
-  ) {
-    project = await ensureDefaultProject(workspace.orgId);
-  } else {
-    const relationship = typeof projectRel === "object" && projectRel !== null ? projectRel as Record<string, unknown> : {};
-    const projectData = typeof relationship["data"] === "object" && relationship["data"] !== null ? relationship["data"] as Record<string, unknown> : {};
-    const projectId = typeof projectData["id"] === "string" ? projectData["id"] : "";
-    if (projectData["type"] !== undefined && projectData["type"] !== "projects") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid project relationship" }] };
-    }
-    project = await db.query.projects.findFirst({
-      where: and(eq(projects.id, projectId), eq(projects.orgId, workspace.orgId)),
-    });
-  }
-  if (project === undefined) {
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Project must belong to the workspace organization" }] };
-  }
-  const newProjectId = project.id;
   const parsedOverwrites = parseSettingOverwrites(rawSettingOverwrites, workspace.settingOverwrites);
-  if ("error" in parsedOverwrites) {
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: parsedOverwrites.error }] };
-  }
+  if ("error" in parsedOverwrites) return failWorkspaceUpdate(set, 422, parsedOverwrites.error);
   const suppliedOverwrites = rawSettingOverwrites as Record<string, unknown> | undefined;
   const workspaceSettingOverwrites: Record<string, boolean> = {
     "agent-pool": false,
     ...parsedOverwrites.value,
   };
-  if (executionMode !== undefined) {
-    workspaceSettingOverwrites["execution-mode"] = true;
-  }
-  if (rawAgentPoolId !== undefined && suppliedOverwrites?.["agent-pool"] === undefined) {
-    workspaceSettingOverwrites["agent-pool"] = true;
-  }
-  const effectiveExecutionMode = workspaceSettingOverwrites["execution-mode"] === true
-    ? typeof executionMode === "string" ? executionMode : workspace.executionMode
-    : project.defaultExecutionMode ?? "remote";
-  const effectiveAgentPoolId = effectiveExecutionMode === "agent"
-    ? workspaceSettingOverwrites["agent-pool"] === true
-      ? rawAgentPoolId !== undefined ? rawAgentPoolId : workspace.agentPoolId
-      : project.defaultAgentPoolId
-    : null;
-  if (effectiveExecutionMode === "agent" && effectiveAgentPoolId === null) {
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "An agent pool is required for agent execution mode" }] };
-  }
-  if (effectiveExecutionMode !== "agent" && typeof rawAgentPoolId === "string") {
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "agent-pool-id is only valid for agent execution mode" }] };
-  }
-  if (effectiveAgentPoolId !== null) {
-    const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, effectiveAgentPoolId) });
-    if (pool?.orgId !== workspace.orgId) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent pool must belong to the workspace organization" }] };
-    }
-    if (!(await agentPoolAllowsWorkspace(pool, workspace.id, newProjectId))) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent pool is not allowed for this workspace or project" }] };
-    }
-  }
-  const inheritsProjectAutoDestroy = rawAutoDestroyActivityDuration !== undefined
-    ? false
-    : rawInheritsProjectAutoDestroy === true
-      ? true
-      : rawInheritsProjectAutoDestroy === false
-        ? false
-        : workspace.inheritsProjectAutoDestroy;
-  const effectiveAutoDestroyActivityDuration = rawAutoDestroyActivityDuration !== undefined
-    ? rawAutoDestroyActivityDuration
-    : inheritsProjectAutoDestroy
-      ? project.autoDestroyActivityDuration
-      : workspace.autoDestroyActivityDuration;
-  const overrideKeys = tagBindings !== undefined
-    ? tagBindings.map((binding): string => binding.key)
-    : newProjectId !== workspace.projectId
-      ? (await db.query.workspaceTags.findMany({
-          where: eq(workspaceTags.workspaceId, workspace.id),
-          columns: { key: true },
-        })).map((tag: Readonly<{ key: string }>): string => tag.key)
-      : [];
-  const lockedTagKey = await findLockedInheritedTagKey(workspace.orgId, newProjectId, overrideKeys);
-  if (lockedTagKey !== undefined) {
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Tag key "${lockedTagKey}" cannot override its inherited project tag` }] };
-  }
+  applyExecutionOverwrites(workspaceSettingOverwrites, parsed.executionMode, parsed.rawAgentPoolId, suppliedOverwrites);
+  // Boundary narrowing: validateWorkspaceUpdateScalars already rejected a
+  // non-string agent-pool-id and a malformed auto-destroy duration, so the
+  // unknown payload values are safe to treat with their validated types here.
+  const agentPoolId = parsed.rawAgentPoolId as string | null | undefined;
+  const autoDestroyDuration = attributes["auto-destroy-activity-duration"] as string | null | undefined;
+  const effective = resolveEffectiveExecution({
+    executionMode: parsed.executionMode,
+    rawAgentPoolId: agentPoolId,
+    overwritesExecutionMode: workspaceSettingOverwrites["execution-mode"] === true,
+    overwritesAgentPool: workspaceSettingOverwrites["agent-pool"] === true,
+    workspace,
+    project: project.project,
+  });
+  if ("error" in effective) return failWorkspaceUpdate(set, 422, effective.error);
+  const effectiveExecutionMode = effective.mode;
+  const effectiveAgentPoolId = effective.poolId;
+  const poolError = await checkAgentPoolAccess(effectiveAgentPoolId, workspace, newProjectId);
+  if (poolError !== null) return failWorkspaceUpdate(set, 422, poolError);
+  const autoDestroy = resolveAutoDestroyFields(
+    autoDestroyDuration,
+    attributes["inherits-project-auto-destroy"],
+    workspace,
+    project.project,
+  );
+  const lockedError = await checkLockedInheritedTag(workspace, newProjectId, parsed.tagBindings);
+  if (lockedError !== null) return failWorkspaceUpdate(set, 422, lockedError);
   // Issue #628: fail at save on trigger entries that can never match
   // (non-strings, blanks) instead of silently matching nothing at webhook
   // time. Well-typed patterns stay accepted: preview them below.
-  if (Array.isArray(attributes["trigger-prefixes"])) {
-    const badPrefixes = invalidTriggerPrefixIndexes(attributes["trigger-prefixes"] as unknown[]);
-    if (badPrefixes.length > 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "trigger-prefixes entries must be non-blank strings (indexes: " + badPrefixes.join(", ") + ")" }] }; }
-  }
-  if (Array.isArray(attributes["trigger-patterns"])) {
-    const badPatterns = invalidTriggerPatternIndexes(attributes["trigger-patterns"] as unknown[]);
-    if (badPatterns.length > 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "trigger-patterns entries must be non-blank strings (indexes: " + badPatterns.join(", ") + ")" }] }; }
-  }
-  const updated: Partial<typeof workspaces.$inferInsert> = {
-    name: name ?? workspace.name,
-    description: typeof description === "string" ? description : (description === null ? null : workspace.description),
-    projectId: newProjectId,
-    autoApply: autoApply ?? workspace.autoApply,
-    autoApplyRunTrigger: typeof attributes["auto-apply-run-trigger"] === "boolean" ? attributes["auto-apply-run-trigger"] : workspace.autoApplyRunTrigger,
-    fileTriggersEnabled: typeof attributes["file-triggers-enabled"] === "boolean" ? attributes["file-triggers-enabled"] : workspace.fileTriggersEnabled,
-    triggerPrefixes: Array.isArray(attributes["trigger-prefixes"]) ? (attributes["trigger-prefixes"] as string[]) : workspace.triggerPrefixes === null ? null : [...workspace.triggerPrefixes],
-    triggerPatterns: Array.isArray(attributes["trigger-patterns"]) ? (attributes["trigger-patterns"] as string[]) : workspace.triggerPatterns === null ? null : [...workspace.triggerPatterns],
-    vcsRepo: workspace.vcsRepo,
-    queueAllRuns: typeof attributes["queue-all-runs"] === "boolean" ? attributes["queue-all-runs"] : workspace.queueAllRuns,
-    speculativeEnabled: typeof attributes["speculative-enabled"] === "boolean" ? attributes["speculative-enabled"] : workspace.speculativeEnabled,
-    allowDestroyPlan: typeof attributes["allow-destroy-plan"] === "boolean" ? attributes["allow-destroy-plan"] : workspace.allowDestroyPlan,
-    globalRemoteState: typeof attributes["global-remote-state"] === "boolean" ? attributes["global-remote-state"] : workspace.globalRemoteState,
-    projectRemoteState: typeof attributes["project-remote-state"] === "boolean" ? attributes["project-remote-state"] : workspace.projectRemoteState,
+  const triggerError = validateTriggerFields(attributes);
+  if (triggerError !== null) return failWorkspaceUpdate(set, 422, triggerError);
+  const updated = buildWorkspaceUpdateRow({
+    attributes,
+    workspace,
+    name: parsed.name,
     executionMode: effectiveExecutionMode,
     agentPoolId: effectiveAgentPoolId,
-    assessmentsEnabled: typeof attributes["assessments-enabled"] === "boolean" ? attributes["assessments-enabled"] : workspace.assessmentsEnabled,
-    autoDestroyAt: typeof attributes["auto-destroy-at"] === "string" ? attributes["auto-destroy-at"] : workspace.autoDestroyAt,
-    autoDestroyActivityDuration: effectiveAutoDestroyActivityDuration,
-    inheritsProjectAutoDestroy,
-    settingOverwrites: workspaceSettingOverwrites,
-    terraformVersion: terraformVersion ?? workspace.terraformVersion,
-    workingDirectory: normalizedWorkingDirectory,
-    sourceName: typeof sourceName === "string" ? sourceName : (sourceName === null ? null : workspace.sourceName),
-    sourceUrl: typeof sourceUrl === "string" ? sourceUrl : (sourceUrl === null ? null : workspace.sourceUrl),
-    source: source ?? workspace.source,
-    iacBinary: typeof iacBinary === "string" ? iacBinary : (iacBinary === null ? null : workspace.iacBinary),
-    ownedByType: typeof attributes["owned-by-type"] === "string"
-      ? attributes["owned-by-type"]
-      : (attributes["owned-by-type"] === null ? null : workspace.ownedByType),
-    ownedById: typeof attributes["owned-by-id"] === "string"
-      ? attributes["owned-by-id"]
-      : (attributes["owned-by-id"] === null ? null : workspace.ownedById),
-    contactEmail: typeof attributes["contact-email"] === "string"
-      ? attributes["contact-email"]
-      : (attributes["contact-email"] === null ? null : workspace.contactEmail),
-  };
-
-  const vcsError = await db.transaction(async (tx): Promise<string | null> => {
-    if (rawVcsRepo !== undefined) {
-      const normalized = await normalizeVcsRepo(rawVcsRepo, workspace.orgId, workspace.vcsRepo ?? undefined, tx);
-      if ("error" in normalized) return normalized.error;
-      updated.vcsRepo = normalized.value;
-    }
-    await tx.update(workspaces).set(updated).where(eq(workspaces.id, workspace.id));
-    if (tagBindings !== undefined) {
-      await tx.delete(workspaceTags).where(eq(workspaceTags.workspaceId, workspace.id));
-      if (tagBindings.length > 0) {
-        await tx.insert(workspaceTags).values(tagBindings.map((b: Readonly<{ key: string; value: string }>): { id: string; workspaceId: string; key: string; value: string } => ({ id: crypto.randomUUID(), workspaceId: workspace.id, ...b })));
-      }
-    }
-    return null;
+    newProjectId,
+    autoDestroy,
+    workspaceSettingOverwrites,
+    normalizedWorkingDirectory,
   });
-  if (vcsError !== null) {
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: vcsError }] };
-  }
-  const saved = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace.id) });
-  if (saved === undefined) throw new Error("Unable to update workspace");
-  scheduleExplorerInventory(saved.id);
+
+  const persisted = await persistWorkspaceUpdate({
+    row: updated,
+    vcsRepo: attributes["vcs-repo"],
+    orgId: workspace.orgId,
+    vcsRepoFallback: workspace.vcsRepo,
+    tagBindings: parsed.tagBindings,
+    workspaceId: workspace.id,
+  });
+  if ("error" in persisted) return failWorkspaceUpdate(set, 422, persisted.error);
+  const saved = persisted.saved;
   return {
     data: await workspaceResource(
       saved,
       defaultIacBinary,
       await resourcePermissions(saved, principal.userId, principal.principalOrgId, principal.teamId),
-      { orgName: orgName ?? null },
+      workspaceOrgOption(orgName),
     ),
   };
 }
