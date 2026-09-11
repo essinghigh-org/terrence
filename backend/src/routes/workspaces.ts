@@ -1343,27 +1343,25 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   })
   .post("/api/v2/workspaces/:workspace_id/vars", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-write");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const actor = actorScope(user, orgId, teamId);
+    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId, "variables-write");
+    if (ws === undefined) return failWorkspaceUpdate(set, 404);
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const { attributes } = updateBodySections(body);
     if (data?.["type"] !== "vars" || !validVariableAttributes(attributes)) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
+      return failWorkspaceUpdate(set, 422, "Invalid variable attributes");
     }
     const varId = newResourceId("wsvar");
-    const key = typeof attributes["key"] === "string" ? attributes["key"] : "";
-    const value = typeof attributes["value"] === "string" ? attributes["value"] : "";
-    const category = typeof attributes["category"] === "string" ? attributes["category"] : "terraform";
-    const sensitive = typeof attributes["sensitive"] === "boolean" ? attributes["sensitive"] : false;
-    const hcl = typeof attributes["hcl"] === "boolean" ? attributes["hcl"] : false;
-    const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
+    const { key, value, category, sensitive, hcl, description } = resolveVariableCreateFields(attributes);
     // Sensitive values are encrypted at rest (todo 167/168).
     const stored = await variableValueForWrite(sensitive, value);
     try {
       await db.insert(workspaceVariables).values({ id: varId, workspaceId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description });
     } catch (error: unknown) {
-      if (isUniqueConstraintError(error)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this workspace" }] }; }
+      if (isUniqueConstraintError(error)) {
+        return failWorkspaceUpdate(set, 422, "Variable key already exists in this workspace");
+      }
       throw error;
     }
     (set as { status: number }).status = 201;
@@ -1995,6 +1993,18 @@ function updateBodySections(body: unknown): Readonly<{
   const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
   const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
   return { attributes, rels };
+}
+
+function resolveVariableCreateFields(
+  attributes: Readonly<Record<string, unknown>>,
+): Readonly<{ key: string; value: string; category: string; sensitive: boolean; hcl: boolean; description: string | null }> {
+  const key = typeof attributes["key"] === "string" ? attributes["key"] : "";
+  const value = typeof attributes["value"] === "string" ? attributes["value"] : "";
+  const category = typeof attributes["category"] === "string" ? attributes["category"] : "terraform";
+  const sensitive = typeof attributes["sensitive"] === "boolean" ? attributes["sensitive"] : false;
+  const hcl = typeof attributes["hcl"] === "boolean" ? attributes["hcl"] : false;
+  const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
+  return { key, value, category, sensitive, hcl, description };
 }
 
 function resolveVariableSensitive(
