@@ -1071,6 +1071,62 @@ function resolveRunAutoApply(
   };
 }
 
+function provenanceConfigurationDigest(
+  configurationVersion: typeof configurationVersions.$inferSelect | undefined,
+): string {
+  return sha256Hex(canonicalJson({
+    id: configurationVersion?.id ?? null,
+    status: configurationVersion?.status ?? null,
+    ingressAttributes: configurationVersion?.ingressAttributes ?? null,
+    createdAt: configurationVersion?.createdAt ?? null,
+  }));
+}
+
+async function completeRunCreationResponse(
+  input: Readonly<{
+    id: string;
+    workspaceId: string;
+    orgId: string;
+    userId: string | undefined;
+    origin: RunOrigin | undefined;
+    nowIso: string;
+    autoApplySuppressed: boolean;
+    createdResource: Record<string, unknown>;
+    provenance: Awaited<ReturnType<typeof buildRunProvenanceCapsule>>;
+    begin: IdempotencyBegin;
+    set: SetObj;
+  }>,
+): Promise<Record<string, unknown>> {
+  await auditLog("create", "runs", input.id, input.userId ?? null, input.orgId, {
+    workspaceId: input.workspaceId,
+    status: "pending",
+    source: input.origin?.source ?? "tfe-api",
+    triggerReason: input.origin?.triggerReason ?? "manual",
+  });
+  queueRunNotification(input.id, "run:created", "pending");
+  (input.set as { status: number }).status = 201;
+  publish("run.status", {
+    "run-id": input.id,
+    "workspace-id": input.workspaceId,
+    "org-id": input.orgId,
+    status: "pending",
+    at: input.nowIso,
+  });
+  scheduleExplorerInventory(input.workspaceId);
+  (input.createdResource["attributes"] as Record<string, unknown>)["provenance"] = {
+    "schema-version": input.provenance.publicManifest.schemaVersion,
+    sha256: input.provenance.manifestSha256,
+    "manifest-url": `/api/v2/runs/${input.id}/provenance`,
+  };
+  if (input.autoApplySuppressed) {
+    (input.createdResource["attributes"] as Record<string, unknown>)["auto-apply-warning"] =
+      "Auto-apply is enabled on this workspace, but you do not have apply permission, so this run was created with auto-apply off and will wait for confirmation.";
+  }
+  const responseBody = { data: input.createdResource };
+  if (input.begin.kind === "reserved") await completeIdempotency(input.begin.id, 201, responseBody, input.id);
+  return responseBody;
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -1139,12 +1195,7 @@ export async function createRun(
     configurationVersionId: cvId ?? null,
     configurationSource: configurationVersion?.source ?? null,
     configurationIngress: configurationVersion?.ingressAttributes ?? null,
-    configurationDigest: sha256Hex(canonicalJson({
-      id: configurationVersion?.id ?? null,
-      status: configurationVersion?.status ?? null,
-      ingressAttributes: configurationVersion?.ingressAttributes ?? null,
-      createdAt: configurationVersion?.createdAt ?? null,
-    })),
+    configurationDigest: provenanceConfigurationDigest(configurationVersion),
     engine: effectiveTool,
     engineVersion: effectiveVersion ?? null,
     workspaceId: workspace.id,
@@ -1201,18 +1252,19 @@ export async function createRun(
   const createdRun = { id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, agentVersion: null, agentProtocolVersion: null, agentCapabilities: null, agentExecutionPolicy: null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, inputSchemaVersion: 1, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, statusMetadataSchemaVersion: 1, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, scheduledAt: null, softDeletedAt: null, createdAt };
   const createdLinkage = await linkageForRuns([createdRun]);
   const createdResource = runResource(createdRun, canApply, false, origin, undefined, undefined, createdLinkage.get(id));
-  (createdResource["attributes"] as Record<string, unknown>)["provenance"] = {
-    "schema-version": provenance.publicManifest.schemaVersion,
-    sha256: provenance.manifestSha256,
-    "manifest-url": `/api/v2/runs/${id}/provenance`,
-  };
-  if (autoApplySuppressed) {
-    (createdResource["attributes"] as Record<string, unknown>)["auto-apply-warning"] =
-      "Auto-apply is enabled on this workspace, but you do not have apply permission, so this run was created with auto-apply off and will wait for confirmation.";
-  }
-  const responseBody = { data: createdResource };
-  if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
-  return responseBody;
+  return await completeRunCreationResponse({
+    id,
+    workspaceId,
+    orgId: workspace.orgId,
+    userId: user?.id,
+    origin,
+    nowIso,
+    autoApplySuppressed,
+    createdResource,
+    provenance,
+    begin: idempotencyBegin,
+    set,
+  });
 }
 
 /**
