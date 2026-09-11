@@ -1543,6 +1543,34 @@ async function publishScheduleConfirmation(
   return { data: { id: runId, type: "runs", attributes: { status: "confirmed", "scheduled-at": scheduledAt } } };
 }
 
+async function confirmDirectApply(
+  runId: string,
+  before: typeof runs.$inferSelect,
+  userId: string | null,
+  teamId: string | null | undefined,
+  body: unknown,
+  authorized: AuthorizedRun,
+  set: SetObj,
+): Promise<unknown> {
+  const confirmed = await db.update(runs).set({
+    status: "confirmed",
+    scheduledAt: null,
+    statusTimestamps: {
+      ...(before.statusTimestamps ?? {}),
+      "confirmed-at": new Date().toISOString(),
+    },
+  }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+  if (confirmed.length === 0) {
+    (set as { status: number }).status = 409;
+    return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] };
+  }
+  await logApplyConfirmation(runId, userId, authorized.workspace.orgId, authorized.workspace.id, teamId, before.status, "confirmed", body, authorized.workspace);
+  const { executeApply } = await import("../worker");
+  executeApply(authorized.run.id).catch((err: unknown): void => { if (err !== null && err !== undefined) { console.error(err); } });
+  (set as { status: number }).status = 202;
+  return new Response(null, { status: 202 });
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -2274,20 +2302,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       (set as { status: number }).status = 202;
       return new Response(null, { status: 202 });
     }
-    const confirmed = await db.update(runs).set({
-      status: "confirmed",
-      scheduledAt: null,
-      statusTimestamps: {
-        ...(before.statusTimestamps ?? {}),
-        "confirmed-at": new Date().toISOString(),
-      },
-    }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
-    if (confirmed.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] }; }
-    await logApplyConfirmation(runId, user?.id ?? null, authorized.workspace.orgId, authorized.workspace.id, teamId, before.status, "confirmed", body, authorized.workspace);
-    const { executeApply } = await import("../worker");
-    executeApply(authorized.run.id).catch((err: unknown): void => { if (err !== null && err !== undefined) { console.error(err); } });
-    (set as { status: number }).status = 202;
-    return new Response(null, { status: 202 });
+    return await confirmDirectApply(runId, before, user?.id ?? null, teamId, body, authorized, set);
   })
   .post("/api/v2/runs/:run_id/actions/schedule-apply", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     // Schedule a confirmed apply for a future time.
