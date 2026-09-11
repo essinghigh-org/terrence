@@ -6295,11 +6295,12 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
   await pruneSavedPlans();
 }
 
-export async function reconcileInterruptedLocalRuns(): Promise<{
-  requeued: number;
-  errored: number;
-  assessmentsErrored: number;
-  rearmed: number;
+type InterruptedRunCandidate = Pick<typeof runs.$inferSelect, "id" | "workspaceId" | "status" | "statusTimestamps">;
+
+async function fetchInterruptedRunCandidates(): Promise<{
+  candidates: InterruptedRunCandidate[];
+  agentWorkspaceIds: ReadonlySet<string>;
+  pendingAt: string;
 }> {
   await pruneInterruptedApplyRecovery();
   // Issue #579: adopt or drop markerless/staging recovery leftovers before
@@ -6316,90 +6317,135 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
   });
 
   const workspaceIds = [...new Set(candidates.map((run): string => run.workspaceId))];
-  const executionModes = workspaceIds.length === 0
-    ? []
-    : await db.query.workspaces.findMany({
+  const agentWorkspaceIds = workspaceIds.length === 0
+    ? new Set<string>()
+    : new Set((await db.query.workspaces.findMany({
         where: inArray(workspaces.id, workspaceIds),
         columns: { id: true, executionMode: true },
-      });
-  const agentWorkspaceIds = new Set(
-    executionModes.filter((ws): boolean => ws.executionMode === "agent").map((ws): string => ws.id),
-  );
+      })).filter((ws): boolean => ws.executionMode === "agent").map((ws): string => ws.id));
+  return { candidates, agentWorkspaceIds, pendingAt };
+}
 
-  let requeued = 0;
-  let errored = 0;
-  for (const run of candidates) {
-    try {
-    // Agent-mode runs are owned by recoverStaleAgentJobs; only running local
-    // (or workspace-deleted, which can never execute again) runs are
-    // reconciled here.
-    if (agentWorkspaceIds.has(run.workspaceId)) {
-      continue;
-    }
+async function requeueInterruptedRun(run: InterruptedRunCandidate, pendingAt: string): Promise<boolean> {
+  const updated = await db.update(runs).set({
+    status: "pending",
+    statusTimestamps: { ...(run.statusTimestamps ?? {}), "pending-at": pendingAt },
+  }).where(and(eq(runs.id, run.id), eq(runs.status, run.status))).returning({ id: runs.id });
+  if (updated.length === 0) return false;
+  await writeLog(run.id, "plan", "[terrence] Run requeued: the Terrence process restarted before this run's plan began.");
+  return true;
+}
 
-    if (REQUEUE_AFTER_RESTART.has(run.status)) {
-      const updated = await db.update(runs).set({
-        status: "pending",
-        statusTimestamps: { ...(run.statusTimestamps ?? {}), "pending-at": pendingAt },
-      }).where(and(eq(runs.id, run.id), eq(runs.status, run.status))).returning({ id: runs.id });
-      if (updated.length === 0) continue;
-      requeued += 1;
-      await writeLog(run.id, "plan", "[terrence] Run requeued: the Terrence process restarted before this run's plan began.");
-    } else {
-      const applySide = run.status === "apply_queued" || run.status === "applying";
-      let capturedPartialState = false;
-      let recoveryCaptureFailed = false;
-      if (run.status === "applying") {
-        try {
-          capturedPartialState = await captureInterruptedApplyState(storageDir, run.id, runWorkDir(run.id));
-        } catch (error: unknown) {
-          // Issue #579: a state file existed but could not be captured
-          // intact. The work directory is preserved below for manual
-          // recovery instead of deleting the only source.
-          recoveryCaptureFailed = true;
-          logBestEffortFailure("Could not capture state after interrupted apply", { runId: run.id }, error);
-        }
-      }
-      const message = applySide
-        ? run.status === "applying"
-          ? `Terrence restarted during apply; infrastructure state may be partially changed. This run was NOT re-executed automatically.${capturedPartialState ? " A durable recovery copy was captured: fetch it from GET /api/v2/runs/:run_id/recovery-state or the run page Recover action. The copy is kept until it is recovered." : " No local state file was available to capture."}`
-          : "Terrence restarted before this apply began; the run was confirmed but never executed. Discard it or start a new run."
-        : run.status === "pre_plan_running" || run.status === "pre_plan_completed"
-          ? "Terrence restarted while running pre-plan tasks, which may already have executed. This run was marked errored."
-          : "Terrence restarted during the plan phase. This run was marked errored.";
-      await writeLog(run.id, applySide ? "apply" : "plan", `[terrence ERROR] ${message}`);
-      // Mirrors the executeRun/executeApply error path: publishes the
-      // transition, reports VCS status, revokes the run token, notifies.
-      await updateRunStatus(run.id, "errored");
-      if (applySide) await releaseRunWorkspaceLock(run.workspaceId, run.id);
-      try {
-        if (recoveryCaptureFailed) {
-          await writeLog(
-            run.id,
-            "apply",
-            `[terrence ERROR] Recovery copy failed; the run work directory was preserved at ${runWorkDir(run.id)} for manual recovery.`,
-          );
-        } else if (runSandbox !== null) await removeSandboxWorkDir(run.id);
-        else await rm(runWorkDir(run.id), { recursive: true, force: true });
-      } catch (error: unknown) {
-        logBestEffortFailure("Startup reconciliation workdir cleanup failed", { runId: run.id }, error);
-        scheduleRunWorkDirCleanup(run.id);
-      }
-      errored += 1;
-    }
-    } catch (error: unknown) {
-      // One bad transition or CAS race must not abort the whole startup
-      // reconciliation; log and continue to the next interrupted run.
-      const detail = error instanceof Error ? error.message : String(error);
-      try {
-        await writeLog(run.id, "plan", `[terrence ERROR] Startup reconciliation failed for run ${run.id}: ${detail}`);
-      } catch (logError: unknown) {
-        logBestEffortFailure("Could not persist startup reconciliation failure", { runId: run.id }, logError);
-      }
-      log.error(`Startup reconciliation failed for run ${run.id}`, { runId: run.id, error: detail });
-    }
+function interruptedRunErrorMessage(status: string, capturedPartialState: boolean): { message: string; applySide: boolean } {
+  const applySide = status === "apply_queued" || status === "applying";
+  const message = applySide
+    ? status === "applying"
+      ? `Terrence restarted during apply; infrastructure state may be partially changed. This run was NOT re-executed automatically.${capturedPartialState ? " A durable recovery copy was captured: fetch it from GET /api/v2/runs/:run_id/recovery-state or the run page Recover action. The copy is kept until it is recovered." : " No local state file was available to capture."}`
+      : "Terrence restarted before this apply began; the run was confirmed but never executed. Discard it or start a new run."
+    : status === "pre_plan_running" || status === "pre_plan_completed"
+      ? "Terrence restarted while running pre-plan tasks, which may already have executed. This run was marked errored."
+      : "Terrence restarted during the plan phase. This run was marked errored.";
+  return { message, applySide };
+}
+
+async function captureInterruptedApplyPartial(runId: string): Promise<{ captured: boolean; captureFailed: boolean }> {
+  try {
+    const captured = await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId));
+    return { captured, captureFailed: false };
+  } catch (error: unknown) {
+    // Issue #579: a state file existed but could not be captured
+    // intact. The work directory is preserved below for manual
+    // recovery instead of deleting the only source.
+    logBestEffortFailure("Could not capture state after interrupted apply", { runId }, error);
+    return { captured: false, captureFailed: true };
   }
+}
 
+async function cleanupReconciledRunWorkDir(runId: string, recoveryCaptureFailed: boolean): Promise<void> {
+  try {
+    if (recoveryCaptureFailed) {
+      await writeLog(
+        runId,
+        "apply",
+        `[terrence ERROR] Recovery copy failed; the run work directory was preserved at ${runWorkDir(runId)} for manual recovery.`,
+      );
+    } else if (runSandbox !== null) await removeSandboxWorkDir(runId);
+    else await rm(runWorkDir(runId), { recursive: true, force: true });
+  } catch (error: unknown) {
+    logBestEffortFailure("Startup reconciliation workdir cleanup failed", { runId }, error);
+    scheduleRunWorkDirCleanup(runId);
+  }
+}
+
+async function errorInterruptedRun(run: InterruptedRunCandidate): Promise<void> {
+  let capturedPartialState = false;
+  let recoveryCaptureFailed = false;
+  if (run.status === "applying") {
+    const capture = await captureInterruptedApplyPartial(run.id);
+    capturedPartialState = capture.captured;
+    recoveryCaptureFailed = capture.captureFailed;
+  }
+  const { message, applySide } = interruptedRunErrorMessage(run.status, capturedPartialState);
+  await writeLog(run.id, applySide ? "apply" : "plan", `[terrence ERROR] ${message}`);
+  // Mirrors the executeRun/executeApply error path: publishes the
+  // transition, reports VCS status, revokes the run token, notifies.
+  await updateRunStatus(run.id, "errored");
+  if (applySide) await releaseRunWorkspaceLock(run.workspaceId, run.id);
+  await cleanupReconciledRunWorkDir(run.id, recoveryCaptureFailed);
+}
+
+async function reportReconciliationFailure(runId: string, error: unknown): Promise<void> {
+  const detail = error instanceof Error ? error.message : String(error);
+  try {
+    await writeLog(runId, "plan", `[terrence ERROR] Startup reconciliation failed for run ${runId}: ${detail}`);
+  } catch (logError: unknown) {
+    logBestEffortFailure("Could not persist startup reconciliation failure", { runId }, logError);
+  }
+  log.error(`Startup reconciliation failed for run ${runId}`, { runId, error: detail });
+}
+
+async function reconcileInterruptedRun(
+  run: InterruptedRunCandidate,
+  agentWorkspaceIds: ReadonlySet<string>,
+  pendingAt: string,
+): Promise<"requeued" | "errored" | "skipped"> {
+  // Agent-mode runs are owned by recoverStaleAgentJobs; only running local
+  // (or workspace-deleted, which can never execute again) runs are
+  // reconciled here.
+  if (agentWorkspaceIds.has(run.workspaceId)) return "skipped";
+  try {
+    if (REQUEUE_AFTER_RESTART.has(run.status)) {
+      return (await requeueInterruptedRun(run, pendingAt)) ? "requeued" : "skipped";
+    }
+    await errorInterruptedRun(run);
+    return "errored";
+  } catch (error: unknown) {
+    // One bad transition or CAS race must not abort the whole startup
+    // reconciliation; log and continue to the next interrupted run.
+    await reportReconciliationFailure(run.id, error);
+    return "skipped";
+  }
+}
+
+async function rearmOrphanedApply(runId: string, workspaceId: string, orphanAgentWorkspaceIds: ReadonlySet<string>): Promise<boolean> {
+  if (orphanAgentWorkspaceIds.has(workspaceId)) return false;
+  try {
+    const rearmedRows = await db.update(runs).set({ scheduledAt: Date.now() }).where(and(
+      eq(runs.id, runId),
+      eq(runs.status, "confirmed"),
+      isNull(runs.scheduledAt),
+    )).returning({ id: runs.id });
+    if (rearmedRows.length === 0) return false;
+    await writeLog(runId, "apply", "[terrence] Run re-armed: the Terrence process restarted after apply was confirmed but before dispatch. The scheduled-apply poller will dispatch it.");
+    return true;
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    logBestEffortFailure("Startup reconciliation failed to re-arm orphaned apply", { runId }, detail);
+    return false;
+  }
+}
+
+async function rearmOrphanedApplies(): Promise<number> {
   // Orphaned manual-apply dispatches (issue #572): the apply route writes
   // confirmed with scheduledAt null and dispatches fire-and-forget. A crash
   // in between leaves a resting state that no poller selects
@@ -6418,33 +6464,44 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
     ),
     columns: { id: true, workspaceId: true },
   });
-  if (orphanedApplies.length > 0) {
-    const orphanWorkspaceIds = [...new Set(orphanedApplies.map((run): string => run.workspaceId))];
-    const orphanWorkspaces = await db.query.workspaces.findMany({
-      where: inArray(workspaces.id, orphanWorkspaceIds),
-      columns: { id: true, executionMode: true },
-    });
-    const orphanAgentWorkspaceIds = new Set(
-      orphanWorkspaces.filter((ws): boolean => ws.executionMode === "agent").map((ws): string => ws.id),
-    );
-    for (const run of orphanedApplies) {
-      if (orphanAgentWorkspaceIds.has(run.workspaceId)) continue;
-      try {
-        const rearmedRows = await db.update(runs).set({ scheduledAt: Date.now() }).where(and(
-          eq(runs.id, run.id),
-          eq(runs.status, "confirmed"),
-          isNull(runs.scheduledAt),
-        )).returning({ id: runs.id });
-        if (rearmedRows.length === 0) continue;
-        rearmed += 1;
-        await writeLog(run.id, "apply", "[terrence] Run re-armed: the Terrence process restarted after apply was confirmed but before dispatch. The scheduled-apply poller will dispatch it.");
-      } catch (error: unknown) {
-        const detail = error instanceof Error ? error.message : String(error);
-        logBestEffortFailure("Startup reconciliation failed to re-arm orphaned apply", { runId: run.id }, detail);
-      }
-    }
+  if (orphanedApplies.length === 0) return rearmed;
+  const orphanWorkspaceIds = [...new Set(orphanedApplies.map((run): string => run.workspaceId))];
+  const orphanWorkspaces = await db.query.workspaces.findMany({
+    where: inArray(workspaces.id, orphanWorkspaceIds),
+    columns: { id: true, executionMode: true },
+  });
+  const orphanAgentWorkspaceIds = new Set(
+    orphanWorkspaces.filter((ws): boolean => ws.executionMode === "agent").map((ws): string => ws.id),
+  );
+  for (const run of orphanedApplies) {
+    if (await rearmOrphanedApply(run.id, run.workspaceId, orphanAgentWorkspaceIds)) rearmed += 1;
   }
+  return rearmed;
+}
 
+async function errorInterruptedAssessment(assessmentId: string): Promise<boolean> {
+  const updated = await db.update(assessmentResults).set({
+    status: "errored",
+    errorMessage: "Terrence restarted during this health assessment",
+    completedAt: Date.now(),
+  }).where(and(
+    eq(assessmentResults.id, assessmentId),
+    eq(assessmentResults.status, "running"),
+  )).returning({ id: assessmentResults.id });
+  if (updated.length === 0) return false;
+  try {
+    if (runSandbox !== null) {
+      await removeSandboxWorkDir(`assessment-${assessmentId}`);
+    } else {
+      await rm(join(tmpdir(), "terrence", "assessments", assessmentId), { recursive: true, force: true });
+    }
+  } catch (error: unknown) {
+    logBestEffortFailure("Startup assessment workdir cleanup failed", { assessmentResultId: assessmentId }, error);
+  }
+  return true;
+}
+
+async function errorInterruptedAssessments(): Promise<number> {
   // Running assessments die with the process too; they count against the
   // assessment concurrency budget, so error them and let the next discovery
   // cycle create a fresh pending result.
@@ -6454,26 +6511,32 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
   });
   let assessmentsErrored = 0;
   for (const assessment of runningAssessments) {
-    const updated = await db.update(assessmentResults).set({
-      status: "errored",
-      errorMessage: "Terrence restarted during this health assessment",
-      completedAt: Date.now(),
-    }).where(and(
-      eq(assessmentResults.id, assessment.id),
-      eq(assessmentResults.status, "running"),
-    )).returning({ id: assessmentResults.id });
-    if (updated.length === 0) continue;
-    assessmentsErrored += 1;
-    try {
-      if (runSandbox !== null) {
-        await removeSandboxWorkDir(`assessment-${assessment.id}`);
-      } else {
-        await rm(join(tmpdir(), "terrence", "assessments", assessment.id), { recursive: true, force: true });
-      }
-    } catch (error: unknown) {
-      logBestEffortFailure("Startup assessment workdir cleanup failed", { assessmentResultId: assessment.id }, error);
-    }
+    if (await errorInterruptedAssessment(assessment.id)) assessmentsErrored += 1;
   }
+  return assessmentsErrored;
+}
+
+export async function reconcileInterruptedLocalRuns(): Promise<{
+  requeued: number;
+  errored: number;
+  assessmentsErrored: number;
+  rearmed: number;
+}> {
+  const fetched = await fetchInterruptedRunCandidates();
+  const candidates = fetched.candidates;
+  const agentWorkspaceIds = fetched.agentWorkspaceIds;
+  const pendingAt = fetched.pendingAt;
+
+  let requeued = 0;
+  let errored = 0;
+  for (const run of candidates) {
+    const outcome = await reconcileInterruptedRun(run, agentWorkspaceIds, pendingAt);
+    if (outcome === "requeued") requeued += 1;
+    else if (outcome === "errored") errored += 1;
+  }
+
+  const rearmed = await rearmOrphanedApplies();
+  const assessmentsErrored = await errorInterruptedAssessments();
 
   return { requeued, errored, assessmentsErrored, rearmed };
 }
