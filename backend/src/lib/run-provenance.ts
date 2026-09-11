@@ -58,7 +58,7 @@ type RunVariableInput = Readonly<{
   valueEncrypted?: string;
 }>;
 
-type CapsuleInput = Readonly<{
+export type CapsuleInput = Readonly<{
   runId: string;
   createdAt: number;
   configurationVersionId: string | null;

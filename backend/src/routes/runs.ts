@@ -37,8 +37,8 @@ import { newRunId } from "../lib/run-id";
 import { RUN_NOTIFICATION_TRIGGERS } from "../lib/constants";
 import { auditLogValues } from "../lib/audit-trail";
 import { decryptSecret } from "../lib/secrets";
-import { effectiveWorkspaceVariables } from "../lib/effective-variables";
-import { buildRunProvenanceCapsule, canonicalJson, sha256Hex } from "../lib/run-provenance";
+import { effectiveWorkspaceVariables, type EffectiveVariable } from "../lib/effective-variables";
+import { buildRunProvenanceCapsule, canonicalJson, sha256Hex, type CapsuleInput } from "../lib/run-provenance";
 import { issueRunLogCapability, findLogCapability, signedApiURL } from "../lib/capabilities";
 import { authorizedRunCapability, authorizedStateAccess } from "../lib/authorized-resources";
 import { pageRequest, pagination, cursorPagination } from "../lib/pagination";
@@ -983,6 +983,40 @@ async function checkRunCreationGuards(
   return { canApply };
 }
 
+function manifestProvenanceVariables(
+  entries: readonly EffectiveVariable[],
+): Pick<CapsuleInput, "effectiveVariables" | "effectiveExecutionVariables"> {
+  return {
+    effectiveVariables: entries.map((entry) => ({
+      source: entry.source,
+      key: entry.variable.key,
+      category: entry.variable.category,
+      sensitive: entry.variable.sensitive,
+      ...(entry.source === "varset" ? { variableSetId: entry.setId } : {}),
+    })),
+    effectiveExecutionVariables: entries.map((entry) => ({
+      key: entry.variable.key,
+      value: entry.variable.value,
+      category: entry.variable.category ?? "terraform",
+      sensitive: entry.variable.sensitive === true,
+      ...(entry.variable.valueEncrypted === null || entry.variable.valueEncrypted === undefined
+        ? {}
+        : { valueEncrypted: entry.variable.valueEncrypted }),
+    })),
+  };
+}
+
+function resolveRunDisplayFields(
+  message: string,
+  requestedPlanOnly: boolean | undefined,
+  configurationVersion: typeof configurationVersions.$inferSelect | undefined,
+): Readonly<{ planOnly: boolean; finalMsg: string }> {
+  return {
+    planOnly: requestedPlanOnly ?? configurationVersion?.speculative ?? false,
+    finalMsg: message !== "" ? message : (configurationVersion?.source === "tfe-cli" ? "Triggered via CLI" : "Triggered via UI"),
+  };
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -1052,10 +1086,9 @@ export async function createRun(
   const id = newRunId();
   const createdAt = Date.now();
   const logToken = crypto.randomUUID();
-  const planOnly = requestedPlanOnly ?? configurationVersion?.speculative ?? false;
+  const { planOnly, finalMsg } = resolveRunDisplayFields(message, requestedPlanOnly, configurationVersion);
   const runVariables = runVariablesInput === null ? null : await runVariablesForWrite(runVariablesInput);
   const nowIso = new Date(createdAt).toISOString();
-  const finalMsg = message !== "" ? message : (configurationVersion?.source === "tfe-cli" ? "Triggered via CLI" : "Triggered via UI");
   const origin = originForConfiguration(configurationVersion);
   const [effectiveVariables, inputState] = await Promise.all([
     effectiveWorkspaceVariables(workspace.id, workspace.orgId, workspace.projectId ?? null),
@@ -1086,22 +1119,7 @@ export async function createRun(
     inputStateId: inputState?.id ?? null,
     inputStateDigest: inputState?.uploadSha256 ?? null,
     runVariables: runVariables ?? [],
-    effectiveVariables: effectiveVariables.map((entry) => ({
-      source: entry.source,
-      key: entry.variable.key,
-      category: entry.variable.category,
-      sensitive: entry.variable.sensitive,
-      ...(entry.source === "varset" ? { variableSetId: entry.setId } : {}),
-    })),
-    effectiveExecutionVariables: effectiveVariables.map((entry) => ({
-      key: entry.variable.key,
-      value: entry.variable.value,
-      category: entry.variable.category ?? "terraform",
-      sensitive: entry.variable.sensitive === true,
-      ...(entry.variable.valueEncrypted === null || entry.variable.valueEncrypted === undefined
-        ? {}
-        : { valueEncrypted: entry.variable.valueEncrypted }),
-    })),
+    ...manifestProvenanceVariables(effectiveVariables),
   });
   // The lock was validated above, but that check and the insert below are
   // separate statements; re-validate inside the insert transaction so a
