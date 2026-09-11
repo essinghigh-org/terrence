@@ -4560,6 +4560,338 @@ async function executeAssessment(assessmentResultId: string): Promise<void> {
   return trackLocalExecution(executeAssessmentImpl(assessmentResultId));
 }
 
+async function checkAssessmentEnabled(
+  workspace: typeof workspaces.$inferSelect,
+  organization: typeof organizations.$inferSelect | undefined,
+  assessmentResultId: string,
+): Promise<boolean> {
+  if (workspace.assessmentsEnabled !== true && organization?.assessmentsEnforced !== true) {
+    await db.update(assessmentResults)
+      .set({ status: "canceled", succeeded: false, errorMessage: "Health assessments are disabled", completedAt: Date.now() })
+      .where(eq(assessmentResults.id, assessmentResultId));
+    scheduleExplorerInventory(workspace.id);
+    return false;
+  }
+  return true;
+}
+
+function assessmentWorkDir(assessmentResultId: string): string {
+  return runSandbox !== null
+    ? runSandbox.workDirFor(`assessment-${assessmentResultId}`)
+    : join(tmpdir(), "terrence", "assessments", assessmentResultId);
+}
+
+type AssessmentBasis = Readonly<{
+  appliedRun: typeof runs.$inferSelect;
+  configurationVersionId: string;
+}>;
+
+async function loadAssessmentBasis(workspaceId: string): Promise<AssessmentBasis> {
+  const appliedRun = await db.query.runs.findFirst({
+    where: and(
+      eq(runs.workspaceId, workspaceId),
+      eq(runs.status, "applied"),
+      isNotNull(runs.configurationVersionId),
+    ),
+    orderBy: [desc(runs.createdAt)],
+  });
+  if (appliedRun === undefined || appliedRun.configurationVersionId === null || appliedRun.configurationVersionId === undefined) {
+    throw new Error("No successfully applied configuration is available for assessment.");
+  }
+  return { appliedRun, configurationVersionId: appliedRun.configurationVersionId };
+}
+
+async function prepareAssessmentExecutionDir(
+  configurationVersionId: string,
+  workDir: string,
+  workspace: typeof workspaces.$inferSelect,
+): Promise<string> {
+  const configuration = await db.query.configurationVersions.findFirst({
+    where: eq(configurationVersions.id, configurationVersionId),
+  });
+  if (
+    configuration === undefined
+    || typeof configuration.archivePath !== "string"
+    || configuration.archivePath === ""
+    || !(await exists(configuration.archivePath))
+  ) throw new Error("Applied configuration archive is unavailable.");
+
+  await mkdir(workDir, { recursive: true, mode: 0o700 });
+  if (!(await extractTarArchive(
+    configuration.archivePath,
+    workDir,
+    undefined,
+    { phase: "assessment" },
+  ))) {
+    throw new Error("Configuration archive extraction failed or contained invalid path components.");
+  }
+  const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
+  const dirFiles = await readdir(executionDir);
+  if (!dirFiles.some((file: string): boolean => file.endsWith(".tf") || file.endsWith(".tf.json"))) {
+    throw new Error("No Terraform configuration files were found for assessment.");
+  }
+  await writeFile(
+    join(executionDir, "terrence_backend_override.tf"),
+    'terraform {\n  backend "local" {}\n}\n',
+    { mode: 0o600 },
+  );
+  return executionDir;
+}
+
+async function seedAssessmentState(
+  workspace: typeof workspaces.$inferSelect,
+  executionDir: string,
+): Promise<void> {
+  const latestState = await db.query.stateVersions.findFirst({
+    where: and(
+      eq(stateVersions.workspaceId, workspace.id),
+      eq(stateVersions.status, "finalized"),
+      eq(stateVersions.intermediate, false),
+    ),
+    orderBy: [desc(stateVersions.serial)],
+  });
+  if (typeof latestState?.statePayload !== "string" || latestState.statePayload === "") {
+    throw new Error("No finalized workspace state is available for assessment.");
+  }
+  await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(latestState.statePayload), { mode: 0o600 });
+}
+
+async function assessmentIdentityEnvironment(
+  assessmentResultId: string,
+  workspace: typeof workspaces.$inferSelect,
+  organization: typeof organizations.$inferSelect | undefined,
+  settings: typeof adminGeneralSettings.$inferSelect | undefined,
+  variables: Awaited<ReturnType<typeof executionVariables>>,
+  executionDir: string,
+): Promise<Awaited<ReturnType<typeof workspaceIdentityEnvironment>>> {
+  const project = workspace.projectId === null ? undefined : await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) });
+  return workspaceIdentityEnvironment({
+    organizationId: organization?.id ?? workspace.orgId,
+    organizationName: organization?.name ?? workspace.orgId,
+    projectId: workspace.projectId ?? "default",
+    projectName: project?.name ?? "Default Project",
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
+    runId: assessmentResultId,
+    phase: "plan",
+    ttlSeconds: timeoutSeconds(settings?.planTimeout, 7_200),
+  }, variables, executionDir);
+}
+
+async function prepareAssessmentTerraformEnv(
+  assessmentResultId: string,
+  appliedRun: typeof runs.$inferSelect,
+  workspace: typeof workspaces.$inferSelect,
+  organization: typeof organizations.$inferSelect | undefined,
+  executionDir: string,
+): Promise<{
+  variables: Awaited<ReturnType<typeof executionVariables>>;
+  environment: Record<string, string>;
+  assessmentTimeoutMs: number;
+  requestedTool: string;
+  requestedVersion: string;
+}> {
+  const variables = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
+  const settings = await db.query.adminGeneralSettings.findFirst({ where: eq(adminGeneralSettings.id, "general") });
+  const assessmentTimeoutMs = timeoutSeconds(settings?.planTimeout, 7_200) * 1_000;
+  const identity = await assessmentIdentityEnvironment(assessmentResultId, workspace, organization, settings, variables, executionDir);
+  const environment = buildRunPhaseEnv(variables, appliedRun.variables, identity.environment);
+  const requestedTool = workspace.iacBinary ?? organization?.defaultIacBinary ?? "terraform";
+  const requestedVersion = appliedRun.terraformVersion
+    ?? workspace.terraformVersion
+    ?? organization?.defaultTerraformVersion
+    ?? "latest";
+  return { variables, environment, assessmentTimeoutMs, requestedTool, requestedVersion };
+}
+
+async function writeAssessmentTfVarsFiles(
+  executionDir: string,
+  variables: Awaited<ReturnType<typeof executionVariables>>,
+  appliedRunVariables: unknown,
+): Promise<{ terraformVariables: string[]; appliedRunTfVarsLines: string[] }> {
+  const terraformVariables = variables
+    .filter((variable: Readonly<{ category: string }>): boolean => variable.category === "terraform")
+    .map((variable: Readonly<{ key: string; hcl: boolean; value: string }>): string =>
+      terraformVariableLine(variable.key, variable.value, variable.hcl));
+  if (terraformVariables.length > 0) {
+    await writeFile(
+      join(executionDir, "terrence.workspace.tfvars"),
+      terraformVariables.join("\n"),
+      { mode: 0o600 },
+    );
+  }
+  const appliedRunTfVarsLines = runTerraformVariableLines(appliedRunVariables, variables);
+  if (appliedRunTfVarsLines.length > 0) {
+    await writeFile(
+      join(executionDir, "terrence.run.tfvars"),
+      appliedRunTfVarsLines.join("\n"),
+      { mode: 0o600 },
+    );
+  }
+  return { terraformVariables, appliedRunTfVarsLines };
+}
+
+async function runAssessmentPlanCapture(
+  assessmentResultId: string,
+  resolved: NonNullable<Awaited<ReturnType<typeof ensureBinary>>>,
+  executionDir: string,
+  environment: Record<string, string>,
+  assessmentTimeoutMs: number,
+  workDir: string,
+  terraformVariables: readonly string[],
+  appliedRunTfVarsLines: readonly string[],
+  appendOutput: (text: string) => void,
+): Promise<JsonObject> {
+  const init = await captureProcess(
+    `assessment-${assessmentResultId}`,
+    [resolved.binaryPath, "init", "-reconfigure", "-no-color", "-input=false"],
+    executionDir,
+    environment,
+    assessmentTimeoutMs,
+    workDir,
+  );
+  appendOutput(init.output);
+  if (init.exitCode !== 0) throw new Error(`${resolved.tool} init failed with exit code ${String(init.exitCode)}`);
+
+  const planArgs = [
+    resolved.binaryPath,
+    "plan",
+    "-no-color",
+    "-input=false",
+    "-detailed-exitcode",
+    "-out=tfplan",
+  ];
+  if (terraformVariables.length > 0) planArgs.push("-var-file=terrence.workspace.tfvars");
+  if (appliedRunTfVarsLines.length > 0) planArgs.push("-var-file=terrence.run.tfvars");
+  const plan = await captureProcess(
+    `assessment-${assessmentResultId}`,
+    planArgs,
+    executionDir,
+    environment,
+    assessmentTimeoutMs,
+    workDir,
+  );
+  appendOutput(plan.output);
+  if (plan.exitCode !== 0 && plan.exitCode !== 2) {
+    throw new Error(`${resolved.tool} assessment plan failed with exit code ${String(plan.exitCode)}`);
+  }
+
+  const generatedPlan = await readPlanJson(assessmentResultId, executionDir, resolved.binaryPath, assessmentTimeoutMs, workDir);
+  if (generatedPlan === undefined) throw new Error("Unable to read assessment plan JSON.");
+  return generatedPlan.planJson;
+}
+
+async function readAssessmentProviderSchema(
+  assessmentResultId: string,
+  resolved: NonNullable<Awaited<ReturnType<typeof ensureBinary>>>,
+  executionDir: string,
+  environment: Record<string, string>,
+  assessmentTimeoutMs: number,
+  workDir: string,
+  appendOutput: (text: string) => void,
+): Promise<JsonObject> {
+  const schema = await captureProcess(
+    `assessment-${assessmentResultId}`,
+    [resolved.binaryPath, "providers", "schema", "-json"],
+    executionDir,
+    environment,
+    assessmentTimeoutMs,
+    workDir,
+  );
+  if (schema.exitCode === 0) return parseJsonObject(await readCapturedJson(schema.capturedOutput, "Provider schema output"));
+  appendOutput(`[terrence] Provider schema unavailable: ${schema.output}`);
+  return {};
+}
+
+async function completeAssessmentRun(
+  assessmentResultId: string,
+  workspaceId: string,
+  planJson: JsonObject,
+  providerSchema: JsonObject,
+  output: readonly string[],
+): Promise<void> {
+  const activeRun = await db.query.runs.findFirst({
+    where: and(
+      eq(runs.workspaceId, workspaceId),
+      notInArray(runs.status, FINAL_RUN_STATUSES),
+    ),
+  });
+  if (activeRun !== undefined) {
+    await db.update(assessmentResults).set({
+      status: "canceled",
+      succeeded: false,
+      errorMessage: "Canceled because an ordinary run started",
+      logOutput: output.join("\n"),
+      completedAt: Date.now(),
+    }).where(eq(assessmentResults.id, assessmentResultId));
+    scheduleExplorerInventory(workspaceId);
+    return;
+  }
+
+  const [resources, checks] = await Promise.all([
+    Promise.resolve(assessmentResourceCounts(planJson)),
+    storePlanCheckResults(workspaceId, planJson, { assessmentResultId }),
+  ]);
+  const allChecksSucceeded = checks.failed === 0 && checks.errored === 0 && checks.unknown === 0;
+  await db.update(assessmentResults).set({
+    status: "completed",
+    succeeded: true,
+    drifted: resources.drifted > 0,
+    errorMessage: null,
+    resourcesDrifted: resources.drifted,
+    resourcesUndrifted: resources.undrifted,
+    allChecksSucceeded,
+    checksPassed: checks.passed,
+    checksFailed: checks.failed,
+    checksErrored: checks.errored,
+    checksUnknown: checks.unknown,
+    jsonOutput: planJson,
+    jsonSchema: providerSchema,
+    artifactSchemaVersion: 1,
+    logOutput: output.join("\n"),
+    completedAt: Date.now(),
+  }).where(eq(assessmentResults.id, assessmentResultId));
+  scheduleExplorerInventory(workspaceId);
+  if (resources.drifted > 0) queueAssessmentNotification(assessmentResultId, "assessment:drifted");
+  if (!allChecksSucceeded) queueAssessmentNotification(assessmentResultId, "assessment:check_failure");
+}
+
+async function failAssessmentRun(
+  assessmentResultId: string,
+  workspaceId: string,
+  output: readonly string[],
+  appendOutput: (text: string) => void,
+  error: unknown,
+): Promise<void> {
+  const message = error instanceof Error ? error.message : String(error);
+  appendOutput(`[terrence ERROR] ${message}`);
+  await db.update(assessmentResults).set({
+    status: "errored",
+    succeeded: false,
+    drifted: null,
+    errorMessage: message,
+    logOutput: output.join("\n"),
+    completedAt: Date.now(),
+  }).where(eq(assessmentResults.id, assessmentResultId));
+  scheduleExplorerInventory(workspaceId);
+  queueAssessmentNotification(assessmentResultId, "assessment:failed");
+}
+
+async function cleanupAssessmentRun(assessmentResultId: string, workDir: string): Promise<void> {
+  await revokeWorkloadIdentityTokens(assessmentResultId).catch((error: unknown): void => {
+    log.error("Failed to revoke assessment workload identity tokens", { assessmentResultId, error: String(error) });
+  });
+  try {
+    if (runSandbox !== null) {
+      await removeSandboxWorkDir(`assessment-${assessmentResultId}`);
+    } else {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  } catch (error: unknown) {
+    logBestEffortFailure("Assessment workdir cleanup failed", { assessmentResultId }, error);
+  }
+}
+
 async function executeAssessmentImpl(assessmentResultId: string): Promise<void> {
   assertRunSandboxAvailable();
   const assessment = await db.query.assessmentResults.findFirst({
@@ -4574,19 +4906,11 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
   const organization = await db.query.organizations.findFirst({
     where: eq(organizations.id, workspace.orgId),
   });
-  if (workspace.assessmentsEnabled !== true && organization?.assessmentsEnforced !== true) {
-    await db.update(assessmentResults)
-      .set({ status: "canceled", succeeded: false, errorMessage: "Health assessments are disabled", completedAt: Date.now() })
-      .where(eq(assessmentResults.id, assessmentResultId));
-    scheduleExplorerInventory(workspace.id);
-    return;
-  }
+  if (!(await checkAssessmentEnabled(workspace, organization, assessmentResultId))) return;
 
   await db.update(assessmentResults).set({ status: "running" })
     .where(eq(assessmentResults.id, assessmentResultId));
-  const workDir = runSandbox !== null
-    ? runSandbox.workDirFor(`assessment-${assessmentResultId}`)
-    : join(tmpdir(), "terrence", "assessments", assessmentResultId);
+  const workDir = assessmentWorkDir(assessmentResultId);
   const output: string[] = [];
   const appendOutput = (text: string): void => {
     if (text !== "") output.push(text.trimEnd());
@@ -4597,17 +4921,8 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
     // imported artifacts fail this worker with a typed row-aware diagnostic.
     parsePersistedArtifact(assessment.jsonOutput, assessment.artifactSchemaVersion, assessment.id);
     parsePersistedArtifact(assessment.jsonSchema, assessment.artifactSchemaVersion, assessment.id);
-    const appliedRun = await db.query.runs.findFirst({
-      where: and(
-        eq(runs.workspaceId, workspace.id),
-        eq(runs.status, "applied"),
-        isNotNull(runs.configurationVersionId),
-      ),
-      orderBy: [desc(runs.createdAt)],
-    });
-    if (appliedRun?.configurationVersionId === null || appliedRun?.configurationVersionId === undefined) {
-      throw new Error("No successfully applied configuration is available for assessment.");
-    }
+    const basis = await loadAssessmentBasis(workspace.id);
+    const appliedRun = basis.appliedRun;
 
     const simulated = envFlag("SIMULATED_RUNS") || Reflect.get(process.env, "NODE_ENV") === "test";
     let planJson: JsonObject;
@@ -4618,216 +4933,25 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       providerSchema = parseJsonObject(process.env["SIMULATED_ASSESSMENT_SCHEMA"] ?? "{}");
       appendOutput("[terrence] Simulated health assessment completed.");
     } else {
-      const configuration = await db.query.configurationVersions.findFirst({
-        where: eq(configurationVersions.id, appliedRun.configurationVersionId),
-      });
-      if (
-        configuration === undefined
-        || typeof configuration.archivePath !== "string"
-        || configuration.archivePath === ""
-        || !(await exists(configuration.archivePath))
-      ) throw new Error("Applied configuration archive is unavailable.");
-
-      await mkdir(workDir, { recursive: true, mode: 0o700 });
-      if (!(await extractTarArchive(
-        configuration.archivePath,
-        workDir,
-        undefined,
-        { phase: "assessment" },
-      ))) {
-        throw new Error("Configuration archive extraction failed or contained invalid path components.");
-      }
-      const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
-      const dirFiles = await readdir(executionDir);
-      if (!dirFiles.some((file: string): boolean => file.endsWith(".tf") || file.endsWith(".tf.json"))) {
-        throw new Error("No Terraform configuration files were found for assessment.");
-      }
-      await writeFile(
-        join(executionDir, "terrence_backend_override.tf"),
-        'terraform {\n  backend "local" {}\n}\n',
-        { mode: 0o600 },
-      );
-
-      const latestState = await db.query.stateVersions.findFirst({
-        where: and(
-          eq(stateVersions.workspaceId, workspace.id),
-          eq(stateVersions.status, "finalized"),
-          eq(stateVersions.intermediate, false),
-        ),
-        orderBy: [desc(stateVersions.serial)],
-      });
-      if (typeof latestState?.statePayload !== "string" || latestState.statePayload === "") {
-        throw new Error("No finalized workspace state is available for assessment.");
-      }
-      await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(latestState.statePayload), { mode: 0o600 });
-
-      const variables = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
-      const project = workspace.projectId === null ? undefined : await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) });
-      const settings = await db.query.adminGeneralSettings.findFirst({ where: eq(adminGeneralSettings.id, "general") });
-      const assessmentTimeoutMs = timeoutSeconds(settings?.planTimeout, 7_200) * 1_000;
-      const identity = await workspaceIdentityEnvironment({
-        organizationId: organization?.id ?? workspace.orgId,
-        organizationName: organization?.name ?? workspace.orgId,
-        projectId: workspace.projectId ?? "default",
-        projectName: project?.name ?? "Default Project",
-        workspaceId: workspace.id,
-        workspaceName: workspace.name,
-        runId: assessmentResultId,
-        phase: "plan",
-        ttlSeconds: timeoutSeconds(settings?.planTimeout, 7_200),
-      }, variables, executionDir);
-      const environment = buildRunPhaseEnv(variables, appliedRun.variables, identity.environment);
-      const terraformVariables = variables
-        .filter((variable: Readonly<{ category: string }>): boolean => variable.category === "terraform")
-        .map((variable: Readonly<{ key: string; hcl: boolean; value: string }>): string =>
-          terraformVariableLine(variable.key, variable.value, variable.hcl));
-      if (terraformVariables.length > 0) {
-        await writeFile(
-          join(executionDir, "terrence.workspace.tfvars"),
-          terraformVariables.join("\n"),
-          { mode: 0o600 },
-        );
-      }
-      const appliedRunTfVarsLines = runTerraformVariableLines(appliedRun.variables, variables);
-      if (appliedRunTfVarsLines.length > 0) {
-        await writeFile(
-          join(executionDir, "terrence.run.tfvars"),
-          appliedRunTfVarsLines.join("\n"),
-          { mode: 0o600 },
-        );
-      }
-
-      const requestedTool = workspace.iacBinary ?? organization?.defaultIacBinary ?? "terraform";
-      const requestedVersion = appliedRun.terraformVersion
-        ?? workspace.terraformVersion
-        ?? organization?.defaultTerraformVersion
-        ?? "latest";
-      const resolved = await ensureBinary(requestedTool, requestedVersion);
-      if (resolved === null) throw new Error(`Unable to resolve CLI binary '${requestedTool}' for assessment.`);
+      const executionDir = await prepareAssessmentExecutionDir(basis.configurationVersionId, workDir, workspace);
+      await seedAssessmentState(workspace, executionDir);
+      const terraformEnv = await prepareAssessmentTerraformEnv(assessmentResultId, appliedRun, workspace, organization, executionDir);
+      const tfVarsFiles = await writeAssessmentTfVarsFiles(executionDir, terraformEnv.variables, appliedRun.variables);
+      const resolved = await ensureBinary(terraformEnv.requestedTool, terraformEnv.requestedVersion);
+      if (resolved === null) throw new Error(`Unable to resolve CLI binary '${terraformEnv.requestedTool}' for assessment.`);
       if (runSandbox !== null) {
         await runSandbox.ensureTool(resolved.tool, resolved.version, resolved.binaryPath);
         await runSandbox.prepareWorkDir(`assessment-${assessmentResultId}`);
       }
-      const init = await captureProcess(
-        `assessment-${assessmentResultId}`,
-        [resolved.binaryPath, "init", "-reconfigure", "-no-color", "-input=false"],
-        executionDir,
-        environment,
-        assessmentTimeoutMs,
-        workDir,
-      );
-      appendOutput(init.output);
-      if (init.exitCode !== 0) throw new Error(`${resolved.tool} init failed with exit code ${String(init.exitCode)}`);
-
-      const planArgs = [
-        resolved.binaryPath,
-        "plan",
-        "-no-color",
-        "-input=false",
-        "-detailed-exitcode",
-        "-out=tfplan",
-      ];
-      if (terraformVariables.length > 0) planArgs.push("-var-file=terrence.workspace.tfvars");
-      if (appliedRunTfVarsLines.length > 0) planArgs.push("-var-file=terrence.run.tfvars");
-      const plan = await captureProcess(
-        `assessment-${assessmentResultId}`,
-        planArgs,
-        executionDir,
-        environment,
-        assessmentTimeoutMs,
-        workDir,
-      );
-      appendOutput(plan.output);
-      if (plan.exitCode !== 0 && plan.exitCode !== 2) {
-        throw new Error(`${resolved.tool} assessment plan failed with exit code ${String(plan.exitCode)}`);
-      }
-
-      const generatedPlan = await readPlanJson(assessmentResultId, executionDir, resolved.binaryPath, assessmentTimeoutMs, workDir);
-      if (generatedPlan === undefined) throw new Error("Unable to read assessment plan JSON.");
-      planJson = generatedPlan.planJson;
-
-      const schema = await captureProcess(
-        `assessment-${assessmentResultId}`,
-        [resolved.binaryPath, "providers", "schema", "-json"],
-        executionDir,
-        environment,
-        assessmentTimeoutMs,
-        workDir,
-      );
-      if (schema.exitCode === 0) providerSchema = parseJsonObject(await readCapturedJson(schema.capturedOutput, "Provider schema output"));
-      else appendOutput(`[terrence] Provider schema unavailable: ${schema.output}`);
+      planJson = await runAssessmentPlanCapture(assessmentResultId, resolved, executionDir, terraformEnv.environment, terraformEnv.assessmentTimeoutMs, workDir, tfVarsFiles.terraformVariables, tfVarsFiles.appliedRunTfVarsLines, appendOutput);
+      providerSchema = await readAssessmentProviderSchema(assessmentResultId, resolved, executionDir, terraformEnv.environment, terraformEnv.assessmentTimeoutMs, workDir, appendOutput);
     }
 
-    const activeRun = await db.query.runs.findFirst({
-      where: and(
-        eq(runs.workspaceId, workspace.id),
-        notInArray(runs.status, FINAL_RUN_STATUSES),
-      ),
-    });
-    if (activeRun !== undefined) {
-      await db.update(assessmentResults).set({
-        status: "canceled",
-        succeeded: false,
-        errorMessage: "Canceled because an ordinary run started",
-        logOutput: output.join("\n"),
-        completedAt: Date.now(),
-      }).where(eq(assessmentResults.id, assessmentResultId));
-      scheduleExplorerInventory(workspace.id);
-      return;
-    }
-
-    const [resources, checks] = await Promise.all([
-      Promise.resolve(assessmentResourceCounts(planJson)),
-      storePlanCheckResults(workspace.id, planJson, { assessmentResultId }),
-    ]);
-    const allChecksSucceeded = checks.failed === 0 && checks.errored === 0 && checks.unknown === 0;
-    await db.update(assessmentResults).set({
-      status: "completed",
-      succeeded: true,
-      drifted: resources.drifted > 0,
-      errorMessage: null,
-      resourcesDrifted: resources.drifted,
-      resourcesUndrifted: resources.undrifted,
-      allChecksSucceeded,
-      checksPassed: checks.passed,
-      checksFailed: checks.failed,
-      checksErrored: checks.errored,
-      checksUnknown: checks.unknown,
-      jsonOutput: planJson,
-      jsonSchema: providerSchema,
-      artifactSchemaVersion: 1,
-      logOutput: output.join("\n"),
-      completedAt: Date.now(),
-    }).where(eq(assessmentResults.id, assessmentResultId));
-    scheduleExplorerInventory(workspace.id);
-    if (resources.drifted > 0) queueAssessmentNotification(assessmentResultId, "assessment:drifted");
-    if (!allChecksSucceeded) queueAssessmentNotification(assessmentResultId, "assessment:check_failure");
+    await completeAssessmentRun(assessmentResultId, workspace.id, planJson, providerSchema, output);
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    appendOutput(`[terrence ERROR] ${message}`);
-    await db.update(assessmentResults).set({
-      status: "errored",
-      succeeded: false,
-      drifted: null,
-      errorMessage: message,
-      logOutput: output.join("\n"),
-      completedAt: Date.now(),
-    }).where(eq(assessmentResults.id, assessmentResultId));
-    scheduleExplorerInventory(workspace.id);
-    queueAssessmentNotification(assessmentResultId, "assessment:failed");
+    await failAssessmentRun(assessmentResultId, workspace.id, output, appendOutput, error);
   } finally {
-    await revokeWorkloadIdentityTokens(assessmentResultId).catch((error: unknown): void => {
-      log.error("Failed to revoke assessment workload identity tokens", { assessmentResultId, error: String(error) });
-    });
-    try {
-      if (runSandbox !== null) {
-        await removeSandboxWorkDir(`assessment-${assessmentResultId}`);
-      } else {
-        await rm(workDir, { recursive: true, force: true });
-      }
-    } catch (error: unknown) {
-      logBestEffortFailure("Assessment workdir cleanup failed", { assessmentResultId }, error);
-    }
+    await cleanupAssessmentRun(assessmentResultId, workDir);
   }
 }
 
