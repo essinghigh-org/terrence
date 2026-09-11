@@ -184,14 +184,8 @@ async function currentRunForWorkspace(workspaceId: string, include: string): Pro
 function parseLockReason(body: unknown): Readonly<{ reason: string | null; error: string | null }> {
   if (body === undefined || body === null) return { reason: null, error: null };
   if (typeof body !== "object" || Array.isArray(body)) return { reason: null, error: "Lock reason must be a string" };
-  const payload = body as Record<string, unknown>;
-  const data = payload["data"] !== null && typeof payload["data"] === "object"
-    ? payload["data"] as Record<string, unknown>
-    : undefined;
-  const attributes = data?.["attributes"] !== null && typeof data?.["attributes"] === "object"
-    ? data["attributes"] as Record<string, unknown>
-    : undefined;
-  const value = payload["reason"] ?? attributes?.["reason"];
+  const { attributes } = updateBodySections(body);
+  const value = (body as Record<string, unknown>)["reason"] ?? attributes["reason"];
   if (value === undefined || value === null) return { reason: null, error: null };
   if (typeof value !== "string") return { reason: null, error: "Lock reason must be a string" };
   const reason = value.trim();
@@ -1384,36 +1378,26 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   .patch("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
     const varId = params["var_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-write");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const actor = actorScope(user, orgId, teamId);
+    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId, "variables-write");
+    if (ws === undefined) return failWorkspaceUpdate(set, 404);
     const variable = await db.query.workspaceVariables.findFirst({ where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, workspaceId)) });
-    if (variable === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (variable === undefined) return failWorkspaceUpdate(set, 404);
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
-    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const { attributes: attrs } = updateBodySections(body);
     if (data?.["type"] !== "vars" || !validVariableAttributes(attrs, true)) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
+      return failWorkspaceUpdate(set, 422, "Invalid variable attributes");
     }
-    let sensitive = typeof attrs["sensitive"] === "boolean" ? attrs["sensitive"] : (variable.sensitive ?? false);
-    if ((variable.sensitive ?? false) && !sensitive && attrs["value"] === undefined) sensitive = true;
-    // A value supplied in this PATCH is authoritative; otherwise keep the
-    // stored value (decrypting an encrypted one). Flipping sensitive on
-    // encrypts the existing plaintext (todo 169).
-    const suppliedValue = typeof attrs["value"] === "string" ? attrs["value"] : null;
-    const unchangedSensitive = suppliedValue === null && sensitive && variable.sensitive === true && variable.valueEncrypted !== null;
-    const effectiveValue = suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value);
-    const key = typeof attrs["key"] === "string" ? attrs["key"] : variable.key;
-    const category = typeof attrs["category"] === "string" ? attrs["category"] : variable.category;
-    const hcl = typeof attrs["hcl"] === "boolean" ? attrs["hcl"] : (variable.hcl ?? false);
-    const description = typeof attrs["description"] === "string" ? attrs["description"] : variable.description;
-    const stored = unchangedSensitive ? { value: variable.value, valueEncrypted: variable.valueEncrypted } : await variableValueForWrite(sensitive, effectiveValue);
+    const { sensitive, suppliedValue } = resolveVariableSensitive(attrs, variable);
+    const stored = await resolveVariableStored(sensitive, suppliedValue, variable);
+    const { key, category, hcl, description } = resolveVariableFields(attrs, variable);
     const updated = { key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description };
     try {
       await db.update(workspaceVariables).set(updated).where(eq(workspaceVariables.id, varId));
     } catch (error: unknown) {
-      const isUnique: boolean = isUniqueConstraintError(error);
-      if (isUnique) {
-        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this workspace" }] };
+      if (isUniqueConstraintError(error)) {
+        return failWorkspaceUpdate(set, 422, "Variable key already exists in this workspace");
       }
       throw error;
     }
@@ -2047,6 +2031,40 @@ function updateBodySections(body: unknown): Readonly<{
   const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
   const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
   return { attributes, rels };
+}
+
+function resolveVariableSensitive(
+  attrs: Readonly<Record<string, unknown>>,
+  variable: VarItem,
+): Readonly<{ sensitive: boolean; suppliedValue: string | null }> {
+  let sensitive = typeof attrs["sensitive"] === "boolean" ? attrs["sensitive"] : (variable.sensitive ?? false);
+  if ((variable.sensitive ?? false) && !sensitive && attrs["value"] === undefined) sensitive = true;
+  const suppliedValue = typeof attrs["value"] === "string" ? attrs["value"] : null;
+  return { sensitive, suppliedValue };
+}
+
+async function resolveVariableStored(
+  sensitive: boolean,
+  suppliedValue: string | null,
+  variable: VarItem,
+): Promise<Readonly<{ value: string; valueEncrypted: string | null }>> {
+  const unchangedSensitive = suppliedValue === null && sensitive && variable.sensitive === true && variable.valueEncrypted !== null;
+  if (unchangedSensitive) return { value: variable.value, valueEncrypted: variable.valueEncrypted };
+  // A value supplied in the PATCH is authoritative; otherwise keep the
+  // stored value (decrypting an encrypted one). Flipping sensitive on
+  // encrypts the existing plaintext (todo 169).
+  return variableValueForWrite(sensitive, suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value));
+}
+
+function resolveVariableFields(
+  attrs: Readonly<Record<string, unknown>>,
+  variable: VarItem,
+): Readonly<{ key: string; category: string; hcl: boolean; description: string | null }> {
+  const key = typeof attrs["key"] === "string" ? attrs["key"] : variable.key;
+  const category = typeof attrs["category"] === "string" ? attrs["category"] : variable.category;
+  const hcl = typeof attrs["hcl"] === "boolean" ? attrs["hcl"] : (variable.hcl ?? false);
+  const description = typeof attrs["description"] === "string" ? attrs["description"] : variable.description;
+  return { key, category, hcl, description };
 }
 
 function parseWorkspaceUpdateBody(body: unknown): ParsedWorkspaceUpdate {
