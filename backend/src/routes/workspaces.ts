@@ -1020,29 +1020,21 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   })
   .get("/api/v2/workspaces/:workspace_id/readme", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "state-read");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const actor = actorScope(user, principalOrgId, teamId);
+    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId, "state-read");
+    if (ws === undefined) return failWorkspaceUpdate(set, 404);
     const latestRun = await db.query.runs.findFirst({
       where: eq(runs.workspaceId, workspaceId),
       orderBy: [desc(runs.createdAt), asc(runs.id)],
     });
     const configurationVersionId = latestRun?.configurationVersionId;
     if (latestRun === undefined || configurationVersionId === null || configurationVersionId === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
+      return failWorkspaceUpdate(set, 404);
     }
-    const configuration = await db.query.configurationVersions.findFirst({
-      where: eq(configurationVersions.id, configurationVersionId),
-    });
-    if (configuration?.archivePath === null || configuration?.archivePath === undefined || !(await Bun.file(configuration.archivePath).exists())) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const content = await readmeFromArchive(configuration.archivePath);
-    if (content === null) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
+    const archivePath = await readmeArchivePath(configurationVersionId);
+    if (archivePath === null) return failWorkspaceUpdate(set, 404);
+    const content = await readmeFromArchive(archivePath);
+    if (content === null) return failWorkspaceUpdate(set, 404);
     return {
       data: {
         id: `readme-${latestRun.id}`,
@@ -2540,6 +2532,15 @@ async function rejectLockedInheritedTag(
   const lockedTagKey = await findLockedInheritedTagKey(ws.orgId, ws.projectId, [...entries.keys()]);
   if (lockedTagKey === undefined) return null;
   return failWorkspaceUpdate(set, 422, `Tag key "${lockedTagKey}" cannot override its inherited project tag`);
+}
+
+async function readmeArchivePath(configurationVersionId: string): Promise<string | null> {
+  const configuration = await db.query.configurationVersions.findFirst({
+    where: eq(configurationVersions.id, configurationVersionId),
+  });
+  const archivePath = configuration?.archivePath;
+  if (archivePath === null || archivePath === undefined || !(await Bun.file(archivePath).exists())) return null;
+  return archivePath;
 }
 
 async function findNamedWorkspace(
