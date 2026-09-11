@@ -3626,6 +3626,342 @@ async function failClosedPolicyChecks(
   return { proceed: !hardFailed && !softFailed, hardFailed, softFailed };
 }
 
+function interpretOpaResult(checkResult: Record<string, unknown>): string {
+  const resultList = checkResult["result"] as Record<string, unknown>[] | undefined;
+  const exprList = resultList?.[0]?.["expressions"] as Record<string, unknown>[] | undefined;
+  const valObj = exprList?.[0]?.["value"] as Record<string, unknown> | undefined;
+  const violated = valObj?.["violations"];
+  return violated !== undefined && Array.isArray(violated) && violated.length > 0 ? "failed" : "passed";
+}
+
+async function evaluateOpaPolicy(
+  runId: string,
+  policy: typeof policies.$inferSelect,
+  policySource: string,
+  planJsonPayload: string,
+  policyTimeoutMs: number,
+): Promise<{ status: string; result: Record<string, unknown> }> {
+  const policySandbox = policyEvaluationSandbox();
+  // Unpredictable per-invocation directory: a guessable tmp path under
+  // /tmp invites symlink attacks and cross-run tampering.
+  const workDir = join(tmpdir(), "terrence", "opa", `${runId}-${crypto.randomUUID()}`);
+  let checkStatus = "unreachable";
+  let checkResult: Record<string, unknown> = {};
+  try {
+    await mkdir(workDir, { recursive: true, mode: 0o700 });
+    await mkdir(join(workDir, "tmp"), { recursive: true, mode: 0o700 });
+    const policyPath = join(workDir, "policy.rego");
+    const dataPath = join(workDir, "input.json");
+    await writeFile(policyPath, policySource, { mode: 0o600 });
+    await writeFile(dataPath, planJsonPayload, { mode: 0o600 });
+    const opaQuery = typeof policy.source === "string" && typeof policy.query === "string" && policy.query !== ""
+      ? policy.query
+      : "data";
+    // Validate OPA query to prevent argument injection — only allow safe query syntax
+    const opaQuerySafe = /^[a-zA-Z0-9_.]+$/.test(opaQuery) ? opaQuery : "data";
+    const opaProc = spawnRunProcess(
+      runId,
+      [await requirePolicyEngine("opa"), "eval", "--data", policyPath, "--input", dataPath, opaQuerySafe],
+      {
+        cwd: workDir,
+        env: { PATH: process.env["PATH"] ?? "" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+      policySandbox,
+    );
+    const opaOutput = captureProcessOutput(opaProc.stdout, opaProc.stderr, workDir, "opa");
+    const [opaExit, capturedOutput] = await waitForTrackedProcess(runId, "policy", opaProc, opaOutput, policyTimeoutMs);
+    if (opaExit === 0) {
+      checkResult = parseJsonObject(await readCapturedJson(capturedOutput, "OPA output"));
+      checkStatus = interpretOpaResult(checkResult);
+    } else {
+      checkStatus = "errored";
+      checkResult = { error: "OPA evaluation failed" };
+    }
+  } finally {
+    try {
+      await rm(workDir, { recursive: true, force: true });
+    } catch (error: unknown) {
+      logBestEffortFailure("OPA policy workdir cleanup failed", { runId, policyId: policy.id }, error);
+    }
+  }
+  return { status: checkStatus, result: checkResult };
+}
+
+async function resolveSentinelParamInputs(
+  policy: typeof policies.$inferSelect,
+  parametersBySet: PlanPolicySets["parametersBySet"],
+): Promise<SentinelParamInput[]> {
+  const paramInputs: SentinelParamInput[] = [];
+  for (const parameter of (policy.policySetId !== null ? parametersBySet.get(policy.policySetId) ?? [] : [])) {
+    // Sensitive parameters are stored encrypted (issue #577):
+    // resolve the plaintext for the engine invocation.
+    paramInputs.push({
+      key: parameter.key,
+      hcl: parameter.hcl === true,
+      sensitive: parameter.sensitive === true,
+      plaintext: await variableValueForRead(parameter),
+    });
+  }
+  return paramInputs;
+}
+
+function parseSentinelResult(
+  sentinelStdout: string,
+  sentinelStderr: string,
+  paramInputs: readonly SentinelParamInput[],
+): Record<string, unknown> {
+  let sentinel: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(sentinelStdout) as unknown;
+    sentinel = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : { output: sentinelStdout };
+  } catch {
+    sentinel = { output: sentinelStdout };
+  }
+  if (sentinelStderr !== "") sentinel["stderr"] = sentinelStderr;
+  // Scrub sensitive parameter plaintexts before persisting (CodeRabbit
+  // P1-sweep review, CWE-312): failure traces may echo evaluated values.
+  const sensitivePlaintexts = paramInputs
+    .filter((param) => param.sensitive && param.plaintext !== "")
+    .map((param) => param.plaintext);
+  if (sensitivePlaintexts.length > 0) {
+    sentinel = redactSecrets(sentinel, sensitivePlaintexts) as Record<string, unknown>;
+  }
+  return sentinel;
+}
+
+function enforcementFailedCounts(passed: boolean, enforcementLevel: string): Readonly<{ hard: number; soft: number; advisory: number }> {
+  return {
+    hard: !passed && enforcementLevel === "hard-mandatory" ? 1 : 0,
+    soft: !passed && enforcementLevel === "soft-mandatory" ? 1 : 0,
+    advisory: !passed && enforcementLevel === "advisory" ? 1 : 0,
+  };
+}
+
+function sentinelCheckOutcome(
+  sentinelExit: number,
+  enforcementLevel: string,
+  duration: unknown,
+  sentinel: Record<string, unknown>,
+): { status: string; result: Record<string, unknown> } {
+  if (sentinelExit === 0 || sentinelExit === 1 || sentinelExit === 2) {
+    const passed = sentinelExit === 0;
+    const failedCounts = enforcementFailedCounts(passed, enforcementLevel);
+    return {
+      status: passed ? "passed" : "failed",
+      result: {
+        result: passed,
+        passed: passed ? 1 : 0,
+        "total-failed": passed ? 0 : 1,
+        "hard-failed": failedCounts.hard,
+        "soft-failed": failedCounts.soft,
+        "advisory-failed": failedCounts.advisory,
+        "duration-ms": typeof duration === "number" ? duration : 0,
+        sentinel,
+      },
+    };
+  }
+  return { status: "errored", result: { error: `Sentinel evaluation exited with code ${String(sentinelExit)}`, sentinel } };
+}
+
+async function evaluateSentinelPolicy(
+  runId: string,
+  policy: typeof policies.$inferSelect,
+  policySource: string,
+  parametersBySet: PlanPolicySets["parametersBySet"],
+  generatedPlanJson: JsonObject | undefined,
+  policyTimeoutMs: number,
+): Promise<{ status: string; result: Record<string, unknown> }> {
+  const workDir = join(tmpdir(), "terrence", "sentinel", `${runId}-${crypto.randomUUID()}`, policy.id);
+  try {
+    await mkdir(workDir, { recursive: true, mode: 0o700 });
+    await mkdir(join(workDir, "tmp"), { recursive: true, mode: 0o700 });
+    const policyPath = join(workDir, "policy.sentinel");
+    const configPath = join(workDir, "sentinel.json");
+    await writeFile(policyPath, policySource, { mode: 0o600 });
+    // Keep the potentially large plan out of argv (/proc and ARG_MAX). A
+    // JSON config preserves the plan as data without HCL interpolation.
+    // Sensitive parameters ride the same 0600 config file (CWE-200):
+    // decrypted values must never appear in process arguments.
+    const paramInputs = await resolveSentinelParamInputs(policy, parametersBySet);
+    const { configParams, argvParams } = splitSentinelParams(paramInputs);
+    await writeFile(configPath, JSON.stringify({
+      global: { tfplan: { value: generatedPlanJson ?? {} } },
+      ...(Object.keys(configParams).length > 0 ? { param: configParams } : {}),
+    }), { mode: 0o600 });
+    const args = [
+      await requirePolicyEngine("sentinel"),
+      "apply",
+      "-json",
+      "-timeout=30s",
+      `-config=${configPath}`,
+      ...argvParams,
+    ];
+    args.push(policyPath);
+
+    const policySandbox = policyEvaluationSandbox();
+    const sentinelProc = spawnRunProcess(
+      runId,
+      args,
+      {
+        cwd: workDir,
+        env: { PATH: process.env["PATH"] ?? "" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+      policySandbox,
+    );
+    const sentinelOutput = captureProcessOutput(sentinelProc.stdout, sentinelProc.stderr, workDir, "sentinel");
+    const [sentinelExit, capturedOutput] = await waitForTrackedProcess(runId, "policy", sentinelProc, sentinelOutput, policyTimeoutMs);
+    const sentinelStdout = await readCapturedJson(capturedOutput, "Sentinel output");
+    const sentinelStderr = capturedOutput.stderr.truncated
+      ? `${capturedOutput.stderr.preview}\n[terrence] Sentinel stderr truncated.`
+      : capturedOutput.stderr.preview;
+    const sentinel = parseSentinelResult(sentinelStdout, sentinelStderr, paramInputs);
+    return sentinelCheckOutcome(sentinelExit, policy.enforcementLevel, sentinel["duration"], sentinel);
+  } finally {
+    try {
+      await rm(workDir, { recursive: true, force: true });
+    } catch (error: unknown) {
+      logBestEffortFailure("Sentinel policy workdir cleanup failed", { runId, policyId: policy.id }, error);
+    }
+  }
+}
+
+function opaEvaluationArgs(
+  isOpa: boolean | undefined,
+  policySource: unknown,
+  planJsonPayload: string | null,
+): { policySource: string; planJsonPayload: string } | null {
+  if (isOpa !== true || typeof policySource !== "string" || policySource === "" || planJsonPayload === null || planJsonPayload === "") return null;
+  return { policySource, planJsonPayload };
+}
+
+function sentinelEvaluationSource(isSentinel: boolean | undefined, policySource: unknown): string | null {
+  if (isSentinel !== true || typeof policySource !== "string" || policySource === "") return null;
+  return policySource;
+}
+
+function unsupportedPolicyKindResult(kind: string | undefined): { status: string; result: Record<string, unknown> } {
+  if (kind !== "opa" && kind !== "sentinel") {
+    return { status: "unreachable", result: { error: `Policy kind '${kind ?? "unknown"}' is not supported` } };
+  }
+  return { status: "errored", result: { error: "Missing policy query or plan data for evaluation" } };
+}
+
+async function evaluatePlanPolicy(
+  runId: string,
+  policy: typeof policies.$inferSelect,
+  policySetsById: PlanPolicySets["policySetsById"],
+  parametersBySet: PlanPolicySets["parametersBySet"],
+  planJsonPayload: string | null,
+  generatedPlanJson: JsonObject | undefined,
+  policyTimeoutMs: number,
+): Promise<{ status: string; result: Record<string, unknown> }> {
+  const policySet = policy.policySetId !== null ? policySetsById.get(policy.policySetId) : undefined;
+  const policySource = typeof policy.source === "string" && policy.source !== ""
+    ? policy.source
+    : policy.query;
+  const opaArgs = opaEvaluationArgs(policySet?.kind === "opa", policySource, planJsonPayload);
+  if (opaArgs !== null) {
+    return evaluateOpaPolicy(runId, policy, opaArgs.policySource, opaArgs.planJsonPayload, policyTimeoutMs);
+  }
+  const sentinelSource = sentinelEvaluationSource(policySet?.kind === "sentinel", policySource);
+  if (sentinelSource !== null) {
+    return evaluateSentinelPolicy(runId, policy, sentinelSource, parametersBySet, generatedPlanJson, policyTimeoutMs);
+  }
+  return unsupportedPolicyKindResult(policySet?.kind);
+}
+
+async function recordPolicyCheckOutcome(
+  runId: string,
+  policy: typeof policies.$inferSelect,
+  checkId: string,
+  checkStatus: string,
+  checkResult: Record<string, unknown>,
+  checkBatch: (typeof policyChecks.$inferInsert)[],
+): Promise<{ hardFailed: boolean; softFailed: boolean }> {
+  const storedStatus = checkStatus === "failed" && policy.enforcementLevel === "soft-mandatory"
+    ? "soft_failed"
+    : checkStatus;
+  checkBatch.push({
+    id: checkId,
+    runId,
+    policyId: policy.id,
+    policySetId: policy.policySetId,
+    status: storedStatus,
+    result: checkResult,
+    createdAt: Date.now(),
+  });
+
+  let hardFailed = false;
+  let softFailed = false;
+  if (checkStatus === "failed") {
+    if (policy.enforcementLevel === "hard-mandatory") {
+      hardFailed = true;
+      await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" HARD-FAILED (hard-mandatory). Blocking apply.`);
+    } else if (policy.enforcementLevel === "soft-mandatory") {
+      softFailed = true;
+      await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" SOFT-FAILED (soft-mandatory). Override required.`);
+    } else {
+      await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" FAILED (advisory — not blocking).`);
+    }
+  } else if (checkStatus === "passed") {
+    await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" PASSED.`);
+  } else if (checkStatus === "errored" || checkStatus === "unreachable") {
+    if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
+    if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
+    await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" ${checkStatus}: ${JSON.stringify(checkResult)}`);
+  }
+  return { hardFailed, softFailed };
+}
+
+async function recordPolicyCheckError(
+  runId: string,
+  policy: typeof policies.$inferSelect,
+  checkId: string,
+  err: unknown,
+  checkBatch: (typeof policyChecks.$inferInsert)[],
+): Promise<{ hardFailed: boolean; softFailed: boolean }> {
+  let hardFailed = false;
+  let softFailed = false;
+  // A missing engine is unreachable, not errored (issue #596): the
+  // policy never evaluated. Blocking semantics match errored
+  // (mandatory and soft-mandatory stop the run; advisory warns).
+  if (err instanceof PolicyEngineMissingError) {
+    checkBatch.push({
+      id: checkId,
+      runId,
+      policyId: policy.id,
+      policySetId: policy.policySetId,
+      status: "unreachable",
+      result: { error: err.message },
+      createdAt: Date.now(),
+    });
+    if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
+    if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
+    await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" unreachable: ${err.message}`);
+    return { hardFailed, softFailed };
+  }
+  const errMsg = err instanceof Error ? err.message : String(err);
+  checkBatch.push({
+    id: checkId,
+    runId,
+    policyId: policy.id,
+    policySetId: policy.policySetId,
+    status: "errored",
+    result: { error: errMsg },
+    createdAt: Date.now(),
+  });
+  if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
+  if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
+  await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" evaluation error: ${errMsg}`);
+  return { hardFailed, softFailed };
+}
+
 export async function runPolicyChecks(
   runId: string,
   workspaceId: string,
@@ -3663,235 +3999,15 @@ export async function runPolicyChecks(
     let checkResult: Record<string, unknown> = {};
 
     try {
-      // For OPA policies, attempt to run opa eval
-      const policySet = policy.policySetId !== null ? policySetsById.get(policy.policySetId) : undefined;
-      const isOpa = policySet?.kind === "opa";
-      const isSentinel = policySet?.kind === "sentinel";
-      const policySource = typeof policy.source === "string" && policy.source !== ""
-        ? policy.source
-        : policy.query;
+      ({ status: checkStatus, result: checkResult } = await evaluatePlanPolicy(runId, policy, policySetsById, parametersBySet, planJsonPayload, generatedPlanJson, policyTimeoutMs));
 
-      if (isOpa && typeof policySource === "string" && policySource !== "" && planJsonPayload !== null && planJsonPayload !== "") {
-        const policySandbox = policyEvaluationSandbox();
-        // Try to evaluate with OPA
-        // Unpredictable per-invocation directory: a guessable tmp path under
-        // /tmp invites symlink attacks and cross-run tampering.
-        const workDir = join(tmpdir(), "terrence", "opa", `${runId}-${crypto.randomUUID()}`);
-        try {
-          await mkdir(workDir, { recursive: true, mode: 0o700 });
-          await mkdir(join(workDir, "tmp"), { recursive: true, mode: 0o700 });
-        const policyPath = join(workDir, "policy.rego");
-        const dataPath = join(workDir, "input.json");
-        await writeFile(policyPath, policySource, { mode: 0o600 });
-        await writeFile(dataPath, planJsonPayload, { mode: 0o600 });
-        const opaQuery = typeof policy.source === "string" && typeof policy.query === "string" && policy.query !== ""
-          ? policy.query
-          : "data";
-        // Validate OPA query to prevent argument injection — only allow safe query syntax
-        const opaQuerySafe = /^[a-zA-Z0-9_.]+$/.test(opaQuery) ? opaQuery : "data";
-        const opaProc = spawnRunProcess(
-          runId,
-          [await requirePolicyEngine("opa"), "eval", "--data", policyPath, "--input", dataPath, opaQuerySafe],
-          {
-            cwd: workDir,
-            env: { PATH: process.env["PATH"] ?? "" },
-            stdout: "pipe",
-            stderr: "pipe",
-          },
-          policySandbox,
-        );
-        const opaOutput = captureProcessOutput(opaProc.stdout, opaProc.stderr, workDir, "opa");
-        const [opaExit, capturedOutput] = await waitForTrackedProcess(runId, "policy", opaProc, opaOutput, policyTimeoutMs);
-        if (opaExit === 0) {
-          checkResult = parseJsonObject(await readCapturedJson(capturedOutput, "OPA output"));
-          const resultList = checkResult["result"] as Record<string, unknown>[] | undefined;
-          const exprList = resultList?.[0]?.["expressions"] as Record<string, unknown>[] | undefined;
-          const valObj = exprList?.[0]?.["value"] as Record<string, unknown> | undefined;
-          const violated = valObj?.["violations"];
-          if (violated !== undefined && Array.isArray(violated) && violated.length > 0) {
-            checkStatus = "failed";
-          } else {
-            checkStatus = "passed";
-          }
-        } else {
-          checkStatus = "errored";
-          checkResult = { error: "OPA evaluation failed" };
-        }
-        } finally {
-          try {
-            await rm(workDir, { recursive: true, force: true });
-          } catch (error: unknown) {
-            logBestEffortFailure("OPA policy workdir cleanup failed", { runId, policyId: policy.id }, error);
-          }
-        }
-      } else if (isSentinel && typeof policySource === "string" && policySource !== "") {
-        const workDir = join(tmpdir(), "terrence", "sentinel", `${runId}-${crypto.randomUUID()}`, policy.id);
-        try {
-          await mkdir(workDir, { recursive: true, mode: 0o700 });
-          await mkdir(join(workDir, "tmp"), { recursive: true, mode: 0o700 });
-        const policyPath = join(workDir, "policy.sentinel");
-        const configPath = join(workDir, "sentinel.json");
-        await writeFile(policyPath, policySource, { mode: 0o600 });
-        // Keep the potentially large plan out of argv (/proc and ARG_MAX). A
-        // JSON config preserves the plan as data without HCL interpolation.
-        // Sensitive parameters ride the same 0600 config file (CWE-200):
-        // decrypted values must never appear in process arguments.
-        const paramInputs: SentinelParamInput[] = [];
-        for (const parameter of (policy.policySetId !== null ? parametersBySet.get(policy.policySetId) ?? [] : [])) {
-          // Sensitive parameters are stored encrypted (issue #577):
-          // resolve the plaintext for the engine invocation.
-          paramInputs.push({
-            key: parameter.key,
-            hcl: parameter.hcl === true,
-            sensitive: parameter.sensitive === true,
-            plaintext: await variableValueForRead(parameter),
-          });
-        }
-        const { configParams, argvParams } = splitSentinelParams(paramInputs);
-        await writeFile(configPath, JSON.stringify({
-          global: { tfplan: { value: generatedPlanJson ?? {} } },
-          ...(Object.keys(configParams).length > 0 ? { param: configParams } : {}),
-        }), { mode: 0o600 });
-        const args = [
-          await requirePolicyEngine("sentinel"),
-          "apply",
-          "-json",
-          "-timeout=30s",
-          `-config=${configPath}`,
-          ...argvParams,
-        ];
-        args.push(policyPath);
-
-        const policySandbox = policyEvaluationSandbox();
-        const sentinelProc = spawnRunProcess(
-          runId,
-          args,
-          {
-            cwd: workDir,
-            env: { PATH: process.env["PATH"] ?? "" },
-            stdout: "pipe",
-            stderr: "pipe",
-          },
-          policySandbox,
-        );
-        const sentinelOutput = captureProcessOutput(sentinelProc.stdout, sentinelProc.stderr, workDir, "sentinel");
-        const [sentinelExit, capturedOutput] = await waitForTrackedProcess(runId, "policy", sentinelProc, sentinelOutput, policyTimeoutMs);
-        const sentinelStdout = await readCapturedJson(capturedOutput, "Sentinel output");
-        const sentinelStderr = capturedOutput.stderr.truncated
-          ? `${capturedOutput.stderr.preview}\n[terrence] Sentinel stderr truncated.`
-          : capturedOutput.stderr.preview;
-        let sentinel: Record<string, unknown>;
-        try {
-          const parsed = JSON.parse(sentinelStdout) as unknown;
-          sentinel = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-            ? parsed as Record<string, unknown>
-            : { output: sentinelStdout };
-        } catch {
-          sentinel = { output: sentinelStdout };
-        }
-        if (sentinelStderr !== "") sentinel["stderr"] = sentinelStderr;
-        // Scrub sensitive parameter plaintexts before persisting (CodeRabbit
-        // P1-sweep review, CWE-312): failure traces may echo evaluated values.
-        const sensitivePlaintexts = paramInputs
-          .filter((param) => param.sensitive && param.plaintext !== "")
-          .map((param) => param.plaintext);
-        if (sensitivePlaintexts.length > 0) {
-          sentinel = redactSecrets(sentinel, sensitivePlaintexts) as Record<string, unknown>;
-        }
-        if (sentinelExit === 0 || sentinelExit === 1 || sentinelExit === 2) {
-          const passed = sentinelExit === 0;
-          checkStatus = passed ? "passed" : "failed";
-          checkResult = {
-            result: passed,
-            passed: passed ? 1 : 0,
-            "total-failed": passed ? 0 : 1,
-            "hard-failed": !passed && policy.enforcementLevel === "hard-mandatory" ? 1 : 0,
-            "soft-failed": !passed && policy.enforcementLevel === "soft-mandatory" ? 1 : 0,
-            "advisory-failed": !passed && policy.enforcementLevel === "advisory" ? 1 : 0,
-            "duration-ms": typeof sentinel["duration"] === "number" ? sentinel["duration"] : 0,
-            sentinel,
-          };
-        } else {
-          checkStatus = "errored";
-          checkResult = { error: `Sentinel evaluation exited with code ${String(sentinelExit)}`, sentinel };
-        }
-        } finally {
-          try {
-            await rm(workDir, { recursive: true, force: true });
-          } catch (error: unknown) {
-            logBestEffortFailure("Sentinel policy workdir cleanup failed", { runId, policyId: policy.id }, error);
-          }
-        }
-      } else if (!isOpa && !isSentinel) {
-        checkStatus = "unreachable";
-        checkResult = { error: `Policy kind '${policySet?.kind ?? "unknown"}' is not supported` };
-      } else {
-        checkStatus = "errored";
-        checkResult = { error: "Missing policy query or plan data for evaluation" };
-      }
-
-      const storedStatus = checkStatus === "failed" && policy.enforcementLevel === "soft-mandatory"
-        ? "soft_failed"
-        : checkStatus;
-      checkBatch.push({
-        id: checkId,
-        runId,
-        policyId: policy.id,
-        policySetId: policy.policySetId,
-        status: storedStatus,
-        result: checkResult,
-        createdAt: Date.now(),
-      });
-
-      if (checkStatus === "failed") {
-        if (policy.enforcementLevel === "hard-mandatory") {
-          hardFailed = true;
-          await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" HARD-FAILED (hard-mandatory). Blocking apply.`);
-        } else if (policy.enforcementLevel === "soft-mandatory") {
-          softFailed = true;
-          await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" SOFT-FAILED (soft-mandatory). Override required.`);
-        } else {
-          await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" FAILED (advisory — not blocking).`);
-        }
-      } else if (checkStatus === "passed") {
-        await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" PASSED.`);
-      } else if (checkStatus === "errored" || checkStatus === "unreachable") {
-        if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
-        if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
-        await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" ${checkStatus}: ${JSON.stringify(checkResult)}`);
-      }
+      const outcome = await recordPolicyCheckOutcome(runId, policy, checkId, checkStatus, checkResult, checkBatch);
+      hardFailed = hardFailed || outcome.hardFailed;
+      softFailed = softFailed || outcome.softFailed;
     } catch (err: unknown) {
-      // A missing engine is unreachable, not errored (issue #596): the
-      // policy never evaluated. Blocking semantics match errored
-      // (mandatory and soft-mandatory stop the run; advisory warns).
-      if (err instanceof PolicyEngineMissingError) {
-        checkBatch.push({
-          id: checkId,
-          runId,
-          policyId: policy.id,
-          policySetId: policy.policySetId,
-          status: "unreachable",
-          result: { error: err.message },
-          createdAt: Date.now(),
-        });
-        if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
-        if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
-        await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" unreachable: ${err.message}`);
-        continue;
-      }
-      const errMsg = err instanceof Error ? err.message : String(err);
-      checkBatch.push({
-        id: checkId,
-        runId,
-        policyId: policy.id,
-        policySetId: policy.policySetId,
-        status: "errored",
-        result: { error: errMsg },
-        createdAt: Date.now(),
-      });
-      if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
-      if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
-      await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" evaluation error: ${errMsg}`);
+      const errorOutcome = await recordPolicyCheckError(runId, policy, checkId, err, checkBatch);
+      hardFailed = hardFailed || errorOutcome.hardFailed;
+      softFailed = softFailed || errorOutcome.softFailed;
     }
   }
 
