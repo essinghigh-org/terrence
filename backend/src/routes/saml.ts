@@ -1129,6 +1129,51 @@ async function completeSamlLogin(args: {
   return respond(ssoHtmlPage("SAML SSO", "You are signed in.", { redirectUrl: "/app" }));
 }
 
+function appRedirect(set: SetObj): Response {
+  const response = new Response(null, { status: 302, headers: { "Cache-Control": "no-store", Location: "/app" } });
+  appendSetCookies(response, set.headers["Set-Cookie"]);
+  return response;
+}
+
+async function spInitiatedLogoutRedirect(args: {
+  settings: SamlRow;
+  request: RequestInfo;
+  samlSessionUser: { id: string } | null;
+  nameId: string | null;
+  set: SetObj;
+}): Promise<Response | null> {
+  if (!(args.settings.enabled && args.settings.sloEndpointUrl !== null && args.samlSessionUser !== null && args.nameId !== null && args.nameId !== "")) {
+    return null;
+  }
+  // Send SP-initiated logout to the IdP so the session is ended on both
+  // sides. The IdP acknowledges via its own LogoutResponse; we do not
+  // block the local redirect on it.
+  const requestId = `_${randomBytes(16).toString("hex")}`;
+  let logoutRequest: string;
+  try {
+    logoutRequest = logoutRequestXml(samlSpEntityId(args.request), args.settings.sloEndpointUrl, requestId, args.nameId);
+  } catch {
+    return appRedirect(args.set);
+  }
+  let target: URL;
+  try {
+    target = new URL(args.settings.sloEndpointUrl);
+  } catch {
+    return appRedirect(args.set);
+  }
+  await auditLog("sso-logout", "saml", args.samlSessionUser.id, args.samlSessionUser.id, null, {
+    reason: "SP-initiated",
+    signed: false,
+  });
+  target.searchParams.set("SAMLRequest", encodeRedirect(logoutRequest));
+  const response = new Response(null, {
+    status: 302,
+    headers: { "Cache-Control": "no-store", Location: target.toString() },
+  });
+  appendSetCookies(response, args.set.headers["Set-Cookie"]);
+  return response;
+}
+
 export const samlRoutes = new Elysia({ name: "saml-sso" })
   .get("/users/saml/metadata", async ({ request }: {
     request: RequestInfo;
@@ -1262,9 +1307,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     // same endpoint. Local logout already happened before the request, so
     // just finish in the application instead of starting another request.
     if (typeof query["SAMLResponse"] === "string" && query["SAMLResponse"] !== "") {
-      const response = new Response(null, { status: 302, headers: { "Cache-Control": "no-store", Location: "/app" } });
-      appendSetCookies(response, set.headers["Set-Cookie"]);
-      return response;
+      return appRedirect(set);
     }
     if (!isApplicationLogoutRequest(request)) return new Response("Invalid SAML logout request", {
       status: 400,
@@ -1275,51 +1318,9 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     const nameId = samlSessionUser?.ssoSubject ?? null;
     // Terminate the local session regardless of the IdP's availability.
     await revokeBrowserSession(set, request);
-    if (settings.enabled && settings.sloEndpointUrl !== null && samlSessionUser !== null && nameId !== null && nameId !== "") {
-      // Send SP-initiated logout to the IdP so the session is ended on both
-      // sides. The IdP acknowledges via its own LogoutResponse; we do not
-      // block the local redirect on it.
-      const requestId = `_${randomBytes(16).toString("hex")}`;
-      let logoutRequest: string;
-      try {
-        logoutRequest = logoutRequestXml(samlSpEntityId(request), settings.sloEndpointUrl, requestId, nameId);
-      } catch {
-        const response = new Response(null, {
-          status: 302,
-          headers: { "Cache-Control": "no-store", Location: "/app" },
-        });
-        appendSetCookies(response, set.headers["Set-Cookie"]);
-        return response;
-      }
-      let target: URL;
-      try {
-        target = new URL(settings.sloEndpointUrl);
-      } catch {
-        const response = new Response(null, {
-          status: 302,
-          headers: { "Cache-Control": "no-store", Location: "/app" },
-        });
-        appendSetCookies(response, set.headers["Set-Cookie"]);
-        return response;
-      }
-      await auditLog("sso-logout", "saml", samlSessionUser.id, samlSessionUser.id, null, {
-        reason: "SP-initiated",
-        signed: false,
-      });
-      target.searchParams.set("SAMLRequest", encodeRedirect(logoutRequest));
-      const response = new Response(null, {
-        status: 302,
-        headers: { "Cache-Control": "no-store", Location: target.toString() },
-      });
-      appendSetCookies(response, set.headers["Set-Cookie"]);
-      return response;
-    }
-    const response = new Response(null, {
-      status: 302,
-      headers: { "Cache-Control": "no-store", Location: "/app" },
-    });
-    appendSetCookies(response, set.headers["Set-Cookie"]);
-    return response;
+    const spLogout = await spInitiatedLogoutRedirect({ settings, request, samlSessionUser, nameId, set });
+    if (spLogout !== null) return spLogout;
+    return appRedirect(set);
   })
   // IdP-initiated logout: the IdP POSTs a LogoutRequest; after validating it
   // we revoke the local session and answer with a LogoutResponse.
