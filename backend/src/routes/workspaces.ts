@@ -1506,33 +1506,18 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   })
   .post("/api/v2/workspaces/:workspace_id/actions/force-unlock", async ({ params, user, orgId: principalOrgId, teamId, set, body }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "admin");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (ws.locked !== true) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is not locked" }] }; }
-    // Issue #617: a lock held by a live run must not be swept away silently —
-    // a second apply could be handed the workspace while the first is still
-    // writing. Require an explicit force flag for those; stale and manual
-    // locks unlock as before.
-    const payload = body !== null && typeof body === "object" ? (body as { data?: { attributes?: Record<string, unknown> } }) : {};
-    const force = payload.data?.attributes?.["force"] === true;
-    if (!force) {
-      const { isLiveRunLock } = await import("../lib/agent-jobs");
-      if (await isLiveRunLock(ws)) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Workspace lock is held by a live run (${ws.lockOwnerId ?? "unknown"}); cancel or discard the run first, or retry with force to override` }] };
-      }
-    }
+    const actor = actorScope(user, principalOrgId, teamId);
+    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId, "admin");
+    if (ws === undefined) return failWorkspaceUpdate(set, 404);
+    if (ws.locked !== true) return failWorkspaceUpdate(set, 409, "Workspace is not locked");
+    const refusal = await forceUnlockRefusal(body, ws, set);
+    if (refusal !== null) return refusal;
     const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true))).returning({ id: workspaces.id });
-    if (unlocked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock changed while unlocking" }] }; }
+    if (unlocked.length === 0) return failWorkspaceUpdate(set, 409, "Workspace lock changed while unlocking");
     await promoteIntermediateStateVersion(workspaceId);
     const org = await cachedOrgById(ws.orgId);
     return {
-      data: await workspaceResource(
-        { ...ws, locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null },
-        org?.defaultIacBinary,
-        await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
-        { orgName: org?.name ?? null },
-      ),
+      data: await lockedWorkspaceResource(ws, org, actor, { locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null }),
     };
   })
   // --- Remote State Consumers ---
@@ -2562,6 +2547,25 @@ function resolveUnlockOwner(
     return { error: "Only the lock owner can unlock this workspace" };
   }
   return { ownerless: ownerlessLegacyLock };
+}
+
+async function forceUnlockRefusal(
+  body: unknown,
+  ws: WsItem,
+  set: SetObj,
+): Promise<WorkspaceUpdateFailure | null> {
+  // Issue #617: a lock held by a live run must not be swept away silently —
+  // a second apply could be handed the workspace while the first is still
+  // writing. Require an explicit force flag for those; stale and manual
+  // locks unlock as before.
+  const payload = body !== null && typeof body === "object" ? (body as { data?: { attributes?: Record<string, unknown> } }) : {};
+  const force = payload.data?.attributes?.["force"] === true;
+  if (force) return null;
+  const { isLiveRunLock } = await import("../lib/agent-jobs");
+  if (await isLiveRunLock(ws)) {
+    return failWorkspaceUpdate(set, 422, `Workspace lock is held by a live run (${ws.lockOwnerId ?? "unknown"}); cancel or discard the run first, or retry with force to override`);
+  }
+  return null;
 }
 
 async function lockedWorkspaceResource(
