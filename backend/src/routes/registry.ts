@@ -668,13 +668,16 @@ function variableOptionsInput(raw: unknown): readonly VariableOptionInput[] | Re
   return parsed;
 }
 
-function noCodeInput(body: unknown, requireModule: boolean): NoCodeInput | Readonly<{ error: string }> {
+function noCodeDataSection(body: unknown): Readonly<{ data: Record<string, unknown> } | { error: string }> {
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
   const rawData = payload["data"];
   if (rawData === null || typeof rawData !== "object") return { error: "data is required" };
   const data = rawData as Record<string, unknown>;
   if (data["type"] !== "no-code-modules") return { error: "data.type must be no-code-modules" };
+  return { data };
+}
 
+function noCodeAttributesSection(data: Readonly<Record<string, unknown>>): Readonly<{ enabled: unknown; versionPin: unknown } | { error: string }> {
   const rawAttributes = data["attributes"];
   if (rawAttributes !== undefined && (rawAttributes === null || typeof rawAttributes !== "object")) {
     return { error: "data.attributes must be an object" };
@@ -686,7 +689,10 @@ function noCodeInput(body: unknown, requireModule: boolean): NoCodeInput | Reado
   if (versionPin !== undefined && (typeof versionPin !== "string" || versionPin.trim() === "")) {
     return { error: "version-pin must be a non-empty string" };
   }
+  return { enabled, versionPin };
+}
 
+function noCodeRelationshipsSection(data: Readonly<Record<string, unknown>>): Readonly<{ relationships: Record<string, unknown> } | { error: string }> {
   const rawRelationships = data["relationships"];
   if (rawRelationships !== undefined && (rawRelationships === null || typeof rawRelationships !== "object")) {
     return { error: "data.relationships must be an object" };
@@ -694,6 +700,13 @@ function noCodeInput(body: unknown, requireModule: boolean): NoCodeInput | Reado
   const relationships = typeof rawRelationships === "object"
     ? rawRelationships as Record<string, unknown>
     : {};
+  return { relationships };
+}
+
+function noCodeModuleIdSection(
+  relationships: Readonly<Record<string, unknown>>,
+  requireModule: boolean,
+): Readonly<{ moduleId: string | undefined } | { error: string }> {
   const rawRegistryModule = relationships["registry-module"];
   let moduleId: string | undefined;
   if (rawRegistryModule !== undefined) {
@@ -714,23 +727,39 @@ function noCodeInput(body: unknown, requireModule: boolean): NoCodeInput | Reado
     moduleId = registryData["id"];
   }
   if (requireModule && moduleId === undefined) return { error: "registry-module relationship is required" };
+  return { moduleId };
+}
 
+function noCodeVariableOptionsSection(
+  relationships: Readonly<Record<string, unknown>>,
+): Readonly<{ variableOptions: readonly VariableOptionInput[] | undefined } | { error: string }> {
   const rawVariableOptions = relationships["variable-options"];
-  let variableOptions: readonly VariableOptionInput[] | undefined;
-  if (rawVariableOptions !== undefined) {
-    if (rawVariableOptions === null || typeof rawVariableOptions !== "object") {
-      return { error: "variable-options relationship is invalid" };
-    }
-    const options = variableOptionsInput((rawVariableOptions as Record<string, unknown>)["data"]);
-    if ("error" in options) return options;
-    variableOptions = options;
+  if (rawVariableOptions === undefined) return { variableOptions: undefined };
+  if (rawVariableOptions === null || typeof rawVariableOptions !== "object") {
+    return { error: "variable-options relationship is invalid" };
   }
+  const options = variableOptionsInput((rawVariableOptions as Record<string, unknown>)["data"]);
+  if ("error" in options) return options;
+  return { variableOptions: options };
+}
+
+function noCodeInput(body: unknown, requireModule: boolean): NoCodeInput | Readonly<{ error: string }> {
+  const dataSection = noCodeDataSection(body);
+  if ("error" in dataSection) return dataSection;
+  const attributeSection = noCodeAttributesSection(dataSection.data);
+  if ("error" in attributeSection) return attributeSection;
+  const relationshipSection = noCodeRelationshipsSection(dataSection.data);
+  if ("error" in relationshipSection) return relationshipSection;
+  const moduleSection = noCodeModuleIdSection(relationshipSection.relationships, requireModule);
+  if ("error" in moduleSection) return moduleSection;
+  const optionsSection = noCodeVariableOptionsSection(relationshipSection.relationships);
+  if ("error" in optionsSection) return optionsSection;
 
   return {
-    moduleId,
-    versionPin: typeof versionPin === "string" ? versionPin.trim() : undefined,
-    enabled: typeof enabled === "boolean" ? enabled : undefined,
-    variableOptions,
+    moduleId: moduleSection.moduleId,
+    versionPin: typeof attributeSection.versionPin === "string" ? attributeSection.versionPin.trim() : undefined,
+    enabled: typeof attributeSection.enabled === "boolean" ? attributeSection.enabled : undefined,
+    variableOptions: optionsSection.variableOptions,
   };
 }
 
