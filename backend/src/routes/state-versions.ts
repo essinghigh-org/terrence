@@ -182,6 +182,24 @@ const RECOVERY_ACTIVE_RUN_STATUSES = new Set([
   "post_plan_completed", "confirmed", "apply_queued", "applying",
 ]);
 
+function parsedStateMetadata(
+  state: Readonly<{ id: string; serial: number; terraformVersion: string | null }>,
+  payload: string,
+  parsed: ReturnType<typeof parseTerraformStatePayload>,
+): RecoveryStateMetadata {
+  return {
+    id: state.id,
+    serial: parsed?.["serial"] !== undefined && Number.isSafeInteger(parsed["serial"]) ? parsed["serial"] as number : state.serial,
+    lineage: typeof parsed?.["lineage"] === "string" && parsed["lineage"] !== "" && parsed["lineage"].length <= 256 ? parsed["lineage"] : null,
+    digest: createHash("sha256").update(payload).digest("hex"),
+    size: Buffer.byteLength(payload),
+    terraformVersion: typeof parsed?.["terraform_version"] === "string" && parsed["terraform_version"].length <= 256 ? parsed["terraform_version"] : state.terraformVersion,
+    representation: parsed === null
+      ? isClientEncryptedState(payload) ? "opentofu-encrypted" : "invalid"
+      : "terraform-v4",
+  };
+}
+
 function stateMetadata(state: Readonly<{ id: string; statePayload: string | null; serial: number; terraformVersion: string | null }>): RecoveryStateMetadata {
   if (typeof state.statePayload !== "string" || state.statePayload === "") {
     return { id: state.id, serial: state.serial, lineage: null, digest: null, size: null, terraformVersion: state.terraformVersion, representation: "unavailable" };
@@ -189,17 +207,7 @@ function stateMetadata(state: Readonly<{ id: string; statePayload: string | null
   try {
     const payload = decodeStatePayload(state.statePayload);
     const parsed = parseTerraformStatePayload(payload);
-    return {
-      id: state.id,
-      serial: parsed?.["serial"] !== undefined && Number.isSafeInteger(parsed["serial"]) ? parsed["serial"] as number : state.serial,
-      lineage: typeof parsed?.["lineage"] === "string" && parsed["lineage"] !== "" && parsed["lineage"].length <= 256 ? parsed["lineage"] : null,
-      digest: createHash("sha256").update(payload).digest("hex"),
-      size: Buffer.byteLength(payload),
-      terraformVersion: typeof parsed?.["terraform_version"] === "string" && parsed["terraform_version"].length <= 256 ? parsed["terraform_version"] : state.terraformVersion,
-      representation: parsed === null
-        ? isClientEncryptedState(payload) ? "opentofu-encrypted" : "invalid"
-        : "terraform-v4",
-    };
+    return parsedStateMetadata(state, payload, parsed);
   } catch {
     return { id: state.id, serial: state.serial, lineage: null, digest: null, size: null, terraformVersion: state.terraformVersion, representation: "invalid" };
   }
@@ -1643,6 +1651,21 @@ async function commitJsonUpload(args: {
   }
 }
 
+async function resolveStateVersionRead(
+  sv: { workspaceId: string },
+  run: ParamCtx["run"],
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+) {
+  const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+  const runScoped = run !== undefined && run !== null && ws !== undefined && checkRunStateAccess(run, ws.id);
+  if (ws === undefined || (!runScoped && !(await checkWorkspacePermission(ws, userId, orgId, teamId, "state-read")))) {
+    throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  return ws;
+}
+
 export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   .use(authPlugin)
   .get("/api/v2/state-versions", async ({ request, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -1810,16 +1833,22 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    const runScoped = run !== undefined && run !== null && ws !== undefined && checkRunStateAccess(run, ws.id);
-    if (ws === undefined || (!runScoped && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-read")))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    try {
+      const ws = await resolveStateVersionRead(sv, run, user?.id, orgId, teamId);
+      if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")) {
+        (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const runData = sv.runId !== null
+        ? await db.query.runs.findFirst({ where: eq(runs.id, sv.runId), columns: { status: true, message: true } })
+        : null;
+      return { data: stateVersionResource(sv, request, true, runData ?? null, authorizedStateAccess(ws.id, "state-read")) };
+    } catch (error: unknown) {
+      if (error instanceof StateVersionRejected) {
+        (set as { status: number }).status = error.status;
+        return error.body;
+      }
+      throw error;
     }
-    const runData = sv.runId !== null
-      ? await db.query.runs.findFirst({ where: eq(runs.id, sv.runId), columns: { status: true, message: true } })
-      : null;
-    return { data: stateVersionResource(sv, request, true, runData ?? null, authorizedStateAccess(ws?.id ?? sv.workspaceId, "state-read")) };
   })
   .get("/api/v2/state-versions/:state_version_id/state-version-outputs", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     if ((user === undefined || user === null) && orgId === null && teamId === null && run === null) {
