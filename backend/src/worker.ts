@@ -3060,6 +3060,286 @@ async function runPostPlanDispatch(
   }
 }
 
+async function resolveApplyBinary(
+  runId: string,
+  requestedTool: string,
+  requestedVersion: string,
+  isSimulatedAllowed: boolean,
+): Promise<Awaited<ReturnType<typeof ensureBinary>>> {
+  if (isSimulatedAllowed) return null;
+  try {
+    return await ensureBinary(requestedTool, requestedVersion);
+  } catch (error: unknown) {
+    await writeRunDiagnostic(
+      runId,
+      "apply",
+      "error",
+      "run.apply.binary_resolution_failed",
+      "The execution engine threw while resolving its CLI binary.",
+      {
+        failureReason: "cli_binary_resolution_threw",
+        requestedTool,
+        requestedVersion,
+        error,
+      },
+    );
+    throw error;
+  }
+}
+
+async function writeApplyPreflightDiagnostic(
+  runId: string,
+  executionDir: string,
+  dirFiles: string[],
+  requestedTool: string,
+  requestedVersion: string,
+  resolved: Awaited<ReturnType<typeof ensureBinary>>,
+  isSimulatedAllowed: boolean,
+  savedPlanRequired: boolean,
+  savedPlanRestored: boolean,
+  configurationArchivePath: string | null,
+  archiveRestored: boolean,
+): Promise<{ executionDirectoryExists: boolean; configurationFiles: string[] }> {
+  const executionDirectoryExists = await exists(executionDir);
+  const configurationFiles = dirFiles.filter((file: string): boolean => file.endsWith(".tf") || file.endsWith(".tf.json"));
+  await writeRunDiagnostic(
+    runId,
+    "apply",
+    "info",
+    "run.apply.preflight",
+    "Apply preflight evaluated.",
+    {
+      requestedTool,
+      requestedVersion,
+      resolvedTool: resolved?.tool ?? null,
+      resolvedVersion: resolved?.version ?? null,
+      binaryPath: resolved?.binaryPath ?? null,
+      binaryResolved: resolved !== null,
+      simulated: isSimulatedAllowed,
+      savedPlanRequired,
+      savedPlanRestored,
+      savedPlanFilePresent: await exists(join(executionDir, "tfplan")),
+      archivePath: configurationArchivePath,
+      archiveRestored,
+      executionDirectory: executionDir,
+      executionDirectoryExists,
+      rootEntryCount: dirFiles.length,
+      rootEntryNames: dirFiles.slice(0, 64),
+      configurationFileCount: configurationFiles.length,
+      configurationFiles,
+    },
+  );
+  return { executionDirectoryExists, configurationFiles };
+}
+
+async function buildApplyEnvVars(
+  runId: string,
+  workspace: typeof workspaces.$inferSelect,
+  runVariables: unknown,
+  debuggingMode: boolean,
+): Promise<Record<string, string>> {
+  const vars = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
+  // Run-scoped variables ride the apply environment exactly like the
+  // plan environment (issue #577): provider credentials injected at
+  // plan time must still be present at apply time.
+  const envVars = buildRunPhaseEnv(vars, runVariables, await runTerraformEnv(runId, workspace, "apply", vars));
+  if (debuggingMode) envVars["TF_LOG"] = "TRACE";
+  return envVars;
+}
+
+async function runApplyInit(
+  runId: string,
+  resolved: NonNullable<Awaited<ReturnType<typeof ensureBinary>>>,
+  executionDir: string,
+  envVars: Record<string, string>,
+  applyTimeoutMs: number,
+  savedPlanRequired: boolean,
+): Promise<boolean> {
+  if (!savedPlanRequired) return true;
+  if (await runWasCanceled(runId)) return false;
+  await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} init ---`);
+  if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
+  const initProc = spawnRunProcess(
+    runId,
+    [resolved.binaryPath, "init", "-reconfigure", "-no-color", "-input=false"],
+    {
+      cwd: executionDir,
+      env: envVars,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+    runSandbox,
+  );
+  const initOutput = Promise.all([
+    streamLog(runId, "apply", initProc.stdout),
+    streamLog(runId, "apply", initProc.stderr),
+  ]);
+  const [initExit] = await waitForTrackedProcess(runId, "apply", initProc, initOutput, applyTimeoutMs);
+  if (await runWasCanceled(runId)) return false;
+  if (initExit !== 0) throw new Error(`${resolved.tool} init failed with exit code ${initExit}`);
+  return true;
+}
+
+async function applyStateVcsMetadata(configurationVersionId: string | null): Promise<{ vcsCommitSha: string | null; vcsCommitUrl: string | null }> {
+  if (configurationVersionId === null) return { vcsCommitSha: null, vcsCommitUrl: null };
+  const cfg = await db.query.configurationVersions.findFirst({
+    where: eq(configurationVersions.id, configurationVersionId),
+    columns: { ingressAttributes: true },
+  });
+  const ingress = cfg?.ingressAttributes as Record<string, unknown> | null | undefined;
+  let vcsCommitSha: string | null = null;
+  let vcsCommitUrl: string | null = null;
+  if (typeof ingress?.["commitSha"] === "string" && ingress["commitSha"] !== "") vcsCommitSha = ingress["commitSha"];
+  if (typeof ingress?.["commitUrl"] === "string" && ingress["commitUrl"] !== "") vcsCommitUrl = ingress["commitUrl"];
+  return { vcsCommitSha, vcsCommitUrl };
+}
+
+async function saveApplyStateVersion(
+  runId: string,
+  workspaceId: string,
+  configurationVersionId: string | null,
+  createdBy: typeof runs.$inferSelect["createdBy"],
+  terraformVersion: string,
+  stateFilePath: string,
+): Promise<void> {
+  if (await runWasCanceled(runId)) return;
+  if (!(await exists(stateFilePath))) return;
+  const statePayload = await readFile(stateFilePath, "utf-8");
+  if (await runWasCanceled(runId)) return;
+
+  // Derive the JSON state and outputs from the raw payload. The resources
+  // list and outputs endpoints read jsonState/jsonStateOutputs, so a
+  // state version without them renders as "no resources".
+  let jsonState: string | null = statePayload;
+  let jsonStateOutputs: string | null = null;
+  try {
+    const parsed = JSON.parse(statePayload) as Record<string, unknown>;
+    jsonStateOutputs = parsed["outputs"] !== null && parsed["outputs"] !== undefined
+      ? JSON.stringify(parsed["outputs"])
+      : null;
+  } catch (error: unknown) {
+    jsonState = null;
+    logBestEffortFailure("Apply state file is not valid JSON; storing raw state without JSON resources", { runId }, error);
+  }
+
+  // Pull VCS commit metadata from the run's configuration version so the state
+  // version's `vcs-commit-sha` matches TFE's definition ("commit used by the run
+  // that produced that state, if applicable" — null for CLI pushes).
+  const { vcsCommitSha, vcsCommitUrl } = await applyStateVcsMetadata(configurationVersionId);
+  const nextSerial = await insertStateVersionWithSerialRetry({
+    id: crypto.randomUUID(),
+    workspaceId,
+    statePayload: await encryptStatePayload(statePayload),
+    jsonState: await encryptStatePayload(jsonState),
+    jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
+    runId,
+    createdBy,
+    vcsCommitSha,
+    vcsCommitUrl,
+    terraformVersion,
+    status: "finalized",
+    createdAt: Date.now(),
+  });
+  scheduleExplorerInventory(workspaceId);
+
+  await writeLog(runId, "apply", `[terrence] Recorded state version serial #${nextSerial}`);
+}
+
+async function tryCaptureInterruptedApplyState(runId: string, failureLog: string): Promise<boolean> {
+  try {
+    await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId));
+  } catch (captureError: unknown) {
+    log.error(failureLog, { runId, error: captureError });
+    return true;
+  }
+  return false;
+}
+
+async function handleCanceledApply(runId: string): Promise<{ captureFailed: boolean }> {
+  let captureFailed = false;
+  const captured = await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId)).catch((captureError: unknown): boolean => {
+    log.error("Could not capture state after canceled apply", { runId, error: captureError });
+    captureFailed = true;
+    return false;
+  });
+  await writeLog(
+    runId,
+    "apply",
+    captured
+      ? "[terrence] Apply was canceled; encrypted recovery state was captured before cleanup. Fetch it from GET /api/v2/runs/:run_id/recovery-state or the run page Recover action. The copy is kept until it is recovered."
+      : captureFailed
+        ? `[terrence] Apply was canceled; recovery copy failed, so the run work directory was preserved at ${runWorkDir(runId)} for manual recovery.`
+        : "[terrence] Apply was canceled; no local state file was available to capture.",
+  );
+  return { captureFailed };
+}
+
+function applyPreflightFailedChecks(
+  resolved: Awaited<ReturnType<typeof ensureBinary>>,
+  executionDirectoryExists: boolean,
+  hasTfFiles: boolean,
+): string[] {
+  return [
+    ...(resolved === null ? ["cli_binary_unresolved"] : []),
+    ...(!executionDirectoryExists ? ["execution_directory_missing"] : []),
+    ...(!hasTfFiles ? ["configuration_files_missing"] : []),
+  ];
+}
+
+async function throwApplyPreflightFailure(
+  runId: string,
+  executionDir: string,
+  dirFiles: string[],
+  configurationFiles: string[],
+  requestedTool: string,
+  requestedVersion: string,
+  executionDirectoryExists: boolean,
+  failedChecks: string[],
+): Promise<never> {
+  await writeRunDiagnostic(
+    runId,
+    "apply",
+    "error",
+    "run.apply.preflight_failed",
+    "Apply preflight failed before the Terraform process started.",
+    {
+      failureReason: "apply_preflight_failed",
+      failedChecks,
+      requestedTool,
+      requestedVersion,
+      executionDirectory: executionDir,
+      executionDirectoryExists,
+      rootEntryNames: dirFiles.slice(0, 64),
+      configurationFiles,
+    },
+  );
+  if (failedChecks.length === 1 && failedChecks[0] === "cli_binary_unresolved") {
+    throw new Error(`Unable to resolve CLI binary '${requestedTool}' for apply phase.`);
+  }
+  if (failedChecks.length === 1 && failedChecks[0] === "configuration_files_missing") {
+    throw new Error(`No Terraform configuration (.tf or .tf.json) files were found in workspace directory '${executionDir}'.`);
+  }
+  throw new Error(`Apply preflight failed: ${failedChecks.join(", ") || "unknown_failure"}.`);
+}
+
+async function runPostApplyStage(
+  runId: string,
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  savedPlanRequired: boolean,
+): Promise<void> {
+  try {
+    if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "post_apply")) && !(await runWasCanceled(runId))) {
+      await writeLog(runId, "apply", "[terrence] Post-apply run task failure recorded; the apply remains completed.");
+    }
+  } catch (error: unknown) {
+    await writeLog(runId, "apply", `[terrence] Post-apply run tasks could not complete: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    await cleanupRunToken(runId);
+  }
+  if (savedPlanRequired) await cleanupSavedPlan(runId);
+}
+
 async function executeApplyImpl(runId: string): Promise<void> {
   assertRunSandboxAvailable();
   const run = await db.query.runs.findFirst({
@@ -3143,93 +3423,20 @@ async function executeApplyImpl(runId: string): Promise<void> {
     dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
     hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
     const isSimulatedAllowed = envFlag("SIMULATED_RUNS") || Reflect.get(process.env, "NODE_ENV") === "test";
-    let resolved: Awaited<ReturnType<typeof ensureBinary>> | null = null;
-    if (!isSimulatedAllowed) {
-      try {
-        resolved = await ensureBinary(requestedTool, requestedVersion);
-      } catch (error: unknown) {
-        await writeRunDiagnostic(
-          runId,
-          "apply",
-          "error",
-          "run.apply.binary_resolution_failed",
-          "The execution engine threw while resolving its CLI binary.",
-          {
-            failureReason: "cli_binary_resolution_threw",
-            requestedTool,
-            requestedVersion,
-            error,
-          },
-        );
-        throw error;
-      }
-    }
+    const resolved = await resolveApplyBinary(runId, requestedTool, requestedVersion, isSimulatedAllowed);
 
-    const executionDirectoryExists = await exists(executionDir);
-    const configurationFiles = dirFiles.filter((file: string): boolean => file.endsWith(".tf") || file.endsWith(".tf.json"));
-    await writeRunDiagnostic(
-      runId,
-      "apply",
-      "info",
-      "run.apply.preflight",
-      "Apply preflight evaluated.",
-      {
-        requestedTool,
-        requestedVersion,
-        resolvedTool: resolved?.tool ?? null,
-        resolvedVersion: resolved?.version ?? null,
-        binaryPath: resolved?.binaryPath ?? null,
-        binaryResolved: resolved !== null,
-        simulated: isSimulatedAllowed,
-        savedPlanRequired,
-        savedPlanRestored: savedPlan !== undefined,
-        savedPlanFilePresent: await exists(join(executionDir, "tfplan")),
-        archivePath: configurationArchivePath,
-        archiveRestored,
-        executionDirectory: executionDir,
-        executionDirectoryExists,
-        rootEntryCount: dirFiles.length,
-        rootEntryNames: dirFiles.slice(0, 64),
-        configurationFileCount: configurationFiles.length,
-        configurationFiles,
-      },
-    );
+    const preflight = await writeApplyPreflightDiagnostic(runId, executionDir, dirFiles, requestedTool, requestedVersion, resolved, isSimulatedAllowed, savedPlanRequired, savedPlan !== undefined, configurationArchivePath, archiveRestored);
+    const executionDirectoryExists = preflight.executionDirectoryExists;
+    const configurationFiles = preflight.configurationFiles;
 
     if (resolved !== null && executionDirectoryExists && hasTfFiles) {
       if (await runWasCanceled(runId)) return;
       const binary = resolved.binaryPath;
       if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
-      const vars = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
-      // Run-scoped variables ride the apply environment exactly like the
-      // plan environment (issue #577): provider credentials injected at
-      // plan time must still be present at apply time.
-      const envVars = buildRunPhaseEnv(vars, run.variables, await runTerraformEnv(run.id, workspace, "apply", vars));
-      if (run.debuggingMode) envVars["TF_LOG"] = "TRACE";
+      const envVars = await buildApplyEnvVars(runId, workspace, run.variables, run.debuggingMode);
       const applyTimeoutMs = await executionTimeoutMs("apply");
 
-      if (savedPlanRequired && resolved !== null) {
-        if (await runWasCanceled(runId)) return;
-        await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} init ---`);
-        if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
-        const initProc = spawnRunProcess(
-          runId,
-          [binary, "init", "-reconfigure", "-no-color", "-input=false"],
-          {
-            cwd: executionDir,
-            env: envVars,
-            stdout: "pipe",
-            stderr: "pipe",
-          },
-          runSandbox,
-        );
-        const initOutput = Promise.all([
-          streamLog(runId, "apply", initProc.stdout),
-          streamLog(runId, "apply", initProc.stderr),
-        ]);
-        const [initExit] = await waitForTrackedProcess(runId, "apply", initProc, initOutput, applyTimeoutMs);
-        if (await runWasCanceled(runId)) return;
-        if (initExit !== 0) throw new Error(`${resolved.tool} init failed with exit code ${initExit}`);
-      }
+      if (!(await runApplyInit(runId, resolved, executionDir, envVars, applyTimeoutMs, savedPlanRequired))) return;
 
       await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} apply ---`);
       if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
@@ -3257,59 +3464,6 @@ async function executeApplyImpl(runId: string): Promise<void> {
       // the reference format saves that partial state so a follow-up run does not try to
       // recreate resources that already exist.
       const stateFilePath = join(executionDir, "terraform.tfstate");
-      const saveStateAfterApply = async (): Promise<void> => {
-        if (await runWasCanceled(runId)) return;
-        if (!(await exists(stateFilePath))) return;
-        const statePayload = await readFile(stateFilePath, "utf-8");
-        if (await runWasCanceled(runId)) return;
-
-        // Derive the JSON state and outputs from the raw payload. The resources
-        // list and outputs endpoints read jsonState/jsonStateOutputs, so a
-        // state version without them renders as "no resources".
-        let jsonState: string | null = statePayload;
-        let jsonStateOutputs: string | null = null;
-        try {
-          const parsed = JSON.parse(statePayload) as Record<string, unknown>;
-          jsonStateOutputs = parsed["outputs"] !== null && parsed["outputs"] !== undefined
-            ? JSON.stringify(parsed["outputs"])
-            : null;
-        } catch (error: unknown) {
-          jsonState = null;
-          logBestEffortFailure("Apply state file is not valid JSON; storing raw state without JSON resources", { runId }, error);
-        }
-
-        // Pull VCS commit metadata from the run's configuration version so the state
-        // version's `vcs-commit-sha` matches TFE's definition ("commit used by the run
-        // that produced that state, if applicable" — null for CLI pushes).
-        let vcsCommitSha: string | null = null;
-        let vcsCommitUrl: string | null = null;
-        if (run.configurationVersionId !== null) {
-          const cfg = await db.query.configurationVersions.findFirst({
-            where: eq(configurationVersions.id, run.configurationVersionId),
-            columns: { ingressAttributes: true },
-          });
-          const ingress = cfg?.ingressAttributes as Record<string, unknown> | null | undefined;
-          if (typeof ingress?.["commitSha"] === "string" && ingress["commitSha"] !== "") vcsCommitSha = ingress["commitSha"];
-          if (typeof ingress?.["commitUrl"] === "string" && ingress["commitUrl"] !== "") vcsCommitUrl = ingress["commitUrl"];
-        }
-        const nextSerial = await insertStateVersionWithSerialRetry({
-          id: crypto.randomUUID(),
-          workspaceId: workspace.id,
-          statePayload: await encryptStatePayload(statePayload),
-          jsonState: await encryptStatePayload(jsonState),
-          jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
-          runId,
-          createdBy: run.createdBy,
-          vcsCommitSha,
-          vcsCommitUrl,
-          terraformVersion: resolved.version,
-          status: "finalized",
-          createdAt: Date.now(),
-        });
-        scheduleExplorerInventory(workspace.id);
-
-        await writeLog(runId, "apply", `[terrence] Recorded state version serial #${nextSerial}`);
-      };
 
       applyStarted = true;
       const applyProc = spawnRunProcess(
@@ -3332,20 +3486,8 @@ async function executeApplyImpl(runId: string): Promise<void> {
 
       if (await runWasCanceled(runId)) {
         applyCanceled = true;
-        const captured = await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId)).catch((captureError: unknown): boolean => {
-          log.error("Could not capture state after canceled apply", { runId, error: captureError });
-          recoveryCaptureFailed = true;
-          return false;
-        });
-        await writeLog(
-          runId,
-          "apply",
-          captured
-            ? "[terrence] Apply was canceled; encrypted recovery state was captured before cleanup. Fetch it from GET /api/v2/runs/:run_id/recovery-state or the run page Recover action. The copy is kept until it is recovered."
-            : recoveryCaptureFailed
-              ? `[terrence] Apply was canceled; recovery copy failed, so the run work directory was preserved at ${runWorkDir(runId)} for manual recovery.`
-              : "[terrence] Apply was canceled; no local state file was available to capture.",
-        );
+        const recovery = await handleCanceledApply(runId);
+        recoveryCaptureFailed = recoveryCaptureFailed || recovery.captureFailed;
         if (recoveryCaptureFailed) recoveryPreservationLogged = true;
         return;
       }
@@ -3354,63 +3496,26 @@ async function executeApplyImpl(runId: string): Promise<void> {
         // successfully), so a follow-up run does not recreate existing
         // resources.
         try {
-          await saveStateAfterApply();
+          await saveApplyStateVersion(runId, workspace.id, run.configurationVersionId, run.createdBy, resolved.version, stateFilePath);
         } catch (saveError: unknown) {
           await writeLog(runId, "apply", `[terrence] Could not record partial state after failed apply: ${saveError instanceof Error ? saveError.message : String(saveError)}`);
-          try {
-            await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId));
-          } catch (captureError: unknown) {
-            recoveryCaptureFailed = true;
-            log.error("Could not capture state after partial apply persistence failure", { runId, error: captureError });
-          }
+          if (await tryCaptureInterruptedApplyState(runId, "Could not capture state after partial apply persistence failure")) recoveryCaptureFailed = true;
         }
         throw new Error(`${resolved.tool} apply failed with exit code ${applyExit}`);
       }
 
       try {
-        await saveStateAfterApply();
+        await saveApplyStateVersion(runId, workspace.id, run.configurationVersionId, run.createdBy, resolved.version, stateFilePath);
       } catch (saveError: unknown) {
-        try {
-          await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId));
-        } catch (captureError: unknown) {
-          recoveryCaptureFailed = true;
-          log.error("Could not capture state after apply state persistence failure", { runId, error: captureError });
-        }
+        if (await tryCaptureInterruptedApplyState(runId, "Could not capture state after apply state persistence failure")) recoveryCaptureFailed = true;
         throw saveError;
       }
 
     } else if (isSimulatedAllowed) {
       await writeLog(runId, "apply", `[terrence] Execution engine: Simulated apply completed successfully.`);
     } else {
-      const failedChecks = [
-        ...(resolved === null ? ["cli_binary_unresolved"] : []),
-        ...(!executionDirectoryExists ? ["execution_directory_missing"] : []),
-        ...(!hasTfFiles ? ["configuration_files_missing"] : []),
-      ];
-      await writeRunDiagnostic(
-        runId,
-        "apply",
-        "error",
-        "run.apply.preflight_failed",
-        "Apply preflight failed before the Terraform process started.",
-        {
-          failureReason: "apply_preflight_failed",
-          failedChecks,
-          requestedTool,
-          requestedVersion,
-          executionDirectory: executionDir,
-          executionDirectoryExists,
-          rootEntryNames: dirFiles.slice(0, 64),
-          configurationFiles,
-        },
-      );
-      if (failedChecks.length === 1 && failedChecks[0] === "cli_binary_unresolved") {
-        throw new Error(`Unable to resolve CLI binary '${requestedTool}' for apply phase.`);
-      }
-      if (failedChecks.length === 1 && failedChecks[0] === "configuration_files_missing") {
-        throw new Error(`No Terraform configuration (.tf or .tf.json) files were found in workspace directory '${executionDir}'.`);
-      }
-      throw new Error(`Apply preflight failed: ${failedChecks.join(", ") || "unknown_failure"}.`);
+      const failedChecks = applyPreflightFailedChecks(resolved, executionDirectoryExists, hasTfFiles);
+      await throwApplyPreflightFailure(runId, executionDir, dirFiles, configurationFiles, requestedTool, requestedVersion, executionDirectoryExists, failedChecks);
     }
 
     // Parse resource counts from the apply summary line (issue #618): match
@@ -3425,16 +3530,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
     });
     applySuccess = true;
     await writeLog(runId, "apply", `[terrence] Run status updated to 'applied'.`);
-    try {
-      if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "post_apply")) && !(await runWasCanceled(runId))) {
-        await writeLog(runId, "apply", "[terrence] Post-apply run task failure recorded; the apply remains completed.");
-      }
-    } catch (error: unknown) {
-      await writeLog(runId, "apply", `[terrence] Post-apply run tasks could not complete: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      await cleanupRunToken(runId);
-    }
-    if (savedPlanRequired) await cleanupSavedPlan(runId);
+    await runPostApplyStage(runId, workspace, org, savedPlanRequired);
   } catch (error: unknown) {
     if (await runWasCanceled(runId)) {
       applyCanceled = true;
