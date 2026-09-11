@@ -932,20 +932,22 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   })
   .get("/api/v2/workspaces/:workspace_id", async ({ params, user, orgId: principalOrgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
+    const actor = actorScope(user, principalOrgId, teamId);
     const runScoped = run !== undefined && run !== null && run.workspaceId === workspaceId;
     const ws = runScoped
       ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
-      : await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+      : await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId);
+    if (ws === undefined) return failWorkspaceUpdate(set, 404);
     const org = await cachedOrgById(ws.orgId);
-    const currentRunById = await currentRunForWorkspace(ws.id, new URL(request.url).searchParams.get("include") ?? "");
+    const include = new URL(request.url).searchParams.get("include") ?? "";
+    const currentRunById = await currentRunForWorkspace(ws.id, include);
     const data = await workspaceResource(
       ws,
       org?.defaultIacBinary,
-      await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+      await resourcePermissions(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId),
       { orgName: org?.name ?? null, ...(currentRunById === undefined ? {} : { currentRun: currentRunById }) },
     );
-    return maybeAttachOutputs(data, ws, new URL(request.url).searchParams.get("include") ?? "");
+    return maybeAttachOutputs(data, ws, include);
   })
   .get("/api/v2/workspaces/:workspace_id/resources", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
