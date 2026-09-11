@@ -1779,6 +1779,46 @@ async function transitionForceExecutedRun(
   return { ok: true as const };
 }
 
+async function cancelQueuedRunExecution(runId: string, status: string): Promise<void> {
+  if (status === "plan_queued" || status === "apply_queued") {
+    const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
+    cancelRunExecution(runId, true);
+    await cleanupSavedPlan(runId);
+    await cancelAgentJobsForRun(runId);
+  }
+}
+
+async function queuePendingRun(
+  authorized: AuthorizedRun,
+  runId: string,
+  user: ParamCtx["user"],
+  orgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ data: unknown } | { failure: unknown }>> {
+  const updated = await db.update(runs).set({ status: "pending" }).where(and(
+    eq(runs.id, runId),
+    eq(runs.status, authorized.run.status),
+    inArray(runs.status, ["pending", "plan_queued", "apply_queued"]),
+  )).returning();
+  if (updated.length === 0) {
+    (set as { status: number }).status = 409;
+    return { failure: { errors: [{ status: "409", title: "Conflict", detail: "Run is not queued" }] } };
+  }
+  await auditLog("queue", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+    workspaceId: authorized.workspace.id,
+    fromStatus: authorized.run.status,
+    toStatus: "pending",
+    ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+  });
+  const updatedRun = updated[0];
+  if (updatedRun === undefined) {
+    (set as { status: number }).status = 500;
+    return { failure: { errors: [{ status: "500", title: "Internal Server Error" }] } };
+  }
+  return { data: await actionRunResource(updatedRun, authorized.workspace, user?.id, orgId ?? null, teamId ?? null) };
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -2704,30 +2744,10 @@ export const runRoutes = new Elysia({ name: "runs" })
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    if (authorized.run.status === "plan_queued" || authorized.run.status === "apply_queued") {
-      const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
-      cancelRunExecution(runId, true);
-      await cleanupSavedPlan(runId);
-      await cancelAgentJobsForRun(runId);
-    }
-    const updated = await db.update(runs).set({ status: "pending" }).where(and(
-      eq(runs.id, runId),
-      eq(runs.status, authorized.run.status),
-      inArray(runs.status, ["pending", "plan_queued", "apply_queued"]),
-    )).returning();
-    if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not queued" }] }; }
-    await auditLog("queue", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
-      workspaceId: authorized.workspace.id,
-      fromStatus: authorized.run.status,
-      toStatus: "pending",
-      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
-    });
-    const updatedRun = updated[0];
-    if (updatedRun === undefined) {
-      (set as { status: number }).status = 500;
-      return { errors: [{ status: "500", title: "Internal Server Error" }] };
-    }
-    return { data: await actionRunResource(updatedRun, authorized.workspace, user?.id, orgId ?? null, teamId ?? null) };
+    await cancelQueuedRunExecution(runId, authorized.run.status);
+    const queued = await queuePendingRun(authorized, runId, user, orgId, teamId, set);
+    if ("failure" in queued) return queued.failure;
+    return queued;
   })
   // --- Comments ---
   .get("/api/v2/runs/:run_id/comments", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
