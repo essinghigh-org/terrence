@@ -344,6 +344,330 @@ async function recoveryReviewFor(
   };
 }
 
+class StateVersionRejected extends Error {
+  constructor(public status: number, public body: unknown) {
+    super("state version rejected");
+  }
+}
+
+type ParsedStateVersionRequest = {
+  payload: Record<string, unknown>;
+  data: Record<string, unknown> | undefined;
+  attributes: Record<string, unknown>;
+  expectedMd5: unknown;
+  expectedLineage: unknown;
+  inlineState: string | undefined;
+  inlineJsonState: string | undefined;
+  inlineJsonStateOutputs: string | undefined;
+  requestedRunId: string | null;
+  intermediate: boolean;
+  serial: number | undefined;
+};
+
+function objectField(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+function parseStateVersionPayload(body: unknown): ParsedStateVersionRequest {
+  const payload = objectField(body);
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = objectField(data?.["attributes"]);
+  const rels = objectField(data?.["relationships"]);
+  const runRel = objectField(rels["run"]);
+  const runData = objectField(runRel["data"]);
+  const inlineState = typeof attributes["state"] === "string" ? attributes["state"] : undefined;
+  const inlineJsonState = typeof attributes["json-state"] === "string" ? attributes["json-state"] : undefined;
+  const inlineJsonStateOutputs = typeof attributes["json-state-outputs"] === "string" ? attributes["json-state-outputs"] : undefined;
+  const serial = typeof attributes["serial"] === "number" ? attributes["serial"] : undefined;
+  return {
+    payload,
+    data,
+    attributes,
+    expectedMd5: attributes["md5"],
+    expectedLineage: attributes["lineage"],
+    inlineState,
+    inlineJsonState,
+    inlineJsonStateOutputs,
+    requestedRunId: typeof runData["id"] === "string" ? runData["id"] : null,
+    intermediate: attributes["intermediate"] === true,
+    serial,
+  };
+}
+
+function stateChecksumShapeError(expectedMd5: unknown, expectedLineage: unknown): string | null {
+  if ((expectedMd5 !== undefined && (typeof expectedMd5 !== "string" || !/^(?:[a-fA-F0-9]{32}|[A-Za-z0-9+/]{22}==)$/.test(expectedMd5)))
+    || (expectedLineage !== undefined && (typeof expectedLineage !== "string" || expectedLineage === ""))) {
+    return "Invalid state checksum or lineage";
+  }
+  return null;
+}
+
+function decodeStateVersionBodies(
+  inlineState: string | undefined,
+  inlineJsonState: string | undefined,
+  inlineJsonStateOutputs: string | undefined,
+): { statePayload: string | null; jsonState: string | null; jsonStateOutputs: string | null } {
+  const statePayload = inlineState !== undefined && inlineState !== "" ? decodeStatePayload(inlineState) : null;
+  const jsonState = inlineJsonState !== undefined && inlineJsonState !== "" ? decodeStatePayload(inlineJsonState) : null;
+  const jsonStateOutputs = inlineJsonStateOutputs !== undefined && inlineJsonStateOutputs !== ""
+    ? decodeStatePayload(inlineJsonStateOutputs)
+    : null;
+  return { statePayload, jsonState, jsonStateOutputs };
+}
+
+async function resolveStateVersionWorkspace(
+  workspaceId: string,
+  run: ParamCtx["run"],
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+): Promise<typeof workspaces.$inferSelect> {
+  const ws = run !== null && run.workspaceId === workspaceId
+    ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
+    : await findAuthorizedWorkspace(workspaceId, userId, orgId, teamId, "state-write");
+  if (ws === undefined) {
+    throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  return ws;
+}
+
+function resolveStateVersionIdempotency(
+  request: ParamCtx["request"],
+  workspaceId: string,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+  payload: Record<string, unknown>,
+  set: ParamCtx["set"],
+): Exclude<ReturnType<typeof idempotencyContext>, "invalid"> {
+  const idempotency = idempotencyContext(
+    request,
+    `state-versions:${workspaceId}`,
+    idempotencyPrincipal({ userId, orgId, teamId }),
+    payload,
+    set,
+  );
+  if (idempotency === "invalid") {
+    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] });
+  }
+  return idempotency;
+}
+
+function assertStateVersionCreatable(
+  parsed: ParsedStateVersionRequest,
+  run: ParamCtx["run"],
+  orgId: string | null,
+): void {
+  if (parsed.data?.["type"] !== "state-versions") {
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be state-versions" }] });
+  }
+  if (orgId !== null && orgId !== undefined) {
+    throw new StateVersionRejected(403, { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create state versions" }] });
+  }
+  const checksumError = stateChecksumShapeError(parsed.expectedMd5, parsed.expectedLineage);
+  if (checksumError !== null) {
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: checksumError }] });
+  }
+  if (run !== null && parsed.requestedRunId !== null && parsed.requestedRunId !== run.runId) {
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "run must match the run-scoped credential" }] });
+  }
+}
+
+function assertStateVersionSerial(serial: number | undefined): number {
+  if (serial === undefined) {
+    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: "param is missing or the value is empty: serial" }] });
+  }
+  if (!Number.isSafeInteger(serial) || serial < 0) {
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial must be a non-negative safe integer" }] });
+  }
+  return serial;
+}
+
+async function resolveStateVersionRun(runId: string | null, workspaceId: string): Promise<string | null> {
+  if (runId === null) return null;
+  const relatedRun = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { workspaceId: true, createdBy: true } });
+  if (relatedRun?.workspaceId !== workspaceId) {
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "run must belong to this workspace" }] });
+  }
+  return relatedRun.createdBy;
+}
+
+function assertStateVersionWritable(
+  run: ParamCtx["run"],
+  ws: typeof workspaces.$inferSelect,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+  intermediate: boolean,
+): void {
+  if (run === null && (!ownsWorkspaceLock(ws, lockPrincipal(userId, orgId, teamId)))) {
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before writing state" }] });
+  }
+  // No locked-workspace rejection here: the reference format allows state uploads on locked
+  // workspaces. The CLI holds the workspace lock for the whole
+  // import/apply operation and uploads the state while still locked;
+  // rejecting it breaks `terraform import`. Concurrent-writer protection
+  // comes from the run-level lock and state serial numbers, not from
+  // blocking the lock holder.
+  if (intermediate && ws.locked !== true) {
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Intermediate state requires a locked workspace" }] });
+  }
+}
+
+function assertStatePayloadMd5(statePayload: string | null, md5Attribute: unknown): void {
+  if (statePayload === null) return;
+  if (typeof md5Attribute !== "string") {
+    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: "md5 is required when state is supplied" }] });
+  }
+  const expected = createHash("md5").update(statePayload).digest("base64");
+  if (md5Attribute !== expected && md5Attribute.toLowerCase() !== createHash("md5").update(statePayload).digest("hex")) {
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "md5 does not match the state payload" }] });
+  }
+}
+
+function parseAndAssertStatePayload(
+  statePayload: string | null,
+  expectedLineage: unknown,
+  serial: number,
+  md5Attribute: unknown,
+): Record<string, unknown> | null {
+  const parsedTerraformState = statePayload === null ? null : parseTerraformStatePayload(statePayload);
+  if (statePayload !== null && parsedTerraformState === null) {
+    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(statePayload) }] });
+  }
+  if (parsedTerraformState !== null && expectedLineage !== undefined && parsedTerraformState["lineage"] !== expectedLineage) {
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "lineage does not match the state payload" }] });
+  }
+  if (parsedTerraformState !== null && parsedTerraformState["serial"] !== serial) {
+    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial does not match the Terraform state payload" }] });
+  }
+  assertStatePayloadMd5(statePayload, md5Attribute);
+  return parsedTerraformState;
+}
+
+async function assertStateVersionAdvances(
+  workspaceId: string,
+  serial: number,
+  parsedTerraformState: Record<string, unknown> | null,
+  jsonState: string | null,
+): Promise<void> {
+  const latestState = await db.query.stateVersions.findFirst({
+    where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
+    orderBy: [desc(stateVersions.serial)],
+    columns: { serial: true, statePayload: true },
+  });
+  if (latestState !== undefined && serial <= latestState.serial) {
+    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] });
+  }
+  if (parsedTerraformState !== null) {
+    const lineageError = stateLineageError(latestState, parsedTerraformState);
+    if (lineageError !== null) {
+      throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: lineageError }] });
+    }
+  }
+  if (jsonState !== null && parseStatePayload(jsonState) === null) {
+    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] });
+  }
+}
+
+type InsertStateVersionArgs = {
+  id: string;
+  workspaceId: string;
+  serial: number;
+  expectedMd5: string | null;
+  expectedLineage: string | null;
+  statePayload: string | null;
+  runId: string | null;
+  jsonState: string | null;
+  jsonStateOutputs: string | null;
+  relatedRunCreatedBy: string | null;
+  createdBy: string | null;
+  intermediate: boolean;
+  ws: typeof workspaces.$inferSelect;
+};
+
+async function insertStateVersionRecord(args: InsertStateVersionArgs): Promise<void> {
+  const { id, workspaceId, serial, expectedMd5, expectedLineage, statePayload, runId, jsonState, jsonStateOutputs, relatedRunCreatedBy, createdBy, intermediate, ws } = args;
+  try {
+    await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<void> => {
+      const t = tx as typeof db;
+      if (!(await fenceStateWorkspace(t, ws))) throw new StateSerialConflictError();
+      await pruneStateReservations(t, ws);
+      // Re-check inside the same transaction as the insert. This closes the
+      // race between two writers that both observed the same latest serial,
+      // and includes pending/intermediate rows hidden by the finalized-only
+      // validation query above.
+      const latestAny = await t.query.stateVersions.findFirst({
+        where: eq(stateVersions.workspaceId, workspaceId),
+        orderBy: [desc(stateVersions.serial)],
+        columns: { serial: true },
+      });
+      if (latestAny !== undefined && serial <= latestAny.serial) throw new StateSerialConflictError();
+      await t.insert(stateVersions).values({
+        id,
+        workspaceId,
+        serial,
+        expectedMd5,
+        expectedLineage,
+        uploadExpiresAt: statePayload === null ? Date.now() + STATE_UPLOAD_TTL_MS : null,
+        uploadLock: statePayload === null ? stateUploadLock(ws) : null,
+        uploadSha256: statePayload === null ? null : createHash("sha256").update(statePayload).digest("hex"),
+        runId,
+        statePayload: await encryptStatePayload(statePayload),
+        jsonState: await encryptStatePayload(jsonState ?? statePayload),
+        jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
+        createdBy: relatedRunCreatedBy ?? createdBy,
+        intermediate,
+        status: statePayload === null ? "pending" : "finalized",
+        createdAt: Date.now(),
+      });
+      await insertStateOutputIndex(t, id, workspaceId, jsonState, statePayload);
+      await t.insert(auditLogs).values(auditLogValues({
+        action: "create",
+        resourceType: "state-version",
+        resourceId: id,
+        orgId: ws.orgId,
+        userId: createdBy,
+        details: {
+          workspaceId,
+          runId,
+          serial,
+          status: statePayload === null ? "pending" : "finalized",
+          intermediate,
+          stateBytes: statePayload === null ? 0 : Buffer.byteLength(statePayload, "utf8"),
+        },
+      }) as typeof auditLogs.$inferInsert);
+    }));
+  } catch (error: unknown) {
+    if (error instanceof StateSerialConflictError || isUniqueConstraintError(error)) {
+      throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] });
+    }
+    throw error;
+  }
+}
+
+async function completeStateVersionCreation(
+  id: string,
+  workspaceId: string,
+  request: ParamCtx["request"],
+  ws: typeof workspaces.$inferSelect,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+  set: ParamCtx["set"],
+  idempotencyBegin: Awaited<ReturnType<typeof beginIdempotency>>,
+): Promise<unknown> {
+  scheduleExplorerInventory(workspaceId);
+  const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
+  if (sv === undefined) {
+    throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  (set as { status: number }).status = 201;
+   const responseBody = { data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, userId, orgId, teamId)) };
+   if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
+   return responseBody;
+}
+
 export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   .use(authPlugin)
   .get("/api/v2/state-versions", async ({ request, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -1338,202 +1662,54 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       ...(idempotent ? { meta: { idempotent: true, evidenceRetained: true } } : {}),
     };
   })
+
   .post("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = run !== null && run.workspaceId === workspaceId
-      ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
-      : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-write");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const idempotency = idempotencyContext(
-      request,
-      `state-versions:${workspaceId}`,
-      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
-      payload,
-      set as unknown as { status?: number | string; headers: Record<string, string | number> },
-    );
-    if (idempotency === "invalid") {
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
-    }
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    if (data?.["type"] !== "state-versions") {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be state-versions" }] };
-    }
-    if (orgId !== null && orgId !== undefined) {
-      (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create state versions" }] };
-    }
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-    const runRel = typeof rels["run"] === "object" && rels["run"] !== null ? (rels["run"] as Record<string, unknown>) : {};
-    const runData = typeof runRel["data"] === "object" && runRel["data"] !== null ? (runRel["data"] as Record<string, unknown>) : {};
-    const serial = typeof attributes["serial"] === "number" ? attributes["serial"] : undefined;
-    const expectedMd5 = attributes["md5"];
-    const expectedLineage = attributes["lineage"];
-    if ((expectedMd5 !== undefined && (typeof expectedMd5 !== "string" || !/^(?:[a-fA-F0-9]{32}|[A-Za-z0-9+/]{22}==)$/.test(expectedMd5)))
-      || (expectedLineage !== undefined && (typeof expectedLineage !== "string" || expectedLineage === ""))) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid state checksum or lineage" }] };
-    }
-    const inlineState = typeof attributes["state"] === "string" ? attributes["state"] : undefined;
-    const statePayload = inlineState !== undefined && inlineState !== "" ? decodeStatePayload(inlineState) : null;
-    const inlineJsonState = typeof attributes["json-state"] === "string" ? attributes["json-state"] : undefined;
-    const jsonState = inlineJsonState !== undefined && inlineJsonState !== "" ? decodeStatePayload(inlineJsonState) : null;
-    const inlineJsonStateOutputs = typeof attributes["json-state-outputs"] === "string" ? attributes["json-state-outputs"] : undefined;
-    const jsonStateOutputs = inlineJsonStateOutputs !== undefined && inlineJsonStateOutputs !== ""
-      ? decodeStatePayload(inlineJsonStateOutputs)
-      : null;
-    const requestedRunId = typeof runData["id"] === "string" ? runData["id"] : null;
-    if (run !== null && requestedRunId !== null && requestedRunId !== run.runId) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "run must match the run-scoped credential" }] };
-    }
-    const runId = run?.runId ?? requestedRunId;
-    let relatedRunCreatedBy: string | null = null;
-    const intermediate = attributes["intermediate"] === true;
-    if (serial === undefined) {
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "param is missing or the value is empty: serial" }] };
-    }
-    if (!Number.isSafeInteger(serial) || serial < 0) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial must be a non-negative safe integer" }] };
-    }
-    if (runId !== null) {
-      const relatedRun = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { workspaceId: true, createdBy: true } });
-      if (relatedRun?.workspaceId !== workspaceId) {
-        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "run must belong to this workspace" }] };
-      }
-      relatedRunCreatedBy = relatedRun.createdBy;
-    }
-    if (run === null && (!ownsWorkspaceLock(ws, lockPrincipal(user?.id, orgId, teamId)))) {
-      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before writing state" }] };
-    }
-    // No locked-workspace rejection here: the reference format allows state uploads on locked
-    // workspaces. The CLI holds the workspace lock for the whole
-    // import/apply operation and uploads the state while still locked;
-    // rejecting it breaks `terraform import`. Concurrent-writer protection
-    // comes from the run-level lock and state serial numbers, not from
-    // blocking the lock holder.
-    if (intermediate && ws.locked !== true) {
-      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Intermediate state requires a locked workspace" }] };
-    }
-    const parsedTerraformState = statePayload === null ? null : parseTerraformStatePayload(statePayload);
-    if (statePayload !== null && parsedTerraformState === null) {
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(statePayload) }] };
-    }
-    if (parsedTerraformState !== null && expectedLineage !== undefined && parsedTerraformState["lineage"] !== expectedLineage) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "lineage does not match the state payload" }] };
-    }
-    if (parsedTerraformState !== null && parsedTerraformState["serial"] !== serial) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial does not match the Terraform state payload" }] };
-    }
-    if (statePayload !== null && typeof attributes["md5"] !== "string") {
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "md5 is required when state is supplied" }] };
-    }
-    if (statePayload !== null && typeof attributes["md5"] === "string") {
-      const expected = createHash("md5").update(statePayload).digest("base64");
-      if (attributes["md5"] !== expected && attributes["md5"].toLowerCase() !== createHash("md5").update(statePayload).digest("hex")) {
-        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "md5 does not match the state payload" }] };
-      }
-    }
-    const idempotencyBegin = await beginIdempotency(
-      idempotency,
-      "state-versions",
-      set as unknown as { status?: number | string; headers: Record<string, string | number> },
-    );
-    if (idempotencyBegin.kind === "replay") return replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
-    if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
-    const latestState = await db.query.stateVersions.findFirst({
-      where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
-      orderBy: [desc(stateVersions.serial)],
-      columns: { serial: true, statePayload: true },
-    });
-    if (latestState !== undefined && serial <= latestState.serial) {
-      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] };
-    }
-    if (parsedTerraformState !== null) {
-      const lineageError = stateLineageError(latestState, parsedTerraformState);
-      if (lineageError !== null) {
-        if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: lineageError }] };
-      }
-    }
-    if (jsonState !== null && parseStatePayload(jsonState) === null) {
-      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] };
-    }
-    const id = crypto.randomUUID();
+    let idempotencyBegin: Awaited<ReturnType<typeof beginIdempotency>> | undefined;
     try {
-      await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<void> => {
-        const t = tx as typeof db;
-        if (!(await fenceStateWorkspace(t, ws))) throw new StateSerialConflictError();
-        await pruneStateReservations(t, ws);
-        // Re-check inside the same transaction as the insert. This closes the
-        // race between two writers that both observed the same latest serial,
-        // and includes pending/intermediate rows hidden by the finalized-only
-        // validation query above.
-        const latestAny = await t.query.stateVersions.findFirst({
-          where: eq(stateVersions.workspaceId, workspaceId),
-          orderBy: [desc(stateVersions.serial)],
-          columns: { serial: true },
-        });
-        if (latestAny !== undefined && serial <= latestAny.serial) throw new StateSerialConflictError();
-        await t.insert(stateVersions).values({
-          id,
-          workspaceId,
-          serial,
-          expectedMd5: expectedMd5 ?? null,
-          expectedLineage: expectedLineage ?? null,
-          uploadExpiresAt: statePayload === null ? Date.now() + STATE_UPLOAD_TTL_MS : null,
-          uploadLock: statePayload === null ? stateUploadLock(ws) : null,
-          uploadSha256: statePayload === null ? null : createHash("sha256").update(statePayload).digest("hex"),
-          runId,
-          statePayload: await encryptStatePayload(statePayload),
-          jsonState: await encryptStatePayload(jsonState ?? statePayload),
-          jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
-          createdBy: relatedRunCreatedBy ?? user?.id ?? null,
-          intermediate,
-          status: statePayload === null ? "pending" : "finalized",
-          createdAt: Date.now(),
-        });
-        await insertStateOutputIndex(t, id, workspaceId, jsonState, statePayload);
-        await t.insert(auditLogs).values(auditLogValues({
-          action: "create",
-          resourceType: "state-version",
-          resourceId: id,
-          orgId: ws.orgId,
-          userId: user?.id ?? null,
-          details: {
-            workspaceId,
-            runId,
-            serial,
-            status: statePayload === null ? "pending" : "finalized",
-            intermediate,
-            stateBytes: statePayload === null ? 0 : Buffer.byteLength(statePayload, "utf8"),
-          },
-        }) as typeof auditLogs.$inferInsert);
-      }));
+      const ws = await resolveStateVersionWorkspace(workspaceId, run, user?.id, orgId, teamId);
+      const parsed = parseStateVersionPayload(body);
+      const idempotency = resolveStateVersionIdempotency(request, workspaceId, user?.id, orgId, teamId, parsed.payload, set);
+      assertStateVersionCreatable(parsed, run, orgId);
+      const bodies = decodeStateVersionBodies(parsed.inlineState, parsed.inlineJsonState, parsed.inlineJsonStateOutputs);
+      const runId = run?.runId ?? parsed.requestedRunId;
+      const relatedRunCreatedBy = await resolveStateVersionRun(runId, workspaceId);
+      const serial = assertStateVersionSerial(parsed.serial);
+      assertStateVersionWritable(run, ws, user?.id, orgId, teamId, parsed.intermediate);
+      const parsedTerraformState = parseAndAssertStatePayload(bodies.statePayload, parsed.expectedLineage, serial, parsed.attributes["md5"]);
+      idempotencyBegin = await beginIdempotency(
+        idempotency,
+        "state-versions",
+        set,
+      );
+      if (idempotencyBegin.kind === "replay") return await replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
+      if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
+      await assertStateVersionAdvances(workspaceId, serial, parsedTerraformState, bodies.jsonState);
+      const id = crypto.randomUUID();
+      await insertStateVersionRecord({
+        id,
+        workspaceId,
+        serial,
+        expectedMd5: typeof parsed.expectedMd5 === "string" ? parsed.expectedMd5 : null,
+        expectedLineage: typeof parsed.expectedLineage === "string" ? parsed.expectedLineage : null,
+        statePayload: bodies.statePayload,
+        runId,
+        jsonState: bodies.jsonState,
+        jsonStateOutputs: bodies.jsonStateOutputs,
+        relatedRunCreatedBy,
+        createdBy: relatedRunCreatedBy ?? user?.id ?? null,
+        intermediate: parsed.intermediate,
+        ws,
+      });
+      return await completeStateVersionCreation(id, workspaceId, request, ws, user?.id, orgId, teamId, set, idempotencyBegin);
     } catch (error: unknown) {
-      if (error instanceof StateSerialConflictError || isUniqueConstraintError(error)) {
-        if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] };
+      if (error instanceof StateVersionRejected) {
+        if (idempotencyBegin?.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+        (set as { status: number }).status = error.status;
+        return error.body;
       }
       throw error;
     }
-    scheduleExplorerInventory(workspaceId);
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
-    if (sv === undefined) {
-      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    (set as { status: number }).status = 201;
-     const responseBody = { data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
-     if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
-     return responseBody;
   })
   .post("/api/v2/workspaces/:workspace_id/state-versions/upload", async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
