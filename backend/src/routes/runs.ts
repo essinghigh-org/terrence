@@ -1177,6 +1177,74 @@ async function assembleRunProvenance(
   });
 }
 
+type AuthorizedRun = NonNullable<Awaited<ReturnType<typeof findAuthorizedRun>>>;
+
+async function authorizeRunApply(
+  runId: string,
+  user: ParamCtx["user"],
+  orgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ authorized: AuthorizedRun } | { failure: Record<string, unknown> }>> {
+  const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+  if (authorized === undefined) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  if (orgId !== null && orgId !== undefined) {
+    (set as { status: number }).status = 403;
+    return { failure: { errors: [{ status: "403", title: "Forbidden" }] } };
+  }
+  if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "apply"))) {
+    (set as { status: number }).status = 403;
+    return { failure: { errors: [{ status: "403", title: "Forbidden" }] } };
+  }
+  return { authorized };
+}
+
+async function resolveApplyAgentPool(
+  workspace: AuthorizedRun["workspace"],
+  set: SetObj,
+): Promise<Readonly<{ agentPoolId: string | null } | { failure: Record<string, unknown> }>> {
+  if (workspace.executionMode !== "agent") return { agentPoolId: null };
+  const pool = workspace.agentPoolId === null
+    ? undefined
+    : await db.query.agentPools.findFirst({ where: eq(agentPools.id, workspace.agentPoolId) });
+  if (
+    pool?.orgId !== workspace.orgId
+    || !(await agentPoolAllowsWorkspace(
+      pool,
+      workspace.id,
+      workspace.projectId,
+    ))
+  ) {
+    (set as { status: number }).status = 409;
+    return { failure: { errors: [{ status: "409", title: "Conflict", detail: "The workspace does not have an allowed agent pool" }] } };
+  }
+  return { agentPoolId: pool.id };
+}
+
+async function logApplyConfirmation(
+  runId: string,
+  userId: string | null,
+  orgId: string,
+  workspaceId: string,
+  teamId: string | null | undefined,
+  fromStatus: string,
+  toStatus: string,
+  body: unknown,
+  workspace: AuthorizedRun["workspace"],
+): Promise<void> {
+  await auditLog("apply", "runs", runId, userId, orgId, {
+    workspaceId,
+    fromStatus,
+    toStatus,
+    ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+  });
+  const commentStr = actionComment(body);
+  if (commentStr !== "") await createRunComment({ runId, userId, body: commentStr, workspaceId: workspace.id, orgId: workspace.orgId });
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -1982,10 +2050,9 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   .post("/api/v2/runs/:run_id/actions/apply", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "apply"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const access = await authorizeRunApply(runId, user, orgId, teamId, set);
+    if ("failure" in access) return access.failure;
+    const { authorized } = access;
     if (authorized.workspace.locked === true) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(authorized.workspace.lockedReason) }] };
@@ -1997,24 +2064,9 @@ export const runRoutes = new Elysia({ name: "runs" })
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: gateBlockReason }] };
     }
-    let agentPoolId: string | null = null;
-    if (authorized.workspace.executionMode === "agent") {
-      const pool = authorized.workspace.agentPoolId === null
-        ? undefined
-        : await db.query.agentPools.findFirst({ where: eq(agentPools.id, authorized.workspace.agentPoolId) });
-      if (
-        pool?.orgId !== authorized.workspace.orgId
-        || !(await agentPoolAllowsWorkspace(
-          pool,
-          authorized.workspace.id,
-          authorized.workspace.projectId,
-        ))
-      ) {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "The workspace does not have an allowed agent pool" }] };
-      }
-      agentPoolId = pool.id;
-    }
+    const pool = await resolveApplyAgentPool(authorized.workspace, set);
+    if ("failure" in pool) return pool.failure;
+    const { agentPoolId } = pool;
     if (agentPoolId !== null) {
       const confirmedTimestamps = {
         ...(before.statusTimestamps ?? {}),
@@ -2034,14 +2086,7 @@ export const runRoutes = new Elysia({ name: "runs" })
         (set as { status: number }).status = 409;
         return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] };
       }
-      await auditLog("apply", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
-        workspaceId: authorized.workspace.id,
-        fromStatus: before.status,
-        toStatus: "apply_queued",
-        ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
-      });
-      const commentStr = actionComment(body);
-      if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
+      await logApplyConfirmation(runId, user?.id ?? null, authorized.workspace.orgId, authorized.workspace.id, teamId, before.status, "apply_queued", body, authorized.workspace);
       (set as { status: number }).status = 202;
       return new Response(null, { status: 202 });
     }
@@ -2054,14 +2099,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       },
     }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
     if (confirmed.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] }; }
-    await auditLog("apply", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
-      workspaceId: authorized.workspace.id,
-      fromStatus: before.status,
-      toStatus: "confirmed",
-      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
-    });
-    const commentStr = actionComment(body);
-    if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
+    await logApplyConfirmation(runId, user?.id ?? null, authorized.workspace.orgId, authorized.workspace.id, teamId, before.status, "confirmed", body, authorized.workspace);
     const { executeApply } = await import("../worker");
     executeApply(authorized.run.id).catch((err: unknown): void => { if (err !== null && err !== undefined) { console.error(err); } });
     (set as { status: number }).status = 202;
@@ -2072,10 +2110,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     // The worker applies the run when scheduled-at arrives; the manual apply
     // action clears the schedule and applies immediately.
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "apply"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const access = await authorizeRunApply(runId, user, orgId, teamId, set);
+    if ("failure" in access) return access.failure;
+    const { authorized } = access;
     if (authorized.workspace.locked === true) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(authorized.workspace.lockedReason) }] };
