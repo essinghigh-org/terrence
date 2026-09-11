@@ -2098,14 +2098,31 @@ export async function executeRun(runId: string): Promise<void> {
   ));
 }
 
-async function executeRunImpl(runId: string): Promise<void> {
+async function loadPlanExecutionScope(runId: string): Promise<{
+  rawRun: typeof runs.$inferSelect;
+  workspace: typeof workspaces.$inferSelect;
+  org: typeof organizations.$inferSelect | undefined;
+  runInputs: ReturnType<typeof parsePersistedRunInputs>;
+  runStatusTimestamps: ReturnType<typeof parsePersistedStatusMetadata>;
+} | null> {
   assertRunSandboxAvailable();
   const rawRun = await db.query.runs.findFirst({
     where: eq(runs.id, runId),
   });
 
-  if (rawRun === undefined) return;
-  if (FINAL_RUN_STATUSES.includes(rawRun.status)) return;
+  if (rawRun === undefined) return null;
+  if (FINAL_RUN_STATUSES.includes(rawRun.status)) return null;
+
+  const workspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, rawRun.workspaceId),
+  });
+
+  if (workspace === undefined) return null;
+
+  const org = await db.query.organizations.findFirst({
+    where: eq(organizations.id, workspace.orgId),
+  });
+
   const runInputs = parsePersistedRunInputs({
     targetAddrs: rawRun.targetAddrs,
     replaceAddrs: rawRun.replaceAddrs,
@@ -2113,6 +2130,174 @@ async function executeRunImpl(runId: string): Promise<void> {
     variables: rawRun.variables,
   }, rawRun.inputSchemaVersion, rawRun.id);
   const runStatusTimestamps = parsePersistedStatusMetadata(rawRun.statusTimestamps, rawRun.statusMetadataSchemaVersion, rawRun.id);
+  // Re-check executor policy at plan/apply entry (36-39): handles
+  // admin enabling requireHardIsolation between claim and execution.
+  if (!(await enforcePlanExecutorPolicy(workspace, org, rawRun.status, runStatusTimestamps, runId))) return null;
+  return { rawRun, workspace, org, runInputs, runStatusTimestamps };
+}
+
+async function fetchPlanConfiguration(
+  configurationVersionId: string | null,
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  runId: string,
+  workDir: string,
+): Promise<void> {
+  if (configurationVersionId !== null) {
+    const cv = await waitForPlanConfigurationArchive(configurationVersionId, runId);
+    await extractPlanConfigurationArchive(cv, workspace, runId, workDir);
+  } else if (workspace.source === "local") {
+    await preparePlanLocalSource(workspace, org, runId, workDir);
+  }
+}
+
+async function preparePlanWorkspace(
+  runId: string,
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  configurationVersionId: string | null,
+  workDir: string,
+): Promise<void> {
+  await updateRunStatus(runId, "fetching");
+  await mkdir(workDir, { recursive: true, mode: 0o700 });
+  await writeLog(runId, "plan", `[terrence] Initializing run environment in ${workDir}`);
+  await fetchPlanConfiguration(configurationVersionId, workspace, org, runId, workDir);
+}
+
+type PlanExecutionContext = Awaited<ReturnType<typeof buildPlanExecutionFiles>> & {
+  requestedTool: string;
+  requestedVersion: string;
+  hasTfFiles: boolean;
+  isSimulatedAllowed: boolean;
+};
+
+async function preparePlanExecutionFiles(
+  runId: string,
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  executionDir: string,
+  runVariables: unknown,
+  debuggingMode: boolean,
+  runTerraformVersion: string | null | undefined,
+): Promise<PlanExecutionContext> {
+  const planFiles = await buildPlanExecutionFiles(runId, workspace, executionDir, runVariables, debuggingMode);
+  const requestedTool = workspace.iacBinary ?? org?.defaultIacBinary ?? "terraform";
+  const requestedVersion = runTerraformVersion ?? workspace.terraformVersion ?? org?.defaultTerraformVersion ?? "latest";
+
+  const currentDirFiles = await readdir(executionDir);
+  const hasTfFiles = currentDirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
+
+  const isSimulatedAllowed = envFlag("SIMULATED_RUNS") || Reflect.get(process.env, "NODE_ENV") === "test";
+  if (!isSimulatedAllowed) {
+    await writeLog(runId, "plan", `[terrence] Resolving binary for ${requestedTool} (version: ${requestedVersion})...`);
+  }
+  return { ...planFiles, requestedTool, requestedVersion, hasTfFiles, isSimulatedAllowed };
+}
+
+async function runPlanBinaryOrSimulated(
+  runId: string,
+  run: PlanRunFlags,
+  executionDir: string,
+  envVars: Record<string, string>,
+  tfVarsLines: readonly string[],
+  runTfVarsLines: readonly string[],
+  requestedTool: string,
+  requestedVersion: string,
+  hasTfFiles: boolean,
+  isSimulatedAllowed: boolean,
+  planTimeoutMs: number,
+): Promise<{ planHasChanges: boolean; proceed: boolean; resolvedBinaryPath: string | undefined }> {
+  const planHasChanges = true;
+  const resolved = isSimulatedAllowed ? null : await ensureBinary(requestedTool, requestedVersion);
+  if (resolved !== null && hasTfFiles) {
+    const planArgs = buildPlanArgs(resolved.binaryPath, run, tfVarsLines, runTfVarsLines);
+    const planOutcome = await runPlanInitAndPlan(runId, resolved, executionDir, envVars, planArgs, planTimeoutMs);
+    if (!planOutcome.proceed) return { planHasChanges, proceed: false, resolvedBinaryPath: resolved.binaryPath };
+    return { planHasChanges: planOutcome.planHasChanges, proceed: true, resolvedBinaryPath: resolved.binaryPath };
+  }
+  if (isSimulatedAllowed) {
+    await writeLog(runId, "plan", `[terrence] Execution engine: Simulated plan completed successfully.`);
+    await writeLog(runId, "plan", `Plan: 1 to add, 0 to change, 0 to destroy.`);
+    return { planHasChanges, proceed: true, resolvedBinaryPath: undefined };
+  }
+  if (resolved === null) {
+    // Issue #602: name the version and the remedies (the download already
+    // retried with backoff): an unpublished version fails here even on a
+    // fast link, while timeouts and rate-limited enumeration are
+    // operator-fixable.
+    await writeLog(runId, "plan", `[terrence] Failed to resolve ${requestedTool} v${requestedVersion}: no cached binary and the download failed. Verify the version was published for this OS/arch; on slow links raise TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS; set GITHUB_TOKEN or GH_TOKEN when release enumeration is rate-limited.`);
+    throw new Error(`Unable to resolve CLI binary '${requestedTool}' (version: ${requestedVersion}): no cached binary and the download failed after retries. Verify the version exists; on slow links raise TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS, and set GITHUB_TOKEN or GH_TOKEN when release enumeration is rate-limited.`);
+  }
+  throw new Error(`No Terraform configuration (.tf or .tf.json) files were found in workspace directory '${executionDir}'.`);
+}
+
+async function runPlanFinalizeStages(
+  runId: string,
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  run: PostPlanRunFlags,
+  planHasChanges: boolean,
+  executionDir: string,
+  workDir: string,
+  plannedState: Readonly<{ id: string | null; serial: number }>,
+  configurationVersionId: string | null,
+  planTimeoutMs: number,
+  resolvedBinaryPath: string | undefined,
+  isSimulatedAllowed: boolean,
+): Promise<void> {
+  const finalized = await finalizePlanOutput(runId, workspace, executionDir, workDir, plannedState, configurationVersionId, planTimeoutMs, resolvedBinaryPath, isSimulatedAllowed);
+  if (!(await runCostEstimateStage(runId, executionDir))) return;
+  if (!(await runPolicyGateStage(runId, workspace, executionDir, resolvedBinaryPath, finalized.planJson, finalized.persistPlanForLater))) return;
+  await runPostPlanDispatch(runId, workspace, org, run, planHasChanges, finalized.persistPlanForLater);
+}
+
+async function reportPlanFailure(runStatus: string, runId: string, error: unknown): Promise<never> {
+  // Issue #615: a cancel that wins the race against a plan-phase write must
+  // not surface internal state-machine errors in the user-visible log. The
+  // apply path already guards this way; mirror it here.
+  if (await runWasCanceled(runId)) {
+    await writeLog(runId, "plan", "[terrence] Run canceled.");
+    throw error;
+  }
+  const errMsg = error instanceof Error ? error.message : String(error);
+  log.error(`Run ${runId} planning failed`, { error });
+  await writeRunDiagnostic(
+    runId,
+    "plan",
+    "error",
+    "run.plan.failed",
+    "Planning failed.",
+    { failureReason: "plan_failed", error },
+  );
+  await writeLog(runId, "plan", `[terrence ERROR] ${errMsg}`);
+  try {
+    if (!isTerminalRunStatus(runStatus)) await updateRunStatus(runId, "errored");
+  } catch (statusError: unknown) {
+    log.error(`Failed to mark run ${runId} errored after planning failure`, { error: statusError });
+  } finally {
+    await cleanupSavedPlan(runId);
+  }
+  throw error;
+}
+
+async function cleanupPlanWorkDir(runId: string): Promise<void> {
+  try {
+    // Saved plans live under storage/saved-plans; never retain the execution
+    // directory, which contains tfvars, state, provider caches, and tokens.
+    // Exception (issue #579): a failed recovery capture leaves the work
+    // directory as the only source, so spare it for manual recovery. The
+    // apply phase already logged the preservation note.
+    if (!isRunWorkDirPreserved(runId)) await cleanupRunWorkDir(runId);
+  } catch (error: unknown) {
+    logBestEffortFailure("Run workdir cleanup failed after planning", { runId }, error);
+    scheduleRunWorkDirCleanup(runId);
+  }
+}
+
+async function executeRunImpl(runId: string): Promise<void> {
+  const scope = await loadPlanExecutionScope(runId);
+  if (scope === null) return;
+  const { rawRun, workspace, org, runInputs, runStatusTimestamps } = scope;
   // From this point onward the worker operates on the trusted adapter output.
   // Unknown persisted extension fields are retained by the adapter but are not
   // copied into the CLI arguments or environment.
@@ -2125,125 +2310,25 @@ async function executeRunImpl(runId: string): Promise<void> {
     statusTimestamps: runStatusTimestamps,
   };
 
-  const workspace = await db.query.workspaces.findFirst({
-    where: eq(workspaces.id, run.workspaceId),
-  });
-
-  if (workspace === undefined) return;
-
-  const org = await db.query.organizations.findFirst({
-    where: eq(organizations.id, workspace.orgId),
-  });
-
-  // Re-check executor policy at plan/apply entry (36-39): handles
-  // admin enabling requireHardIsolation between claim and execution.
-  if (!(await enforcePlanExecutorPolicy(workspace, org, run.status, run.statusTimestamps, runId))) return;
-
   const workDir = runWorkDir(runId);
   let plannedAgainstState: { id: string | null; serial: number } = { id: null, serial: 0 };
 
   try {
-    await updateRunStatus(runId, "fetching");
-    await mkdir(workDir, { recursive: true, mode: 0o700 });
-    await writeLog(runId, "plan", `[terrence] Initializing run environment in ${workDir}`);
-
-    if (run.configurationVersionId !== null) {
-      const cv = await waitForPlanConfigurationArchive(run.configurationVersionId, runId);
-      await extractPlanConfigurationArchive(cv, workspace, runId, workDir);
-    } else if (workspace.source === "local") {
-      await preparePlanLocalSource(workspace, org, runId, workDir);
-    }
-
+    await preparePlanWorkspace(runId, workspace, org, run.configurationVersionId, workDir);
     if (!(await runPrePlanGate(runId, workspace, org, run.operation))) return;
 
     const prepared = await seedPlanExecutionState(runId, workspace, workDir);
-    const executionDir = prepared.executionDir;
     plannedAgainstState = prepared.plannedState;
 
-    const planFiles = await buildPlanExecutionFiles(runId, workspace, executionDir, run.variables, run.debuggingMode);
-    const envVars = planFiles.envVars;
-    const tfVarsLines = planFiles.tfVarsLines;
-    const runTfVarsLines = planFiles.runTfVarsLines;
-
-    const requestedTool = workspace.iacBinary ?? org?.defaultIacBinary ?? "terraform";
-    const requestedVersion = run.terraformVersion ?? workspace.terraformVersion ?? org?.defaultTerraformVersion ?? "latest";
-
-    const currentDirFiles = await readdir(executionDir);
-    const hasTfFiles = currentDirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
-
-    const isSimulatedAllowed = envFlag("SIMULATED_RUNS") || Reflect.get(process.env, "NODE_ENV") === "test";
-    if (!isSimulatedAllowed) {
-      await writeLog(runId, "plan", `[terrence] Resolving binary for ${requestedTool} (version: ${requestedVersion})...`);
-    }
-    let planHasChanges = true;
-    const resolved = isSimulatedAllowed ? null : await ensureBinary(requestedTool, requestedVersion);
-
+    const planFiles = await preparePlanExecutionFiles(runId, workspace, org, prepared.executionDir, run.variables, run.debuggingMode, run.terraformVersion);
     const planTimeoutMs = await executionTimeoutMs("plan");
-    if (resolved !== null && hasTfFiles) {
-      const planArgs = buildPlanArgs(resolved.binaryPath, run, tfVarsLines, runTfVarsLines);
-      const planOutcome = await runPlanInitAndPlan(runId, resolved, executionDir, envVars, planArgs, planTimeoutMs);
-      if (!planOutcome.proceed) return;
-      planHasChanges = planOutcome.planHasChanges;
-    } else if (isSimulatedAllowed) {
-      await writeLog(runId, "plan", `[terrence] Execution engine: Simulated plan completed successfully.`);
-      await writeLog(runId, "plan", `Plan: 1 to add, 0 to change, 0 to destroy.`);
-    } else if (resolved === null) {
-      // Issue #602: name the version and the remedies (the download already
-      // retried with backoff): an unpublished version fails here even on a
-      // fast link, while timeouts and rate-limited enumeration are
-      // operator-fixable.
-      await writeLog(runId, "plan", `[terrence] Failed to resolve ${requestedTool} v${requestedVersion}: no cached binary and the download failed. Verify the version was published for this OS/arch; on slow links raise TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS; set GITHUB_TOKEN or GH_TOKEN when release enumeration is rate-limited.`);
-      throw new Error(`Unable to resolve CLI binary '${requestedTool}' (version: ${requestedVersion}): no cached binary and the download failed after retries. Verify the version exists; on slow links raise TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS, and set GITHUB_TOKEN or GH_TOKEN when release enumeration is rate-limited.`);
-    } else {
-      throw new Error(`No Terraform configuration (.tf or .tf.json) files were found in workspace directory '${executionDir}'.`);
-    }
-
-    const finalized = await finalizePlanOutput(runId, workspace, executionDir, workDir, plannedAgainstState, run.configurationVersionId, planTimeoutMs, resolved?.binaryPath, isSimulatedAllowed);
-    const planJson = finalized.planJson;
-    const persistPlanForLater = finalized.persistPlanForLater;
-
-    if (!(await runCostEstimateStage(runId, executionDir))) return;
-    if (!(await runPolicyGateStage(runId, workspace, executionDir, resolved?.binaryPath, planJson, persistPlanForLater))) return;
-    await runPostPlanDispatch(runId, workspace, org, run, planHasChanges, persistPlanForLater);
+    const plan = await runPlanBinaryOrSimulated(runId, run, prepared.executionDir, planFiles.envVars, planFiles.tfVarsLines, planFiles.runTfVarsLines, planFiles.requestedTool, planFiles.requestedVersion, planFiles.hasTfFiles, planFiles.isSimulatedAllowed, planTimeoutMs);
+    if (!plan.proceed) return;
+    await runPlanFinalizeStages(runId, workspace, org, run, plan.planHasChanges, prepared.executionDir, workDir, plannedAgainstState, run.configurationVersionId, planTimeoutMs, plan.resolvedBinaryPath, planFiles.isSimulatedAllowed);
   } catch (error: unknown) {
-    // Issue #615: a cancel that wins the race against a plan-phase write must
-    // not surface internal state-machine errors in the user-visible log. The
-    // apply path already guards this way; mirror it here.
-    if (await runWasCanceled(runId)) {
-      await writeLog(runId, "plan", "[terrence] Run canceled.");
-      throw error;
-    }
-    const errMsg = error instanceof Error ? error.message : String(error);
-    log.error(`Run ${runId} planning failed`, { error });
-    await writeRunDiagnostic(
-      runId,
-      "plan",
-      "error",
-      "run.plan.failed",
-      "Planning failed.",
-      { failureReason: "plan_failed", error },
-    );
-    await writeLog(runId, "plan", `[terrence ERROR] ${errMsg}`);
-    try {
-      if (!isTerminalRunStatus(run.status)) await updateRunStatus(runId, "errored");
-    } catch (statusError: unknown) {
-      log.error(`Failed to mark run ${runId} errored after planning failure`, { error: statusError });
-    } finally {
-      await cleanupSavedPlan(runId);
-    }
-    throw error;
+    await reportPlanFailure(run.status, runId, error);
   } finally {
-    try {
-      // Saved plans live under storage/saved-plans; never retain the execution
-      // directory, which contains tfvars, state, provider caches, and tokens.
-      // Exception (issue #579): a failed recovery capture leaves the work
-      // directory as the only source, so spare it for manual recovery. The
-      // apply phase already logged the preservation note.
-      if (!isRunWorkDirPreserved(runId)) await cleanupRunWorkDir(runId);
-    } catch (error: unknown) {
-      logBestEffortFailure("Run workdir cleanup failed after planning", { runId }, error);
-      scheduleRunWorkDirCleanup(runId);
-    }
+    await cleanupPlanWorkDir(runId);
   }
 }
 
