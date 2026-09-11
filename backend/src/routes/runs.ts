@@ -169,30 +169,42 @@ async function rawRunLogResponse(
   return slice.bytes;
 }
 
+const INGRESS_STRING_FIELDS = [
+  ["branch", "branch"],
+  ["commitSha", "commitSha"],
+  ["commitUrl", "commitUrl"],
+  ["senderUsername", "triggeredBy"],
+  ["senderAvatarUrl", "triggeredByAvatarUrl"],
+  ["senderProviderId", "triggeredByProviderId"],
+] as const;
+
+function resolveTriggerReason(source: string, ingress: ConfigurationVersionItem["ingressAttributes"]): string {
+  if (!VCS_RUN_SOURCES.has(source)) return "manual";
+  if ((ingress as Record<string, unknown> | null)?.["manualTrigger"] === true) return "manual";
+  if (typeof ingress?.pullRequestNumber === "number") return "pull_request";
+  if (typeof ingress?.tag === "string" && ingress.tag !== "") return "tag";
+  return "push";
+}
+
+function ingressStringFields(ingress: ConfigurationVersionItem["ingressAttributes"]): Record<string, string> {
+  const fields: Record<string, string> = {};
+  for (const [source, target] of INGRESS_STRING_FIELDS) {
+    const value = ingress?.[source];
+    if (typeof value === "string") fields[target] = value;
+  }
+  return fields;
+}
+
 function originForConfiguration(
   configuration: ConfigurationVersionItem | undefined,
 ): RunOrigin | undefined {
   if (configuration === undefined) return undefined;
   const source = configuration.source ?? "tfe-api";
   const ingress = configuration.ingressAttributes;
-  const triggerReason = !VCS_RUN_SOURCES.has(source)
-    ? "manual"
-    : (ingress as Record<string, unknown> | null)?.["manualTrigger"] === true
-      ? "manual"
-      : typeof ingress?.pullRequestNumber === "number"
-        ? "pull_request"
-        : typeof ingress?.tag === "string" && ingress.tag !== ""
-          ? "tag"
-          : "push";
   const origin: RunOrigin = {
     source,
-    triggerReason,
-    ...(typeof ingress?.branch === "string" ? { branch: ingress.branch } : {}),
-    ...(typeof ingress?.commitSha === "string" ? { commitSha: ingress.commitSha } : {}),
-    ...(typeof ingress?.commitUrl === "string" ? { commitUrl: ingress.commitUrl } : {}),
-    ...(typeof ingress?.senderUsername === "string" ? { triggeredBy: ingress.senderUsername } : {}),
-    ...(typeof ingress?.senderAvatarUrl === "string" ? { triggeredByAvatarUrl: ingress.senderAvatarUrl } : {}),
-    ...(typeof ingress?.senderProviderId === "string" ? { triggeredByProviderId: ingress.senderProviderId } : {}),
+    triggerReason: resolveTriggerReason(source, ingress),
+    ...ingressStringFields(ingress),
   };
   return origin;
 }
