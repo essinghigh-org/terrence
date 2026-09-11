@@ -467,83 +467,121 @@ type TerraformType =
   | Readonly<{ kind: "tuple"; constraint: string; items: readonly TerraformType[] }>
   | Readonly<{ kind: "object"; constraint: string; fields: Readonly<Record<string, TerraformType>> }>;
 
-function parseTerraformType(source: string): TerraformType | undefined {
-  let position = 0;
-  const skipSpace = (): void => {
-    while (/\s/.test(source[position] ?? "")) position += 1;
-  };
-  const take = (value: string): boolean => {
-    skipSpace();
-    if (!source.startsWith(value, position)) return false;
-    position += value.length;
-    return true;
-  };
-  const identifier = (): string | undefined => {
-    skipSpace();
-    const match = /^[A-Za-z_][A-Za-z0-9_-]*/.exec(source.slice(position));
-    if (match === null) return undefined;
-    position += match[0].length;
-    return match[0];
-  };
-  const parse = (): TerraformType | undefined => {
-    const rawName = identifier();
+function parseScalarType(name: string): TerraformType | undefined {
+  if (name === "any" || name === "dynamic") return { kind: "any", constraint: "any" };
+  if (name === "string") return { kind: "string", constraint: "string" };
+  if (name === "number" || name === "integer" || name === "float") return { kind: "number", constraint: "number" };
+  if (name === "bool" || name === "boolean") return { kind: "bool", constraint: "bool" };
+  if (name === "array") return { kind: "list", constraint: "list(any)", item: { kind: "any", constraint: "any" } };
+  return undefined;
+}
+
+function parseBareCollectionType(name: string): TerraformType | undefined {
+  if (name === "list" || name === "set" || name === "map") {
+    return { kind: name, constraint: `${name}(any)`, item: { kind: "any", constraint: "any" } };
+  }
+  return undefined;
+}
+
+class TerraformTypeParser {
+  private position = 0;
+
+  constructor(private readonly source: string) {}
+
+  public parseDocument(): TerraformType | undefined {
+    const parsed = this.parse();
+    this.skipSpace();
+    return parsed !== undefined && this.position === this.source.length ? parsed : undefined;
+  }
+
+  public parse(): TerraformType | undefined {
+    const rawName = this.identifier();
     if (rawName === undefined) return undefined;
     const name = rawName.toLowerCase();
-    if (name === "any" || name === "dynamic") return { kind: "any", constraint: "any" };
-    if (name === "string") return { kind: "string", constraint: "string" };
-    if (name === "number" || name === "integer" || name === "float") return { kind: "number", constraint: "number" };
-    if (name === "bool" || name === "boolean") return { kind: "bool", constraint: "bool" };
-    if (name === "array") return { kind: "list", constraint: "list(any)", item: { kind: "any", constraint: "any" } };
-
-    if (!take("(")) {
-      if (name === "list" || name === "set" || name === "map") {
-        return { kind: name, constraint: `${name}(any)`, item: { kind: "any", constraint: "any" } };
-      }
-      return undefined;
-    }
-    if (name === "list" || name === "set" || name === "map" || name === "optional") {
-      const item = parse();
-      if (item === undefined || !take(")")) return undefined;
-      return { kind: name, constraint: `${name}(${item.constraint})`, item };
-    }
-    if (name === "tuple") {
-      if (!take("[")) return undefined;
-      const items: TerraformType[] = [];
-      skipSpace();
-      while ((source[position] ?? "") !== "]") {
-        const item = parse();
-        if (item === undefined) return undefined;
-        items.push(item);
-        skipSpace();
-        if ((source[position] ?? "") === "]") break;
-        if (!take(",")) return undefined;
-      }
-      if (!take("]") || !take(")")) return undefined;
-      return { kind: "tuple", constraint: `tuple([${items.map((item): string => item.constraint).join(", ")}])`, items };
-    }
-    if (name === "object") {
-      if (!take("{")) return undefined;
-      const fields: Record<string, TerraformType> = {};
-      skipSpace();
-      while ((source[position] ?? "") !== "}") {
-        const fieldName = identifier();
-        if (fieldName === undefined || fields[fieldName] !== undefined || (!take("=") && !take(":"))) return undefined;
-        const fieldType = parse();
-        if (fieldType === undefined) return undefined;
-        fields[fieldName] = fieldType;
-        skipSpace();
-        if ((source[position] ?? "") === "}") break;
-        if (!take(",")) return undefined;
-      }
-      if (!take("}") || !take(")")) return undefined;
-      const entries = Object.entries(fields).map(([key, value]): string => `${key} = ${value.constraint}`);
-      return { kind: "object", constraint: `object({ ${entries.join(", ")} })`, fields };
-    }
+    const scalar = parseScalarType(name);
+    if (scalar !== undefined) return scalar;
+    if (!this.take("(")) return parseBareCollectionType(name);
+    if (name === "list" || name === "set" || name === "map" || name === "optional") return this.parseCollectionType(name);
+    if (name === "tuple") return this.parseTupleType();
+    if (name === "object") return this.parseObjectType();
     return undefined;
-  };
-  const parsed = parse();
-  skipSpace();
-  return parsed !== undefined && position === source.length ? parsed : undefined;
+  }
+
+  private skipSpace(): void {
+    while (/\s/.test(this.source[this.position] ?? "")) this.position += 1;
+  }
+
+  private take(value: string): boolean {
+    this.skipSpace();
+    if (!this.source.startsWith(value, this.position)) return false;
+    this.position += value.length;
+    return true;
+  }
+
+  private identifier(): string | undefined {
+    this.skipSpace();
+    const match = /^[A-Za-z_][A-Za-z0-9_-]*/.exec(this.source.slice(this.position));
+    if (match === null) return undefined;
+    this.position += match[0].length;
+    return match[0];
+  }
+
+  private parseCollectionType(name: "list" | "set" | "map" | "optional"): TerraformType | undefined {
+    const item = this.parse();
+    if (item === undefined || !this.take(")")) return undefined;
+    return { kind: name, constraint: `${name}(${item.constraint})`, item };
+  }
+
+  private parseTupleType(): TerraformType | undefined {
+    if (!this.take("[")) return undefined;
+    const items = this.parseTupleItems();
+    if (items === undefined) return undefined;
+    if (!this.take("]") || !this.take(")")) return undefined;
+    return { kind: "tuple", constraint: `tuple([${items.map((item): string => item.constraint).join(", ")}])`, items };
+  }
+
+  private parseTupleItems(): TerraformType[] | undefined {
+    const items: TerraformType[] = [];
+    this.skipSpace();
+    while ((this.source[this.position] ?? "") !== "]") {
+      const item = this.parse();
+      if (item === undefined) return undefined;
+      items.push(item);
+      this.skipSpace();
+      if ((this.source[this.position] ?? "") === "]") break;
+      if (!this.take(",")) return undefined;
+    }
+    return items;
+  }
+
+  private parseObjectType(): TerraformType | undefined {
+    if (!this.take("{")) return undefined;
+    const fields = this.parseObjectFields();
+    if (fields === undefined) return undefined;
+    if (!this.take("}") || !this.take(")")) return undefined;
+    const entries = Object.entries(fields).map(([key, value]): string => `${key} = ${value.constraint}`);
+    return { kind: "object", constraint: `object({ ${entries.join(", ")} })`, fields };
+  }
+
+  private parseObjectFields(): Record<string, TerraformType> | undefined {
+    const fields: Record<string, TerraformType> = {};
+    this.skipSpace();
+    while ((this.source[this.position] ?? "") !== "}") {
+      const fieldName = this.identifier();
+      if (fieldName === undefined || fields[fieldName] !== undefined || (!this.take("=") && !this.take(":"))) return undefined;
+      const fieldType = this.parse();
+      if (fieldType === undefined) return undefined;
+      fields[fieldName] = fieldType;
+      this.skipSpace();
+      if ((this.source[this.position] ?? "") === "}") break;
+      if (!this.take(",")) return undefined;
+    }
+    return fields;
+  }
+}
+
+function parseTerraformType(source: string): TerraformType | undefined {
+  return new TerraformTypeParser(source).parseDocument();
 }
 
 function matchesTerraformType(value: unknown, type: TerraformType): boolean {
