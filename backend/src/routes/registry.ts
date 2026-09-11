@@ -1304,6 +1304,49 @@ function assembleTestVariableResult(
 
 type TestConfigRow = DeepReadonly<typeof moduleTestConfigurations.$inferSelect>;
 
+type OrgRowForWrite = NonNullable<Awaited<ReturnType<typeof cachedOrgByName>>>;
+
+async function resolveRegistryModuleForWrite(
+  params: Readonly<Record<string, string>>,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ org: OrgRowForWrite; mod: ModItem } | { failure: unknown }>> {
+  const org = await cachedOrgByName(params["org_name"] ?? "");
+  if (org === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-modules"))) return { failure: registryNotFound(set) };
+  const mod = await db.query.registryModules.findFirst({
+    where: and(
+      eq(registryModules.orgId, org.id),
+      eq(registryModules.namespace, params["namespace"] ?? ""),
+      eq(registryModules.name, params["module_name"] ?? ""),
+      eq(registryModules.provider, params["provider"] ?? ""),
+    ),
+  });
+  if (mod === undefined) return { failure: registryNotFound(set) };
+  return { org, mod };
+}
+
+function validateModulePatchFields(
+  attributes: Readonly<Record<string, unknown>>,
+  currentBranch: string | null,
+): Readonly<{ sourceDirectory: unknown; tagPrefix: unknown } | { error: string }> {
+  const sourceDirectory = attributes["source-directory"];
+  const tagPrefix = attributes["tag-prefix"];
+  const vcsRepo = attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object" ? attributes["vcs-repo"] as Record<string, unknown> : {};
+  const requestedBranch = vcsRepo["branch"];
+  if (sourceDirectory !== undefined && (typeof sourceDirectory !== "string" || sourceDirectory.startsWith("/") || sourceDirectory.includes("\\") || sourceDirectory.split("/").includes(".."))) {
+    return { error: "source-directory must be a safe relative path" };
+  }
+  if (tagPrefix !== undefined && (typeof tagPrefix !== "string" || tagPrefix.length > 128)) {
+    return { error: "tag-prefix must be at most 128 characters" };
+  }
+  if (requestedBranch !== undefined && requestedBranch !== currentBranch) {
+    return { error: "Switching publishing workflows is not supported; create a new module instead" };
+  }
+  return { sourceDirectory, tagPrefix };
+}
+
 type ProviderPlatformFields = Readonly<{
   os: string;
   arch: string;
@@ -1982,39 +2025,17 @@ export const registryRoutes = new Elysia({ name: "registry" })
     }
   })
   .patch("/api/v2/organizations/:org_name/registry-modules/private/:namespace/:module_name/:provider", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    const mod = await db.query.registryModules.findFirst({
-      where: and(
-        eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params["namespace"] ?? ""),
-        eq(registryModules.name, params["module_name"] ?? ""),
-        eq(registryModules.provider, params["provider"] ?? ""),
-      ),
-    });
-    if (mod === undefined) return registryNotFound(set);
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const sourceDirectory = attributes["source-directory"];
-    const tagPrefix = attributes["tag-prefix"];
-    const vcsRepo = attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object" ? attributes["vcs-repo"] as Record<string, unknown> : {};
-    const requestedBranch = vcsRepo["branch"];
-    if (sourceDirectory !== undefined && (typeof sourceDirectory !== "string" || sourceDirectory.startsWith("/") || sourceDirectory.includes("\\") || sourceDirectory.split("/").includes(".."))) {
+    const resolved = await resolveRegistryModuleForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { org, mod } = resolved;
+    const validated = validateModulePatchFields(jsonApiAttributes(body), mod.branch);
+    if ("error" in validated) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "source-directory must be a safe relative path" }] };
-    }
-    if (tagPrefix !== undefined && (typeof tagPrefix !== "string" || tagPrefix.length > 128)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "tag-prefix must be at most 128 characters" }] };
-    }
-    if (requestedBranch !== undefined && requestedBranch !== mod.branch) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Switching publishing workflows is not supported; create a new module instead" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: validated.error }] };
     }
     await db.update(registryModules).set({
-      ...(typeof sourceDirectory === "string" ? { sourceDirectory } : {}),
-      ...(typeof tagPrefix === "string" ? { tagPrefix } : {}),
+      ...(typeof validated.sourceDirectory === "string" ? { sourceDirectory: validated.sourceDirectory } : {}),
+      ...(typeof validated.tagPrefix === "string" ? { tagPrefix: validated.tagPrefix } : {}),
       updatedAt: Date.now(),
     }).where(eq(registryModules.id, mod.id));
     const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, mod.id) });
