@@ -1245,6 +1245,24 @@ async function logApplyConfirmation(
   if (commentStr !== "") await createRunComment({ runId, userId, body: commentStr, workspaceId: workspace.id, orgId: workspace.orgId });
 }
 
+async function rejectMissingConfiguration(
+  workspace: typeof workspaces.$inferSelect,
+  cvId: string | undefined,
+  begin: IdempotencyBegin,
+  set: SetObj,
+): Promise<{ failure: Record<string, unknown> } | null> {
+  // A run with no configuration to plan against only fails deep in the
+  // worker log (issue #574). Reject it here with an actionable message,
+  // except for VCS-backed workspaces (handled above) and local-path
+  // workspaces whose source lives on disk.
+  if (cvId === undefined && workspace.vcsRepo?.identifier === undefined && workspace.source !== "local") {
+    await abandonReservedIdempotency(begin);
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No configuration version is available for this workspace. Upload a configuration version or connect a VCS repository first." }] } };
+  }
+  return null;
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -1280,15 +1298,8 @@ export async function createRun(
   if ("failure" in configurationSelection) return configurationSelection.failure;
   const { configurationVersion } = configurationSelection.selection;
   cvId = configurationSelection.selection.cvId;
-  // A run with no configuration to plan against only fails deep in the
-  // worker log (issue #574). Reject it here with an actionable message,
-  // except for VCS-backed workspaces (handled above) and local-path
-  // workspaces whose source lives on disk.
-  if (cvId === undefined && workspace.vcsRepo?.identifier === undefined && workspace.source !== "local") {
-    await abandonReservedIdempotency(idempotencyBegin);
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No configuration version is available for this workspace. Upload a configuration version or connect a VCS repository first." }] };
-  }
+  const missingConfiguration = await rejectMissingConfiguration(workspace, cvId, idempotencyBegin, set);
+  if (missingConfiguration !== null) return missingConfiguration.failure;
   const toolchain = await resolveRunToolchain(workspace, terraformVersion, idempotencyBegin, set);
   if ("failure" in toolchain) return toolchain.failure;
   const { effectiveTool, effectiveVersion } = toolchain.toolchain;
