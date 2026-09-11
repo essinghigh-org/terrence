@@ -1401,6 +1401,48 @@ async function stampRerunManifest(
   };
 }
 
+type OrgRow = NonNullable<Awaited<ReturnType<typeof cachedOrgByName>>>;
+
+async function authorizeOrgRunsAccess(
+  orgName: string,
+  user: ParamCtx["user"],
+  orgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ organization: OrgRow } | { failure: unknown }>> {
+  const organization = await cachedOrgByName(orgName);
+  if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { organization };
+}
+
+function queuePageWindow(
+  cursorMode: boolean,
+  size: number,
+  number: number,
+): Readonly<{ limit: number; offset: number | undefined }> {
+  return {
+    limit: cursorMode ? size + 1 : size,
+    offset: cursorMode ? undefined : (number - 1) * size,
+  };
+}
+
+function runQueuePageMeta(
+  request: RequestWithUrl,
+  cursorMode: boolean,
+  hasMore: boolean,
+  last: Readonly<{ createdAt: number; id: string }> | undefined,
+  size: number,
+  number: number,
+  countRows: readonly { total: number }[],
+): Record<string, unknown> {
+  return cursorMode
+    ? cursorPagination(request, hasMore && last !== undefined ? encodeRunCursor(last) : null, size, hasMore)
+    : pagination(request, number, size, countRows[0]?.total ?? 0);
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -1648,12 +1690,14 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organizations/:org_name/runs/queue", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const organization = await cachedOrgByName(orgName);
-    if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const access = await authorizeOrgRunsAccess(params["org_name"] ?? "", user, orgId, teamId, set);
+    if ("failure" in access) return access.failure;
+    const { organization } = access;
+    const tokenOrgId = orgId ?? null;
+    const tokenTeamId = teamId ?? null;
     const [orgWorkspaces, applyIds] = await Promise.all([
-      authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null),
-      workspaceIdsForPermission(organization.id, user?.id, orgId ?? null, teamId ?? null, "apply"),
+      authorizedOrgWorkspaces(organization.id, user?.id, tokenOrgId, tokenTeamId),
+      workspaceIdsForPermission(organization.id, user?.id, tokenOrgId, tokenTeamId, "apply"),
     ]);
     const { number, size } = pageRequest(request);
     const parsedCursor = parseRunQueueCursor(request, set);
@@ -1667,12 +1711,13 @@ export const runRoutes = new Elysia({ name: "runs" })
     }
     const workspaceIds = orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id);
     const { base: baseQueueWhere, where: queueWhere } = runQueueWhere(workspaceIds, cursor);
+    const window = queuePageWindow(cursorMode, size, number);
     const [queueWithCursor, countRows, runningRows] = await Promise.all([
       db.query.runs.findMany({
         where: queueWhere,
         orderBy: [asc(runs.createdAt), asc(runs.id)],
-        limit: cursorMode ? size + 1 : size,
-        offset: cursorMode ? undefined : (number - 1) * size,
+        limit: window.limit,
+        offset: window.offset,
       }),
       queueTotalQuery(cursorMode, baseQueueWhere),
       db.select({ total: count() }).from(runs).where(and(
@@ -1695,16 +1740,13 @@ export const runRoutes = new Elysia({ name: "runs" })
       return { ...resource, attributes: { ...attrs, "position-in-queue": isPending ? position : 0 } };
     });
     const included = await includedRunResources(queue, request, requestedRunIncludes(request));
-    const last = queue.at(-1);
-    const pageMeta = cursorMode
-      ? cursorPagination(request, hasMore && last !== undefined ? encodeRunCursor(last) : null, size, hasMore)
-      : pagination(request, number, size, countRows[0]?.total ?? 0);
+    const pageMeta = runQueuePageMeta(request, cursorMode, hasMore, queue.at(-1), size, number, countRows);
     return { data, ...(included.length > 0 ? { included } : {}), ...pageMeta };
   })
   .get("/api/v2/organizations/:org_name/capacity", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const organization = await cachedOrgByName(orgName);
-    if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const access = await authorizeOrgRunsAccess(params["org_name"] ?? "", user, orgId, teamId, set);
+    if ("failure" in access) return access.failure;
+    const { organization } = access;
     const orgWorkspaces = await authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null);
     const counts = orgWorkspaces.length === 0 ? [] : await db.select({ status: runs.status, total: count() }).from(runs).where(and(
       inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)),
