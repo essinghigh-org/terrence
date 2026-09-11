@@ -1308,6 +1308,26 @@ type OrgRowForWrite = NonNullable<Awaited<ReturnType<typeof cachedOrgByName>>>;
 
 type NoCodeRow = typeof noCodeModules.$inferSelect;
 
+function parseRegistryModuleFields(
+  body: unknown,
+  orgName: string,
+): Readonly<{ name: string; provider: string } | { error: string }> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
+  const provider = typeof attributes["provider"] === "string" ? attributes["provider"].trim() : "";
+  const namespace = attributes["namespace"];
+  const registryName = attributes["registry-name"];
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?$/.test(name) || !/^[a-z0-9]{1,64}$/.test(provider)) {
+    return { error: "Name and provider must follow private module naming rules" };
+  }
+  if ((namespace !== undefined && namespace !== orgName) || (registryName !== undefined && registryName !== "private")) {
+    return { error: "Private modules use the organization namespace and private registry" };
+  }
+  return { name, provider };
+}
+
 async function resolveOrgForNoCodeWrite(
   orgName: string,
   user: ParamCtx["user"],
@@ -2047,20 +2067,10 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
-    const provider = typeof attributes["provider"] === "string" ? attributes["provider"].trim() : "";
-    const namespace = attributes["namespace"];
-    const registryName = attributes["registry-name"];
-    if (!/^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?$/.test(name) || !/^[a-z0-9]{1,64}$/.test(provider)) {
+    const fields = parseRegistryModuleFields(body, org.name);
+    if ("error" in fields) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name and provider must follow private module naming rules" }] };
-    }
-    if ((namespace !== undefined && namespace !== org.name) || (registryName !== undefined && registryName !== "private")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Private modules use the organization namespace and private registry" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
     }
     const id = newResourceId("mod");
     const now = Date.now();
@@ -2068,8 +2078,8 @@ export const registryRoutes = new Elysia({ name: "registry" })
       id,
       orgId: org.id,
       namespace: org.name,
-      name,
-      provider,
+      name: fields.name,
+      provider: fields.provider,
       publishingMechanism: "manual",
       status: "pending",
       createdAt: now,
