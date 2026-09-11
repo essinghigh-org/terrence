@@ -2670,6 +2670,211 @@ async function runPreApplyPhase(
   return true;
 }
 
+async function isApplySavedPlanRequired(run: typeof runs.$inferSelect, runId: string): Promise<boolean> {
+  // Peek at the metadata only: the plan file itself is restored after the
+  // configuration archive is extracted, because uploaded archives can
+  // contain a stale client-side `tfplan` bookmark that must not shadow the
+  // verified saved plan.
+  if (run.savePlan === true) return true;
+  try {
+    return (await readSavedPlanMetadata(runId)) !== undefined;
+  } catch {
+    // Corrupt metadata: take the saved-plan path so restore surfaces the diagnostic below.
+    return true;
+  }
+}
+
+type ApplyArchiveRestore = Readonly<{
+  dirFiles: string[];
+  hasTfFiles: boolean;
+  configurationArchivePath: string | null;
+  archiveRestored: boolean;
+}>;
+
+async function restoreApplyConfigurationArchive(
+  run: typeof runs.$inferSelect,
+  workspace: typeof workspaces.$inferSelect,
+  workDir: string,
+  executionDir: string,
+  runId: string,
+  dirFiles: string[],
+  hasTfFiles: boolean,
+  savedPlanRequired: boolean,
+): Promise<ApplyArchiveRestore> {
+  let restoredFiles = dirFiles;
+  let restoredHasTfFiles = hasTfFiles;
+  let configurationArchivePath: string | null = null;
+  let archiveRestored = false;
+  if (savedPlanRequired && !hasTfFiles && run.configurationVersionId !== null) {
+    // The plan-phase workdir is cleaned after planning, so the directory may
+    // not exist yet (it used to be created implicitly by the early restore).
+    // Extract into workDir (like the plan phase): archive members carry
+    // working-directory-relative paths, so extracting into executionDir
+    // would nest them one level too deep.
+    await mkdir(workDir, { recursive: true, mode: 0o700 });
+    const configuration = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, run.configurationVersionId) });
+    configurationArchivePath = typeof configuration?.archivePath === "string" && configuration.archivePath !== ""
+      ? configuration.archivePath
+      : null;
+    if (configurationArchivePath !== null && await exists(configurationArchivePath)) {
+      archiveRestored = await extractTarArchive(
+        configurationArchivePath,
+        workDir,
+        workspace.workingDirectory,
+        { runId, phase: "apply" },
+      );
+      if (!archiveRestored) {
+        await writeRunDiagnostic(
+          runId,
+          "apply",
+          "error",
+          "run.apply.archive_restore_failed",
+          "The configuration archive could not be restored for apply.",
+          {
+            failureReason: "configuration_archive_restore_failed",
+            archivePath: configurationArchivePath,
+            executionDirectory: executionDir,
+          },
+        );
+        throw new Error("Saved plan configuration archive could not be restored.");
+      }
+      restoredFiles = await readdir(executionDir);
+      restoredHasTfFiles = restoredFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
+    }
+  }
+  return { dirFiles: restoredFiles, hasTfFiles: restoredHasTfFiles, configurationArchivePath, archiveRestored };
+}
+
+async function restoreSavedPlanForApply(runId: string, executionDir: string): Promise<SavedPlanMetadata> {
+  // Restore after extraction: the uploaded archive can contain a stale
+  // client-side `tfplan` bookmark, and the verified bytes must be the
+  // last write so `terraform apply tfplan` reads the real saved plan.
+  let savedPlan: SavedPlanMetadata | undefined;
+  try {
+    savedPlan = await restoreSavedPlan(runId, executionDir);
+  } catch (error: unknown) {
+    const integrityFailure = error instanceof SavedPlanIntegrityError;
+    await writeRunDiagnostic(
+      runId,
+      "apply",
+      "error",
+      integrityFailure ? "run.apply.saved_plan_integrity_failed" : "run.apply.saved_plan_restore_failed",
+      integrityFailure
+        ? "Saved plan integrity verification failed before apply."
+        : "Saved plan could not be restored before apply.",
+      {
+        failureReason: integrityFailure ? "saved_plan_integrity_check_failed" : "saved_plan_restore_failed",
+        error,
+      },
+    );
+    throw error;
+  }
+  if (savedPlan === undefined) {
+    await writeRunDiagnostic(
+      runId,
+      "apply",
+      "error",
+      "run.apply.saved_plan_missing",
+      "Apply cannot verify the saved plan because its metadata or file is unavailable.",
+      { failureReason: "saved_plan_metadata_or_file_missing" },
+    );
+    throw new Error("Saved plan metadata or file is missing; the plan cannot be verified before apply.");
+  }
+  return savedPlan;
+}
+
+type ApplySavedPlanState = Readonly<{
+  applyStatePayload: string | null;
+  currentStateId: string | null;
+  currentStateSerial: number;
+}>;
+
+async function loadApplyStateForSavedPlan(
+  run: typeof runs.$inferSelect,
+  workspace: typeof workspaces.$inferSelect,
+  runId: string,
+  savedPlan: SavedPlanMetadata,
+): Promise<ApplySavedPlanState> {
+  if (savedPlan.configurationVersionId !== run.configurationVersionId) {
+    await writeRunDiagnostic(
+      runId,
+      "apply",
+      "error",
+      "run.apply.saved_plan_mismatch",
+      "Saved plan belongs to a different configuration version.",
+      {
+        failureReason: "saved_plan_configuration_mismatch",
+        savedPlanConfigurationVersionId: savedPlan.configurationVersionId,
+        runConfigurationVersionId: run.configurationVersionId,
+      },
+    );
+    throw new Error("Saved plan configuration version no longer matches the run.");
+  }
+  const currentState = await db.query.stateVersions.findFirst({
+    where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
+    orderBy: [desc(stateVersions.serial)],
+    columns: { id: true, serial: true, statePayload: true },
+  });
+  return {
+    applyStatePayload: currentState?.statePayload ?? null,
+    currentStateId: currentState?.id ?? null,
+    currentStateSerial: currentState?.serial ?? 0,
+  };
+}
+
+async function assertSavedPlanFresh(
+  runId: string,
+  savedPlan: SavedPlanMetadata,
+  currentStateId: string | null,
+  currentStateSerial: number,
+): Promise<void> {
+  if (savedPlan.stateSerial !== currentStateSerial || savedPlan.stateId !== currentStateId) {
+    await writeRunDiagnostic(
+      runId,
+      "apply",
+      "error",
+      "run.apply.saved_plan_stale",
+      "Saved plan is stale because workspace state changed after planning.",
+      {
+        failureReason: "saved_plan_state_mismatch",
+        savedPlanStateId: savedPlan.stateId,
+        savedPlanStateSerial: savedPlan.stateSerial,
+        currentStateId,
+        currentStateSerial,
+      },
+    );
+    throw new Error("Saved plan is stale because the workspace state changed after planning.");
+  }
+}
+
+async function seedApplyExecutionDir(
+  runId: string,
+  executionDir: string,
+  savedPlanRequired: boolean,
+  applyStatePayload: string | null,
+): Promise<void> {
+  if (savedPlanRequired && !(await exists(join(executionDir, "tfplan")) && await exists(executionDir))) {
+    await writeRunDiagnostic(
+      runId,
+      "apply",
+      "error",
+      "run.apply.plan_file_missing",
+      "The verified saved plan file is not present in the apply execution directory.",
+      {
+        failureReason: "saved_plan_file_missing_after_restore",
+        executionDirectory: executionDir,
+        executionDirectoryExists: await exists(executionDir),
+      },
+    );
+    throw new Error("Saved plan file 'tfplan' is missing; cannot apply run.");
+  }
+  if (savedPlanRequired && applyStatePayload !== null && applyStatePayload !== "") {
+    await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(applyStatePayload), { mode: 0o600 });
+    await writeLog(runId, "apply", `[terrence] Seeded workspace state for saved plan apply.`);
+  }
+  if (savedPlanRequired) await writeLocalBackendOverride(executionDir);
+}
+
 async function executeApplyImpl(runId: string): Promise<void> {
   assertRunSandboxAvailable();
   const run = await db.query.runs.findFirst({
@@ -2724,161 +2929,29 @@ async function executeApplyImpl(runId: string): Promise<void> {
 
     let applyStatePayload: string | null = null;
     let savedPlan: SavedPlanMetadata | undefined;
-    // Peek at the metadata only: the plan file itself is restored after the
-    // configuration archive is extracted, because uploaded archives can
-    // contain a stale client-side `tfplan` bookmark that must not shadow the
-    // verified saved plan.
-    let savedPlanRequired = run.savePlan === true;
-    if (!savedPlanRequired) {
-      try {
-        savedPlanRequired = (await readSavedPlanMetadata(runId)) !== undefined;
-      } catch {
-        // Corrupt metadata: take the saved-plan path so restore surfaces the diagnostic below.
-        savedPlanRequired = true;
-      }
-    }
     // The saved-plan file is restored after the archive block below, so an
     // uploaded stale `tfplan` bookmark can never shadow the verified plan.
     // Validation of the restored plan lives alongside the restore.
+    const savedPlanRequired = await isApplySavedPlanRequired(run, runId);
 
     const requestedTool = workspace.iacBinary ?? org?.defaultIacBinary ?? "terraform";
     const requestedVersion = run.terraformVersion ?? workspace.terraformVersion ?? org?.defaultTerraformVersion ?? "latest";
 
     let dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
     let hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
-    let configurationArchivePath: string | null = null;
-    let archiveRestored = false;
-    if (savedPlanRequired && !hasTfFiles && run.configurationVersionId !== null) {
-      // The plan-phase workdir is cleaned after planning, so the directory may
-      // not exist yet (it used to be created implicitly by the early restore).
-      // Extract into workDir (like the plan phase): archive members carry
-      // working-directory-relative paths, so extracting into executionDir
-      // would nest them one level too deep.
-      await mkdir(workDir, { recursive: true, mode: 0o700 });
-      const configuration = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, run.configurationVersionId) });
-      configurationArchivePath = typeof configuration?.archivePath === "string" && configuration.archivePath !== ""
-        ? configuration.archivePath
-        : null;
-      if (configurationArchivePath !== null && await exists(configurationArchivePath)) {
-        archiveRestored = await extractTarArchive(
-          configurationArchivePath,
-          workDir,
-          workspace.workingDirectory,
-          { runId, phase: "apply" },
-        );
-        if (!archiveRestored) {
-          await writeRunDiagnostic(
-            runId,
-            "apply",
-            "error",
-            "run.apply.archive_restore_failed",
-            "The configuration archive could not be restored for apply.",
-            {
-              failureReason: "configuration_archive_restore_failed",
-              archivePath: configurationArchivePath,
-              executionDirectory: executionDir,
-            },
-          );
-          throw new Error("Saved plan configuration archive could not be restored.");
-        }
-        dirFiles = await readdir(executionDir);
-        hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
-      }
-    }
+    const restored = await restoreApplyConfigurationArchive(run, workspace, workDir, executionDir, runId, dirFiles, hasTfFiles, savedPlanRequired);
+    dirFiles = restored.dirFiles;
+    hasTfFiles = restored.hasTfFiles;
+    const configurationArchivePath = restored.configurationArchivePath;
+    const archiveRestored = restored.archiveRestored;
     if (savedPlanRequired) {
-      // Restore after extraction: the uploaded archive can contain a stale
-      // client-side `tfplan` bookmark, and the verified bytes must be the
-      // last write so `terraform apply tfplan` reads the real saved plan.
-      try {
-        savedPlan = await restoreSavedPlan(runId, executionDir);
-      } catch (error: unknown) {
-        const integrityFailure = error instanceof SavedPlanIntegrityError;
-        await writeRunDiagnostic(
-          runId,
-          "apply",
-          "error",
-          integrityFailure ? "run.apply.saved_plan_integrity_failed" : "run.apply.saved_plan_restore_failed",
-          integrityFailure
-            ? "Saved plan integrity verification failed before apply."
-            : "Saved plan could not be restored before apply.",
-          {
-            failureReason: integrityFailure ? "saved_plan_integrity_check_failed" : "saved_plan_restore_failed",
-            error,
-          },
-        );
-        throw error;
-      }
-      if (savedPlan === undefined) {
-        await writeRunDiagnostic(
-          runId,
-          "apply",
-          "error",
-          "run.apply.saved_plan_missing",
-          "Apply cannot verify the saved plan because its metadata or file is unavailable.",
-          { failureReason: "saved_plan_metadata_or_file_missing" },
-        );
-        throw new Error("Saved plan metadata or file is missing; the plan cannot be verified before apply.");
-      }
-      if (savedPlan.configurationVersionId !== run.configurationVersionId) {
-        await writeRunDiagnostic(
-          runId,
-          "apply",
-          "error",
-          "run.apply.saved_plan_mismatch",
-          "Saved plan belongs to a different configuration version.",
-          {
-            failureReason: "saved_plan_configuration_mismatch",
-            savedPlanConfigurationVersionId: savedPlan.configurationVersionId,
-            runConfigurationVersionId: run.configurationVersionId,
-          },
-        );
-        throw new Error("Saved plan configuration version no longer matches the run.");
-      }
-      const currentState = await db.query.stateVersions.findFirst({
-        where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
-        orderBy: [desc(stateVersions.serial)],
-        columns: { id: true, serial: true, statePayload: true },
-      });
-      applyStatePayload = currentState?.statePayload ?? null;
-      if (savedPlan.stateSerial !== (currentState?.serial ?? 0) || savedPlan.stateId !== (currentState?.id ?? null)) {
-        await writeRunDiagnostic(
-          runId,
-          "apply",
-          "error",
-          "run.apply.saved_plan_stale",
-          "Saved plan is stale because workspace state changed after planning.",
-          {
-            failureReason: "saved_plan_state_mismatch",
-            savedPlanStateId: savedPlan.stateId,
-            savedPlanStateSerial: savedPlan.stateSerial,
-            currentStateId: currentState?.id ?? null,
-            currentStateSerial: currentState?.serial ?? 0,
-          },
-        );
-        throw new Error("Saved plan is stale because the workspace state changed after planning.");
-      }
+      savedPlan = await restoreSavedPlanForApply(runId, executionDir);
+      const planState = await loadApplyStateForSavedPlan(run, workspace, runId, savedPlan);
+      applyStatePayload = planState.applyStatePayload;
+      await assertSavedPlanFresh(runId, savedPlan, planState.currentStateId, planState.currentStateSerial);
     }
 
-    if (savedPlanRequired && !(await exists(join(executionDir, "tfplan")) && await exists(executionDir))) {
-      await writeRunDiagnostic(
-        runId,
-        "apply",
-        "error",
-        "run.apply.plan_file_missing",
-        "The verified saved plan file is not present in the apply execution directory.",
-        {
-          failureReason: "saved_plan_file_missing_after_restore",
-          executionDirectory: executionDir,
-          executionDirectoryExists: await exists(executionDir),
-        },
-      );
-      throw new Error("Saved plan file 'tfplan' is missing; cannot apply run.");
-    }
-    if (savedPlanRequired && applyStatePayload !== null && applyStatePayload !== "") {
-      await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(applyStatePayload), { mode: 0o600 });
-      await writeLog(runId, "apply", `[terrence] Seeded workspace state for saved plan apply.`);
-    }
-    if (savedPlanRequired) await writeLocalBackendOverride(executionDir);
+    await seedApplyExecutionDir(runId, executionDir, savedPlanRequired, applyStatePayload);
     // Refresh the listing: the restore/seed/override writes above happened
     // after the archive-time snapshot, and preflight must describe the
     // directory `terraform apply` is about to see.
