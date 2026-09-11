@@ -1456,17 +1456,17 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   .post("/api/v2/workspaces/:workspace_id/actions/lock", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
 
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "lock"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    if (ws.locked === true) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is already locked" }] }; }
+    const actor = actorScope(user, principalOrgId, teamId);
+    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId);
+    if (ws === undefined) return failWorkspaceUpdate(set, 404);
+    if (!(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "lock"))) return failWorkspaceUpdate(set, 403);
+    if (ws.locked === true) return failWorkspaceUpdate(set, 409, "Workspace is already locked");
     const lockReason = parseLockReason(body);
     if (lockReason.error !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockReason.error }] };
+      return failWorkspaceUpdate(set, 422, lockReason.error);
     }
 
-    const principal = lockPrincipal(user?.id, principalOrgId, teamId);
+    const principal = lockPrincipal(actor.actorId, actor.actorOrgId, actor.actorTeamId);
     const lockedAt = Date.now();
     const locked = await db.update(workspaces).set({
       locked: true,
@@ -1475,16 +1475,11 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       lockOwnerId: principal.id,
       lockedAt,
     }).where(and(eq(workspaces.id, workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
-    if (locked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is already locked" }] }; }
-    await auditLog("lock", "workspaces", workspaceId, user?.id ?? null, ws.orgId, teamId !== null && teamId !== undefined ? { teamId } : undefined);
+    if (locked.length === 0) return failWorkspaceUpdate(set, 409, "Workspace is already locked");
+    await auditLog("lock", "workspaces", workspaceId, actor.actorId ?? null, ws.orgId, actor.actorTeamId !== null ? { teamId: actor.actorTeamId } : undefined);
     const org = await cachedOrgById(ws.orgId);
     return {
-      data: await workspaceResource(
-        { ...ws, locked: true, lockedReason: lockReason.reason, lockOwnerType: principal.type, lockOwnerId: principal.id, lockedAt },
-        org?.defaultIacBinary,
-        await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
-        { orgName: org?.name ?? null },
-      ),
+      data: await lockedWorkspaceResource(ws, org, actor, { locked: true, lockedReason: lockReason.reason, lockOwnerType: principal.type, lockOwnerId: principal.id, lockedAt }),
     };
   })
 
@@ -2560,6 +2555,26 @@ async function workspaceIfMatchFailure(
   if (ifMatchSatisfied(request, { data: currentResource })) return null;
   (set as { status: number }).status = 412;
   return { errors: [{ status: "412", title: "Precondition Failed" }] };
+}
+
+async function lockedWorkspaceResource(
+  ws: WsItem,
+  org: Awaited<ReturnType<typeof cachedOrgById>>,
+  actor: ActorScope,
+  lock: Readonly<{
+    locked: boolean;
+    lockedReason: string | null;
+    lockOwnerType: string | null;
+    lockOwnerId: string | null;
+    lockedAt: number | null;
+  }>,
+): Promise<Record<string, unknown>> {
+  return workspaceResource(
+    { ...ws, locked: lock.locked, lockedReason: lock.lockedReason, lockOwnerType: lock.lockOwnerType, lockOwnerId: lock.lockOwnerId, lockedAt: lock.lockedAt },
+    org?.defaultIacBinary,
+    await resourcePermissions(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId),
+    { orgName: org?.name ?? null },
+  );
 }
 
 async function updateWorkspaceResponse(
