@@ -1862,6 +1862,54 @@ async function forceCancelActiveRun(
   return { ok: true as const };
 }
 
+type RunActorLookup = ReadonlyMap<string, { username: string; email: string | null }>;
+
+function eventHistoryResource(
+  rowId: string,
+  eventById: ReadonlyMap<string, AuditItem>,
+  usernames: RunActorLookup,
+): Record<string, unknown>[] {
+  const event = eventById.get(rowId);
+  if (event === undefined) return [];
+  const details = safeRunEventDetails(event);
+  return [{
+    id: event.id,
+    type: "run-events",
+    createdAt: event.createdAt,
+    attributes: {
+      action: event.action,
+      "created-at": new Date(event.createdAt).toISOString(),
+      "actor-username": event.userId === null ? details["actorUsername"] ?? null : usernames.get(event.userId)?.username ?? null,
+      "actor-avatar-url": event.userId === null
+        ? AvatarService.resolveVcsUrl(details["actorProviderId"], details["actorAvatarUrl"] ?? null)
+        : gravatarUrl(usernames.get(event.userId)?.email ?? null),
+      details,
+    },
+  }];
+}
+
+function commentHistoryResource(
+  rowId: string,
+  commentById: ReadonlyMap<string, CommentItem>,
+  usernames: RunActorLookup,
+): Record<string, unknown>[] {
+  const comment = commentById.get(rowId);
+  if (comment === undefined) return [];
+  return [{
+    id: `re-${comment.id}`,
+    type: "run-events",
+    createdAt: comment.createdAt,
+    attributes: {
+      action: "comment",
+      "created-at": new Date(comment.createdAt).toISOString(),
+      "actor-username": comment.userId === null ? null : usernames.get(comment.userId)?.username ?? null,
+      "actor-avatar-url": comment.userId === null ? null : gravatarUrl(usernames.get(comment.userId)?.email ?? null),
+      details: { "comment-id": comment.id },
+    },
+    relationships: { comment: { data: { id: comment.id, type: "comments" } } },
+  }];
+}
+
 export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
@@ -2417,41 +2465,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     const eventById = new Map(events.map((event): [string, AuditItem] => [event.id, event]));
     const commentById = new Map(comments.map((comment): [string, CommentItem] => [comment.id, comment]));
     const eventResources = historyRows.flatMap((row): Record<string, unknown>[] => {
-      if (row.kind === "event") {
-        const event = eventById.get(row.id);
-        if (event === undefined) return [];
-        const details = safeRunEventDetails(event);
-        return [{
-          id: event.id,
-          type: "run-events",
-          createdAt: event.createdAt,
-          attributes: {
-            action: event.action,
-            "created-at": new Date(event.createdAt).toISOString(),
-            "actor-username": event.userId === null ? details["actorUsername"] ?? null : usernames.get(event.userId)?.username ?? null,
-            "actor-avatar-url": event.userId === null
-              ? AvatarService.resolveVcsUrl(details["actorProviderId"], details["actorAvatarUrl"] ?? null)
-              : gravatarUrl(usernames.get(event.userId)?.email ?? null),
-            details,
-          },
-        }];
-      }
+      if (row.kind === "event") return eventHistoryResource(row.id, eventById, usernames);
       if (row.kind !== "comment") return [];
-      const comment = commentById.get(row.id);
-      if (comment === undefined) return [];
-      return [{
-        id: `re-${comment.id}`,
-        type: "run-events",
-        createdAt: comment.createdAt,
-        attributes: {
-          action: "comment",
-          "created-at": new Date(comment.createdAt).toISOString(),
-          "actor-username": comment.userId === null ? null : usernames.get(comment.userId)?.username ?? null,
-          "actor-avatar-url": comment.userId === null ? null : gravatarUrl(usernames.get(comment.userId)?.email ?? null),
-          details: { "comment-id": comment.id },
-        },
-        relationships: { comment: { data: { id: comment.id, type: "comments" } } },
-      }];
+      return commentHistoryResource(row.id, commentById, usernames);
     }).map((resource): Record<string, unknown> => Object.fromEntries(
       Object.entries(resource).filter(([key]): boolean => key !== "createdAt"),
     ));
