@@ -1306,6 +1306,21 @@ type TestConfigRow = DeepReadonly<typeof moduleTestConfigurations.$inferSelect>;
 
 type OrgRowForWrite = NonNullable<Awaited<ReturnType<typeof cachedOrgByName>>>;
 
+async function resolveProviderByIdForWrite(
+  providerId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ provider: ProvItem } | { failure: unknown }>> {
+  const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
+  if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, userId, tokenOrgId, teamId ?? null, "manage-providers"))) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { provider: prov };
+}
+
 async function resolveNoCodeDetailsForWrite(
   id: string,
   user: ParamCtx["user"],
@@ -2467,36 +2482,24 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   .post("/api/v2/registry-providers/:provider_id/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const providerId = params["provider_id"] ?? "";
-    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
-    if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const version = typeof attributes["version"] === "string" ? attributes["version"] : "";
-    if (version === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version is required" }] }; }
-    const rawKeyId = attributes["key-id"];
-    if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) {
+    const resolved = await resolveProviderByIdForWrite(providerId, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { provider } = resolved;
+    const fields = await parseProviderVersionFields(body, provider.orgId, provider.namespace);
+    if ("error" in fields) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key" }] };
-    }
-    const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
-    if (keyId !== null && await registrySigningKey(prov.orgId, prov.namespace, keyId) === undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key in the provider namespace" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
     }
     const id = newResourceId("provver");
-    const protocols = Array.isArray(attributes["protocols"]) ? (attributes["protocols"] as string[]) : ["5.0"];
-    const shasumsUrl = typeof attributes["shasums-url"] === "string" ? attributes["shasums-url"] : null;
-    const shasumsSignatureUrl = typeof attributes["shasums-signature-url"] === "string" ? attributes["shasums-signature-url"] : null;
     try {
-      await db.insert(registryProviderVersions).values({ id, providerId, version, keyId, protocols, shasumsUrl, shasumsSignatureUrl, createdAt: Date.now() });
+      await db.insert(registryProviderVersions).values({ id, providerId, version: fields.version, keyId: fields.keyId, protocols: fields.protocols, shasumsUrl: fields.shasumsUrl, shasumsSignatureUrl: fields.shasumsSignatureUrl, createdAt: Date.now() });
     } catch (error: unknown) {
       if (!isUniqueConstraintError(error)) throw error;
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Provider version already exists" }] };
     }
     (set as { status: number }).status = 201;
-    return { data: { id, type: "registry-provider-versions", attributes: { version, "key-id": keyId, protocols, "shasums-url": shasumsUrl, "shasums-signature-url": shasumsSignatureUrl, "created-at": new Date().toISOString() } } };
+    return { data: { id, type: "registry-provider-versions", attributes: { version: fields.version, "key-id": fields.keyId, protocols: fields.protocols, "shasums-url": fields.shasumsUrl, "shasums-signature-url": fields.shasumsSignatureUrl, "created-at": new Date().toISOString() } } };
   })
   .delete("/api/v2/registry-provider-versions/:version_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const versionId = params["version_id"] ?? "";
