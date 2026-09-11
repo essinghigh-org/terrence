@@ -2620,6 +2620,56 @@ async function enforceApplyExecutorPolicy(
   return false;
 }
 
+async function deferApplyForWorkspaceLock(
+  workspace: typeof workspaces.$inferSelect,
+  run: typeof runs.$inferSelect,
+  runId: string,
+): Promise<void> {
+  const key = `workspace-lock:${runId}`;
+  if (scheduledBlockReasons.get(key) !== "workspace-locked") {
+    scheduledBlockReasons.set(key, "workspace-locked");
+    await writeLog(runId, "apply", "[terrence] Apply deferred because the workspace is locked.");
+    // The status row is unchanged by a deferral, so without this the UI
+    // would show no signal beyond the log line (issue #645).
+    publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "confirmed", at: new Date().toISOString() });
+  }
+  await db.update(runs).set({
+    status: "confirmed",
+    scheduledAt: run.scheduledAt ?? Date.now() + 1000,
+  }).where(and(
+    eq(runs.id, runId),
+    eq(runs.status, run.status),
+    notInArray(runs.status, FINAL_RUN_STATUSES),
+  ));
+}
+
+async function runPreApplyPhase(
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  run: typeof runs.$inferSelect,
+  runId: string,
+): Promise<boolean> {
+  if (!["confirmed", "apply_queued", "applying"].includes(run.status)) await updateRunStatus(runId, "confirmed");
+  if (await runWasCanceled(runId)) return false;
+  try {
+    if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "pre_apply"))) {
+      // Issue #584: a cancel during the task wait must not be recorded as a
+      // task failure (and must not attempt canceled -> errored, which the
+      // state machine rejects). The run is already canceled; just stop.
+      if (await runWasCanceled(runId)) return false;
+      await updateRunStatus(runId, "errored");
+      await writeLog(runId, "apply", "[terrence] Run blocked by mandatory pre-apply task failure.");
+      await cleanupApplyArtifacts(runId);
+      return false;
+    }
+  } catch (error: unknown) {
+    await writeLog(runId, "apply", `[terrence] Pre-apply run tasks could not complete: ${error instanceof Error ? error.message : String(error)}`);
+    await cleanupApplyArtifacts(runId);
+    throw error;
+  }
+  return true;
+}
+
 async function executeApplyImpl(runId: string): Promise<void> {
   assertRunSandboxAvailable();
   const run = await db.query.runs.findFirst({
@@ -2646,46 +2696,14 @@ async function executeApplyImpl(runId: string): Promise<void> {
   if (!(await enforceApplyExecutorPolicy(workspace, org, run, runId))) return;
 
   if (!(await acquireRunWorkspaceLock(workspace.id, runId))) {
-    const key = `workspace-lock:${runId}`;
-    if (scheduledBlockReasons.get(key) !== "workspace-locked") {
-      scheduledBlockReasons.set(key, "workspace-locked");
-      await writeLog(runId, "apply", "[terrence] Apply deferred because the workspace is locked.");
-      // The status row is unchanged by a deferral, so without this the UI
-      // would show no signal beyond the log line (issue #645).
-      publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "confirmed", at: new Date().toISOString() });
-    }
-    await db.update(runs).set({
-      status: "confirmed",
-      scheduledAt: run.scheduledAt ?? Date.now() + 1000,
-    }).where(and(
-      eq(runs.id, runId),
-      eq(runs.status, run.status),
-      notInArray(runs.status, FINAL_RUN_STATUSES),
-    ));
+    await deferApplyForWorkspaceLock(workspace, run, runId);
     return;
   }
   scheduledBlockReasons.delete(`workspace-lock:${runId}`);
   let workspaceRunLock = true;
 
   try {
-    if (!["confirmed", "apply_queued", "applying"].includes(run.status)) await updateRunStatus(runId, "confirmed");
-    if (await runWasCanceled(runId)) return;
-    try {
-      if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "pre_apply"))) {
-        // Issue #584: a cancel during the task wait must not be recorded as a
-        // task failure (and must not attempt canceled -> errored, which the
-        // state machine rejects). The run is already canceled; just stop.
-        if (await runWasCanceled(runId)) return;
-        await updateRunStatus(runId, "errored");
-        await writeLog(runId, "apply", "[terrence] Run blocked by mandatory pre-apply task failure.");
-        await cleanupApplyArtifacts(runId);
-        return;
-      }
-    } catch (error: unknown) {
-      await writeLog(runId, "apply", `[terrence] Pre-apply run tasks could not complete: ${error instanceof Error ? error.message : String(error)}`);
-      await cleanupApplyArtifacts(runId);
-      throw error;
-    }
+    if (!(await runPreApplyPhase(workspace, org, run, runId))) return;
     await updateRunStatus(runId, "apply_queued");
     await updateRunStatus(runId, "applying");
     if (await runWasCanceled(runId)) return;
