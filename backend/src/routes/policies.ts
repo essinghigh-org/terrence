@@ -4,7 +4,7 @@ import { db } from "../db";
 import { policySets, policySetVersions, policySetWorkspaces, policySetProjects, policySetExclusions, policySetProjectExclusions, policySetTagSelectors, policySetParameters, policies, policyChecks, projects, runs, workspaces, organizations, oauthClients, oauthTokens, githubAppInstallations, type users } from "../db/schema";
 import { eq, and, inArray, asc, isNull, like, ilike, count, exists, notExists, or } from "drizzle-orm";
 import { isPostgres } from "../db/driver";
-import { checkOrganizationPermission, checkWorkspacePermission, signedApiURL, validSignedApiURL, pageRequest, pagination, type DeepReadonly } from "../lib/utils";
+import { checkOrganizationPermission, checkWorkspacePermission, signedApiURL, validSignedApiURL, pageRequest, pagination, type DeepReadonly, type OrganizationPermission } from "../lib/utils";
 import { organizationName } from "../lib/response";
 import { authPlugin } from "../auth";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
@@ -507,6 +507,104 @@ async function applyPolicySetPatchFields(
   if (attributes["policies-path"] !== undefined) updates.policiesPath = content.policiesPath;
   if (attributes["policy-update-patterns"] !== undefined) updates.policyUpdatePatterns = content.patterns;
   if (attributes["vcs-repo"] !== undefined) updates.vcsRepo = content.vcsRepo;
+  return null;
+}
+
+type PolicyPatchScope = Readonly<{
+  pol: typeof policies.$inferSelect;
+  org: typeof organizations.$inferSelect;
+  ps: typeof policySets.$inferSelect | undefined;
+}>;
+
+async function loadPolicyPatchScope(
+  policyId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null | undefined,
+  permission: OrganizationPermission,
+): Promise<Readonly<{ value: PolicyPatchScope }> | Readonly<{ notFound: true }>> {
+  const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
+  if (pol === undefined) return { notFound: true as const };
+  const resolvedOrgId = await resolvePolicyOrgId(pol);
+  if (resolvedOrgId === null) return { notFound: true as const };
+  const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
+  if (org === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId ?? null, permission))) {
+    return { notFound: true as const };
+  }
+  const ps = pol.policySetId !== null ? await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) }) : undefined;
+  return { value: { pol, org, ps } };
+}
+
+function parsePatchPayload(body: unknown): Readonly<{ data: Record<string, unknown> | undefined; attributes: Record<string, unknown> }> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  return { data, attributes };
+}
+
+function checkPolicyPatchable(ps: { vcsRepo: unknown } | undefined, dataType: unknown): Readonly<{ detail?: string }> | null {
+  if (ps !== undefined && ps.vcsRepo !== null) return {};
+  if (dataType !== "policies") return { detail: "data.type must be policies" };
+  return null;
+}
+
+function applyPolicyPatchScalars(
+  attributes: Record<string, unknown>,
+  updates: Partial<typeof policies.$inferInsert>,
+): string | null {
+  if (typeof attributes["name"] === "string") updates.name = attributes["name"];
+  if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
+  if (typeof attributes["kind"] === "string") {
+    if (attributes["kind"] !== "sentinel" && attributes["kind"] !== "opa") return "kind must be sentinel or opa";
+    updates.kind = attributes["kind"];
+  }
+  if (attributes["policy"] !== undefined || attributes["source"] !== undefined) updates.source = typeof attributes["policy"] === "string" ? attributes["policy"] : typeof attributes["source"] === "string" ? attributes["source"] : null;
+  if (attributes["query"] !== undefined) updates.query = typeof attributes["query"] === "string" ? attributes["query"] : null;
+  return null;
+}
+
+function applyPolicyQueryDefaults(
+  policyKind: string,
+  attributes: Record<string, unknown>,
+  currentQuery: string | null,
+  updates: Partial<typeof policies.$inferInsert>,
+): void {
+  if (policyKind === "opa" && updates.query === undefined && (currentQuery === null || currentQuery === "")) updates.query = "data";
+  if (policyKind === "sentinel" && attributes["kind"] !== undefined) updates.query = null;
+}
+
+function applyDefaultPolicyEnforcement(
+  updates: Partial<typeof policies.$inferInsert>,
+  policyKind: string,
+  currentLevel: string | null,
+): void {
+  if (typeof updates.kind === "string" && !policyEnforcementLevels(policyKind).includes(currentLevel ?? "")) {
+    updates.enforcementLevel = policyKind === "opa" ? "mandatory" : "soft-mandatory";
+  }
+}
+
+function resolvePolicyPatchEnforcement(
+  attributes: Record<string, unknown>,
+  pol: Pick<PolicyRow, "kind" | "query" | "enforcementLevel">,
+  ps: Readonly<{ kind: string }> | undefined,
+  updates: Partial<typeof policies.$inferInsert>,
+): string | null {
+  const requestedEnforcementLevel = requestedPolicyEnforcementLevel(attributes);
+  const policyKind = typeof updates.kind === "string" ? updates.kind : pol.kind;
+  if (ps !== undefined && policyKind !== ps.kind) {
+    return "A policy kind must match its policy set kind";
+  }
+  applyPolicyQueryDefaults(policyKind, attributes, pol.query, updates);
+  if (requestedEnforcementLevel !== undefined) {
+    const lev = requestedEnforcementLevel;
+    const allowedLevels = policyEnforcementLevels(policyKind);
+    if (!allowedLevels.includes(lev)) {
+      return `enforcement-level must be ${allowedLevels.join(", ")}`;
+    }
+    updates.enforcementLevel = lev;
+  } else {
+    applyDefaultPolicyEnforcement(updates, policyKind, pol.enforcementLevel);
+  }
   return null;
 }
 
@@ -1317,48 +1415,27 @@ export const policyRoutes = new Elysia({ name: "policies" })
   })
   .patch("/api/v2/policies/:policy_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const policyId = params["policy_id"] ?? "";
-    const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
-    if (pol === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const resolvedOrgId = await resolvePolicyOrgId(pol);
-    if (resolvedOrgId === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ps = pol.policySetId !== null ? await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) }) : undefined;
-    if (ps !== undefined && ps.vcsRepo !== null) {
+    const scope = await loadPolicyPatchScope(policyId, user?.id, tokenOrgId, tokenTeamId, "manage-policies");
+    if ("notFound" in scope) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const { pol, org, ps } = scope.value;
+    const { data, attributes } = parsePatchPayload(body);
+    const patchable = checkPolicyPatchable(ps, data?.["type"]);
+    if (patchable !== null) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+      return patchable.detail === undefined
+        ? { errors: [{ status: "422", title: "Unprocessable Entity" }] }
+        : { errors: [{ status: "422", title: "Unprocessable Entity", detail: patchable.detail }] };
     }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    if (data?.["type"] !== "policies") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be policies" }] }; }
     const updates: Partial<typeof policies.$inferInsert> = {};
-    if (typeof attributes["name"] === "string") updates.name = attributes["name"];
-    if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
-    if (attributes["kind"] !== undefined) {
-      if (attributes["kind"] !== "sentinel" && attributes["kind"] !== "opa") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "kind must be sentinel or opa" }] }; }
-      updates.kind = attributes["kind"];
-    }
-    if (attributes["policy"] !== undefined || attributes["source"] !== undefined) updates.source = typeof attributes["policy"] === "string" ? attributes["policy"] : typeof attributes["source"] === "string" ? attributes["source"] : null;
-    if (attributes["query"] !== undefined) updates.query = typeof attributes["query"] === "string" ? attributes["query"] : null;
-    const requestedEnforcementLevel = requestedPolicyEnforcementLevel(attributes);
-    const policyKind = typeof updates.kind === "string" ? updates.kind : pol.kind;
-    if (ps !== undefined && policyKind !== ps.kind) {
+    const scalarsError = applyPolicyPatchScalars(attributes, updates);
+    if (scalarsError !== null) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A policy kind must match its policy set kind" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: scalarsError }] };
     }
-    if (policyKind === "opa" && updates.query === undefined && (pol.query === null || pol.query === "")) updates.query = "data";
-    if (policyKind === "sentinel" && attributes["kind"] !== undefined) updates.query = null;
-    if (requestedEnforcementLevel !== undefined) {
-      const lev = requestedEnforcementLevel;
-      const allowedLevels = policyEnforcementLevels(policyKind);
-      if (!allowedLevels.includes(lev)) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `enforcement-level must be ${allowedLevels.join(", ")}` }] };
-      }
-      updates.enforcementLevel = lev;
-    } else if (typeof updates.kind === "string" && !policyEnforcementLevels(policyKind).includes(pol.enforcementLevel ?? "")) {
-      updates.enforcementLevel = policyKind === "opa" ? "mandatory" : "soft-mandatory";
+    const enforcementError = resolvePolicyPatchEnforcement(attributes, pol, ps, updates);
+    if (enforcementError !== null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: enforcementError }] };
     }
     if (Object.keys(updates).length > 0) await db.update(policies).set(updates).where(eq(policies.id, policyId));
     const updated = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
