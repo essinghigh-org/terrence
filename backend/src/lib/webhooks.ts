@@ -416,19 +416,7 @@ function validateGitlabMrFields(branch: string | undefined, commitSha: string | 
   return undefined;
 }
 
-function parseGitlabMergeRequestWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
-  const attributes = asRecord(payload["object_attributes"]);
-  const action = attributes?.["action"];
-  if (!["open", "reopen", "update"].includes(typeof action === "string" ? action : "")) return undefined;
-  const lastCommit = asRecord(attributes?.["last_commit"]);
-  const branch = requiredString(attributes?.["source_branch"]);
-  const targetBranch = requiredString(attributes?.["target_branch"]);
-  const commitSha = requiredString(lastCommit?.["id"]);
-  const commitMessage = resolveGitlabMrCommitMessage(attributes, lastCommit);
-  const commitUrl = resolveGitlabMrCommitUrl(attributes, lastCommit);
-  const pullRequestNumber = attributes?.["iid"];
-  if (validateGitlabMrFields(branch, commitSha, commitUrl, pullRequestNumber) !== undefined) return undefined;
-  if (branch === undefined || commitSha === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
+function buildGitlabMrDetails(branch: string, targetBranch: string | undefined, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity, commitMessage: string, commitSha: string, commitUrl: string, pullRequestNumber: number): ParsedProviderWebhook {
   return {
     kind: "pull_request",
     details: {
@@ -447,6 +435,22 @@ function parseGitlabMergeRequestWebhook(payload: WebhookPayload, repoFullName: s
   };
 }
 
+function parseGitlabMergeRequestWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
+  const attributes = asRecord(payload["object_attributes"]);
+  const action = attributes?.["action"];
+  if (!["open", "reopen", "update"].includes(typeof action === "string" ? action : "")) return undefined;
+  const lastCommit = asRecord(attributes?.["last_commit"]);
+  const branch = requiredString(attributes?.["source_branch"]);
+  const targetBranch = requiredString(attributes?.["target_branch"]);
+  const commitSha = requiredString(lastCommit?.["id"]);
+  const commitMessage = resolveGitlabMrCommitMessage(attributes, lastCommit);
+  const commitUrl = resolveGitlabMrCommitUrl(attributes, lastCommit);
+  const pullRequestNumber = attributes?.["iid"];
+  if (validateGitlabMrFields(branch, commitSha, commitUrl, pullRequestNumber) !== undefined) return undefined;
+  if (branch === undefined || commitSha === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
+  return buildGitlabMrDetails(branch, targetBranch, repoFullName, cloneUrl, senderUsername, sourceIdentity, commitMessage, commitSha, commitUrl, pullRequestNumber);
+}
+
 function extractBitbucketChanges(payload: WebhookPayload): unknown[] | undefined {
   const push = asRecord(payload["push"]);
   const changes = push?.["changes"];
@@ -462,25 +466,7 @@ function validateBitbucketPushFields(referenceType: string | undefined, referenc
   return undefined;
 }
 
-function parseBitbucketPushChange(
-  changeValue: unknown,
-  repoFullName: string,
-  cloneUrl: string,
-  senderUsername: string,
-  sourceIdentity: VcsSourceIdentity,
-): ParsedProviderWebhook | undefined {
-  const change = asRecord(changeValue);
-  const reference = asRecord(change?.["new"]);
-  const target = asRecord(reference?.["target"]);
-  const targetLinks = asRecord(target?.["links"]);
-  const html = asRecord(targetLinks?.["html"]);
-  const referenceType = requiredString(reference?.["type"]);
-  const referenceName = requiredString(reference?.["name"]);
-  const commitSha = requiredString(target?.["hash"]);
-  const commitMessage = requiredString(target?.["message"]) ?? "VCS push";
-  const commitUrl = requiredString(html?.["href"]);
-  if (validateBitbucketPushFields(referenceType, referenceName, commitSha, commitUrl) !== undefined) return undefined;
-  if ((referenceType !== "branch" && referenceType !== "tag") || referenceName === undefined || commitSha === undefined || commitUrl === undefined) return undefined;
+function buildBitbucketPushDetails(referenceType: "branch" | "tag", referenceName: string, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity, commitMessage: string, commitSha: string, commitUrl: string): ParsedProviderWebhook {
   return {
     kind: "push",
     details: {
@@ -495,6 +481,40 @@ function parseBitbucketPushChange(
       sourceIdentity,
     },
   };
+}
+
+function extractBitbucketPushFields(changeValue: unknown): {
+  referenceType: string | undefined;
+  referenceName: string | undefined;
+  commitSha: string | undefined;
+  commitMessage: string;
+  commitUrl: string | undefined;
+} {
+  const change = asRecord(changeValue);
+  const reference = asRecord(change?.["new"]);
+  const target = asRecord(reference?.["target"]);
+  const targetLinks = asRecord(target?.["links"]);
+  const html = asRecord(targetLinks?.["html"]);
+  return {
+    referenceType: requiredString(reference?.["type"]),
+    referenceName: requiredString(reference?.["name"]),
+    commitSha: requiredString(target?.["hash"]),
+    commitMessage: requiredString(target?.["message"]) ?? "VCS push",
+    commitUrl: requiredString(html?.["href"]),
+  };
+}
+
+function parseBitbucketPushChange(
+  changeValue: unknown,
+  repoFullName: string,
+  cloneUrl: string,
+  senderUsername: string,
+  sourceIdentity: VcsSourceIdentity,
+): ParsedProviderWebhook | undefined {
+  const { referenceType, referenceName, commitSha, commitMessage, commitUrl } = extractBitbucketPushFields(changeValue);
+  if (validateBitbucketPushFields(referenceType, referenceName, commitSha, commitUrl) !== undefined) return undefined;
+  if ((referenceType !== "branch" && referenceType !== "tag") || referenceName === undefined || commitSha === undefined || commitUrl === undefined) return undefined;
+  return buildBitbucketPushDetails(referenceType, referenceName, repoFullName, cloneUrl, senderUsername, sourceIdentity, commitMessage, commitSha, commitUrl);
 }
 
 function parseBitbucketPushWebhooks(
