@@ -188,6 +188,52 @@ function buildVarsetUpdate(
   };
 }
 
+function parseVarsetVariableAttributes(
+  body: unknown,
+  set: SetObj,
+  partial = false,
+): { attributes: Record<string, unknown> | undefined } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
+  if (data?.["type"] !== "vars" || !validVariableSetVariableAttributes(attributes, partial)) {
+    (set as { status: number }).status = 422; return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] } };
+  }
+  return { attributes };
+}
+
+async function buildVarsetVariable(
+  attributes: Record<string, unknown> | undefined,
+  variableSetId: string,
+): Promise<{ id: string; variableSetId: string; key: string; value: string; valueEncrypted: string | null; category: string; sensitive: boolean; hcl: boolean; description: string | null }> {
+  const key = typeof attributes?.["key"] === "string" ? attributes["key"] : "";
+  const rawValue = typeof attributes?.["value"] === "string" ? attributes["value"] : "";
+  const category = typeof attributes?.["category"] === "string" ? attributes["category"] : "terraform";
+  const sensitive = typeof attributes?.["sensitive"] === "boolean" ? attributes["sensitive"] : false;
+  const hcl = typeof attributes?.["hcl"] === "boolean" ? attributes["hcl"] : false;
+  const description = typeof attributes?.["description"] === "string" ? attributes["description"] : null;
+  // Sensitive values are encrypted at rest (todo 167/168).
+  const stored = await variableValueForWrite(sensitive, rawValue);
+  return { id: newResourceId("var"), variableSetId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description };
+}
+
+async function refreshVarsetVariableEncryption(
+  values: Record<string, unknown>,
+  current: VarItem,
+): Promise<void> {
+  // Re-encrypt when the value or sensitive flag changed (todo 167-169).
+  const sensitiveNow = values["sensitive"] === true;
+  const valueChanged = values["value"] !== current.value;
+  const sensitiveChanged = sensitiveNow !== (current.sensitive === true);
+  if (valueChanged || sensitiveChanged) {
+    const stored = await variableValueForWrite(sensitiveNow, values["value"] as string);
+    values["value"] = stored.value;
+    values["valueEncrypted"] = stored.valueEncrypted;
+  } else {
+    values["valueEncrypted"] = current.valueEncrypted;
+  }
+}
+
 export const varsetRoutes = new Elysia({ name: "varsets" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/varsets", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -417,21 +463,9 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
-    if (data?.["type"] !== "vars" || !validVariableSetVariableAttributes(attributes)) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
-    }
-    const key = typeof attributes?.["key"] === "string" ? attributes["key"] : "";
-    const rawValue = typeof attributes?.["value"] === "string" ? attributes["value"] : "";
-    const category = typeof attributes?.["category"] === "string" ? attributes["category"] : "terraform";
-    const sensitive = typeof attributes?.["sensitive"] === "boolean" ? attributes["sensitive"] : false;
-    const hcl = typeof attributes?.["hcl"] === "boolean" ? attributes["hcl"] : false;
-    const description = typeof attributes?.["description"] === "string" ? attributes["description"] : null;
-    // Sensitive values are encrypted at rest (todo 167/168).
-    const stored = await variableValueForWrite(sensitive, rawValue);
-    const variable = { id: newResourceId("var"), variableSetId: record.id, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description };
+    const parsed = parseVarsetVariableAttributes(body, set);
+    if ("error" in parsed) return parsed.error;
+    const variable = await buildVarsetVariable(parsed.attributes, record.id);
     try { await db.insert(variableSetVariables).values(variable); } catch (error: unknown) {
       if (isUniqueConstraintError(error)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this set" }] }; }
       throw error;
@@ -460,16 +494,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       const v = byId.get(item.id);
       if (v === undefined) throw new Error("Variable not found");
       const base = variableSetVariableUpdate(v, item.attributes as Parameters<typeof variableSetVariableUpdate>[1]);
-      const sensitiveNow = base["sensitive"] === true;
-      const valueChanged = base["value"] !== v.value;
-      const sensitiveChanged = sensitiveNow !== (v.sensitive === true);
-      if (valueChanged || sensitiveChanged) {
-        const stored = await variableValueForWrite(sensitiveNow, base["value"] as string);
-        base["value"] = stored.value;
-        (base)["valueEncrypted"] = stored.valueEncrypted;
-      } else {
-        (base)["valueEncrypted"] = v.valueEncrypted;
-      }
+      await refreshVarsetVariableEncryption(base, v);
       return { variable: v, values: base };
     }));
     try {
@@ -513,24 +538,10 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     const variable = record !== undefined ? await db.query.variableSetVariables.findFirst({ where: and(eq(variableSetVariables.id, varId), eq(variableSetVariables.variableSetId, record.id)) }) : undefined;
     if (record === undefined || variable === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
-    if (data?.["type"] !== "vars" || !validVariableSetVariableAttributes(attributes, true)) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
-    }
-    const updated = variableSetVariableUpdate(variable, attributes as Parameters<typeof variableSetVariableUpdate>[1]);
-    // Re-encrypt when the value or sensitive flag changed (todo 167-169).
-    const sensitiveNow = updated["sensitive"] === true;
-    const valueChanged = updated["value"] !== variable.value;
-    const sensitiveChanged = sensitiveNow !== (variable.sensitive === true);
-    if (valueChanged || sensitiveChanged) {
-      const stored = await variableValueForWrite(sensitiveNow, updated["value"] as string);
-      updated["value"] = stored.value;
-      updated["valueEncrypted"] = stored.valueEncrypted;
-    } else {
-      updated["valueEncrypted"] = variable.valueEncrypted;
-    }
+    const parsed = parseVarsetVariableAttributes(body, set, true);
+    if ("error" in parsed) return parsed.error;
+    const updated = variableSetVariableUpdate(variable, parsed.attributes as Parameters<typeof variableSetVariableUpdate>[1]);
+    await refreshVarsetVariableEncryption(updated, variable);
     try { await db.update(variableSetVariables).set(updated).where(eq(variableSetVariables.id, variable.id)); } catch (error: unknown) {
       if (isUniqueConstraintError(error)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this set" }] }; }
       throw error;
