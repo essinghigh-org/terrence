@@ -488,6 +488,69 @@ async function applyMembershipUpdates(
   return { lockedMem, lostActiveAccess };
 }
 
+function requireTokenCreatorOrThrow(
+  user: Readonly<typeof users.$inferSelect> | null | undefined,
+): Readonly<typeof users.$inferSelect> {
+  if (user === null || user === undefined) {
+    throw new HttpStatusError(401, { errors: [{ status: "401", title: "Unauthorized" }] });
+  }
+  // Same privilege-escalation guard as the per-user endpoint: a fine-grained
+  // token must not be able to mint an unscoped (full-access) token.
+  if (currentTokenScopes() !== null) {
+    throw new HttpStatusError(403, { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot create additional tokens" }] });
+  }
+  return user;
+}
+
+function childRecord(value: unknown, key: string): Record<string, unknown> {
+  const record = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const nested = record[key];
+  return typeof nested === "object" && nested !== null ? (nested as Record<string, unknown>) : {};
+}
+
+function parseMintTokenInput(body: unknown): { description: string; orgId: string | undefined; requestedExpiry: number | null; rawScopes: unknown } {
+  const root = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  const data = childRecord(root, "data");
+  const attributes = childRecord(data, "attributes");
+  const orgData = childRecord(childRecord(childRecord(data, "relationships"), "organization"), "data");
+  const description = typeof attributes["description"] === "string" ? attributes["description"] : "API token";
+  const orgId = typeof orgData["id"] === "string" ? orgData["id"] : undefined;
+  const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
+  return { description, orgId, requestedExpiry, rawScopes: attributes["scopes"] };
+}
+
+async function resolveMintTokenExpiryOrThrow(
+  orgId: string | undefined,
+  requestedExpiry: number | null,
+): Promise<number | null> {
+  if (Number.isNaN(requestedExpiry)) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "expired-at must be a valid ISO-8601 timestamp" }] });
+  }
+  // Organization TTL policy governs org-scoped tokens minted here (todo
+  // 72-74); user-scoped ones have no governing org policy.
+  const policyResolution = orgId !== undefined
+    ? await resolveTokenExpiryUnderPolicy(orgId, "", requestedExpiry)
+    : { kind: "ok" as const, expiresAt: requestedExpiry };
+  if (policyResolution.kind === "invalid") {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] });
+  }
+  if (policyResolution.kind === "forbidden") {
+    throw new HttpStatusError(403, { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] });
+  }
+  return policyResolution.expiresAt;
+}
+
+function parseMintScopesOrThrow(rawScopes: unknown): TokenScopes | null {
+  // Fine-grained scopes (optional): when present, the token is restricted
+  // to the listed orgs/projects/workspaces/tags and permission grants.
+  if (rawScopes === undefined) return null;
+  try {
+    return parseTokenScopes(rawScopes);
+  } catch (error: unknown) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Invalid scopes" }] });
+  }
+}
+
 export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
   .get("/api/v2/users", async ({ query, user, set }: ParamCtx): Promise<unknown> => {
@@ -1127,98 +1190,59 @@ export const userRoutes = new Elysia({ name: "users" })
     return { errors: [{ status: "404", title: "Not Found" }] };
   })
   .post("/api/v2/tokens", async ({ body, user, set }: ParamCtx): Promise<unknown> => {
-    if (user === null || user === undefined) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-    // Same privilege-escalation guard as the per-user endpoint: a fine-grained
-    // token must not be able to mint an unscoped (full-access) token.
-    if (currentTokenScopes() !== null) {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot create additional tokens" }] };
-    }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-    const orgRel = typeof rels["organization"] === "object" && rels["organization"] !== null ? (rels["organization"] as Record<string, unknown>) : {};
-    const orgData = typeof orgRel["data"] === "object" && orgRel["data"] !== null ? (orgRel["data"] as Record<string, unknown>) : {};
-    const description = typeof attributes["description"] === "string" ? attributes["description"] : "API token";
-    const orgId = typeof orgData["id"] === "string" ? orgData["id"] : undefined;
-    const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
-    if (Number.isNaN(requestedExpiry)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "expired-at must be a valid ISO-8601 timestamp" }] };
-    }
-    // Organization TTL policy governs org-scoped tokens minted here (todo
-    // 72-74); user-scoped ones have no governing org policy.
-    const policyResolution = orgId !== undefined
-      ? await resolveTokenExpiryUnderPolicy(orgId, "", requestedExpiry)
-      : { kind: "ok" as const, expiresAt: requestedExpiry };
-    if (policyResolution.kind === "invalid") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
-    }
-    if (policyResolution.kind === "forbidden") {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
-    }
-    const expiresAt = policyResolution.expiresAt;
-    // Fine-grained scopes (optional): when present, the token is restricted
-    // to the listed orgs/projects/workspaces/tags and permission grants.
-    let scopes: TokenScopes | null = null;
-    if (attributes["scopes"] !== undefined) {
-      try {
-        scopes = parseTokenScopes(attributes["scopes"]);
-      } catch (error: unknown) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Invalid scopes" }] };
+    try {
+      const creator = requireTokenCreatorOrThrow(user);
+      const input = parseMintTokenInput(body);
+      const expiresAt = await resolveMintTokenExpiryOrThrow(input.orgId, input.requestedExpiry);
+      const scopes = parseMintScopesOrThrow(input.rawScopes);
+      if (input.description === "" || Number.isNaN(expiresAt)) {
+        throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity" }] });
       }
-    }
-    if (description === "" || Number.isNaN(expiresAt)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
-    }
-    if (orgId !== undefined) {
-      if (!(await checkOrgPermission(user.id, orgId, "owner"))) {
-        (set as { status: number }).status = 403;
-        return { errors: [{ status: "403", title: "Forbidden" }] };
+      const mintOrgId = input.orgId;
+      if (mintOrgId !== undefined && !(await checkOrgPermission(creator.id, mintOrgId, "owner"))) {
+        throw new HttpStatusError(403, { errors: [{ status: "403", title: "Forbidden" }] });
       }
-    }
-    const rawToken = generateAuthenticationToken(orgId !== undefined ? "org" : "user");
-    const createdToken = {
-      id: crypto.randomUUID(),
-      token: hashAuthenticationToken(rawToken),
-      userId: orgId !== undefined ? null : user.id,
-      orgId: orgId ?? null,
-      description,
-      scopes: scopes === null ? null : JSON.stringify(scopes),
-      tokenType: "",
-      legacy: false,
-      createdAt: Date.now(),
-      lastUsedAt: null,
-      expiresAt,
-      teamId: null,
-    };
-    if (orgId !== undefined) {
-      await withDbLock(`organization-token:${orgId}:`, async (): Promise<void> => {
-        await db.transaction(async (tx: unknown): Promise<void> => {
-          const t = tx as typeof db;
-          await t.delete(apiTokens).where(organizationTokenWhere(orgId, ""));
-          await t.insert(apiTokens).values(createdToken);
+      const rawToken = generateAuthenticationToken(mintOrgId !== undefined ? "org" : "user");
+      const createdToken = {
+        id: crypto.randomUUID(),
+        token: hashAuthenticationToken(rawToken),
+        userId: mintOrgId !== undefined ? null : creator.id,
+        orgId: mintOrgId ?? null,
+        description: input.description,
+        scopes: scopes === null ? null : JSON.stringify(scopes),
+        tokenType: "",
+        legacy: false,
+        createdAt: Date.now(),
+        lastUsedAt: null,
+        expiresAt,
+        teamId: null,
+      };
+      if (mintOrgId !== undefined) {
+        await withDbLock(`organization-token:${mintOrgId}:`, async (): Promise<void> => {
+          await db.transaction(async (tx: unknown): Promise<void> => {
+            const t = tx as typeof db;
+            await t.delete(apiTokens).where(organizationTokenWhere(mintOrgId, ""));
+            await t.insert(apiTokens).values(createdToken);
+          });
         });
+      } else {
+        await db.insert(apiTokens).values(createdToken);
+      }
+      await auditLog("create", "authentication-token", createdToken.id, creator.id, mintOrgId ?? null, {
+        description: input.description,
+        scopes: createdToken.scopes,
+        ...(mintOrgId !== undefined ? { orgId: mintOrgId } : {}),
+        source: "user",
       });
-    } else {
-      await db.insert(apiTokens).values(createdToken);
+      (set as { status: number }).status = 201;
+      return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
+    } catch (error: unknown) {
+      if (error instanceof HttpStatusError) {
+        (set as { status: number }).status = error.status;
+        return error.body;
+      }
+      throw error;
     }
-    await auditLog("create", "authentication-token", createdToken.id, user.id, orgId ?? null, {
-      description,
-      scopes: createdToken.scopes,
-      ...(orgId !== undefined ? { orgId } : {}),
-      source: "user",
-    });
-    (set as { status: number }).status = 201;
-    return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
   .get("/api/v2/organizations/:org_name/authentication-token", async ({ params, request, user, orgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
