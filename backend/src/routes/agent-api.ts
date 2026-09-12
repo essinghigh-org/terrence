@@ -444,6 +444,125 @@ async function jsonBody(ctx: AgentCtx): Promise<Record<string, unknown> | undefi
   return jsonBodyValue(ctx);
 }
 
+type RegistrationFields = {
+  name: string;
+  arch: string | null;
+  version: string | null;
+  accept: string;
+  requestForwarding: boolean;
+  hyok: boolean;
+  iacBinaries: string[];
+};
+
+function negotiateRegistrationProtocol(
+  ctx: AgentCtx,
+  body: Record<string, unknown>,
+  set: { status?: number; headers?: Record<string, string | number> },
+): ReturnType<typeof negotiateAgentProtocol> | { error: unknown } {
+  try {
+    const negotiation = negotiateAgentProtocol(parseAgentProtocolOffer(body, ctx.request.headers));
+    protocolHeaders(set, negotiation.capabilities);
+    return negotiation;
+  } catch (error: unknown) {
+    if (error instanceof AgentProtocolNegotiationError) return { error: protocolNegotiationError(set, error) };
+    throw error;
+  }
+}
+
+// tfc-agent never sends iac-binaries; terrence-agent declares it so the
+// claim path only hands it matching jobs. Absent means terraform-only,
+// preserving the pre-capability contract.
+function parseRegistrationIacBinaries(
+  body: Record<string, unknown>,
+  set: { status?: number },
+): { iacBinaries: string[] } | { error: unknown } {
+  if (body["iac_binaries"] === undefined) return { iacBinaries: ["terraform"] };
+  if (
+    !Array.isArray(body["iac_binaries"])
+    || body["iac_binaries"].length === 0
+    || body["iac_binaries"].some((binary: unknown): boolean =>
+      typeof binary !== "string" || (binary !== "tofu" && binary !== "terraform"))
+  ) {
+    set.status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binaries must be a non-empty array of 'tofu' or 'terraform'" }] } };
+  }
+  return { iacBinaries: [...new Set(body["iac_binaries"] as string[])] };
+}
+
+function parseRegistrationFields(
+  body: Record<string, unknown>,
+  version: string | null,
+  set: { status?: number },
+): RegistrationFields | { error: unknown } {
+  const name = typeof body["name"] === "string" && body["name"] !== "" ? body["name"] : "agent";
+  const arch = typeof body["arch"] === "string" ? body["arch"] : null;
+  if (arch !== null && !AGENT_ARCHITECTURES.has(arch)) {
+    set.status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "arch must be amd64, aarch64, arm64, 386, or arm" }] } };
+  }
+  const accept = typeof body["accept"] === "string" && body["accept"] !== "" ? body["accept"] : DEFAULT_AGENT_ACCEPT;
+  if (accept !== "none" && (!/^[a-z_]+(?:,[a-z_]+)*$/.test(accept) || accept.split(",").some((value): boolean => !AGENT_WORKLOAD_TYPES.includes(value)))) {
+    set.status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "accept contains an unsupported workload type" }] } };
+  }
+  const binaries = parseRegistrationIacBinaries(body, set);
+  if ("error" in binaries) return binaries;
+  return {
+    name,
+    arch,
+    version,
+    accept,
+    requestForwarding: body["request_forwarding"] === true,
+    hyok: body["hyok"] === true,
+    iacBinaries: binaries.iacBinaries,
+  };
+}
+
+async function upsertRegistrationAgent(
+  pool: Readonly<{ poolId: string }>,
+  fields: RegistrationFields,
+  negotiation: ReturnType<typeof negotiateAgentProtocol>,
+  now: number,
+): Promise<string> {
+  const existing = await db.query.agents.findFirst({
+    where: and(eq(agents.agentPoolId, pool.poolId), eq(agents.name, fields.name)),
+  });
+  if (existing !== undefined) {
+    await db.update(agents).set({
+      architecture: fields.arch,
+      version: fields.version ?? existing.version,
+      protocolVersion: negotiation.version,
+      capabilities: [...negotiation.capabilities],
+      artifactFormats: [...negotiation.artifactFormats],
+      iacBinaries: fields.iacBinaries,
+      accept: fields.accept,
+      requestForwarding: fields.requestForwarding,
+      hyok: fields.hyok,
+      status: "idle",
+      lastPingAt: now,
+    }).where(eq(agents.id, existing.id));
+    return existing.id;
+  }
+  const agentId = newResourceId("agent");
+  await db.insert(agents).values({
+    id: agentId,
+    agentPoolId: pool.poolId,
+    name: fields.name,
+    architecture: fields.arch,
+    version: fields.version,
+    protocolVersion: negotiation.version,
+    capabilities: [...negotiation.capabilities],
+    artifactFormats: [...negotiation.artifactFormats],
+    iacBinaries: fields.iacBinaries,
+    accept: fields.accept,
+    requestForwarding: fields.requestForwarding,
+    hyok: fields.hyok,
+    status: "idle",
+    lastPingAt: now,
+  });
+  return agentId;
+}
+
 export const agentApiRoutes = new Elysia({ name: "agent-api" })
   .use(authPlugin)
 
@@ -475,84 +594,13 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
-    let negotiation: ReturnType<typeof negotiateAgentProtocol>;
-    try {
-      negotiation = negotiateAgentProtocol(parseAgentProtocolOffer(body, ctx.request.headers));
-    } catch (error: unknown) {
-      if (error instanceof AgentProtocolNegotiationError) return protocolNegotiationError(set, error);
-      throw error;
-    }
-    protocolHeaders(set, negotiation.capabilities);
-    const name = typeof body["name"] === "string" && body["name"] !== "" ? body["name"] : "agent";
-    const arch = typeof body["arch"] === "string" ? body["arch"] : null;
-    if (arch !== null && !AGENT_ARCHITECTURES.has(arch)) {
-      set.status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "arch must be amd64, aarch64, arm64, 386, or arm" }] };
-    }
-    const version = ctx.request.headers.get("tfc-agent-version");
-    const accept = typeof body["accept"] === "string" && body["accept"] !== "" ? body["accept"] : DEFAULT_AGENT_ACCEPT;
-    if (accept !== "none" && (!/^[a-z_]+(?:,[a-z_]+)*$/.test(accept) || accept.split(",").some((value): boolean => !AGENT_WORKLOAD_TYPES.includes(value)))) {
-      set.status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "accept contains an unsupported workload type" }] };
-    }
-    const requestForwarding = body["request_forwarding"] === true;
-    const hyok = body["hyok"] === true;
-    // tfc-agent never sends iac-binaries; terrence-agent declares it so the
-    // claim path only hands it matching jobs. Absent means terraform-only,
-    // preserving the pre-capability contract.
-    let iacBinaries: string[] = ["terraform"];
-    if (body["iac_binaries"] !== undefined) {
-      if (
-        !Array.isArray(body["iac_binaries"])
-        || body["iac_binaries"].length === 0
-        || body["iac_binaries"].some((binary: unknown): boolean =>
-          typeof binary !== "string" || (binary !== "tofu" && binary !== "terraform"))
-      ) {
-        set.status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binaries must be a non-empty array of 'tofu' or 'terraform'" }] };
-      }
-      iacBinaries = [...new Set(body["iac_binaries"] as string[])];
-    }
+    const negotiation = negotiateRegistrationProtocol(ctx, body, set);
+    if ("error" in negotiation) return negotiation.error;
+    const fields = parseRegistrationFields(body, ctx.request.headers.get("tfc-agent-version"), set);
+    if ("error" in fields) return fields.error;
 
     const now = Date.now();
-    const existing = await db.query.agents.findFirst({
-      where: and(eq(agents.agentPoolId, pool.poolId), eq(agents.name, name)),
-    });
-    let agentId: string;
-    if (existing !== undefined) {
-      agentId = existing.id;
-      await db.update(agents).set({
-        architecture: arch,
-        version: version ?? existing.version,
-        protocolVersion: negotiation.version,
-        capabilities: [...negotiation.capabilities],
-        artifactFormats: [...negotiation.artifactFormats],
-        iacBinaries,
-        accept,
-        requestForwarding,
-        hyok,
-        status: "idle",
-        lastPingAt: now,
-      }).where(eq(agents.id, existing.id));
-    } else {
-      agentId = newResourceId("agent");
-      await db.insert(agents).values({
-        id: agentId,
-        agentPoolId: pool.poolId,
-        name,
-        architecture: arch,
-        version,
-        protocolVersion: negotiation.version,
-        capabilities: [...negotiation.capabilities],
-        artifactFormats: [...negotiation.artifactFormats],
-        iacBinaries,
-        accept,
-        requestForwarding,
-        hyok,
-        status: "idle",
-        lastPingAt: now,
-      });
-    }
+    const agentId = await upsertRegistrationAgent(pool, fields, negotiation, now);
     await db.update(agentPoolTokens).set({ lastUsedAt: now }).where(eq(agentPoolTokens.id, pool.tokenId));
     return {
       id: agentId,
