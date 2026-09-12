@@ -143,6 +143,51 @@ async function hydrateVarsetRecords(
     })));
 }
 
+function parseVarsetAttributes(
+  body: unknown,
+  set: SetObj,
+  partial = false,
+): { attributes: Record<string, unknown> } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
+  if (data?.["type"] !== "varsets" || attributes === undefined || attributes === null || !validVariableSetAttributes(attributes, partial)) {
+    (set as { status: number }).status = 422; return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable set attributes" }] } };
+  }
+  return { attributes };
+}
+
+async function checkVarsetParentProject(
+  orgId: string,
+  parentProjectId: string,
+  global: boolean,
+  set: SetObj,
+): Promise<unknown | null> {
+  const parent = await db.query.projects.findFirst({ where: eq(projects.id, parentProjectId) });
+  if (parent === undefined || parent.orgId !== orgId) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Parent project must belong to the organization" }] };
+  }
+  // the reference format: project-owned variable sets cannot be global.
+  if (global === true) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Project-owned variable sets cannot be global" }] };
+  }
+  return null;
+}
+
+function buildVarsetUpdate(
+  record: Readonly<{ name: string; description: string | null; global: boolean | null; priority: boolean | null }>,
+  attributes: Record<string, unknown>,
+): { name: string; description: string | null; global: boolean | null; priority: boolean | null } {
+  return {
+    name: typeof attributes["name"] === "string" ? attributes["name"].trim() : record.name,
+    description: attributes["description"] === undefined ? record.description : (typeof attributes["description"] === "string" ? attributes["description"] : null),
+    global: typeof attributes["global"] === "boolean" ? attributes["global"] : record.global,
+    priority: typeof attributes["priority"] === "boolean" ? attributes["priority"] : record.priority,
+  };
+}
+
 export const varsetRoutes = new Elysia({ name: "varsets" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/varsets", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -189,12 +234,9 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, orgId, teamId, "manage-varsets"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
-    if (data?.["type"] !== "varsets" || attributes === undefined || attributes === null || !validVariableSetAttributes(attributes)) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable set attributes" }] };
-    }
+    const parsed = parseVarsetAttributes(body, set);
+    if ("error" in parsed) return parsed.error;
+    const { attributes } = parsed;
     const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
     const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
     const global = typeof attributes["global"] === "boolean" ? attributes["global"] : false;
@@ -203,16 +245,8 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       ? attributes["parent-project-id"]
       : null;
     if (parentProjectId !== null) {
-      const parent = await db.query.projects.findFirst({ where: eq(projects.id, parentProjectId) });
-      if (parent === undefined || parent.orgId !== org.id) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Parent project must belong to the organization" }] };
-      }
-      // the reference format: project-owned variable sets cannot be global.
-      if (global === true) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Project-owned variable sets cannot be global" }] };
-      }
+      const parentError = await checkVarsetParentProject(org.id, parentProjectId, global, set);
+      if (parentError !== null) return parentError;
     }
     const record = {
       id: newResourceId("varset"),
@@ -237,22 +271,14 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
-    if (data?.["type"] !== "varsets" || !attributes || !validVariableSetAttributes(attributes, true)) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable set attributes" }] };
-    }
+    const parsed = parseVarsetAttributes(body, set, true);
+    if ("error" in parsed) return parsed.error;
+    const { attributes } = parsed;
     if (attributes["parent-project-id"] !== undefined) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The owning project of a variable set cannot be changed" }] };
     }
-    const updated = {
-      name: typeof attributes["name"] === "string" ? attributes["name"].trim() : record.name,
-      description: attributes["description"] === undefined ? record.description : (typeof attributes["description"] === "string" ? attributes["description"] : null),
-      global: typeof attributes["global"] === "boolean" ? attributes["global"] : record.global,
-      priority: typeof attributes["priority"] === "boolean" ? attributes["priority"] : record.priority,
-    };
+    const updated = buildVarsetUpdate(record, attributes);
     if (record.parentProjectId !== null && updated.global === true) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Project-owned variable sets cannot be global" }] };
