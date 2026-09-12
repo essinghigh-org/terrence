@@ -79,101 +79,130 @@ function normalizeSql(sql: string): string {
     .replace(/\b[0-9]+\b/g, "?");
 }
 
-async function main(): Promise<void> {
-  const { iterations, warmup, jsonOut, filter, queryBreakdown, memory } = parseArgs();
-  const [{ app }, dbMod, { seedBenchmark }, { buildScenarios, tokenFor }] = await Promise.all([
-    import("../src/app"),
-    import("../src/db"),
-    import("./seed"),
-    import("./scenarios"),
-  ]);
-  const scenarios = buildScenarios().filter((s): boolean => filter === null || s.name === filter);
-  if (scenarios.length === 0) {
-    throw new Error(filter === null
-      ? "No benchmark scenarios are defined"
-      : `No benchmark scenario matches "${filter}"`);
+import type { app as benchAppInstance } from "../src/app";
+import type {
+  getQueryCount as dbGetQueryCount,
+  getQueryLog as dbGetQueryLog,
+  resetQueryCount as dbResetQueryCount,
+  setQueryLogging as dbSetQueryLogging,
+} from "../src/db";
+import type { seedBenchmark as seedBench } from "./seed";
+import type { buildScenarios as buildBenchScenarios, tokenFor as benchTokenFor } from "./scenarios";
+
+// Type-only views of the lazily imported modules (dynamic imports inside
+// main keep the env setup above ahead of the app/db module evaluation).
+type BenchDbModule = {
+  resetQueryCount: typeof dbResetQueryCount;
+  getQueryCount: typeof dbGetQueryCount;
+  setQueryLogging: typeof dbSetQueryLogging;
+  getQueryLog: typeof dbGetQueryLog;
+};
+type BenchSeedContext = Awaited<ReturnType<typeof seedBench>>;
+type BenchScenarioList = ReturnType<typeof buildBenchScenarios>;
+type BenchScenario = BenchScenarioList[number];
+type BenchTokenFor = typeof benchTokenFor;
+type BenchAppInstance = typeof benchAppInstance;
+
+type BenchDeps = Readonly<{
+  app: BenchAppInstance;
+  dbMod: BenchDbModule;
+  ctx: BenchSeedContext;
+  tokenFor: BenchTokenFor;
+}>;
+
+/** Single measured request through the real app, with SQL counting. */
+async function runOneRequest(
+  deps: BenchDeps,
+  scenario: BenchScenario,
+  iteration: number,
+): Promise<{ status: number; ms: number; queries: number }> {
+  const token = deps.tokenFor(deps.ctx, scenario.token);
+  const path = scenario.path(deps.ctx, iteration);
+  const method = scenario.method ?? "GET";
+  const body = scenario.body?.(deps.ctx, iteration);
+  deps.dbMod.resetQueryCount();
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  let init: string | undefined;
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/vnd.api+json";
+    init = JSON.stringify(body);
   }
-  const ctx = await seedBenchmark();
+  const request = new Request(`http://bench.local${path}`, { method, headers, body: init });
+  const started = performance.now();
+  const response = await deps.app.handle(request);
+  await response.text(); // force full body serialization
+  const ms = performance.now() - started;
+  return { status: response.status, ms, queries: deps.dbMod.getQueryCount() };
+}
 
-  // Per-request helper: build the request, run it, force body serialization.
-  const runOne = async (scenario: (typeof scenarios)[number], iteration: number): Promise<{ status: number; ms: number; queries: number }> => {
-    const token = tokenFor(ctx, scenario.token);
-    const path = scenario.path(ctx, iteration);
-    const method = scenario.method ?? "GET";
-    const body = scenario.body?.(ctx, iteration);
-    dbMod.resetQueryCount();
-    const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
-    let init: string | undefined;
-    if (body !== undefined) {
-      headers["Content-Type"] = "application/vnd.api+json";
-      init = JSON.stringify(body);
-    }
-    const request = new Request(`http://bench.local${path}`, { method, headers, body: init });
-    const started = performance.now();
-    const response = await app.handle(request);
-    await response.text(); // force full body serialization
-    const ms = performance.now() - started;
-    return { status: response.status, ms, queries: dbMod.getQueryCount() };
-  };
-
-  // Query-log breakdown mode: run the scenario a handful of times with SQL
-  // capture enabled and report the most-repeated statements.
-  if (queryBreakdown !== null) {
-    const target = scenarios.find((s): boolean => s.name === queryBreakdown);
-    if (target === undefined) {
-      throw new Error(`No scenario matches --query-breakdown ${queryBreakdown}`);
-    }
-    dbMod.setQueryLogging(true);
-    const perStatement = new Map<string, number>();
-    for (let i = 0; i < Math.max(iterations, 10); i += 1) {
-      dbMod.resetQueryCount();
-      const body = target.body?.(ctx, i);
-      const request = new Request(`http://bench.local${target.path(ctx, i)}`, {
-        method: target.method ?? "GET",
-        headers: {
-          Authorization: `Bearer ${tokenFor(ctx, target.token)}`,
-          ...(body !== undefined ? { "Content-Type": "application/vnd.api+json" } : {}),
-        },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-      });
-      const response = await app.handle(request);
-      await response.text();
-      for (const sql of dbMod.getQueryLog()) {
-        const key = normalizeSql(sql);
-        perStatement.set(key, (perStatement.get(key) ?? 0) + 1);
-      }
-    }
-    dbMod.setQueryLogging(false);
-    const total = [...perStatement.values()].reduce((sum, value): number => sum + value, 0);
-    console.log(`\nQuery breakdown for "${target.name}" (${total} statements over ${Math.max(iterations, 10)} runs)\n`);
-    console.log(`${"count".padStart(6)} sql`);
-    console.log("-".repeat(120));
-    const sorted = [...perStatement.entries()].sort((a, b): number => b[1] - a[1]);
-    for (const [sql, count] of sorted) {
-      console.log(`${String(count).padStart(6)} ${sql}`);
-    }
-    console.log(`\n${String(total).padStart(6)} total`);
-    return;
+/** Query-log breakdown mode: report the most-repeated normalized statements. */
+async function runQueryBreakdownMode(
+  deps: BenchDeps,
+  scenarios: readonly BenchScenario[],
+  targetName: string,
+  iterations: number,
+): Promise<void> {
+  const target = scenarios.find((s): boolean => s.name === targetName);
+  if (target === undefined) {
+    throw new Error(`No scenario matches --query-breakdown ${targetName}`);
   }
+  deps.dbMod.setQueryLogging(true);
+  const perStatement = new Map<string, number>();
+  for (let i = 0; i < Math.max(iterations, 10); i += 1) {
+    deps.dbMod.resetQueryCount();
+    const body = target.body?.(deps.ctx, i);
+    const request = new Request(`http://bench.local${target.path(deps.ctx, i)}`, {
+      method: target.method ?? "GET",
+      headers: {
+        Authorization: `Bearer ${deps.tokenFor(deps.ctx, target.token)}`,
+        ...(body !== undefined ? { "Content-Type": "application/vnd.api+json" } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    const response = await deps.app.handle(request);
+    await response.text();
+    for (const sql of deps.dbMod.getQueryLog()) {
+      const key = normalizeSql(sql);
+      perStatement.set(key, (perStatement.get(key) ?? 0) + 1);
+    }
+  }
+  deps.dbMod.setQueryLogging(false);
+  const total = [...perStatement.values()].reduce((sum, value): number => sum + value, 0);
+  console.log(`\nQuery breakdown for "${target.name}" (${total} statements over ${Math.max(iterations, 10)} runs)\n`);
+  console.log(`${"count".padStart(6)} sql`);
+  console.log("-".repeat(120));
+  const sorted = [...perStatement.entries()].sort((a, b): number => b[1] - a[1]);
+  for (const [sql, count] of sorted) {
+    console.log(`${String(count).padStart(6)} ${sql}`);
+  }
+  console.log(`\n${String(total).padStart(6)} total`);
+}
 
+/** Warmup + measured iterations for every scenario. */
+async function runScenarioMeasurements(
+  deps: BenchDeps,
+  scenarios: readonly BenchScenario[],
+  iterations: number,
+  warmup: number,
+  memory: boolean,
+): Promise<{ results: ScenarioResult[]; peakRss: number }> {
   const results: ScenarioResult[] = [];
   let peakRss = memory ? process.memoryUsage().rss : 0;
   for (const scenario of scenarios) {
-    const path = scenario.path(ctx, 0);
+    const path = scenario.path(deps.ctx, 0);
     for (let i = 0; i < warmup; i += 1) {
-      await runOne(scenario, i);
+      await runOneRequest(deps, scenario, i);
     }
     const latencies: number[] = [];
     const queryCounts: number[] = [];
     let status = 0;
     for (let i = 0; i < iterations; i += 1) {
-      const outcome = await runOne(scenario, warmup + i);
+      const outcome = await runOneRequest(deps, scenario, warmup + i);
       status = outcome.status;
       latencies.push(outcome.ms);
       queryCounts.push(outcome.queries);
       if (memory) {
-        const rss = process.memoryUsage().rss;
-        peakRss = Math.max(peakRss, rss);
+        peakRss = Math.max(peakRss, process.memoryUsage().rss);
       }
     }
     latencies.sort((a, b): number => a - b);
@@ -191,23 +220,38 @@ async function main(): Promise<void> {
       queryCounts,
     });
   }
+  return { results, peakRss };
+}
 
-  // Machine-readable report (before/after comparison consumes this).
-  if (jsonOut !== null) {
-    const { writeFile } = await import("node:fs/promises");
-    const git = await import("node:child_process");
-    const commit = git.execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] })
-      .toString().trim();
-    await writeFile(jsonOut, JSON.stringify({
-      commit,
-      timestamp: new Date().toISOString(),
-      iterations,
-      ...(memory ? { peakRssMb: Math.round(peakRss / 1024 / 1024) } : {}),
-      results: results.map(({ queryCounts: _queryCounts, ...rest }): Omit<ScenarioResult, "queryCounts"> => rest),
-    }, null, 2));
-    console.log(`Wrote ${jsonOut}`);
-  }
+/** Machine-readable report (before/after comparison consumes this). */
+async function writeJsonReport(
+  results: readonly ScenarioResult[],
+  jsonOut: string,
+  iterations: number,
+  memory: boolean,
+  peakRss: number,
+): Promise<void> {
+  const { writeFile } = await import("node:fs/promises");
+  const git = await import("node:child_process");
+  const commit = git.execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+    .toString().trim();
+  await writeFile(jsonOut, JSON.stringify({
+    commit,
+    timestamp: new Date().toISOString(),
+    iterations,
+    ...(memory ? { peakRssMb: Math.round(peakRss / 1024 / 1024) } : {}),
+    results: results.map(({ queryCounts: _queryCounts, ...rest }): Omit<ScenarioResult, "queryCounts"> => rest),
+  }, null, 2));
+  console.log(`Wrote ${jsonOut}`);
+}
 
+/** Human-readable latency table. */
+function printResultsTable(
+  results: readonly ScenarioResult[],
+  scenarios: readonly BenchScenario[],
+  memory: boolean,
+  peakRss: number,
+): void {
   const pad = (value: string, width: number): string => value.padEnd(width);
   console.log(`\n${"scenario".padEnd(36)} ${"m".padEnd(4)} ${"status".padEnd(6)} ${"avg ms".padStart(9)} ${"p50".padStart(9)} ${"p95".padStart(9)} ${"max".padStart(9)} ${"rps".padStart(8)} ${"sql/req".padStart(8)}`);
   console.log("-".repeat(110));
@@ -220,6 +264,39 @@ async function main(): Promise<void> {
   }
   console.log("-".repeat(110));
   if (memory) console.log(`peak RSS: ${Math.round(peakRss / 1024 / 1024)} MiB`);
+}
+
+async function main(): Promise<void> {
+  const { iterations, warmup, jsonOut, filter, queryBreakdown, memory } = parseArgs();
+  const [{ app }, dbMod, { seedBenchmark }, { buildScenarios, tokenFor }] = await Promise.all([
+    import("../src/app"),
+    import("../src/db"),
+    import("./seed"),
+    import("./scenarios"),
+  ]);
+  const scenarios = buildScenarios().filter((s): boolean => filter === null || s.name === filter);
+  if (scenarios.length === 0) {
+    throw new Error(filter === null
+      ? "No benchmark scenarios are defined"
+      : `No benchmark scenario matches "${filter}"`);
+  }
+  const ctx = await seedBenchmark();
+  const deps: BenchDeps = { app, dbMod, ctx, tokenFor };
+
+  // Query-log breakdown mode: run the scenario a handful of times with SQL
+  // capture enabled and report the most-repeated statements.
+  if (queryBreakdown !== null) {
+    await runQueryBreakdownMode(deps, scenarios, queryBreakdown, iterations);
+    return;
+  }
+
+  const { results, peakRss } = await runScenarioMeasurements(deps, scenarios, iterations, warmup, memory);
+
+  if (jsonOut !== null) {
+    await writeJsonReport(results, jsonOut, iterations, memory, peakRss);
+  }
+
+  printResultsTable(results, scenarios, memory, peakRss);
 }
 
 void main().catch((error: unknown): void => {

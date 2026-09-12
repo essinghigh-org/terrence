@@ -159,52 +159,50 @@ function finiteNonNegative(value: number | null | undefined): value is number {
   return value !== null && value !== undefined && Number.isFinite(value) && value >= 0;
 }
 
+function integerBudgetViolations(label: string, value: number, max: number | null): string[] {
+  if (value < 0 || !Number.isSafeInteger(value)) return [`${label}=${value} is invalid`];
+  if (max !== null && value > max) return [`${label} ${value} > ${max}`];
+  return [];
+}
+
+function renderedItemViolations(measurement: PerformanceMeasurement, budget: PerformanceBudget): string[] {
+  const rendered = measurement.renderedItems;
+  if (budget.maxRenderedItems !== null && finiteNonNegative(rendered) && rendered > budget.maxRenderedItems) {
+    return [`renderedItems ${rendered} > ${budget.maxRenderedItems}`];
+  }
+  return [];
+}
+
+function timingValueViolation(label: string, value: number | null | undefined, max: number): string[] {
+  if (finiteNonNegative(value) && value > max) return [`${label} ${value} > ${max}`];
+  return [];
+}
+
+function timingBudgetViolations(measurement: PerformanceMeasurement, budget: PerformanceBudget): string[] {
+  return [
+    ...timingValueViolation("serverP95Ms", measurement.serverP95Ms, budget.maxServerP95Ms),
+    ...timingValueViolation("networkP95Ms", measurement.networkP95Ms, budget.maxNetworkP95Ms),
+    ...timingValueViolation("renderP95Ms", measurement.renderP95Ms, budget.maxRenderP95Ms),
+    ...timingValueViolation("eventLoopP95Ms", measurement.eventLoopP95Ms, budget.maxEventLoopP95Ms),
+    ...timingValueViolation("browserMemoryBytes", measurement.browserMemoryBytes, budget.maxBrowserMemoryBytes),
+    ...timingValueViolation("interactionMs", measurement.interactionMs, budget.maxInteractionMs),
+  ];
+}
+
 /** Return every violated budget so CI can print one actionable report. */
 export function budgetViolations(
   measurement: PerformanceMeasurement,
   options: BudgetCheckOptions = {},
 ): string[] {
   const budget = PERFORMANCE_BUDGETS[measurement.journey];
-  const violations: string[] = [];
-  if (measurement.requests < 0 || !Number.isSafeInteger(measurement.requests)) {
-    violations.push(`requests=${measurement.requests} is invalid`);
-  } else if (budget.maxRequests !== null && measurement.requests > budget.maxRequests) {
-    violations.push(`requests ${measurement.requests} > ${budget.maxRequests}`);
-  }
-  if (measurement.payloadBytes < 0 || !Number.isSafeInteger(measurement.payloadBytes)) {
-    violations.push(`payloadBytes=${measurement.payloadBytes} is invalid`);
-  } else if (measurement.payloadBytes > budget.maxPayloadBytes) {
-    violations.push(`payloadBytes ${measurement.payloadBytes} > ${budget.maxPayloadBytes}`);
-  }
-  if (measurement.queryCount < 0 || !Number.isSafeInteger(measurement.queryCount)) {
-    violations.push(`queryCount=${measurement.queryCount} is invalid`);
-  } else if (measurement.queryCount > budget.maxQueries) {
-    violations.push(`queryCount ${measurement.queryCount} > ${budget.maxQueries}`);
-  }
-  if (budget.maxRenderedItems !== null && finiteNonNegative(measurement.renderedItems)
-    && measurement.renderedItems > budget.maxRenderedItems) {
-    violations.push(`renderedItems ${measurement.renderedItems} > ${budget.maxRenderedItems}`);
-  }
+  const violations: string[] = [
+    ...integerBudgetViolations("requests", measurement.requests, budget.maxRequests),
+    ...integerBudgetViolations("payloadBytes", measurement.payloadBytes, budget.maxPayloadBytes),
+    ...integerBudgetViolations("queryCount", measurement.queryCount, budget.maxQueries),
+    ...renderedItemViolations(measurement, budget),
+  ];
   if (options.enforceTimingBudgets !== true) return violations;
-  if (finiteNonNegative(measurement.serverP95Ms) && measurement.serverP95Ms > budget.maxServerP95Ms) {
-    violations.push(`serverP95Ms ${measurement.serverP95Ms} > ${budget.maxServerP95Ms}`);
-  }
-  if (finiteNonNegative(measurement.networkP95Ms) && measurement.networkP95Ms > budget.maxNetworkP95Ms) {
-    violations.push(`networkP95Ms ${measurement.networkP95Ms} > ${budget.maxNetworkP95Ms}`);
-  }
-  if (finiteNonNegative(measurement.renderP95Ms) && measurement.renderP95Ms > budget.maxRenderP95Ms) {
-    violations.push(`renderP95Ms ${measurement.renderP95Ms} > ${budget.maxRenderP95Ms}`);
-  }
-  if (finiteNonNegative(measurement.eventLoopP95Ms) && measurement.eventLoopP95Ms > budget.maxEventLoopP95Ms) {
-    violations.push(`eventLoopP95Ms ${measurement.eventLoopP95Ms} > ${budget.maxEventLoopP95Ms}`);
-  }
-  if (finiteNonNegative(measurement.browserMemoryBytes) && measurement.browserMemoryBytes > budget.maxBrowserMemoryBytes) {
-    violations.push(`browserMemoryBytes ${measurement.browserMemoryBytes} > ${budget.maxBrowserMemoryBytes}`);
-  }
-  if (finiteNonNegative(measurement.interactionMs) && measurement.interactionMs > budget.maxInteractionMs) {
-    violations.push(`interactionMs ${measurement.interactionMs} > ${budget.maxInteractionMs}`);
-  }
-  return violations;
+  return [...violations, ...timingBudgetViolations(measurement, budget)];
 }
 
 export function assertPerformanceBudget(
