@@ -100,28 +100,47 @@ type WorkspaceVariableUpdate = Readonly<{
   description: string | null;
 }>;
 
-async function workspaceVariableUpdate(
+function resolvedVariableFlags(
   variable: typeof workspaceVariables.$inferSelect,
   args: Readonly<Record<string, unknown>>,
-): Promise<WorkspaceVariableUpdate | Readonly<{ error: string }>> {
+): { key: string; category: string; sensitive: boolean; hcl: boolean; description: string | null; suppliedValue: string | null } {
   const key = typeof args["key"] === "string" ? args["key"] : variable.key;
   const category = typeof args["category"] === "string" ? args["category"] : variable.category;
   let sensitive = typeof args["sensitive"] === "boolean" ? args["sensitive"] : (variable.sensitive ?? false);
   if ((variable.sensitive ?? false) && !sensitive && args["value"] === undefined) sensitive = true;
   const hcl = typeof args["hcl"] === "boolean" ? args["hcl"] : (variable.hcl ?? false);
   const description = typeof args["description"] === "string" ? args["description"] : variable.description;
+  const suppliedValue = typeof args["value"] === "string" ? args["value"] : null;
+  return { key, category, sensitive, hcl, description, suppliedValue };
+}
+
+async function storedVariableValue(
+  variable: typeof workspaceVariables.$inferSelect,
+  sensitive: boolean,
+  suppliedValue: string | null,
+  effectiveValue: string,
+): Promise<{ value: string; valueEncrypted: string | null }> {
+  // An unchanged sensitive value keeps its stored ciphertext so the rotation
+  // below never re-encrypts (and re-keys) an untouched secret.
+  const unchangedSensitive = suppliedValue === null && sensitive && variable.sensitive === true && variable.valueEncrypted !== null;
+  return unchangedSensitive
+    ? { value: variable.value, valueEncrypted: variable.valueEncrypted }
+    : await variableValueForWrite(sensitive, effectiveValue);
+}
+
+async function workspaceVariableUpdate(
+  variable: typeof workspaceVariables.$inferSelect,
+  args: Readonly<Record<string, unknown>>,
+): Promise<WorkspaceVariableUpdate | Readonly<{ error: string }>> {
+  const { key, category, sensitive, hcl, description, suppliedValue } = resolvedVariableFlags(variable, args);
   // A supplied value is authoritative; otherwise keep the stored value
   // (decrypting an encrypted one), mirroring the API update path so MCP
   // rotations of sensitive variables actually persist (issue #577).
-  const suppliedValue = typeof args["value"] === "string" ? args["value"] : null;
   const effectiveValue = suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value);
   if (!validVariableAttributes({ key, value: effectiveValue, category, sensitive, hcl, description }, true)) {
     return { error: "Invalid variable attributes" };
   }
-  const unchangedSensitive = suppliedValue === null && sensitive && variable.sensitive === true && variable.valueEncrypted !== null;
-  const stored = unchangedSensitive
-    ? { value: variable.value, valueEncrypted: variable.valueEncrypted }
-    : await variableValueForWrite(sensitive, effectiveValue);
+  const stored = await storedVariableValue(variable, sensitive, suppliedValue, effectiveValue);
   return { key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description };
 }
 
