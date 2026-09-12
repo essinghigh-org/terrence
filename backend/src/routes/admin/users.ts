@@ -80,6 +80,82 @@ async function insertAdminUser(
   return { created };
 }
 
+async function findAdminUserTarget(
+  userId: string,
+  set: ParamCtx["set"],
+): Promise<{ target: typeof users.$inferSelect } | { error: unknown }> {
+  const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
+  if (targetUser === undefined) { (set as { status: number }).status = 404; return { error: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  if ((targetUser as unknown as { deletedAt?: unknown }).deletedAt != null) { (set as { status: number }).status = 404; return { error: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  return { target: targetUser };
+}
+
+function adminUserAttributes(body: unknown): Record<string, unknown> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  return typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+}
+
+async function parseAdminUsernameUpdate(
+  attributes: Record<string, unknown>,
+  userId: string,
+  set: ParamCtx["set"],
+): Promise<{ username: string | null } | { error: unknown }> {
+  if (typeof attributes["username"] !== "string") return { username: null };
+  const username = normalizeUsername(attributes["username"]);
+  if (username === null) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid username" }] } };
+  }
+  const claimant = await db.query.users.findFirst({ where: eq(users.username, username), columns: { id: true } });
+  if (claimant !== undefined && claimant.id !== userId) {
+    (set as { status: number }).status = 409;
+    return { error: { errors: [{ status: "409", title: "Conflict", detail: "That username is already in use" }] } };
+  }
+  return { username };
+}
+
+async function parseAdminEmailUpdate(
+  attributes: Record<string, unknown>,
+  userId: string,
+  currentEmail: string | null,
+  set: ParamCtx["set"],
+): Promise<{ email: string | null; changed: boolean } | { skipped: true } | { error: unknown }> {
+  if (attributes["email"] !== null && typeof attributes["email"] !== "string") return { skipped: true };
+  const raw = attributes["email"] === null ? "" : attributes["email"].trim();
+  const email = raw === "" ? null : normalizeEmail(raw);
+  if (email === null && raw !== "") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email" }] } };
+  }
+  if (email !== null) {
+    const claimant = await db.query.users.findFirst({ where: eq(users.email, email), columns: { id: true } });
+    if (claimant !== undefined && claimant.id !== userId) {
+      (set as { status: number }).status = 409;
+      return { error: { errors: [{ status: "409", title: "Conflict", detail: "That email address is already in use" }] } };
+    }
+  }
+  return { email, changed: email !== currentEmail };
+}
+
+async function persistAdminUserUpdates(
+  userId: string,
+  updates: Partial<typeof users.$inferInsert>,
+  set: ParamCtx["set"],
+): Promise<{ persisted: true } | { error: unknown }> {
+  if (Object.keys(updates).length === 0) return { persisted: true };
+  try {
+    await db.update(users).set(updates).where(eq(users.id, userId));
+  } catch (e: unknown) {
+    if (isUniqueConstraintError(e)) {
+      (set as { status: number }).status = 409;
+      return { error: { errors: [{ status: "409", title: "Conflict", detail: "That identity is already in use" }] } };
+    }
+    throw e;
+  }
+  return { persisted: true };
+}
+
 export const usersRoutes = new Elysia({ name: "admin-users" })
   .use(authPlugin)
   .get("/api/v2/admin/users", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
@@ -128,54 +204,22 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   .patch("/api/v2/admin/users/:user_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
     const userId = params["user_id"] ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    if (targetUser === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if ((targetUser as unknown as { deletedAt?: unknown }).deletedAt != null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const found = await findAdminUserTarget(userId, set);
+    if ("error" in found) return found.error;
+    const targetUser = found.target;
+    const attributes = adminUserAttributes(body);
     const updates: Partial<typeof users.$inferInsert> = {};
-    if (typeof attributes["username"] === "string") {
-      const username = normalizeUsername(attributes["username"]);
-      if (username === null) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid username" }] };
-      }
-      const claimant = await db.query.users.findFirst({ where: eq(users.username, username), columns: { id: true } });
-      if (claimant !== undefined && claimant.id !== userId) {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "That username is already in use" }] };
-      }
-      updates.username = username;
+    const nameParsed = await parseAdminUsernameUpdate(attributes, userId, set);
+    if ("error" in nameParsed) return nameParsed.error;
+    if (nameParsed.username !== null) updates.username = nameParsed.username;
+    const emailParsed = await parseAdminEmailUpdate(attributes, userId, targetUser.email, set);
+    if ("error" in emailParsed) return emailParsed.error;
+    if (!("skipped" in emailParsed)) {
+      updates.email = emailParsed.email;
+      if (emailParsed.changed) updates.emailVerifiedAt = null;
     }
-    if (attributes["email"] === null || typeof attributes["email"] === "string") {
-      const raw = attributes["email"] === null ? "" : attributes["email"].trim();
-      const email = raw === "" ? null : normalizeEmail(raw);
-      if (email === null && raw !== "") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email" }] };
-      }
-      if (email !== null) {
-        const claimant = await db.query.users.findFirst({ where: eq(users.email, email), columns: { id: true } });
-        if (claimant !== undefined && claimant.id !== userId) {
-          (set as { status: number }).status = 409;
-          return { errors: [{ status: "409", title: "Conflict", detail: "That email address is already in use" }] };
-        }
-      }
-      updates.email = email;
-      if (email !== targetUser.email) updates.emailVerifiedAt = null;
-    }
-    if (Object.keys(updates).length > 0) {
-      try {
-        await db.update(users).set(updates).where(eq(users.id, userId));
-      } catch (e: unknown) {
-        if (isUniqueConstraintError(e)) {
-          (set as { status: number }).status = 409;
-          return { errors: [{ status: "409", title: "Conflict", detail: "That identity is already in use" }] };
-        }
-        throw e;
-      }
-    }
+    const persisted = await persistAdminUserUpdates(userId, updates, set);
+    if ("error" in persisted) return persisted.error;
     if (Object.keys(updates).length > 0) {
       await auditLog("update", "users", userId, user.id, null, { fields: Object.keys(updates) });
       publish("authz.changed", { "user-id": userId });
