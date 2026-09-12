@@ -226,6 +226,106 @@ async function scimLinked(teamId: string): Promise<boolean> {
   })) !== undefined;
 }
 
+type TeamPatchError = Readonly<{ status: 404 } | { status: 422; detail?: string }>;
+
+function parseTeamPatchAttributes(body: unknown): Record<string, unknown> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  return typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+}
+
+function applyBasicTeamUpdates(
+  attributes: Record<string, unknown>,
+  teamName: string,
+  linked: boolean,
+  updates: Partial<typeof teams.$inferInsert>,
+): string | null {
+  if (linked && typeof attributes["name"] === "string" && attributes["name"] !== teamName) {
+    return "SCIM-linked teams cannot be renamed";
+  }
+  if (typeof attributes["name"] === "string") updates.name = attributes["name"];
+  if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
+  if (typeof attributes["visibility"] === "string") updates.visibility = attributes["visibility"];
+  if (!linked && attributes["sso-team-id"] !== undefined) updates.ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : null;
+  return null;
+}
+
+function applyMemberTokenManagement(
+  attributes: Record<string, unknown>,
+  updates: Partial<typeof teams.$inferInsert>,
+): boolean {
+  if (attributes["allow-member-token-management"] === undefined) return false;
+  if (typeof attributes["allow-member-token-management"] !== "boolean") return true;
+  updates.allowMemberTokenManagement = attributes["allow-member-token-management"];
+  return false;
+}
+
+function applyOrganizationAccessUpdate(
+  attributes: Record<string, unknown>,
+  organizationAccess: typeof teams.$inferSelect["organizationAccess"],
+  linked: boolean,
+  updates: Partial<typeof teams.$inferInsert>,
+): string | null {
+  const rawOrgAccess = attributes["organization-access"] as Record<string, unknown> | null;
+  const parsed = parseOrganizationAccess(rawOrgAccess);
+  if ("error" in parsed) return parsed.error;
+  updates.organizationAccess = { ...organizationAccess, ...parsed.value };
+  // Legacy clients may carry visibility / sso-team-id / allow-member-token-management
+  // inside organization-access; the top-level attribute takes precedence
+  // when present (matching the create handler), and sso-team-id is gated by
+  // the linked-team guard. Column-backed keys are persisted to their columns.
+  if (attributes["visibility"] === undefined && typeof rawOrgAccess?.["visibility"] === "string") updates.visibility = rawOrgAccess["visibility"];
+  if (!linked && attributes["sso-team-id"] === undefined && rawOrgAccess?.["sso-team-id"] !== undefined) updates.ssoTeamId = typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null;
+  if (attributes["allow-member-token-management"] === undefined && rawOrgAccess?.["allow-member-token-management"] !== undefined) updates.allowMemberTokenManagement = typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
+  return null;
+}
+
+function applyPolicyOverrideExpiry(
+  attributes: Record<string, unknown>,
+  updates: Partial<typeof teams.$inferInsert>,
+): string | null {
+  const rawExpiry = attributes["policy-override-delegation-expires-at"];
+  if (rawExpiry === null) {
+    updates.policyOverrideDelegationExpiresAt = null;
+    return null;
+  }
+  if (typeof rawExpiry === "number" && Number.isFinite(rawExpiry)) {
+    if (rawExpiry <= 0) return "policy-override-delegation-expires-at must be a future epoch-millis timestamp, or null";
+    updates.policyOverrideDelegationExpiresAt = Math.floor(rawExpiry);
+    return null;
+  }
+  return "policy-override-delegation-expires-at must be a number or null";
+}
+
+async function buildTeamPatchUpdates(
+  attributes: Record<string, unknown>,
+  team: Readonly<typeof teams.$inferSelect>,
+  linked: boolean,
+  canManageOrganizationAccess: () => Promise<boolean>,
+  updates: Partial<typeof teams.$inferInsert>,
+): Promise<TeamPatchError | null> {
+  const basicError = applyBasicTeamUpdates(attributes, team.name, linked, updates);
+  if (basicError !== null) return { status: 422, detail: basicError };
+  if ((attributes["organization-access"] !== undefined || attributes["allow-member-token-management"] !== undefined)
+    && !(await canManageOrganizationAccess())) {
+    return { status: 404 };
+  }
+  if (applyMemberTokenManagement(attributes, updates)) return { status: 422 };
+  if (attributes["organization-access"] !== undefined) {
+    const orgAccessError = applyOrganizationAccessUpdate(attributes, team.organizationAccess, linked, updates);
+    if (orgAccessError !== null) return { status: 422, detail: orgAccessError };
+  }
+  // Time-bounded policy-override delegation (kanban 18.7): epoch-millis
+  // expiry (or null/0 to clear and return to a permanent grant). Requires
+  // manage-organization-access, same as the delegation grant itself.
+  if (attributes["policy-override-delegation-expires-at"] !== undefined) {
+    if (!(await canManageOrganizationAccess())) return { status: 404 };
+    const expiryError = applyPolicyOverrideExpiry(attributes, updates);
+    if (expiryError !== null) return { status: 422, detail: expiryError };
+  }
+  return null;
+}
+
 export const teamRoutes = new Elysia({ name: "teams" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/team-tokens", async ({ params, request, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -433,58 +533,20 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const attributes = parseTeamPatchAttributes(body);
     const updates: Partial<typeof teams.$inferInsert> = {};
     const linked = await scimLinked(teamId);
-    if (linked && typeof attributes["name"] === "string" && attributes["name"] !== team.name) {
+    const patchError = await buildTeamPatchUpdates(
+      attributes,
+      team,
+      linked,
+      (): Promise<boolean> => checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"),
+      updates,
+    );
+    if (patchError !== null) {
+      if (patchError.status === 404) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SCIM-linked teams cannot be renamed" }] };
-    }
-    if (typeof attributes["name"] === "string") updates.name = attributes["name"];
-    if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
-    if (typeof attributes["visibility"] === "string") updates.visibility = attributes["visibility"];
-    if (!linked && attributes["sso-team-id"] !== undefined) updates.ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : null;
-    if ((attributes["organization-access"] !== undefined || attributes["allow-member-token-management"] !== undefined)
-      && !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (attributes["allow-member-token-management"] !== undefined) {
-      if (typeof attributes["allow-member-token-management"] !== "boolean") {
-        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
-      }
-      updates.allowMemberTokenManagement = attributes["allow-member-token-management"];
-    }
-    if (attributes["organization-access"] !== undefined) {
-      const rawOrgAccess = attributes["organization-access"] as Record<string, unknown> | null;
-      const organizationAccess = parseOrganizationAccess(rawOrgAccess);
-      if ("error" in organizationAccess) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: organizationAccess.error }] }; }
-      updates.organizationAccess = { ...team.organizationAccess, ...organizationAccess.value };
-      // Legacy clients may carry visibility / sso-team-id / allow-member-token-management
-      // inside organization-access; the top-level attribute takes precedence
-      // when present (matching the create handler), and sso-team-id is gated by
-      // the linked-team guard. Column-backed keys are persisted to their columns.
-      if (attributes["visibility"] === undefined && typeof rawOrgAccess?.["visibility"] === "string") updates.visibility = rawOrgAccess["visibility"];
-      if (!linked && attributes["sso-team-id"] === undefined && rawOrgAccess?.["sso-team-id"] !== undefined) updates.ssoTeamId = typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null;
-      if (attributes["allow-member-token-management"] === undefined && rawOrgAccess?.["allow-member-token-management"] !== undefined) updates.allowMemberTokenManagement = typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
-    }
-    // Time-bounded policy-override delegation (kanban 18.7): epoch-millis
-    // expiry (or null/0 to clear and return to a permanent grant). Requires
-    // manage-organization-access, same as the delegation grant itself.
-    if (attributes["policy-override-delegation-expires-at"] !== undefined) {
-      if (!(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"))) {
-        (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-      }
-      const rawExpiry = attributes["policy-override-delegation-expires-at"];
-      if (rawExpiry === null) {
-        updates.policyOverrideDelegationExpiresAt = null;
-      } else if (typeof rawExpiry === "number" && Number.isFinite(rawExpiry)) {
-        if (rawExpiry <= 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "policy-override-delegation-expires-at must be a future epoch-millis timestamp, or null" }] }; }
-        updates.policyOverrideDelegationExpiresAt = Math.floor(rawExpiry);
-      } else {
-        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "policy-override-delegation-expires-at must be a number or null" }] };
-      }
+      return { errors: [{ status: "422", title: "Unprocessable Entity", ...("detail" in patchError && patchError.detail !== undefined ? { detail: patchError.detail } : {}) }] };
     }
     if (Object.keys(updates).length > 0) await db.update(teams).set(updates).where(eq(teams.id, teamId));
     const updated = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
