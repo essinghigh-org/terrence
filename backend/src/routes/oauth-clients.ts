@@ -626,6 +626,83 @@ async function completeOAuthHandshake(
   return redirect(destination.toString(), 303);
 }
 
+function oauthClientPatchDocument(body: unknown): { data: Record<string, unknown> | undefined; attributes: Record<string, unknown> } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  return { data, attributes };
+}
+
+function applyOAuthClientFieldUpdates(
+  attributes: Record<string, unknown>,
+  updates: Partial<typeof oauthClients.$inferInsert>,
+  set: SetObj,
+): unknown | null {
+  if (attributes["organization-scoped"] !== undefined) {
+    if (typeof attributes["organization-scoped"] !== "boolean") return unprocessable(set, "organization-scoped must be a boolean");
+    updates.organizationScoped = attributes["organization-scoped"];
+  }
+  if (typeof attributes["name"] === "string") updates.name = attributes["name"];
+  if (attributes["service-provider"] !== undefined) {
+    if (typeof attributes["service-provider"] !== "string" || !SERVICE_PROVIDERS.has(attributes["service-provider"])) return unprocessable(set, "Unsupported service provider");
+    updates.serviceProvider = attributes["service-provider"];
+  }
+  return null;
+}
+
+async function resolveOAuthClientScope(
+  data: Record<string, unknown> | undefined,
+  orgId: string,
+  updates: Partial<typeof oauthClients.$inferInsert>,
+  set: SetObj,
+): Promise<{ projectIds: string[] | undefined } | { error: unknown }> {
+  const projectIds = relationshipProjectIds(data);
+  if (projectIds === null) return { error: unprocessable(set, "Projects must be valid project resource identifiers") };
+  if (projectIds !== undefined && !(await validProjectScope(projectIds, orgId))) return { error: unprocessable(set, "One or more projects do not belong to the organization") };
+  const agentPoolId = relationshipAgentPoolId(data);
+  if (agentPoolId === false) return { error: unprocessable(set, "Agent pool must be a valid agent-pools resource identifier") };
+  if (typeof agentPoolId === "string" && !(await validAgentPool(agentPoolId, orgId))) {
+    return { error: unprocessable(set, "Agent pool does not belong to the organization") };
+  }
+  if (agentPoolId !== undefined) updates.agentPoolId = agentPoolId;
+  return { projectIds };
+}
+
+function setNullableString(
+  updates: Partial<typeof oauthClients.$inferInsert>,
+  column: "apiUrl" | "httpUrl" | "key" | "rsaPublicKey",
+  present: boolean,
+  value: unknown,
+): void {
+  if (present) updates[column] = typeof value === "string" ? value : null;
+}
+
+async function applyOAuthClientCredentialUpdates(
+  attributes: Record<string, unknown>,
+  oc: typeof oauthClients.$inferSelect,
+  updates: Partial<typeof oauthClients.$inferInsert>,
+  set: SetObj,
+): Promise<{ credentialsInvalidated: boolean } | { error: unknown }> {
+  const requestedApiUrl = attributes["api-url"] !== undefined ? normalizedConfiguredUrl(attributes["api-url"]) : oc.apiUrl;
+  const requestedHttpUrl = attributes["http-url"] !== undefined ? normalizedConfiguredUrl(attributes["http-url"]) : oc.httpUrl;
+  const urlError = configuredVcsUrlError(
+    attributes["api-url"] !== undefined ? requestedApiUrl : null,
+    attributes["http-url"] !== undefined ? requestedHttpUrl : null,
+  );
+  if (urlError !== undefined) return { error: unprocessable(set, urlError) };
+  setNullableString(updates, "apiUrl", attributes["api-url"] !== undefined, requestedApiUrl);
+  setNullableString(updates, "httpUrl", attributes["http-url"] !== undefined, requestedHttpUrl);
+  setNullableString(updates, "key", attributes["key"] !== undefined, attributes["key"]);
+  if (attributes["secret"] !== undefined) updates.secret = typeof attributes["secret"] === "string" ? await encryptSecret(attributes["secret"]) : null;
+  setNullableString(updates, "rsaPublicKey", attributes["rsa-public-key"] !== undefined, attributes["rsa-public-key"]);
+  const serviceProviderChanged = updates.serviceProvider !== undefined && updates.serviceProvider !== oc.serviceProvider;
+  const endpointOriginChanged = configuredUrlOriginChanged(oc.apiUrl, requestedApiUrl)
+    || configuredUrlOriginChanged(oc.httpUrl, requestedHttpUrl);
+  const credentialsInvalidated = serviceProviderChanged || endpointOriginChanged;
+  if (credentialsInvalidated && attributes["secret"] === undefined) updates.secret = null;
+  return { credentialsInvalidated };
+}
+
 export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/oauth-clients", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -708,45 +785,16 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     const ocId = params["oc_id"] ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const { data, attributes } = oauthClientPatchDocument(body);
     const updates: Partial<typeof oauthClients.$inferInsert> = {};
-    if (attributes["organization-scoped"] !== undefined) {
-      if (typeof attributes["organization-scoped"] !== "boolean") return unprocessable(set, "organization-scoped must be a boolean");
-      updates.organizationScoped = attributes["organization-scoped"];
-    }
-    if (typeof attributes["name"] === "string") updates.name = attributes["name"];
-    if (attributes["service-provider"] !== undefined) {
-      if (typeof attributes["service-provider"] !== "string" || !SERVICE_PROVIDERS.has(attributes["service-provider"])) return unprocessable(set, "Unsupported service provider");
-      updates.serviceProvider = attributes["service-provider"];
-    }
-    const projectIds = relationshipProjectIds(data);
-    if (projectIds === null) return unprocessable(set, "Projects must be valid project resource identifiers");
-    if (projectIds !== undefined && !(await validProjectScope(projectIds, oc.orgId))) return unprocessable(set, "One or more projects do not belong to the organization");
-    const agentPoolId = relationshipAgentPoolId(data);
-    if (agentPoolId === false) return unprocessable(set, "Agent pool must be a valid agent-pools resource identifier");
-    if (typeof agentPoolId === "string" && !(await validAgentPool(agentPoolId, oc.orgId))) {
-      return unprocessable(set, "Agent pool does not belong to the organization");
-    }
-    if (agentPoolId !== undefined) updates.agentPoolId = agentPoolId;
-    const requestedApiUrl = attributes["api-url"] !== undefined ? normalizedConfiguredUrl(attributes["api-url"]) : oc.apiUrl;
-    const requestedHttpUrl = attributes["http-url"] !== undefined ? normalizedConfiguredUrl(attributes["http-url"]) : oc.httpUrl;
-    const urlError = configuredVcsUrlError(
-      attributes["api-url"] !== undefined ? requestedApiUrl : null,
-      attributes["http-url"] !== undefined ? requestedHttpUrl : null,
-    );
-    if (urlError !== undefined) return unprocessable(set, urlError);
-    if (attributes["api-url"] !== undefined) updates.apiUrl = typeof requestedApiUrl === "string" ? requestedApiUrl : null;
-    if (attributes["http-url"] !== undefined) updates.httpUrl = typeof requestedHttpUrl === "string" ? requestedHttpUrl : null;
-    if (attributes["key"] !== undefined) updates.key = typeof attributes["key"] === "string" ? attributes["key"] : null;
-    if (attributes["secret"] !== undefined) updates.secret = typeof attributes["secret"] === "string" ? await encryptSecret(attributes["secret"]) : null;
-    if (attributes["rsa-public-key"] !== undefined) updates.rsaPublicKey = typeof attributes["rsa-public-key"] === "string" ? attributes["rsa-public-key"] : null;
-    const serviceProviderChanged = updates.serviceProvider !== undefined && updates.serviceProvider !== oc.serviceProvider;
-    const endpointOriginChanged = configuredUrlOriginChanged(oc.apiUrl, requestedApiUrl)
-      || configuredUrlOriginChanged(oc.httpUrl, requestedHttpUrl);
-    const credentialsInvalidated = serviceProviderChanged || endpointOriginChanged;
-    if (credentialsInvalidated && attributes["secret"] === undefined) updates.secret = null;
+    const fieldError = applyOAuthClientFieldUpdates(attributes, updates, set);
+    if (fieldError !== null) return fieldError;
+    const scope = await resolveOAuthClientScope(data, oc.orgId, updates, set);
+    if ("error" in scope) return scope.error;
+    const credentials = await applyOAuthClientCredentialUpdates(attributes, oc, updates, set);
+    if ("error" in credentials) return credentials.error;
+    const { projectIds } = scope;
+    const { credentialsInvalidated } = credentials;
     if (credentialsInvalidated || Object.keys(updates).length > 0) {
       await db.transaction(async (tx): Promise<void> => {
         if (credentialsInvalidated) await tx.delete(oauthTokens).where(eq(oauthTokens.oauthClientId, ocId));
