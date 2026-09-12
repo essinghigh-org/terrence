@@ -261,6 +261,27 @@ async function pagedAuditLogs(where: SQL | undefined, page: AuditLogPage): Promi
 const AUDIT_LOG_ACCESS_DENIED = Symbol("audit-log-access-denied");
 type AuditLogResult = PagedAuditLogs | null | typeof AUDIT_LOG_ACCESS_DENIED;
 
+async function auditLogOrgIdsForUser(
+  user: Readonly<typeof users.$inferSelect>,
+): Promise<string[]> {
+  const scopes = currentTokenScopes();
+  const memberships = await db.query.organizationMemberships.findMany({
+    where: and(eq(organizationMemberships.userId, user.id), eq(organizationMemberships.status, "active")),
+    columns: { orgId: true, role: true },
+  });
+  if (scopes !== null) {
+    if (!scopeGrants(scopes, "audit-logs:read")) return [];
+    const candidateOrgIds = user.isSiteAdmin === true || user.isSiteAuditor === true
+      ? (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id)
+      : memberships.filter((membership): boolean => membership.role === "owner").map(({ orgId }): string => orgId);
+    return candidateOrgIds.filter((orgId): boolean => scopeCoversOrg(scopes, orgId));
+  }
+  if (user.isSiteAdmin === true || user.isSiteAuditor === true) {
+    return (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id);
+  }
+  return memberships.filter((membership): boolean => membership.role === "owner").map(({ orgId }): string => orgId);
+}
+
 async function auditLogsForPrincipal(
   user: Readonly<typeof users.$inferSelect> | null | undefined,
   token: Readonly<{ id: string; orgId: string | null; teamId: string | null; tokenType?: string; scopes?: string | null }> | null | undefined,
@@ -276,25 +297,7 @@ async function auditLogsForPrincipal(
     }
     orgIds = [token.orgId];
   } else {
-    const scopes = currentTokenScopes();
-    const memberships = await db.query.organizationMemberships.findMany({
-      where: and(eq(organizationMemberships.userId, user.id), eq(organizationMemberships.status, "active")),
-      columns: { orgId: true, role: true },
-    });
-    if (scopes !== null) {
-      if (!scopeGrants(scopes, "audit-logs:read")) {
-        orgIds = [];
-      } else {
-        const candidateOrgIds = user.isSiteAdmin === true || user.isSiteAuditor === true
-          ? (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id)
-          : memberships.filter((membership): boolean => membership.role === "owner").map(({ orgId }): string => orgId);
-        orgIds = candidateOrgIds.filter((orgId): boolean => scopeCoversOrg(scopes, orgId));
-      }
-    } else if (user.isSiteAdmin === true || user.isSiteAuditor === true) {
-      orgIds = (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id);
-    } else {
-      orgIds = memberships.filter((membership): boolean => membership.role === "owner").map(({ orgId }): string => orgId);
-    }
+    orgIds = await auditLogOrgIdsForUser(user);
   }
   const uniqueOrgIds = [...new Set(orgIds)];
   if (uniqueOrgIds.length === 0) return user === null || user === undefined ? null : { logs: [], total: 0 };
