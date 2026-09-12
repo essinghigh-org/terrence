@@ -390,6 +390,32 @@ function parseAgentIacBinaries(
   return { iacBinaries: [...new Set(rawIacBinaries as string[])] };
 }
 
+function parseStackJobCompletion(
+  attrs: Record<string, unknown>,
+  set: SetObj,
+): { status: "completed" | "errored"; errorMessage: string | null; result: Record<string, unknown> } | { error: unknown } {
+  const status = attrs["status"];
+  if (status !== "completed" && status !== "errored") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be completed or errored" }] } };
+  }
+  const rawResult = attrs["result"];
+  if (rawResult !== null && typeof rawResult === "object" && !Array.isArray(rawResult) && !isAgentResultValid(rawResult)) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: `result exceeds ${MAX_AGENT_RESULT_BYTES} bytes or structural limits` }] } };
+  }
+  const result = rawResult !== null && typeof rawResult === "object" && !Array.isArray(rawResult) ? rawResult as Record<string, unknown> : {
+    hasChanges: attrs["has-changes"] === true,
+    deferredChanges: attrs["deferred-changes"] === true,
+  };
+  const errorMessage = attrs["error-message"] === null || attrs["error-message"] === undefined ? null : typeof attrs["error-message"] === "string" ? attrs["error-message"] : undefined;
+  if (errorMessage === undefined) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "error-message must be a string or null" }] } };
+  }
+  return { status, errorMessage, result };
+}
+
 function completionResourceCounts(
   attrs: Record<string, unknown>,
   status: string,
@@ -1039,26 +1065,9 @@ export const agentRoutes = new Elysia({ name: "agents" })
     }
     const fencingToken = requestedFencingToken(request);
     const attrs = getAttrs(body);
-    const status = attrs["status"];
-    if (status !== "completed" && status !== "errored") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be completed or errored" }] };
-    }
-    const rawResult = attrs["result"];
-    if (rawResult !== null && typeof rawResult === "object" && !Array.isArray(rawResult) && !isAgentResultValid(rawResult)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `result exceeds ${MAX_AGENT_RESULT_BYTES} bytes or structural limits` }] };
-    }
-    const result = rawResult !== null && typeof rawResult === "object" && !Array.isArray(rawResult) ? rawResult as Record<string, unknown> : {
-      hasChanges: attrs["has-changes"] === true,
-      deferredChanges: attrs["deferred-changes"] === true,
-    };
-    const errorMessage = attrs["error-message"] === null || attrs["error-message"] === undefined ? null : typeof attrs["error-message"] === "string" ? attrs["error-message"] : undefined;
-    if (errorMessage === undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "error-message must be a string or null" }] };
-    }
-    const completed = await completeStackAgentJob(agent.id, jobId, { status, errorMessage, result }, fencingToken);
+    const parsed = parseStackJobCompletion(attrs, set);
+    if ("error" in parsed) return parsed.error;
+    const completed = await completeStackAgentJob(agent.id, jobId, { status: parsed.status, errorMessage: parsed.errorMessage, result: parsed.result }, fencingToken);
     if (completed === undefined) {
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Stack agent job is not claimed by this agent" }] };
