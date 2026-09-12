@@ -326,6 +326,33 @@ async function buildTeamPatchUpdates(
   return null;
 }
 
+function teamWorkspaceRelationId(rels: Record<string, unknown>, key: string): string {
+  const rel = typeof rels[key] === "object" && rels[key] !== null ? (rels[key] as Record<string, unknown>) : {};
+  const relData = typeof rel["data"] === "object" && rel["data"] !== null ? (rel["data"] as Record<string, unknown>) : {};
+  return typeof relData["id"] === "string" ? relData["id"] : "";
+}
+
+function parseTeamWorkspaceRequest(body: unknown): { teamId: string; workspaceId: string; attrs: Record<string, unknown> } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+  const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  return { teamId: teamWorkspaceRelationId(rels, "team"), workspaceId: teamWorkspaceRelationId(rels, "workspace"), attrs };
+}
+
+async function requirePolicyOverrideGrant(
+  applies: boolean,
+  orgId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+): Promise<{ status: 403; detail: string } | null> {
+  if (applies && !(await checkOrganizationPermission(orgId, userId, tokenOrgId, tokenTeamId, "manage-policy-overrides"))) {
+    return { status: 403, detail: "manage-policy-overrides is required to grant policy overrides" };
+  }
+  return null;
+}
+
 export const teamRoutes = new Elysia({ name: "teams" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/team-tokens", async ({ params, request, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -831,16 +858,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return { data: twList.map((tw: TwItem): Record<string, unknown> => ({ id: tw.id, type: "team-workspaces", attributes: { access: tw.access, permissions: tw.permissions ?? { runs: "write", variables: "write", "state-versions": "write" } }, relationships: { team: { data: { id: tw.teamId, type: "teams" } }, workspace: { data: { id: tw.workspaceId, type: "workspaces" } } } })) };
   })
   .post("/api/v2/team-workspaces", async ({ body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-    const teamRel = typeof rels["team"] === "object" && rels["team"] !== null ? (rels["team"] as Record<string, unknown>) : {};
-    const teamData = typeof teamRel["data"] === "object" && teamRel["data"] !== null ? (teamRel["data"] as Record<string, unknown>) : {};
-    const wsRel = typeof rels["workspace"] === "object" && rels["workspace"] !== null ? (rels["workspace"] as Record<string, unknown>) : {};
-    const wsData = typeof wsRel["data"] === "object" && wsRel["data"] !== null ? (wsRel["data"] as Record<string, unknown>) : {};
-    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const teamId = typeof teamData["id"] === "string" ? teamData["id"] : "";
-    const workspaceId = typeof wsData["id"] === "string" ? wsData["id"] : "";
+    const { teamId, workspaceId, attrs } = parseTeamWorkspaceRequest(body);
     const accessInput = attrs["access"] === undefined ? "write" : attrs["access"];
     const grant = parseTeamWorkspaceGrant(accessInput, attrs["permissions"]);
     if ("error" in grant) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: grant.error }] }; }
@@ -855,12 +873,10 @@ export const teamRoutes = new Elysia({ name: "teams" })
       || targetTeam?.orgId !== ws.orgId
       || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "admin"))
     ) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (
-      grant.value.grantsPolicyOverrides
-      && !(await checkOrganizationPermission(ws.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policy-overrides"))
-    ) {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: "manage-policy-overrides is required to grant policy overrides" }] };
+    const grantError = await requirePolicyOverrideGrant(grant.value.grantsPolicyOverrides, ws.orgId, user?.id, tokenOrgId, tokenTeamId ?? null);
+    if (grantError !== null) {
+      (set as { status: number }).status = grantError.status;
+      return { errors: [{ status: "403", title: "Forbidden", detail: grantError.detail }] };
     }
     const id = newResourceId("tw");
     await db.insert(teamWorkspaces).values({ id, teamId, workspaceId, access, permissions });
