@@ -27,6 +27,36 @@ type EventHandler = (event: Readonly<{ name: string; data: Readonly<JsonObject> 
  * frames, and reconnects with exponential backoff (1s..30s) after drops.
  * Closing the handle or aborting the signal stops the loop.
  */
+function authHeaders(token: string | null): Record<string, string> {
+  if (token !== null && token !== "") return { Authorization: `Bearer ${token}` };
+  return {};
+}
+
+async function pumpEventStream(
+  readFrame: () => Promise<Readonly<{ done: boolean; value: Uint8Array | undefined }>>,
+  onEvent: EventHandler,
+): Promise<boolean> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let received = false;
+  for (;;) {
+    const { done, value } = await readFrame();
+    if (done || value === undefined) break;
+    buffer += decoder.decode(value, { stream: true });
+    // Split on both LF and CRLF frame separators.
+    const frames = buffer.split(/\r?\n\r?\n/);
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      if (frame.trim() === "") continue;
+      const event = parseEventFrame(frame);
+      if (event === null) continue;
+      received = true;
+      onEvent(event);
+    }
+  }
+  return received;
+}
+
 export function subscribeEvents(
   onEvent: EventHandler,
   signal?: Readonly<AbortSignal>,
@@ -65,7 +95,7 @@ export function subscribeEvents(
     if (shouldStop()) return;
     try {
       const response = await fetch("/api/v2/events", {
-        headers: token !== null && token !== "" ? { Authorization: `Bearer ${token}` } : {},
+        headers: authHeaders(token),
         signal: controller.signal,
       });
       if (shouldStop()) return;
@@ -78,27 +108,15 @@ export function subscribeEvents(
       if (!response.ok) throw new ApiError(response.status, `Event stream failed (${response.status})`);
       const reader = response.body?.getReader();
       if (reader === undefined) throw new Error("Event stream had no body");
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        // Split on both LF and CRLF frame separators.
-        const frames = buffer.split(/\r?\n\r?\n/);
-        buffer = frames.pop() ?? "";
-        for (const frame of frames) {
-          if (frame.trim() === "") continue;
-          const event = parseEventFrame(frame);
-          if (event !== null) {
-            // Backoff resets only once the stream has demonstrated health
-            // by delivering frames; a connect that drops instantly must
-            // keep backing off.
-            retryMs = 1000;
-            onEvent(event);
-          }
-        }
-      }
+      // Backoff resets only once the stream has demonstrated health
+      // by delivering frames; a connect that drops instantly must
+      // keep backing off.
+      const readFrame = async (): Promise<Readonly<{ done: boolean; value: Uint8Array | undefined }>> => {
+        const result = await reader.read();
+        if (result.done) return { done: true, value: undefined };
+        return { done: false, value: result.value };
+      };
+      if (await pumpEventStream(readFrame, onEvent)) retryMs = 1000;
     } catch {
       // Stream ended or failed; reconnect below unless the caller closed.
     }
