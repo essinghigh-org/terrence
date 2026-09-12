@@ -419,6 +419,97 @@ function policySetParameterResource(p: ParamItem, policySetId: string): Record<s
   };
 }
 
+type PolicySetPatchContent = Readonly<{
+  vcsRepo: PolicySetVcsRepo | null;
+  policiesPath: string | null;
+  patterns: string[];
+}>;
+
+async function resolvePolicySetPatchContent(
+  ps: PsItem,
+  attributes: Record<string, unknown>,
+): Promise<Readonly<{ value: PolicySetPatchContent }> | Readonly<{ error: string }>> {
+  const normalizedVcsRepo = await normalizePolicySetVcsRepo(attributes["vcs-repo"], ps.orgId, ps.vcsRepo ?? undefined);
+  if ("error" in normalizedVcsRepo) return normalizedVcsRepo;
+  const normalizedPath = attributes["policies-path"] === undefined
+    ? { value: ps.policiesPath }
+    : normalizePoliciesPath(attributes["policies-path"]);
+  if ("error" in normalizedPath) return normalizedPath;
+  const normalizedPatterns = attributes["policy-update-patterns"] === undefined
+    ? { value: [...ps.policyUpdatePatterns] }
+    : normalizePolicyUpdatePatterns(attributes["policy-update-patterns"]);
+  if ("error" in normalizedPatterns) return normalizedPatterns;
+  if (
+    normalizedVcsRepo.value === null
+    && (normalizedPath.value !== null || normalizedPatterns.value.length > 0)
+  ) return { error: "policies-path and policy-update-patterns require vcs-repo" };
+  return {
+    value: {
+      vcsRepo: normalizedVcsRepo.value,
+      policiesPath: normalizedPath.value,
+      patterns: normalizedPatterns.value,
+    },
+  };
+}
+
+async function resolvePolicySetPatchLinks(
+  data: Record<string, unknown> | undefined,
+  policySetId: string,
+  vcsRepo: PolicySetVcsRepo | null,
+  vcsRepoProvided: boolean,
+  hadVcsRepo: boolean,
+): Promise<string | null> {
+  const relationships = data?.["relationships"] !== null && typeof data?.["relationships"] === "object"
+    ? data["relationships"] as Record<string, unknown>
+    : {};
+  const policyRelationship = relationships["policies"] !== null && typeof relationships["policies"] === "object"
+    ? relationships["policies"] as Record<string, unknown>
+    : {};
+  if (vcsRepo !== null && Array.isArray(policyRelationship["data"]) && policyRelationship["data"].length > 0) {
+    return "vcs-repo and policies relationships are mutually exclusive";
+  }
+  if (vcsRepoProvided && vcsRepo !== null && !hadVcsRepo) {
+    const attachedPolicy = await db.query.policies.findFirst({ where: eq(policies.policySetId, policySetId) });
+    if (attachedPolicy !== undefined) {
+      return "Remove individually managed policies before configuring vcs-repo";
+    }
+  }
+  return null;
+}
+
+async function checkPolicySetKindChange(kind: string, currentKind: string, policySetId: string): Promise<string | null> {
+  if (!["sentinel", "opa"].includes(kind)) return "kind must be sentinel or opa";
+  if (kind !== currentKind) {
+    const attached = await db.query.policies.findFirst({ where: eq(policies.policySetId, policySetId), columns: { id: true } });
+    if (attached !== undefined) return "Remove policies before changing the policy set kind";
+  }
+  return null;
+}
+
+async function applyPolicySetPatchFields(
+  attributes: Record<string, unknown>,
+  ps: PsItem,
+  policySetId: string,
+  content: PolicySetPatchContent,
+  updates: Partial<typeof policySets.$inferInsert>,
+): Promise<string | null> {
+  if (typeof attributes["name"] === "string") updates.name = attributes["name"];
+  if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
+  if (typeof attributes["kind"] === "string") {
+    const kindError = await checkPolicySetKindChange(attributes["kind"], ps.kind, policySetId);
+    if (kindError !== null) return kindError;
+    updates.kind = attributes["kind"];
+  }
+  if (typeof attributes["global"] === "boolean") updates.global = attributes["global"];
+  if (typeof attributes["overridable"] === "boolean") updates.overridable = attributes["overridable"];
+  if (typeof attributes["agent-enabled"] === "boolean") updates.agentEnabled = attributes["agent-enabled"];
+  if (attributes["policy-tool-version"] !== undefined) updates.policyToolVersion = typeof attributes["policy-tool-version"] === "string" ? attributes["policy-tool-version"] : null;
+  if (attributes["policies-path"] !== undefined) updates.policiesPath = content.policiesPath;
+  if (attributes["policy-update-patterns"] !== undefined) updates.policyUpdatePatterns = content.patterns;
+  if (attributes["vcs-repo"] !== undefined) updates.vcsRepo = content.vcsRepo;
+  return null;
+}
+
 export const policyRoutes = new Elysia({ name: "policies" })
   .use(authPlugin)
   // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
@@ -800,72 +891,21 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const updates: Partial<typeof policySets.$inferInsert> = {};
-    const normalizedVcsRepo = await normalizePolicySetVcsRepo(attributes["vcs-repo"], ps.orgId, ps.vcsRepo ?? undefined);
-    if ("error" in normalizedVcsRepo) {
+    const content = await resolvePolicySetPatchContent(ps, attributes);
+    if ("error" in content) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: normalizedVcsRepo.error }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: content.error }] };
     }
-    const normalizedPath = attributes["policies-path"] === undefined
-      ? { value: ps.policiesPath }
-      : normalizePoliciesPath(attributes["policies-path"]);
-    if ("error" in normalizedPath) {
+    const linksError = await resolvePolicySetPatchLinks(data, policySetId, content.value.vcsRepo, attributes["vcs-repo"] !== undefined, ps.vcsRepo !== null);
+    if (linksError !== null) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: normalizedPath.error }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: linksError }] };
     }
-    const normalizedPatterns = attributes["policy-update-patterns"] === undefined
-      ? { value: [...ps.policyUpdatePatterns] }
-      : normalizePolicyUpdatePatterns(attributes["policy-update-patterns"]);
-    if ("error" in normalizedPatterns) {
+    const fieldsError = await applyPolicySetPatchFields(attributes, ps, policySetId, content.value, updates);
+    if (fieldsError !== null) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: normalizedPatterns.error }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fieldsError }] };
     }
-    if (
-      normalizedVcsRepo.value === null
-      && (normalizedPath.value !== null || normalizedPatterns.value.length > 0)
-    ) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "policies-path and policy-update-patterns require vcs-repo" }] };
-    }
-    const relationships = data?.["relationships"] !== null && typeof data?.["relationships"] === "object"
-      ? data["relationships"] as Record<string, unknown>
-      : {};
-    const policyRelationship = relationships["policies"] !== null && typeof relationships["policies"] === "object"
-      ? relationships["policies"] as Record<string, unknown>
-      : {};
-    if (normalizedVcsRepo.value !== null && Array.isArray(policyRelationship["data"]) && policyRelationship["data"].length > 0) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "vcs-repo and policies relationships are mutually exclusive" }] };
-    }
-    if (attributes["vcs-repo"] !== undefined && normalizedVcsRepo.value !== null && ps.vcsRepo === null) {
-      const attachedPolicy = await db.query.policies.findFirst({ where: eq(policies.policySetId, policySetId) });
-      if (attachedPolicy !== undefined) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remove individually managed policies before configuring vcs-repo" }] };
-      }
-    }
-    if (typeof attributes["name"] === "string") updates.name = attributes["name"];
-    if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
-    if (typeof attributes["kind"] === "string") {
-      if (!["sentinel", "opa"].includes(attributes["kind"])) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "kind must be sentinel or opa" }] };
-      }
-      if (attributes["kind"] !== ps.kind) {
-        const attached = await db.query.policies.findFirst({ where: eq(policies.policySetId, policySetId), columns: { id: true } });
-        if (attached !== undefined) {
-          (set as { status: number }).status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remove policies before changing the policy set kind" }] };
-        }
-      }
-      updates.kind = attributes["kind"];
-    }
-    if (typeof attributes["global"] === "boolean") updates.global = attributes["global"];
-    if (typeof attributes["overridable"] === "boolean") updates.overridable = attributes["overridable"];
-    if (typeof attributes["agent-enabled"] === "boolean") updates.agentEnabled = attributes["agent-enabled"];
-    if (attributes["policy-tool-version"] !== undefined) updates.policyToolVersion = typeof attributes["policy-tool-version"] === "string" ? attributes["policy-tool-version"] : null;
-    if (attributes["policies-path"] !== undefined) updates.policiesPath = normalizedPath.value;
-    if (attributes["policy-update-patterns"] !== undefined) updates.policyUpdatePatterns = normalizedPatterns.value;
-    if (attributes["vcs-repo"] !== undefined) updates.vcsRepo = normalizedVcsRepo.value;
     if (Object.keys(updates).length > 0) await db.update(policySets).set(updates).where(eq(policySets.id, policySetId));
     const updated = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
