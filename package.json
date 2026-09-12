@@ -1,6 +1,6 @@
 {
   "name": "terrence",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "packageManager": "bun@1.4.2",
   "engines": {
     "bun": "1.4.2"
