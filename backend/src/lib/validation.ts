@@ -88,24 +88,47 @@ function persistedStringArray(
   return value;
 }
 
+function recordExtensions(
+  record: Readonly<Record<string, unknown>>,
+  declaredExtensions: unknown,
+  known: ReadonlySet<string>,
+  context: PersistedContext,
+): Record<string, unknown> {
+  if (declaredExtensions !== undefined && !isRecordObject(declaredExtensions)) {
+    persistedFailure(context, "field", "extensions must be an object");
+  }
+  return {
+    ...(declaredExtensions ?? {}),
+    ...Object.fromEntries(Object.entries(record).filter(([key]) => !known.has(key))),
+  };
+}
+
+function assertVariableCategory(value: unknown, context: PersistedContext): asserts value is "terraform" | "env" | undefined {
+  if (value !== undefined && value !== "terraform" && value !== "env") {
+    persistedFailure(context, "field", "variable category must be terraform or env");
+  }
+}
+
+function assertVariableSensitive(value: unknown, context: PersistedContext): asserts value is boolean | undefined {
+  if (value !== undefined && typeof value !== "boolean") {
+    persistedFailure(context, "field", "variable sensitive must be boolean");
+  }
+}
+
+function assertVariableValueEncrypted(value: unknown, context: PersistedContext): asserts value is string | undefined {
+  if (value !== undefined && (typeof value !== "string" || !isEncryptedSecret(value))) {
+    persistedFailure(context, "field", "variable valueEncrypted must be an encrypted secret");
+  }
+}
+
 function persistedRunVariable(value: unknown, context: PersistedContext): PersistedRunVariable {
   const record = persistedRecord(value, context);
   if (typeof record["key"] !== "string" || record["key"] === "") persistedFailure(context, "field", "variable key must be a non-empty string");
   if (typeof record["value"] !== "string") persistedFailure(context, "field", "variable value must be a string");
-  if (record["category"] !== undefined && record["category"] !== "terraform" && record["category"] !== "env") {
-    persistedFailure(context, "field", "variable category must be terraform or env");
-  }
-  if (record["sensitive"] !== undefined && typeof record["sensitive"] !== "boolean") persistedFailure(context, "field", "variable sensitive must be boolean");
-  if (record["valueEncrypted"] !== undefined && (typeof record["valueEncrypted"] !== "string" || !isEncryptedSecret(record["valueEncrypted"]))) {
-    persistedFailure(context, "field", "variable valueEncrypted must be an encrypted secret");
-  }
-  const declaredExtensions = record["extensions"];
-  if (declaredExtensions !== undefined && !isRecordObject(declaredExtensions)) persistedFailure(context, "field", "extensions must be an object");
-  const known = new Set(["key", "value", "category", "sensitive", "valueEncrypted", "extensions"]);
-  const extensions = {
-    ...(declaredExtensions ?? {}),
-    ...Object.fromEntries(Object.entries(record).filter(([key]) => !known.has(key))),
-  };
+  assertVariableCategory(record["category"], context);
+  assertVariableSensitive(record["sensitive"], context);
+  assertVariableValueEncrypted(record["valueEncrypted"], context);
+  const extensions = recordExtensions(record, record["extensions"], new Set(["key", "value", "category", "sensitive", "valueEncrypted", "extensions"]), context);
   return {
     key: record["key"],
     value: record["value"],
@@ -193,6 +216,46 @@ export function decodePersistedArtifact(raw: unknown, rowId?: string): Readonly<
   return { value: decoded.value, schemaVersion: decoded.schemaVersion, extensions: decoded.extensions };
 }
 
+type JobPayloadReaders = Readonly<{
+  record: Readonly<Record<string, unknown>>;
+  known: Record<string, unknown>;
+  context: PersistedContext;
+  rowId: string | undefined;
+  version: 0 | 1;
+  requiredString: (field: string) => string;
+  optionalBoolean: (field: string) => boolean | undefined;
+}>;
+
+function parseExplorerCatalogPayload(readers: JobPayloadReaders): void {
+  readers.known["orgId"] = readers.requiredString("orgId");
+  const backfill = readers.optionalBoolean("backfill");
+  if (backfill !== undefined) readers.known["backfill"] = backfill;
+}
+
+function parsePlanExplanationPayload(readers: JobPayloadReaders): void {
+  readers.known["runId"] = readers.requiredString("runId");
+  const explanationKind = readers.requiredString("kind");
+  if (explanationKind !== "plan" && explanationKind !== "apply") {
+    persistedFailure(persistedContext(`${readers.context.field}.kind`, readers.rowId, readers.version), "field", "kind must be plan or apply");
+  }
+  readers.known["kind"] = explanationKind;
+}
+
+function parseVcsWebhookPayload(readers: JobPayloadReaders): void {
+  const provider = readers.requiredString("provider");
+  if (provider !== "github" && provider !== "gitlab" && provider !== "bitbucket") {
+    persistedFailure(persistedContext(`${readers.context.field}.provider`, readers.rowId, readers.version), "field", "provider must be github, gitlab, or bitbucket");
+  }
+  readers.known["provider"] = provider;
+  readers.known["eventName"] = readers.requiredString("eventName");
+  const payload = persistedRecord(readers.record["payload"], persistedContext(`${readers.context.field}.payload`, readers.rowId, readers.version));
+  readers.known["payload"] = payload;
+  const deliveryId = readers.record["deliveryId"];
+  if (deliveryId === undefined) persistedFailure(persistedContext(`${readers.context.field}.deliveryId`, readers.rowId, readers.version), "missing", "deliveryId is missing");
+  if (deliveryId !== null && typeof deliveryId !== "string") persistedFailure(persistedContext(`${readers.context.field}.deliveryId`, readers.rowId, readers.version), "field", "deliveryId must be a string or null");
+  readers.known["deliveryId"] = deliveryId;
+}
+
 /**
  * Job payloads are validated before a worker handler sees them. The payload's
  * known top-level fields are retained for the handler; future fields survive
@@ -219,6 +282,7 @@ export function parsePersistedJobPayload(
     return value;
   };
   const known: Record<string, unknown> = {};
+  const readers: JobPayloadReaders = { record, known, context, rowId, version, requiredString, optionalBoolean };
   switch (kind) {
     case "module-test":
       known["runId"] = requiredString("runId");
@@ -233,45 +297,21 @@ export function parsePersistedJobPayload(
       known["workspaceId"] = requiredString("workspaceId");
       break;
     case "explorer-catalog":
-      known["orgId"] = requiredString("orgId");
-      {
-        const backfill = optionalBoolean("backfill");
-        if (backfill !== undefined) known["backfill"] = backfill;
-      }
+      parseExplorerCatalogPayload(readers);
       break;
-    case "plan-explanation": {
-      known["runId"] = requiredString("runId");
-      const explanationKind = requiredString("kind");
-      if (explanationKind !== "plan" && explanationKind !== "apply") persistedFailure(persistedContext(`${context.field}.kind`, rowId, version), "field", "kind must be plan or apply");
-      known["kind"] = explanationKind;
+    case "plan-explanation":
+      parsePlanExplanationPayload(readers);
       break;
-    }
-    case "vcs-webhook": {
-      const provider = requiredString("provider");
-      if (provider !== "github" && provider !== "gitlab" && provider !== "bitbucket") persistedFailure(persistedContext(`${context.field}.provider`, rowId, version), "field", "provider must be github, gitlab, or bitbucket");
-      known["provider"] = provider;
-      known["eventName"] = requiredString("eventName");
-      const payload = persistedRecord(record["payload"], persistedContext(`${context.field}.payload`, rowId, version));
-      known["payload"] = payload;
-      const deliveryId = record["deliveryId"];
-      if (deliveryId === undefined) persistedFailure(persistedContext(`${context.field}.deliveryId`, rowId, version), "missing", "deliveryId is missing");
-      if (deliveryId !== null && typeof deliveryId !== "string") persistedFailure(persistedContext(`${context.field}.deliveryId`, rowId, version), "field", "deliveryId must be a string or null");
-      known["deliveryId"] = deliveryId;
+    case "vcs-webhook":
+      parseVcsWebhookPayload(readers);
       break;
-    }
     case "outbox-delivery":
       known["eventId"] = requiredString("eventId");
       break;
     default:
       persistedFailure(context, "field", `unsupported durable job kind ${kind}`);
   }
-  const declaredExtensions = record["extensions"];
-  if (declaredExtensions !== undefined && !isRecordObject(declaredExtensions)) persistedFailure(context, "field", "extensions must be an object");
-  const knownKeys = new Set([...Object.keys(known), "extensions"]);
-  const extensions = {
-    ...(declaredExtensions ?? {}),
-    ...Object.fromEntries(Object.entries(record).filter(([key]) => !knownKeys.has(key))),
-  };
+  const extensions = recordExtensions(record, record["extensions"], new Set([...Object.keys(known), "extensions"]), context);
   return { ...known, ...(Object.keys(extensions).length === 0 ? {} : { extensions }) };
 }
 
