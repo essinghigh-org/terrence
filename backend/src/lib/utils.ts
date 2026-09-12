@@ -1469,35 +1469,61 @@ function requestPeer(request: HeaderCarrier): string | null {
   return requestPeerByRequest.get(request) ?? null;
 }
 
+const HOST_PATTERN = /^[A-Za-z0-9._~-]+(?::\d+)?$/;
+
+function firstForwardedProto(headers: Readonly<{ get(name: string): string | null }>): string {
+  return headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ?? "";
+}
+
+function forwardedHostBaseUrl(
+  headers: Readonly<{ get(name: string): string | null }>,
+  forwardedHost: string,
+  request: HeaderCarrier,
+): string | null {
+  // Forwarded host is proxy-claimed: trust it only from a configured proxy.
+  if (!isTrustedProxyPeer(requestPeer(request))) return null;
+  const proto = headers.get("x-forwarded-proto") === null ? "http" : firstForwardedProto(headers);
+  if (!HOST_PATTERN.test(forwardedHost)) return null;
+  if (proto !== "http" && proto !== "https") return null;
+  return `${proto}://${forwardedHost}`;
+}
+
+function connectionScheme(request: HeaderCarrier): string {
+  try {
+    const scheme = new URL(request.url).protocol;
+    if (scheme === "http:" || scheme === "https:") return scheme.slice(0, -1);
+  } catch {
+    // Keep the http default when the URL is not parseable.
+  }
+  return "http";
+}
+
+function hostHeaderBaseUrl(
+  headers: Readonly<{ get(name: string): string | null }>,
+  host: string,
+  request: HeaderCarrier,
+): string | null {
+  if (!HOST_PATTERN.test(host)) return null;
+  let proto = connectionScheme(request);
+  // A trusted proxy that preserves Host still gets its scheme honored; an
+  // untrusted or malformed proto never overrides the connection scheme.
+  const forwardedProto = firstForwardedProto(headers);
+  if ((forwardedProto === "http" || forwardedProto === "https") && isTrustedProxyPeer(requestPeer(request))) {
+    proto = forwardedProto;
+  }
+  return `${proto}://${host}`;
+}
+
 function proxyBaseUrl(request: HeaderCarrier): string | null {
   const headers = request.headers;
   if (headers === undefined) return null;
   const forwardedHost = headers.get("x-forwarded-host");
   if (forwardedHost !== null && forwardedHost !== "") {
-    // Forwarded host is proxy-claimed: trust it only from a configured proxy.
-    if (!isTrustedProxyPeer(requestPeer(request))) return null;
-    const proto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ?? "http";
-    if (!/^[A-Za-z0-9._~-]+(?::\d+)?$/.test(forwardedHost)) return null;
-    if (proto !== "http" && proto !== "https") return null;
-    return `${proto}://${forwardedHost}`;
+    return forwardedHostBaseUrl(headers, forwardedHost, request);
   }
   const host = headers.get("host");
   if (host === null || host === "") return null;
-  if (!/^[A-Za-z0-9._~-]+(?::\d+)?$/.test(host)) return null;
-  let proto = "http";
-  try {
-    const scheme = new URL(request.url).protocol;
-    if (scheme === "http:" || scheme === "https:") proto = scheme.slice(0, -1);
-  } catch {
-    // Keep the http default when the URL is not parseable.
-  }
-  // A trusted proxy that preserves Host still gets its scheme honored; an
-  // untrusted or malformed proto never overrides the connection scheme.
-  const forwardedProto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ?? "";
-  if ((forwardedProto === "http" || forwardedProto === "https") && isTrustedProxyPeer(requestPeer(request))) {
-    proto = forwardedProto;
-  }
-  return `${proto}://${host}`;
+  return hostHeaderBaseUrl(headers, host, request);
 }
 
 export function requestBaseUrl(request: HeaderCarrier): string {
