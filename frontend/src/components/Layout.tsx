@@ -146,6 +146,186 @@ function isActivePath(pathname: string, path: string, exact = false): boolean {
     : pathname === path || pathname.startsWith(`${path}/`);
 }
 
+type RouteScope = {
+  orgName: string | undefined;
+  workspaceName: string | undefined;
+  projectId: string | undefined;
+  hasOrg: boolean;
+  hasWorkspace: boolean;
+  hasProject: boolean;
+};
+
+function resolveRouteScope(pathname: string): RouteScope {
+  const workspaceMatch = matchPath(
+    {
+      path: "/app/:orgName/workspaces/:workspaceName/*",
+      end: false,
+    },
+    pathname,
+  ) ?? matchPath(
+    {
+      path: "/app/:orgName/workspaces/:workspaceName",
+      end: true,
+    },
+    pathname,
+  );
+  const projectMatch =
+    matchPath({ path: "/app/:orgName/projects/:projectId/*", end: false }, pathname)
+    ?? matchPath({ path: "/app/:orgName/projects/:projectId", end: true }, pathname);
+  const organizationMatch =
+    workspaceMatch ??
+    projectMatch ??
+    matchPath({ path: "/app/:orgName/*", end: false }, pathname) ??
+    matchPath({ path: "/app/:orgName", end: true }, pathname);
+  const routeOrgName = readableRouteParam(organizationMatch?.params.orgName);
+  const orgName =
+    routeOrgName === "account" || routeOrgName === "admin" || routeOrgName === "docs"
+      ? undefined
+      : routeOrgName;
+  const workspaceName = readableRouteParam(workspaceMatch?.params.workspaceName);
+  const projectId = readableRouteParam(projectMatch?.params.projectId);
+  const hasOrg = orgName !== undefined && orgName !== "";
+  const presence = resolveRoutePresence(hasOrg, workspaceName, projectId);
+  return { orgName, workspaceName, projectId, hasOrg, hasWorkspace: presence.hasWorkspace, hasProject: presence.hasProject };
+}
+
+function resolveRoutePresence(
+  hasOrg: boolean,
+  workspaceName: string | undefined,
+  projectId: string | undefined,
+): { hasWorkspace: boolean; hasProject: boolean } {
+  return {
+    hasWorkspace: hasOrg && workspaceName !== undefined && workspaceName !== "",
+    hasProject: hasOrg && projectId !== undefined && projectId !== "",
+  };
+}
+
+function resolveOrgPath(orgName: string | undefined, hasOrg: boolean): { orgPath: string; currentOrgName: string } {
+  return {
+    orgPath: hasOrg && orgName !== undefined ? `/app/${encodeURIComponent(orgName)}` : "/app",
+    currentOrgName: orgName ?? "Choose an organization",
+  };
+}
+
+function resolveRouteFlags(pathname: string): { inAccountSettings: boolean; inSiteAdministration: boolean; inDocs: boolean } {
+  return {
+    inAccountSettings: pathname === "/app/account",
+    inSiteAdministration:
+      pathname === "/app/admin" || pathname.startsWith("/app/admin/"),
+    inDocs:
+      pathname === "/app/docs" || pathname.startsWith("/app/docs/"),
+  };
+}
+
+function resolveSelectedDocsSlug(
+  pathname: string,
+  inDocs: boolean,
+  docsIndex: ReturnType<typeof useDocsIndex>,
+): string | undefined {
+  // The docs sidebar mirrors the view's default: the first document of the
+  // index is highlighted when the route has no slug yet.
+  const docsPathSlug = inDocs && pathname.startsWith("/app/docs/")
+    ? readableRouteParam(pathname.slice("/app/docs/".length).split("/")[0])
+    : undefined;
+  const docsSlug = docsPathSlug === undefined || docsPathSlug === "" ? undefined : docsPathSlug;
+  return docsSlug ?? docsIndex.index?.[0]?.slug;
+}
+
+function resolveSettingsFlags(input: Readonly<{
+  hasOrg: boolean;
+  hasWorkspace: boolean;
+  hasProject: boolean;
+  orgPath: string;
+  workspaceName: string | undefined;
+  projectId: string | undefined;
+  pathname: string;
+}>): {
+  workspacePath: string;
+  projectPath: string;
+  settingsPath: string;
+  projectSettingsPath: string;
+  organizationSettingsPath: string;
+  inWorkspaceSettings: boolean;
+  inProjectSettings: boolean;
+  inOrganizationSettings: boolean;
+} {
+  const workspacePath = input.hasWorkspace && input.workspaceName !== undefined
+    ? `${input.orgPath}/workspaces/${encodeURIComponent(input.workspaceName)}`
+    : "";
+  const projectPath = input.hasProject && input.projectId !== undefined
+    ? `${input.orgPath}/projects/${encodeURIComponent(input.projectId)}`
+    : "";
+  const settingsPath = `${workspacePath}/settings`;
+  const projectSettingsPath = `${projectPath}/settings`;
+  const organizationSettingsPath = `${input.orgPath}/settings`;
+  return {
+    workspacePath,
+    projectPath,
+    settingsPath,
+    projectSettingsPath,
+    organizationSettingsPath,
+    inWorkspaceSettings:
+      input.hasWorkspace && isActivePath(input.pathname, settingsPath),
+    inProjectSettings:
+      input.hasProject && isActivePath(input.pathname, projectSettingsPath),
+    inOrganizationSettings: input.hasOrg
+      && !input.hasWorkspace
+      && (
+        isActivePath(input.pathname, organizationSettingsPath)
+        || input.pathname === `${input.orgPath}/variable-sets`
+      ),
+  };
+}
+
+function resolvePageTitle(input: Readonly<{
+  hasWorkspace: boolean;
+  workspaceName: string | undefined;
+  hasOrg: boolean;
+  currentOrgName: string;
+  inAccountSettings: boolean;
+  inSiteAdministration: boolean;
+  pathname: string;
+}>): string {
+  if (input.hasWorkspace && input.workspaceName !== undefined) return `${input.workspaceName} · ${input.currentOrgName}`;
+  if (input.hasOrg) return input.currentOrgName;
+  if (input.inAccountSettings) return "Account Settings";
+  if (input.inSiteAdministration) return "Site Administration";
+  if (input.pathname === "/app/docs" || input.pathname.startsWith("/app/docs/")) return "Documentation";
+  return "Organizations";
+}
+
+type OrgCapabilities = {
+  canManageWorkspaces: boolean;
+  canManageVcsSettings: boolean;
+  canManageAgentPools: boolean;
+  canManagePolicies: boolean;
+  canReadProjects: boolean;
+};
+
+function resolveOrgCapabilities(
+  hasCurrentOrganizationPermissions: boolean,
+  organizationPermissions: OrganizationPermissions | null,
+): OrgCapabilities {
+  return {
+    canManageWorkspaces:
+      hasCurrentOrganizationPermissions
+      && organizationPermissions?.["can-manage-workspaces"] === true,
+    canManageVcsSettings:
+      hasCurrentOrganizationPermissions
+      && organizationPermissions?.["can-manage-vcs-settings"] === true,
+    canManageAgentPools:
+      hasCurrentOrganizationPermissions
+      && organizationPermissions?.["can-manage-agent-pools"] === true,
+    canManagePolicies:
+      hasCurrentOrganizationPermissions
+      && (organizationPermissions?.["can-manage-policies"] === true
+        || organizationPermissions?.["can-read-policies"] === true),
+    canReadProjects:
+      hasCurrentOrganizationPermissions
+      && organizationPermissions?.["can-read-projects"] === true,
+  };
+}
+
 function clearPendingSequence(pendingGRef: { current: number | null }): void {
   if (pendingGRef.current !== null) {
     window.clearTimeout(pendingGRef.current);
@@ -347,7 +527,7 @@ function WorkspaceSettingsNav({
   onNavigate: () => void;
   pathname: string;
   settingsPath: string;
-  workspaceName: string;
+  workspaceName: string | undefined;
   workspacePath: string;
 }>): JSX.Element {
   // Grouped by what you came here to change, not by internal subsystem:
@@ -396,7 +576,7 @@ function WorkspaceSettingsNav({
         active={false}
         collapsed={collapsed}
         icon={ArrowLeft}
-        label={workspaceName}
+        label={workspaceName ?? ""}
         onNavigate={onNavigate}
         to={workspacePath}
       />
@@ -444,7 +624,7 @@ function WorkspaceNav({
   onNavigate: () => void;
   orgPath: string;
   pathname: string;
-  workspaceName: string;
+  workspaceName: string | undefined;
   workspacePath: string;
   settingsPath: string;
   hasCurrentWorkspacePermissions: boolean;
@@ -471,7 +651,7 @@ function WorkspaceNav({
         onNavigate={onNavigate}
         to={`${orgPath}/workspaces`}
       />
-      <SidebarContextLabel collapsed={collapsed} title={workspaceName}>
+      <SidebarContextLabel collapsed={collapsed} title={workspaceName ?? ""}>
         {workspaceName}
       </SidebarContextLabel>
       {links.map((link): JSX.Element => (
@@ -494,6 +674,91 @@ function WorkspaceNav({
   );
 }
 
+function OrgSwitcher({
+  hasOrg,
+  currentOrgName,
+  orgPath,
+  organizationNames,
+  orgName,
+}: Readonly<{
+  hasOrg: boolean;
+  currentOrgName: string;
+  orgPath: string;
+  organizationNames: string[];
+  orgName: string | undefined;
+}>): JSX.Element {
+  const navigate = useNavigate();
+  if (!hasOrg) {
+    return (
+      <Link
+        to="/app"
+        className={cn(
+          buttonVariants({ variant: "ghost" }),
+          "min-w-0 max-w-32 shrink text-topbar-foreground hover:bg-topbar-foreground/10 hover:text-topbar-foreground sm:max-w-56",
+        )}
+      >
+        <Building2 data-icon="inline-start" />
+        <span className="truncate">{currentOrgName}</span>
+      </Link>
+    );
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={(
+          <Button
+            variant="ghost"
+            className="min-w-0 max-w-32 shrink text-topbar-foreground hover:bg-topbar-foreground/10 hover:text-topbar-foreground sm:max-w-56"
+            aria-label={`Organization menu for ${currentOrgName}`}
+          />
+        )}
+      >
+        <Building2 data-icon="inline-start" />
+        <span className="truncate">{currentOrgName}</span>
+        <ChevronDown data-icon="inline-end" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Organization</DropdownMenuLabel>
+          <DropdownMenuItem
+            onClick={(): void => {
+              void navigate(`${orgPath}/workspaces`);
+            }}
+          >
+            Workspaces
+          </DropdownMenuItem>
+          {organizationNames.some((name): boolean => name !== orgName) && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Switch organization</DropdownMenuLabel>
+              {organizationNames
+                .filter((name): boolean => name !== orgName)
+                .map((name): JSX.Element => (
+                  <DropdownMenuItem
+                    key={name}
+                    onClick={(): void => {
+                      void navigate(`/app/${encodeURIComponent(name)}/workspaces`);
+                    }}
+                  >
+                    {name}
+                  </DropdownMenuItem>
+                ))}
+            </>
+          )}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onClick={(): void => {
+              void navigate("/app");
+            }}
+          >
+            All organizations
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function ProjectNav({
   collapsed,
   onNavigate,
@@ -512,7 +777,7 @@ function ProjectNav({
   projectPath: string;
   projectSettingsPath: string;
   projectName: string | null;
-  projectId: string;
+  projectId: string | undefined;
   inProjectSettings: boolean;
 }>): JSX.Element {
   const projectLinks = inProjectSettings
@@ -568,7 +833,7 @@ function ProjectNav({
         onNavigate={onNavigate}
         to={`${orgPath}/projects`}
       />
-      <SidebarContextLabel collapsed={collapsed} title={projectName ?? projectId}>
+      <SidebarContextLabel collapsed={collapsed} title={projectName ?? projectId ?? ""}>
         {projectName ?? projectId}
       </SidebarContextLabel>
       {inProjectSettings && (
@@ -598,6 +863,8 @@ function OrgNav({
   orgPath,
   pathname,
   orgName,
+  hasOrg,
+  currentOrgName,
   canReadProjects,
   visitsRevision,
 }: Readonly<{
@@ -605,7 +872,9 @@ function OrgNav({
   onNavigate: () => void;
   orgPath: string;
   pathname: string;
-  orgName: string;
+  orgName: string | undefined;
+  hasOrg: boolean;
+  currentOrgName: string;
   canReadProjects: boolean;
   visitsRevision: number;
 }>): JSX.Element {
@@ -616,6 +885,23 @@ function OrgNav({
     { label: "Settings", to: `${orgPath}/settings`, icon: Settings, trailing: true },
   ] as const).filter((link): boolean =>
     link.label !== "Projects" || canReadProjects);
+
+  // hasOrg implies a defined orgName (resolveRouteScope invariant); the Link
+  // fallback covers the unreachable else exactly like the dropdown's absence.
+  if (!hasOrg || orgName === undefined) {
+    return (
+      <Link
+        to="/app"
+        className={cn(
+          buttonVariants({ variant: "ghost" }),
+          "min-w-0 max-w-32 shrink text-topbar-foreground hover:bg-topbar-foreground/10 hover:text-topbar-foreground sm:max-w-56",
+        )}
+      >
+        <Building2 data-icon="inline-start" />
+        <span className="truncate">{currentOrgName}</span>
+      </Link>
+    );
+  }
 
   // Sidebar shortcuts are re-read on every navigation (visitsRevision
   // bumps when a workspace is visited, so the list stays current).
@@ -1059,50 +1345,10 @@ export function Layout({
     };
   }, [organizationRouteKey]);
 
-  const workspaceMatch = matchPath(
-    {
-      path: "/app/:orgName/workspaces/:workspaceName/*",
-      end: false,
-    },
-    location.pathname,
-  ) ?? matchPath(
-    {
-      path: "/app/:orgName/workspaces/:workspaceName",
-      end: true,
-    },
-    location.pathname,
-  );
-  const projectMatch =
-    matchPath({ path: "/app/:orgName/projects/:projectId/*", end: false }, location.pathname)
-    ?? matchPath({ path: "/app/:orgName/projects/:projectId", end: true }, location.pathname);
-  const organizationMatch =
-    workspaceMatch ??
-    projectMatch ??
-    matchPath({ path: "/app/:orgName/*", end: false }, location.pathname) ??
-    matchPath({ path: "/app/:orgName", end: true }, location.pathname);
-  const routeOrgName = readableRouteParam(organizationMatch?.params.orgName);
-  const orgName =
-    routeOrgName === "account" || routeOrgName === "admin" || routeOrgName === "docs"
-      ? undefined
-      : routeOrgName;
-  const workspaceName = readableRouteParam(workspaceMatch?.params.workspaceName);
-  const projectId = readableRouteParam(projectMatch?.params.projectId);
-  const hasOrg = orgName !== undefined && orgName !== "";
-  const hasWorkspace = hasOrg && workspaceName !== undefined && workspaceName !== "";
-  const hasProject = hasOrg && projectId !== undefined && projectId !== "";
-  const inAccountSettings = location.pathname === "/app/account";
-  const inSiteAdministration =
-    location.pathname === "/app/admin" || location.pathname.startsWith("/app/admin/");
-  const inDocs =
-    location.pathname === "/app/docs" || location.pathname.startsWith("/app/docs/");
-  // The docs sidebar mirrors the view's default: the first document of the
-  // index is highlighted when the route has no slug yet.
-  const docsPathSlug = inDocs && location.pathname.startsWith("/app/docs/")
-    ? readableRouteParam(location.pathname.slice("/app/docs/".length).split("/")[0])
-    : undefined;
-  const docsSlug = docsPathSlug === undefined || docsPathSlug === "" ? undefined : docsPathSlug;
-  const selectedDocsSlug = docsSlug ?? docsIndex.index?.[0]?.slug;
-  const orgPath = hasOrg ? `/app/${encodeURIComponent(orgName)}` : "/app";
+  const { orgName, workspaceName, projectId, hasOrg, hasWorkspace, hasProject } = resolveRouteScope(location.pathname);
+  const { inAccountSettings, inSiteAdministration, inDocs } = resolveRouteFlags(location.pathname);
+  const selectedDocsSlug = resolveSelectedDocsSlug(location.pathname, inDocs, docsIndex);
+  const { orgPath, currentOrgName } = resolveOrgPath(orgName, hasOrg);
 
   const toggleSidebar = useCallback((): void => {
     setSidebarCollapsed((collapsed: boolean): boolean => {
@@ -1188,64 +1434,25 @@ export function Layout({
       recordWorkspaceVisit(orgName, workspaceName);
     }
   }, [hasWorkspace, orgName, workspaceName]);
-  const workspacePath = hasWorkspace
-    ? `${orgPath}/workspaces/${encodeURIComponent(workspaceName)}`
-    : "";
-  const projectPath = hasProject
-    ? `${orgPath}/projects/${encodeURIComponent(projectId)}`
-    : "";
-  const settingsPath = `${workspacePath}/settings`;
-  const inWorkspaceSettings =
-    hasWorkspace && isActivePath(location.pathname, settingsPath);
-  const projectSettingsPath = `${projectPath}/settings`;
-  const inProjectSettings =
-    hasProject && isActivePath(location.pathname, projectSettingsPath);
-  const organizationSettingsPath = `${orgPath}/settings`;
+  const {
+    workspacePath, projectPath, settingsPath, projectSettingsPath,
+    organizationSettingsPath, inWorkspaceSettings, inProjectSettings, inOrganizationSettings,
+  } = resolveSettingsFlags({ hasOrg, hasWorkspace, hasProject, orgPath, workspaceName, projectId, pathname: location.pathname });
   const organizationSettingsTab = new URLSearchParams(location.search).get("tab");
-  const inOrganizationSettings = hasOrg
-    && !hasWorkspace
-    && (
-      isActivePath(location.pathname, organizationSettingsPath)
-      || location.pathname === `${orgPath}/variable-sets`
-    );
-  const currentOrgName = orgName ?? "Choose an organization";
 
-  const computedTitle = hasWorkspace
-    ? `${workspaceName} · ${currentOrgName}`
-    : hasOrg
-      ? currentOrgName
-      : inAccountSettings
-        ? "Account Settings"
-        : inSiteAdministration
-          ? "Site Administration"
-          : location.pathname === "/app/docs" || location.pathname.startsWith("/app/docs/")
-            ? "Documentation"
-            : "Organizations";
+  const computedTitle = resolvePageTitle({ hasWorkspace, workspaceName, hasOrg, currentOrgName, inAccountSettings, inSiteAdministration, pathname: location.pathname });
 
   usePageTitle(computedTitle);
 
   const hasCurrentOrganizationPermissions = organizationPermissionPath === orgPath;
-  const canManageWorkspaces =
-    hasCurrentOrganizationPermissions
-    && organizationPermissions?.["can-manage-workspaces"] === true;
-  const canManageVcsSettings =
-    hasCurrentOrganizationPermissions
-    && organizationPermissions?.["can-manage-vcs-settings"] === true;
-  const canManageAgentPools =
-    hasCurrentOrganizationPermissions
-    && organizationPermissions?.["can-manage-agent-pools"] === true;
-  const canManagePolicies =
-    hasCurrentOrganizationPermissions
-    && (organizationPermissions?.["can-manage-policies"] === true
-      || organizationPermissions?.["can-read-policies"] === true);
-  const canReadProjects =
-    hasCurrentOrganizationPermissions
-    && organizationPermissions?.["can-read-projects"] === true;
+  const {
+    canManageWorkspaces, canManageVcsSettings, canManageAgentPools, canManagePolicies, canReadProjects,
+  } = resolveOrgCapabilities(hasCurrentOrganizationPermissions, organizationPermissions);
   const hasCurrentWorkspacePermissions = workspacePermissionPath === workspacePath;
   const [capabilities, setCapabilities] = useState<Capabilities>(DEFAULT_CAPABILITIES);
 
   useEffect((): (() => void) | undefined => {
-    const cached = hasOrg ? orgPermissionsCache.get(orgName) : undefined;
+    const cached = hasOrg && orgName !== undefined ? orgPermissionsCache.get(orgName) : undefined;
     if (cached !== undefined && cached.expires > Date.now()) {
       setOrganizationPermissions(cached.permissions ?? null);
       setOrganizationPermissionPath(orgPath);
@@ -1254,7 +1461,7 @@ export function Layout({
     setOrganizationPermissions(null);
     setOrganizationPermissionPath("");
     setCapabilities(DEFAULT_CAPABILITIES);
-    if (!hasOrg) return undefined;
+    if (!hasOrg || orgName === undefined) return undefined;
     const controller = new AbortController();
     void fetchApi<{ data?: { attributes?: { permissions?: OrganizationPermissions; capabilities?: Capabilities } } }>(`/organizations/${encodeURIComponent(orgName)}`, {
       signal: controller.signal,
@@ -1262,7 +1469,7 @@ export function Layout({
       if (controller.signal.aborted) return;
       const attributes = response.data?.attributes;
       const perms = attributes?.permissions ?? null;
-      if (hasOrg) orgPermissionsCache.set(orgName, { permissions: perms as Readonly<Record<string, boolean>> | undefined, expires: Date.now() + ORG_CACHE_TTL_MS });
+      if (hasOrg && orgName !== undefined) orgPermissionsCache.set(orgName, { permissions: perms as Readonly<Record<string, boolean>> | undefined, expires: Date.now() + ORG_CACHE_TTL_MS });
       setOrganizationPermissions(perms);
       setCapabilities(attributes?.capabilities ?? DEFAULT_CAPABILITIES);
       setOrganizationPermissionPath(orgPath);
@@ -1279,7 +1486,7 @@ export function Layout({
     setCanReadStateVersions(false);
     setCanReadVariable(false);
     setWorkspacePermissionPath("");
-    if (!hasWorkspace) return undefined;
+    if (!hasWorkspace || orgName === undefined || workspaceName === undefined) return undefined;
 
     const controller = new AbortController();
     void fetchApi<{ data?: { attributes?: { permissions?: { "can-read-state-versions"?: boolean; "can-read-variable"?: boolean } } } }>(
@@ -1420,6 +1627,8 @@ export function Layout({
           orgPath={orgPath}
           pathname={location.pathname}
           orgName={orgName}
+          hasOrg={hasOrg}
+          currentOrgName={currentOrgName}
           canReadProjects={canReadProjects}
           visitsRevision={visitsRevision}
         />
@@ -1496,72 +1705,13 @@ export function Layout({
 
             <div aria-hidden="true" className="hidden h-5 w-px bg-topbar-foreground/20 sm:block" />
 
-            {hasOrg ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  render={(
-                    <Button
-                      variant="ghost"
-                      className="min-w-0 max-w-32 shrink text-topbar-foreground hover:bg-topbar-foreground/10 hover:text-topbar-foreground sm:max-w-56"
-                      aria-label={`Organization menu for ${currentOrgName}`}
-                    />
-                  )}
-                >
-                  <Building2 data-icon="inline-start" />
-                  <span className="truncate">{currentOrgName}</span>
-                  <ChevronDown data-icon="inline-end" />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-56">
-                  <DropdownMenuGroup>
-                    <DropdownMenuLabel>Organization</DropdownMenuLabel>
-                    <DropdownMenuItem
-                      onClick={(): void => {
-                        void navigate(`${orgPath}/workspaces`);
-                      }}
-                    >
-                      Workspaces
-                    </DropdownMenuItem>
-                    {organizationNames.some((name): boolean => name !== orgName) && (
-                      <>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuLabel>Switch organization</DropdownMenuLabel>
-                        {organizationNames
-                          .filter((name): boolean => name !== orgName)
-                          .map((name): JSX.Element => (
-                            <DropdownMenuItem
-                              key={name}
-                              onClick={(): void => {
-                                void navigate(`/app/${encodeURIComponent(name)}/workspaces`);
-                              }}
-                            >
-                              {name}
-                            </DropdownMenuItem>
-                          ))}
-                      </>
-                    )}
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={(): void => {
-                        void navigate("/app");
-                      }}
-                    >
-                      All organizations
-                    </DropdownMenuItem>
-                  </DropdownMenuGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : (
-              <Link
-                to="/app"
-                className={cn(
-                  buttonVariants({ variant: "ghost" }),
-                  "min-w-0 max-w-32 shrink text-topbar-foreground hover:bg-topbar-foreground/10 hover:text-topbar-foreground sm:max-w-56",
-                )}
-              >
-                <Building2 data-icon="inline-start" />
-                <span className="truncate">{currentOrgName}</span>
-              </Link>
-            )}
+            <OrgSwitcher
+              hasOrg={hasOrg}
+              currentOrgName={currentOrgName}
+              orgPath={orgPath}
+              organizationNames={organizationNames}
+              orgName={orgName}
+            />
           </div>
 
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
