@@ -65,6 +65,116 @@ function invocationResource(row: typeof actionInvocations.$inferSelect): Record<
   };
 }
 
+function actionOrgData(data: Record<string, unknown>): Record<string, unknown> {
+  const rels = data["relationships"] !== null && typeof data["relationships"] === "object" ? (data["relationships"] as Record<string, unknown>) : {};
+  const orgRel = rels["organization"] !== null && typeof rels["organization"] === "object" ? (rels["organization"] as Record<string, unknown>) : {};
+  return orgRel["data"] !== null && typeof orgRel["data"] === "object" ? (orgRel["data"] as Record<string, unknown>) : {};
+}
+
+function parseActionRequest(
+  body: unknown,
+  set: Ctx["set"],
+): { attrs: Record<string, unknown>; orgName: string; name: string } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
+  const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? (data["attributes"] as Record<string, unknown>) : {};
+  const orgData = actionOrgData(data);
+  const orgName = typeof orgData["id"] === "string" ? orgData["id"] : typeof attrs["organization"] === "string" ? attrs["organization"] : "";
+  const name = typeof attrs["name"] === "string" ? attrs["name"].trim() : "";
+  if (orgName === "" || name === "") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "organization and name are required" }] } };
+  }
+  return { attrs, orgName, name };
+}
+
+async function insertAction(
+  orgId: string,
+  name: string,
+  attrs: Record<string, unknown>,
+): Promise<typeof actions.$inferSelect> {
+  const actionType = typeof attrs["action-type"] === "string" ? String(attrs["action-type"]) : "custom";
+  const description = typeof attrs["description"] === "string" ? attrs["description"] : null;
+  const configuration = attrs["configuration"] !== null && typeof attrs["configuration"] === "object" ? (attrs["configuration"] as Record<string, unknown>) : {};
+  const id = newResourceId("action");
+  const now = Date.now();
+  await db.insert(actions).values({ id, orgId, name, description, actionType, status: "active", configuration, createdAt: now, updatedAt: now });
+  const row = await db.query.actions.findFirst({ where: eq(actions.id, id) });
+  if (row === undefined) throw new Error("Created action could not be loaded");
+  return row;
+}
+
+async function resolveInvocationAction(
+  actionId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  teamId: string | null,
+  set: Ctx["set"],
+): Promise<{ action: typeof actions.$inferSelect } | { error: unknown }> {
+  const action = await db.query.actions.findFirst({ where: eq(actions.id, actionId) });
+  if (action === undefined) {
+    (set as { status: number }).status = 404;
+    return { error: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  if (!(await checkOrganizationPermission(action.orgId, userId, tokenOrgId, teamId, "manage-workspaces"))) {
+    (set as { status: number }).status = 404;
+    return { error: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { action };
+}
+
+async function checkInvocationTargets(
+  body: unknown,
+  set: Ctx["set"],
+): Promise<{ attrs: Record<string, unknown>; runId: string | null; stackId: string | null } | { error: unknown }> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
+  const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? (data["attributes"] as Record<string, unknown>) : {};
+  const runId = typeof attrs["run-id"] === "string" ? String(attrs["run-id"]) : typeof attrs["runId"] === "string" ? String(attrs["runId"]) : null;
+  const stackId = typeof attrs["stack-id"] === "string" ? String(attrs["stack-id"]) : typeof attrs["stackId"] === "string" ? String(attrs["stackId"]) : null;
+  if (runId !== null) {
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+    if (run === undefined) {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "run not found" }] } };
+    }
+  }
+  if (stackId !== null) {
+    const stack = await db.query.stacks.findFirst({ where: eq(stacks.id, stackId) });
+    if (stack === undefined) {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "stack not found" }] } };
+    }
+  }
+  return { attrs, runId, stackId };
+}
+
+async function insertInvocation(
+  action: typeof actions.$inferSelect,
+  runId: string | null,
+  stackId: string | null,
+  attrs: Record<string, unknown>,
+): Promise<typeof actionInvocations.$inferSelect> {
+  const id = newResourceId("actinv");
+  const now = Date.now();
+  const output = attrs["output"] !== null && typeof attrs["output"] === "object" ? (attrs["output"] as Record<string, unknown>) : null;
+  await db.insert(actionInvocations).values({
+    id,
+    actionId: action.id,
+    orgId: action.orgId,
+    runId,
+    stackId,
+    deploymentId: typeof attrs["deploymentId"] === "string" ? String(attrs["deploymentId"]) : null,
+    status: "pending",
+    output,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const row = await db.query.actionInvocations.findFirst({ where: eq(actionInvocations.id, id) });
+  if (row === undefined) throw new Error("Created invocation could not be loaded");
+  return row;
+}
+
 export const actionsRoutes = new Elysia({ name: "actions" })
   .use(authPlugin)
   .get("/api/v2/actions", async ({ user, request, set }: Ctx): Promise<unknown> => {
@@ -109,31 +219,14 @@ export const actionsRoutes = new Elysia({ name: "actions" })
     return { data: rows.map(actionResource), meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } } };
   })
   .post("/api/v2/actions", async ({ body, user, orgId: tokenOrgId, teamId, set }: Ctx): Promise<unknown> => {
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? (data["attributes"] as Record<string, unknown>) : {};
-    const rels = data["relationships"] !== null && typeof data["relationships"] === "object" ? (data["relationships"] as Record<string, unknown>) : {};
-    const orgRel = rels["organization"] !== null && typeof rels["organization"] === "object" ? (rels["organization"] as Record<string, unknown>) : {};
-    const orgData = orgRel["data"] !== null && typeof orgRel["data"] === "object" ? (orgRel["data"] as Record<string, unknown>) : {};
-    const orgName = typeof orgData["id"] === "string" ? orgData["id"] : typeof attrs["organization"] === "string" ? String(attrs["organization"]) : "";
-    const name = typeof attrs["name"] === "string" ? attrs["name"].trim() : "";
-    if (orgName === "" || name === "") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "organization and name are required" }] };
-    }
-    const org = await cachedOrgByName(orgName);
+    const parsed = parseActionRequest(body, set);
+    if ("error" in parsed) return parsed.error;
+    const org = await cachedOrgByName(parsed.orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-workspaces"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const actionType = typeof attrs["action-type"] === "string" ? String(attrs["action-type"]) : "custom";
-    const description = typeof attrs["description"] === "string" ? attrs["description"] : null;
-    const configuration = attrs["configuration"] !== null && typeof attrs["configuration"] === "object" ? (attrs["configuration"] as Record<string, unknown>) : {};
-    const id = newResourceId("action");
-    const now = Date.now();
-    await db.insert(actions).values({ id, orgId: org.id, name, description, actionType, status: "active", configuration, createdAt: now, updatedAt: now });
-    const row = await db.query.actions.findFirst({ where: eq(actions.id, id) });
-    if (row === undefined) throw new Error("Created action could not be loaded");
+    const row = await insertAction(org.id, parsed.name, parsed.attrs);
     (set as { status: number }).status = 201;
     return { data: actionResource(row) };
   })
@@ -167,51 +260,11 @@ export const actionsRoutes = new Elysia({ name: "actions" })
   })
   .post("/api/v2/actions/:id/invocations", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: Ctx): Promise<unknown> => {
     const actionId = params["id"] ?? "";
-    const action = await db.query.actions.findFirst({ where: eq(actions.id, actionId) });
-    if (action === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (!(await checkOrganizationPermission(action.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-workspaces"))) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? (data["attributes"] as Record<string, unknown>) : {};
-    const runId = typeof attrs["run-id"] === "string" ? String(attrs["run-id"]) : typeof attrs["runId"] === "string" ? String(attrs["runId"]) : null;
-    const stackId = typeof attrs["stack-id"] === "string" ? String(attrs["stack-id"]) : typeof attrs["stackId"] === "string" ? String(attrs["stackId"]) : null;
-    if (runId !== null) {
-      const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-      if (run === undefined) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "run not found" }] };
-      }
-    }
-    if (stackId !== null) {
-      const stack = await db.query.stacks.findFirst({ where: eq(stacks.id, stackId) });
-      if (stack === undefined) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "stack not found" }] };
-      }
-    }
-    const id = newResourceId("actinv");
-    const now = Date.now();
-    const output = attrs["output"] !== null && typeof attrs["output"] === "object" ? (attrs["output"] as Record<string, unknown>) : null;
-    await db.insert(actionInvocations).values({
-      id,
-      actionId,
-      orgId: action.orgId,
-      runId,
-      stackId,
-      deploymentId: typeof attrs["deploymentId"] === "string" ? String(attrs["deploymentId"]) : null,
-      status: "pending",
-      output,
-      createdAt: now,
-      updatedAt: now,
-    });
-    const row = await db.query.actionInvocations.findFirst({ where: eq(actionInvocations.id, id) });
-    if (row === undefined) throw new Error("Created invocation could not be loaded");
+    const resolved = await resolveInvocationAction(actionId, user?.id, tokenOrgId ?? null, teamId ?? null, set);
+    if ("error" in resolved) return resolved.error;
+    const targets = await checkInvocationTargets(body, set);
+    if ("error" in targets) return targets.error;
+    const row = await insertInvocation(resolved.action, targets.runId, targets.stackId, targets.attrs);
     (set as { status: number }).status = 201;
     return { data: invocationResource(row) };
   })
