@@ -308,10 +308,10 @@ function planJsonFrom(value: unknown): PlanJson | null | undefined {
   return value as PlanJson;
 }
 
-function completionFromBody(body: unknown): AgentJobCompletion | undefined {
-  const attrs = getAttrs(body);
-  const status = attrs["status"];
-  if (status !== "completed" && status !== "errored") return undefined;
+function completionResourceCounts(
+  attrs: Record<string, unknown>,
+  status: string,
+): { resourceAdditions: number | null; resourceChanges: number | null; resourceDestructions: number | null; resourceImports: number | null; planJson: PlanJson | null } | undefined {
   const resourceAdditions = nonNegativeInteger(attrs["resource-additions"]);
   const resourceChanges = nonNegativeInteger(attrs["resource-changes"]);
   const resourceDestructions = nonNegativeInteger(attrs["resource-destructions"]);
@@ -325,55 +325,66 @@ function completionFromBody(body: unknown): AgentJobCompletion | undefined {
     || planJson === undefined
     || (planJson !== null && status !== "completed")
   ) return undefined;
-  const errorMessage = attrs["error-message"] === undefined || attrs["error-message"] === null
-    ? null
-    : typeof attrs["error-message"] === "string" && attrs["error-message"].length <= 16_384
-      ? attrs["error-message"]
-      : undefined;
-  const statePayload = attrs["state"] === undefined || attrs["state"] === null
-    ? null
-    : typeof attrs["state"] === "string"
-      ? attrs["state"]
-      : undefined;
-  const jsonState = attrs["json-state"] === undefined || attrs["json-state"] === null
-    ? null
-    : typeof attrs["json-state"] === "string"
-      ? attrs["json-state"]
-      : undefined;
-  const jsonStateOutputs = attrs["json-state-outputs"] === undefined || attrs["json-state-outputs"] === null
-    ? null
-    : typeof attrs["json-state-outputs"] === "string"
-      ? attrs["json-state-outputs"]
-      : undefined;
+  return { resourceAdditions, resourceChanges, resourceDestructions, resourceImports, planJson };
+}
+
+function nullableStringField(value: unknown, maxLength?: number): string | null | undefined {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") return undefined;
+  if (maxLength !== undefined && value.length > maxLength) return undefined;
+  return value;
+}
+
+function allJsonParseable(values: ReadonlyArray<string | null>): boolean {
+  for (const json of values) {
+    if (json === null) continue;
+    try {
+      JSON.parse(json);
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function completionResult(attrs: Record<string, unknown>): Record<string, unknown> | undefined {
+  const rawResult = attrs["result"];
+  if (rawResult !== undefined && rawResult !== null && typeof rawResult === "object") {
+    if (!isAgentResultValid(rawResult)) return undefined;
+  }
+  if (typeof attrs["result"] === "object" && attrs["result"] !== null && !Array.isArray(attrs["result"])) {
+    return attrs["result"] as Record<string, unknown>;
+  }
+  return {};
+}
+
+function completionFromBody(body: unknown): AgentJobCompletion | undefined {
+  const attrs = getAttrs(body);
+  const status = attrs["status"];
+  if (status !== "completed" && status !== "errored") return undefined;
+  const counts = completionResourceCounts(attrs, status);
+  if (counts === undefined) return undefined;
+  const errorMessage = nullableStringField(attrs["error-message"], 16_384);
+  const statePayload = nullableStringField(attrs["state"]);
+  const jsonState = nullableStringField(attrs["json-state"]);
+  const jsonStateOutputs = nullableStringField(attrs["json-state-outputs"]);
   if (
     errorMessage === undefined
     || statePayload === undefined
     || jsonState === undefined
     || jsonStateOutputs === undefined
   ) return undefined;
-  for (const json of [statePayload, jsonState, jsonStateOutputs]) {
-    if (json === null) continue;
-    try {
-      JSON.parse(json);
-    } catch {
-      return undefined;
-    }
-  }
-  const rawResult = attrs["result"];
-  if (rawResult !== undefined && rawResult !== null && typeof rawResult === "object") {
-    if (!isAgentResultValid(rawResult)) return undefined;
-  }
-  const result = typeof attrs["result"] === "object" && attrs["result"] !== null && !Array.isArray(attrs["result"])
-    ? attrs["result"] as Record<string, unknown>
-    : {};
+  if (!allJsonParseable([statePayload, jsonState, jsonStateOutputs])) return undefined;
+  const result = completionResult(attrs);
+  if (result === undefined) return undefined;
   return {
     status,
     errorMessage,
-    resourceAdditions,
-    resourceChanges,
-    resourceDestructions,
-    resourceImports,
-    planJson,
+    resourceAdditions: counts.resourceAdditions,
+    resourceChanges: counts.resourceChanges,
+    resourceDestructions: counts.resourceDestructions,
+    resourceImports: counts.resourceImports,
+    planJson: counts.planJson,
     statePayload,
     jsonState,
     jsonStateOutputs,
