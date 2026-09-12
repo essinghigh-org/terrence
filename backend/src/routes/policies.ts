@@ -760,6 +760,33 @@ async function resolvePolicySetAttachment(
   return { value: null };
 }
 
+async function resolveParameterValueUpdate(
+  attrs: Record<string, unknown>,
+  param: typeof policySetParameters.$inferSelect,
+): Promise<Readonly<{ value: string; valueEncrypted: string | null; sensitive: boolean }> | null> {
+  // Value handling mirrors workspace variables (issue #577): a supplied
+  // value is authoritative, otherwise the stored value is kept
+  // (decrypting an encrypted one), so rotations persist and metadata-only
+  // updates leave the secret untouched.
+  let sensitive = typeof attrs["sensitive"] === "boolean" ? attrs["sensitive"] : (param.sensitive ?? false);
+  const suppliedValue = typeof attrs["value"] === "string" ? attrs["value"] : null;
+  // Mirror the workspace-variable PATCH guard (CodeRabbit P1-sweep review):
+  // a sensitive parameter cannot be downgraded to plaintext without
+  // supplying a replacement string. An explicit null is not a value
+  // (second review pass): without this, {"sensitive": false, "value": null}
+  // would decrypt the stored secret into the readable column.
+  if ((param.sensitive ?? false) && !sensitive && suppliedValue === null) sensitive = true;
+  if (suppliedValue !== null || typeof attrs["sensitive"] === "boolean") {
+    // The downgrade guard above guarantees sensitive is still true here
+    // unless a replacement value was supplied, so decrypting the stored
+    // row can only re-encrypt, never expose.
+    const effectiveValue = suppliedValue ?? (sensitive || param.sensitive === true ? await variableValueForRead(param) : param.value);
+    const stored = await variableValueForWrite(sensitive, effectiveValue);
+    return { value: stored.value, valueEncrypted: stored.valueEncrypted, sensitive };
+  }
+  return null;
+}
+
 export const policyRoutes = new Elysia({ name: "policies" })
   .use(authPlugin)
   // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
@@ -1662,33 +1689,15 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const param = await db.query.policySetParameters.findFirst({ where: and(eq(policySetParameters.id, paramId), eq(policySetParameters.policySetId, policySetId)) });
     if (param === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const { attributes: attrs } = parsePatchPayload(body);
     const updates: Partial<typeof policySetParameters.$inferInsert> = {};
     if (typeof attrs["key"] === "string") updates.key = attrs["key"];
     if (typeof attrs["hcl"] === "boolean") updates.hcl = attrs["hcl"];
-    // Value handling mirrors workspace variables (issue #577): a supplied
-    // value is authoritative, otherwise the stored value is kept
-    // (decrypting an encrypted one), so rotations persist and metadata-only
-    // updates leave the secret untouched.
-    let sensitive = typeof attrs["sensitive"] === "boolean" ? attrs["sensitive"] : (param.sensitive ?? false);
-    const suppliedValue = typeof attrs["value"] === "string" ? attrs["value"] : null;
-    // Mirror the workspace-variable PATCH guard (CodeRabbit P1-sweep review):
-    // a sensitive parameter cannot be downgraded to plaintext without
-    // supplying a replacement string. An explicit null is not a value
-    // (second review pass): without this, {"sensitive": false, "value": null}
-    // would decrypt the stored secret into the readable column.
-    if ((param.sensitive ?? false) && !sensitive && suppliedValue === null) sensitive = true;
-    if (suppliedValue !== null || typeof attrs["sensitive"] === "boolean") {
-      // The downgrade guard above guarantees sensitive is still true here
-      // unless a replacement value was supplied, so decrypting the stored
-      // row can only re-encrypt, never expose.
-      const effectiveValue = suppliedValue ?? (sensitive || param.sensitive === true ? await variableValueForRead(param) : param.value);
-      const stored = await variableValueForWrite(sensitive, effectiveValue);
-      updates.value = stored.value;
-      updates.valueEncrypted = stored.valueEncrypted;
-      updates.sensitive = sensitive;
+    const resolvedValue = await resolveParameterValueUpdate(attrs, param);
+    if (resolvedValue !== null) {
+      updates.value = resolvedValue.value;
+      updates.valueEncrypted = resolvedValue.valueEncrypted;
+      updates.sensitive = resolvedValue.sensitive;
     }
     if (Object.keys(updates).length > 0) await db.update(policySetParameters).set(updates).where(eq(policySetParameters.id, paramId));
     const updated = await db.query.policySetParameters.findFirst({ where: eq(policySetParameters.id, paramId) });
