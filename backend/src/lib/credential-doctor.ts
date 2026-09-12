@@ -204,6 +204,47 @@ function networkFailureCode(error: unknown): string {
   return "provider_error";
 }
 
+type ProviderAccessResult = { check: CredentialDoctorCheck; identity: Readonly<Record<string, unknown>> | null };
+
+function missingTrustResult(): ProviderAccessResult {
+  return { check: check("provider_access", "failed", "missing_trust"), identity: null };
+}
+
+function providerErrorResult(status: number): ProviderAccessResult {
+  return { check: check("provider_access", "failed", "provider_error", { http_status: status }), identity: null };
+}
+
+function accessNetworkFailure(error: unknown): ProviderAccessResult {
+  return { check: check("provider_access", "failed", networkFailureCode(error)), identity: null };
+}
+
+function accessStageFailure(
+  response: DoctorResponse,
+  body: string,
+  stage: "exchange" | "identity",
+): ProviderAccessResult {
+  const failure = responseFailure(response, body, stage);
+  return { check: check("provider_access", "failed", failure.code, failure.details), identity: null };
+}
+
+function bearerAccessToken(exchangeJson: Record<string, unknown> | null, status: number): string | ProviderAccessResult {
+  const accessToken = typeof exchangeJson?.["access_token"] === "string" ? exchangeJson["access_token"] : undefined;
+  if (accessToken === undefined || accessToken === "") return providerErrorResult(status);
+  return accessToken;
+}
+
+function isTrustFailure(status: number, stage: "exchange" | "identity", lower: string): boolean {
+  return stage === "exchange" && (status === 400 || status === 401 || status === 403
+    || /invalididentitytoken|invalid assertion|federated|subject|audience|trust|no matching/.test(lower));
+}
+
+function statusFailureCode(status: number): { code: string; fallback: string } {
+  if (status === 401) return { code: "provider_permission_denied", fallback: "unauthorized" };
+  if (status === 403) return { code: "provider_permission_denied", fallback: "forbidden" };
+  if (status >= 500) return { code: "provider_unavailable", fallback: "server_error" };
+  return { code: "provider_error", fallback: "unexpected_response" };
+}
+
 function responseFailure(
   response: DoctorResponse,
   body: string,
@@ -214,14 +255,11 @@ function responseFailure(
   if (/expired|expiration|expired_token|invalid_grant/.test(lower)) {
     return { code: "expired_credentials", details: safeResponseDetails(response, providerCode || "expired") };
   }
-  if (stage === "exchange" && (response.status === 400 || response.status === 401 || response.status === 403
-    || /invalididentitytoken|invalid assertion|federated|subject|audience|trust|no matching/.test(lower))) {
+  if (isTrustFailure(response.status, stage, lower)) {
     return { code: "missing_trust", details: safeResponseDetails(response, providerCode || "trust") };
   }
-  if (response.status === 401) return { code: "provider_permission_denied", details: safeResponseDetails(response, providerCode || "unauthorized") };
-  if (response.status === 403) return { code: "provider_permission_denied", details: safeResponseDetails(response, providerCode || "forbidden") };
-  if (response.status >= 500) return { code: "provider_unavailable", details: safeResponseDetails(response, providerCode || "server_error") };
-  return { code: "provider_error", details: safeResponseDetails(response, providerCode || "unexpected_response") };
+  const mapped = statusFailureCode(response.status);
+  return { code: mapped.code, details: safeResponseDetails(response, providerCode || mapped.fallback) };
 }
 
 async function networkCheck(
@@ -358,20 +396,25 @@ function jsonRecord(body: string): Record<string, unknown> | null {
   }
 }
 
+function azureAccessConfig(values: CredentialDoctorConfiguration["values"]): { tenantId: string; clientId: string; subscriptionId: string } | null {
+  const tenantId = valueAsString(values, "tenant-id");
+  const clientId = valueAsString(values, "client-id", "identity");
+  const subscriptionId = valueAsString(values, "subscription-id");
+  return tenantId === undefined || clientId === undefined || subscriptionId === undefined
+    ? null
+    : { tenantId, clientId, subscriptionId };
+}
+
 async function azureAccess(
   configuration: CredentialDoctorConfiguration,
   token: CredentialDoctorToken,
   requester: CredentialDoctorRequester,
-): Promise<{ check: CredentialDoctorCheck; identity: Readonly<Record<string, unknown>> | null }> {
-  const tenantId = valueAsString(configuration.values, "tenant-id");
-  const clientId = valueAsString(configuration.values, "client-id", "identity");
-  const subscriptionId = valueAsString(configuration.values, "subscription-id");
-  if (tenantId === undefined || clientId === undefined || subscriptionId === undefined) {
-    return { check: check("provider_access", "failed", "missing_trust"), identity: null };
-  }
-  const tokenUrl = `${CREDENTIAL_DOCTOR_ENDPOINTS.azureLogin}/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`;
+): Promise<ProviderAccessResult> {
+  const accessConfig = azureAccessConfig(configuration.values);
+  if (accessConfig === null) return missingTrustResult();
+  const tokenUrl = `${CREDENTIAL_DOCTOR_ENDPOINTS.azureLogin}/${encodeURIComponent(accessConfig.tenantId)}/oauth2/v2.0/token`;
   const body = formBody({
-    client_id: clientId,
+    client_id: accessConfig.clientId,
     scope: "https://management.azure.com/.default",
     grant_type: "client_credentials",
     client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
@@ -381,33 +424,26 @@ async function azureAccess(
   try {
     exchange = await requester({ method: "POST", url: tokenUrl, headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body });
   } catch (error: unknown) {
-    return { check: check("provider_access", "failed", networkFailureCode(error)), identity: null };
+    return accessNetworkFailure(error);
   }
   const exchangeText = await responseText(exchange);
-  if (!exchange.ok) {
-    const failure = responseFailure(exchange, exchangeText, "exchange");
-    return { check: check("provider_access", "failed", failure.code, failure.details), identity: null };
-  }
-  const exchangeJson = jsonRecord(exchangeText);
-  const accessToken = typeof exchangeJson?.["access_token"] === "string" ? exchangeJson["access_token"] : undefined;
-  if (accessToken === undefined || accessToken === "") return { check: check("provider_access", "failed", "provider_error", { http_status: exchange.status }), identity: null };
-  const identityUrl = `${CREDENTIAL_DOCTOR_ENDPOINTS.azureManagement}/subscriptions/${encodeURIComponent(subscriptionId)}?api-version=2020-01-01`;
+  if (!exchange.ok) return accessStageFailure(exchange, exchangeText, "exchange");
+  const tokenOrFailure = bearerAccessToken(jsonRecord(exchangeText), exchange.status);
+  if (typeof tokenOrFailure !== "string") return tokenOrFailure;
+  const identityUrl = `${CREDENTIAL_DOCTOR_ENDPOINTS.azureManagement}/subscriptions/${encodeURIComponent(accessConfig.subscriptionId)}?api-version=2020-01-01`;
   let identityResponse: Response;
   try {
-    identityResponse = await requester({ method: "GET", url: identityUrl, headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" } });
+    identityResponse = await requester({ method: "GET", url: identityUrl, headers: { authorization: `Bearer ${tokenOrFailure}`, accept: "application/json" } });
   } catch (error: unknown) {
-    return { check: check("provider_access", "failed", networkFailureCode(error)), identity: null };
+    return accessNetworkFailure(error);
   }
   const identityText = await responseText(identityResponse);
-  if (!identityResponse.ok) {
-    const failure = responseFailure(identityResponse, identityText, "identity");
-    return { check: check("provider_access", "failed", failure.code, failure.details), identity: null };
-  }
+  if (!identityResponse.ok) return accessStageFailure(identityResponse, identityText, "identity");
   const identityJson = jsonRecord(identityText);
   return {
     check: check("provider_access", "passed", "provider_identity", { http_status: identityResponse.status }),
     identity: {
-      subscription_id: safeVisibleString(identityJson?.["subscriptionId"]) ?? safeVisibleString(subscriptionId),
+      subscription_id: safeVisibleString(identityJson?.["subscriptionId"]) ?? safeVisibleString(accessConfig.subscriptionId),
       tenant_id: safeVisibleString(identityJson?.["tenantId"]),
       display_name: safeVisibleString(identityJson?.["displayName"]),
       state: safeVisibleString(identityJson?.["state"]),
@@ -415,13 +451,20 @@ async function azureAccess(
   };
 }
 
+function firstProjectRecord(identityJson: Record<string, unknown> | null): Record<string, unknown> | undefined {
+  const projects = identityJson?.["projects"];
+  return Array.isArray(projects) && typeof projects[0] === "object" && projects[0] !== null
+    ? projects[0] as Record<string, unknown>
+    : undefined;
+}
+
 async function gcpAccess(
   configuration: CredentialDoctorConfiguration,
   token: CredentialDoctorToken,
   requester: CredentialDoctorRequester,
-): Promise<{ check: CredentialDoctorCheck; identity: Readonly<Record<string, unknown>> | null }> {
+): Promise<ProviderAccessResult> {
   const providerId = valueAsString(configuration.values, "workload-identity-provider-id", "workload-provider-name", "provider");
-  if (providerId === undefined) return { check: check("provider_access", "failed", "missing_trust"), identity: null };
+  if (providerId === undefined) return missingTrustResult();
   const exchangeBody = formBody({
     grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
     audience: providerId,
@@ -434,31 +477,21 @@ async function gcpAccess(
   try {
     exchange = await requester({ method: "POST", url: CREDENTIAL_DOCTOR_ENDPOINTS.gcpSts, headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body: exchangeBody });
   } catch (error: unknown) {
-    return { check: check("provider_access", "failed", networkFailureCode(error)), identity: null };
+    return accessNetworkFailure(error);
   }
   const exchangeText = await responseText(exchange);
-  if (!exchange.ok) {
-    const failure = responseFailure(exchange, exchangeText, "exchange");
-    return { check: check("provider_access", "failed", failure.code, failure.details), identity: null };
-  }
-  const exchangeJson = jsonRecord(exchangeText);
-  const accessToken = typeof exchangeJson?.["access_token"] === "string" ? exchangeJson["access_token"] : undefined;
-  if (accessToken === undefined || accessToken === "") return { check: check("provider_access", "failed", "provider_error", { http_status: exchange.status }), identity: null };
+  if (!exchange.ok) return accessStageFailure(exchange, exchangeText, "exchange");
+  const tokenOrFailure = bearerAccessToken(jsonRecord(exchangeText), exchange.status);
+  if (typeof tokenOrFailure !== "string") return tokenOrFailure;
   let identityResponse: Response;
   try {
-    identityResponse = await requester({ method: "GET", url: CREDENTIAL_DOCTOR_ENDPOINTS.gcpResourceManager, headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" } });
+    identityResponse = await requester({ method: "GET", url: CREDENTIAL_DOCTOR_ENDPOINTS.gcpResourceManager, headers: { authorization: `Bearer ${tokenOrFailure}`, accept: "application/json" } });
   } catch (error: unknown) {
-    return { check: check("provider_access", "failed", networkFailureCode(error)), identity: null };
+    return accessNetworkFailure(error);
   }
   const identityText = await responseText(identityResponse);
-  if (!identityResponse.ok) {
-    const failure = responseFailure(identityResponse, identityText, "identity");
-    return { check: check("provider_access", "failed", failure.code, failure.details), identity: null };
-  }
-  const identityJson = jsonRecord(identityText);
-  const firstProject = Array.isArray(identityJson?.["projects"]) && typeof identityJson["projects"][0] === "object" && identityJson["projects"][0] !== null
-    ? identityJson["projects"][0] as Record<string, unknown>
-    : undefined;
+  if (!identityResponse.ok) return accessStageFailure(identityResponse, identityText, "identity");
+  const firstProject = firstProjectRecord(jsonRecord(identityText));
   return {
     check: check("provider_access", "passed", "provider_identity", { http_status: identityResponse.status }),
     identity: {
@@ -469,54 +502,71 @@ async function gcpAccess(
   };
 }
 
+const VAULT_AUTH_PATH_PATTERN = /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/;
+
+function vaultLoginConfig(
+  configuration: CredentialDoctorConfiguration,
+): { healthUrl: string; authPath: string; role: string; namespace: string | undefined } | ProviderAccessResult {
+  const endpoint = credentialDoctorNetworkEndpoint("vault", configuration.values);
+  if ("error" in endpoint) return { check: check("provider_access", "failed", "invalid_endpoint"), identity: null };
+  const authPath = valueAsString(configuration.values, "auth-path") ?? "jwt";
+  if (!VAULT_AUTH_PATH_PATTERN.test(authPath)) return { check: check("provider_access", "failed", "invalid_endpoint"), identity: null };
+  const role = valueAsString(configuration.values, "role-name", "role");
+  if (role === undefined) return missingTrustResult();
+  return {
+    healthUrl: endpoint.url.slice(0, -"/v1/sys/health".length),
+    authPath,
+    role,
+    namespace: valueAsString(configuration.values, "namespace"),
+  };
+}
+
+function vaultClientToken(loginJson: Record<string, unknown> | null, status: number): string | ProviderAccessResult {
+  const auth = typeof loginJson?.["auth"] === "object" && loginJson["auth"] !== null ? loginJson["auth"] as Record<string, unknown> : null;
+  const clientToken = typeof auth?.["client_token"] === "string" ? auth["client_token"] : undefined;
+  if (clientToken === undefined || clientToken === "") return providerErrorResult(status);
+  return clientToken;
+}
+
+function vaultIdentityPolicies(lookupJson: Record<string, unknown> | null): { data: Record<string, unknown> | null; policies: string[] } {
+  const data = typeof lookupJson?.["data"] === "object" && lookupJson["data"] !== null ? lookupJson["data"] as Record<string, unknown> : null;
+  return { data, policies: Array.isArray(data?.["policies"])
+    ? data["policies"].map((value): string | null => safeVisibleString(value, 160)).filter((value): value is string => value !== null).slice(0, 32)
+    : [] };
+}
+
+function namespacedHeaders(base: Record<string, string>, namespace: string | undefined): Record<string, string> {
+  return namespace === undefined ? base : { ...base, "x-vault-namespace": namespace };
+}
+
 async function vaultAccess(
   configuration: CredentialDoctorConfiguration,
   token: CredentialDoctorToken,
   requester: CredentialDoctorRequester,
-): Promise<{ check: CredentialDoctorCheck; identity: Readonly<Record<string, unknown>> | null }> {
-  const endpoint = credentialDoctorNetworkEndpoint("vault", configuration.values);
-  if ("error" in endpoint) return { check: check("provider_access", "failed", "invalid_endpoint"), identity: null };
-  const healthUrl = endpoint.url.slice(0, -"/v1/sys/health".length);
-  const authPath = valueAsString(configuration.values, "auth-path") ?? "jwt";
-  if (!/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(authPath)) return { check: check("provider_access", "failed", "invalid_endpoint"), identity: null };
-  const role = valueAsString(configuration.values, "role-name", "role");
-  if (role === undefined) return { check: check("provider_access", "failed", "missing_trust"), identity: null };
-  const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
-  const namespace = valueAsString(configuration.values, "namespace");
-  if (namespace !== undefined) headers["x-vault-namespace"] = namespace;
+): Promise<ProviderAccessResult> {
+  const loginConfig = vaultLoginConfig(configuration);
+  if (!("healthUrl" in loginConfig)) return loginConfig;
+  const headers = namespacedHeaders({ "content-type": "application/json", accept: "application/json" }, loginConfig.namespace);
   let login: Response;
   try {
-    login = await requester({ method: "POST", url: `${healthUrl}/v1/auth/${authPath}/login`, headers, body: JSON.stringify({ role, jwt: token.token }) });
+    login = await requester({ method: "POST", url: `${loginConfig.healthUrl}/v1/auth/${loginConfig.authPath}/login`, headers, body: JSON.stringify({ role: loginConfig.role, jwt: token.token }) });
   } catch (error: unknown) {
-    return { check: check("provider_access", "failed", networkFailureCode(error)), identity: null };
+    return accessNetworkFailure(error);
   }
   const loginText = await responseText(login);
-  if (!login.ok) {
-    const failure = responseFailure(login, loginText, "exchange");
-    return { check: check("provider_access", "failed", failure.code, failure.details), identity: null };
-  }
-  const loginJson = jsonRecord(loginText);
-  const auth = typeof loginJson?.["auth"] === "object" && loginJson["auth"] !== null ? loginJson["auth"] as Record<string, unknown> : null;
-  const clientToken = typeof auth?.["client_token"] === "string" ? auth["client_token"] : undefined;
-  if (clientToken === undefined || clientToken === "") return { check: check("provider_access", "failed", "provider_error", { http_status: login.status }), identity: null };
-  const lookupHeaders: Record<string, string> = { "x-vault-token": clientToken, accept: "application/json" };
-  if (namespace !== undefined) lookupHeaders["x-vault-namespace"] = namespace;
+  if (!login.ok) return accessStageFailure(login, loginText, "exchange");
+  const tokenOrFailure = vaultClientToken(jsonRecord(loginText), login.status);
+  if (typeof tokenOrFailure !== "string") return tokenOrFailure;
+  const lookupHeaders = namespacedHeaders({ "x-vault-token": tokenOrFailure, accept: "application/json" }, loginConfig.namespace);
   let lookup: Response;
   try {
-    lookup = await requester({ method: "GET", url: `${healthUrl}/v1/auth/token/lookup-self`, headers: lookupHeaders });
+    lookup = await requester({ method: "GET", url: `${loginConfig.healthUrl}/v1/auth/token/lookup-self`, headers: lookupHeaders });
   } catch (error: unknown) {
-    return { check: check("provider_access", "failed", networkFailureCode(error)), identity: null };
+    return accessNetworkFailure(error);
   }
   const lookupText = await responseText(lookup);
-  if (!lookup.ok) {
-    const failure = responseFailure(lookup, lookupText, "identity");
-    return { check: check("provider_access", "failed", failure.code, failure.details), identity: null };
-  }
-  const lookupJson = jsonRecord(lookupText);
-  const data = typeof lookupJson?.["data"] === "object" && lookupJson["data"] !== null ? lookupJson["data"] as Record<string, unknown> : null;
-  const policies = Array.isArray(data?.["policies"])
-    ? data["policies"].map((value): string | null => safeVisibleString(value, 160)).filter((value): value is string => value !== null).slice(0, 32)
-    : [];
+  if (!lookup.ok) return accessStageFailure(lookup, lookupText, "identity");
+  const { data, policies } = vaultIdentityPolicies(jsonRecord(lookupText));
   return {
     check: check("provider_access", "passed", "provider_identity", { http_status: lookup.status }),
     identity: {
