@@ -128,16 +128,10 @@ async function policySetRelationships(policySet: PsItem): Promise<Record<string,
   };
 }
 
-async function normalizePolicySetVcsRepo(
-  input: unknown,
-  orgId: string,
+function resolveVcsRepoIdentifier(
+  raw: Record<string, unknown>,
   existing?: DeepReadonly<PolicySetVcsRepo>,
-): Promise<Readonly<{ value: PolicySetVcsRepo | null }> | Readonly<{ error: string }>> {
-  if (input === null) return { value: null };
-  if (input === undefined) return { value: existing === undefined ? null : { ...existing } };
-  if (typeof input !== "object" || Array.isArray(input)) return { error: "vcs-repo must be an object or null" };
-  const raw = input as Record<string, unknown>;
-
+): Readonly<{ value: string }> | Readonly<{ error: string }> {
   const rawIdentifier = raw["identifier"];
   if (rawIdentifier !== undefined && typeof rawIdentifier !== "string") return { error: "vcs-repo.identifier must be a string" };
   const identifier = typeof rawIdentifier === "string" ? rawIdentifier.trim() : existing?.identifier ?? "";
@@ -146,29 +140,70 @@ async function normalizePolicySetVcsRepo(
     repositoryParts.length < 2
     || repositoryParts.some((part: string): boolean => !/^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part))
   ) return { error: "vcs-repo.identifier must identify a repository as namespace/name" };
+  return { value: identifier };
+}
 
+type VcsCredentialRefs = Readonly<{
+  oauthTokenId: string | undefined;
+  githubAppInstallationId: string | undefined;
+  hasOAuthToken: boolean;
+  hasInstallation: boolean;
+}>;
+
+function extractOAuthTokenId(
+  raw: Record<string, unknown>,
+  existing?: DeepReadonly<PolicySetVcsRepo>,
+): Readonly<{ value: string | undefined }> | Readonly<{ error: string }> {
   const rawOAuthTokenId = raw["oauth-token-id"] ?? raw["oauthTokenId"];
   if (rawOAuthTokenId !== undefined && rawOAuthTokenId !== null && typeof rawOAuthTokenId !== "string") {
     return { error: "vcs-repo.oauth-token-id must be a string or null" };
   }
-  const oauthTokenId = rawOAuthTokenId === null
+  const value = rawOAuthTokenId === null
     ? undefined
     : typeof rawOAuthTokenId === "string" ? rawOAuthTokenId.trim() : existing?.oauthTokenId;
+  return { value };
+}
 
+function extractInstallationId(
+  raw: Record<string, unknown>,
+  existing?: DeepReadonly<PolicySetVcsRepo>,
+): Readonly<{ value: string | undefined }> | Readonly<{ error: string }> {
   const rawInstallationId = raw["github-app-installation-id"] ?? raw["githubAppInstallationId"];
   if (rawInstallationId !== undefined && rawInstallationId !== null && typeof rawInstallationId !== "string") {
     return { error: "vcs-repo.github-app-installation-id must be a string or null" };
   }
-  const githubAppInstallationId = rawInstallationId === null
+  const value = rawInstallationId === null
     ? undefined
     : typeof rawInstallationId === "string" ? rawInstallationId.trim() : existing?.githubAppInstallationId;
-  const hasOAuthToken = oauthTokenId !== undefined && oauthTokenId !== "";
-  const hasInstallation = githubAppInstallationId !== undefined && githubAppInstallationId !== "";
+  return { value };
+}
+
+function extractVcsCredentialRefs(
+  raw: Record<string, unknown>,
+  existing?: DeepReadonly<PolicySetVcsRepo>,
+): Readonly<{ value: VcsCredentialRefs }> | Readonly<{ error: string }> {
+  const oauthTokenId = extractOAuthTokenId(raw, existing);
+  if ("error" in oauthTokenId) return oauthTokenId;
+  const installation = extractInstallationId(raw, existing);
+  if ("error" in installation) return installation;
+  const hasOAuthToken = oauthTokenId.value !== undefined && oauthTokenId.value !== "";
+  const hasInstallation = installation.value !== undefined && installation.value !== "";
   if (hasOAuthToken === hasInstallation) {
     return { error: "vcs-repo requires exactly one OAuth token or GitHub App installation" };
   }
+  return {
+    value: {
+      oauthTokenId: oauthTokenId.value,
+      githubAppInstallationId: installation.value,
+      hasOAuthToken,
+      hasInstallation,
+    },
+  };
+}
 
-  if (hasOAuthToken) {
+async function verifyVcsCredentialRefs(orgId: string, refs: VcsCredentialRefs): Promise<string | null> {
+  const oauthTokenId = refs.oauthTokenId;
+  if (refs.hasOAuthToken && oauthTokenId !== undefined) {
     const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId) });
     const client = token === undefined
       ? undefined
@@ -178,18 +213,33 @@ async function normalizePolicySetVcsRepo(
     if (
       client === undefined
       || !["github", "github_enterprise", "gitlab", "gitlab_ce", "gitlab_ee", "bitbucket"].includes(client.serviceProvider)
-    ) return { error: "vcs-repo OAuth token is not available in this organization" };
+    ) return "vcs-repo OAuth token is not available in this organization";
   }
-  if (hasInstallation) {
+  const githubAppInstallationId = refs.githubAppInstallationId;
+  if (refs.hasInstallation && githubAppInstallationId !== undefined) {
     const installation = await db.query.githubAppInstallations.findFirst({
       where: and(
         eq(githubAppInstallations.id, githubAppInstallationId),
         eq(githubAppInstallations.orgId, orgId),
       ),
     });
-    if (installation === undefined) return { error: "vcs-repo GitHub App installation is not available in this organization" };
+    if (installation === undefined) return "vcs-repo GitHub App installation is not available in this organization";
   }
+  return null;
+}
 
+function vcsCredentialAttrs(refs: VcsCredentialRefs): Readonly<{ oauthTokenId?: string; githubAppInstallationId?: string }> {
+  if (refs.hasOAuthToken && refs.oauthTokenId !== undefined) return { oauthTokenId: refs.oauthTokenId };
+  if (refs.hasInstallation && refs.githubAppInstallationId !== undefined) {
+    return { githubAppInstallationId: refs.githubAppInstallationId };
+  }
+  return {};
+}
+
+function resolveVcsRepoOptions(
+  raw: Record<string, unknown>,
+  existing?: DeepReadonly<PolicySetVcsRepo>,
+): Readonly<{ value: Readonly<{ branch: string | undefined; ingressSubmodules: boolean }> }> | Readonly<{ error: string }> {
   const rawBranch = raw["branch"];
   if (rawBranch !== undefined && rawBranch !== null && typeof rawBranch !== "string") {
     return { error: "vcs-repo.branch must be a string or null" };
@@ -204,13 +254,33 @@ async function normalizePolicySetVcsRepo(
   const ingressSubmodules = typeof rawIngressSubmodules === "boolean"
     ? rawIngressSubmodules
     : existing?.ingressSubmodules ?? false;
+  return { value: { branch, ingressSubmodules } };
+}
+
+async function normalizePolicySetVcsRepo(
+  input: unknown,
+  orgId: string,
+  existing?: DeepReadonly<PolicySetVcsRepo>,
+): Promise<Readonly<{ value: PolicySetVcsRepo | null }> | Readonly<{ error: string }>> {
+  if (input === null) return { value: null };
+  if (input === undefined) return { value: existing === undefined ? null : { ...existing } };
+  if (typeof input !== "object" || Array.isArray(input)) return { error: "vcs-repo must be an object or null" };
+  const raw = input as Record<string, unknown>;
+
+  const identifier = resolveVcsRepoIdentifier(raw, existing);
+  if ("error" in identifier) return identifier;
+  const credentials = extractVcsCredentialRefs(raw, existing);
+  if ("error" in credentials) return credentials;
+  const verificationError = await verifyVcsCredentialRefs(orgId, credentials.value);
+  if (verificationError !== null) return { error: verificationError };
+  const options = resolveVcsRepoOptions(raw, existing);
+  if ("error" in options) return options;
   return {
     value: {
-      identifier,
-      ...(branch === undefined || branch === "" ? {} : { branch }),
-      ...(hasOAuthToken ? { oauthTokenId } : {}),
-      ...(hasInstallation ? { githubAppInstallationId } : {}),
-      ingressSubmodules,
+      identifier: identifier.value,
+      ...(options.value.branch === undefined || options.value.branch === "" ? {} : { branch: options.value.branch }),
+      ...vcsCredentialAttrs(credentials.value),
+      ingressSubmodules: options.value.ingressSubmodules,
     },
   };
 }
