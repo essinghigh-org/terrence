@@ -98,6 +98,565 @@ function navigateBrowser(url: string): void {
   window.location.assign(url);
 }
 
+async function fetchVcsPermission(encodedOrgName: string, signal: AbortSignal): Promise<boolean> {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+  const organizationResponse = await fetchApi(
+    `/organizations/${encodedOrgName}`,
+    { signal },
+  ) as {
+    data?: {
+      attributes?: {
+        permissions?: { "can-manage-vcs-settings"?: boolean };
+      };
+    };
+  };
+  return organizationResponse.data?.attributes?.permissions?.["can-manage-vcs-settings"] === true;
+}
+
+type InstallationsAndClients = {
+  installations: GitHubAppInstallation[];
+  clients: OAuthClient[];
+  tokensByClient: Record<string, readonly OAuthToken[]>;
+  errors: string[];
+};
+
+async function loadInstallationsAndClients(
+  encodedOrgName: string,
+  signal: AbortSignal,
+): Promise<InstallationsAndClients> {
+  const [installationResult, clientResult] = await Promise.allSettled([
+    fetchApi(
+      `/organizations/${encodedOrgName}/github-app/installations`,
+      { signal },
+    ),
+    fetchApi(
+      `/organizations/${encodedOrgName}/oauth-clients`,
+      { signal },
+    ),
+  ]);
+  const errors: string[] = [];
+  let installations: GitHubAppInstallation[] = [];
+  if (installationResult.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+    const data = (installationResult.value as { data?: GitHubAppInstallation[] }).data;
+    installations = Array.isArray(data) ? data : [];
+  } else {
+    errors.push("Failed to load GitHub App installations.");
+  }
+  let clients: OAuthClient[] = [];
+  let tokensByClient: Record<string, readonly OAuthToken[]> = {};
+  if (clientResult.status === "rejected") {
+    errors.push("Failed to load OAuth clients.");
+  } else {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+    const data = (clientResult.value as { data?: OAuthClient[] }).data;
+    clients = Array.isArray(data) ? data : [];
+    const tokenResults = await Promise.allSettled(clients.map(async (client): Promise<readonly [string, readonly OAuthToken[]]> => {
+      const related = client.relationships?.["oauth-tokens"]?.links?.related;
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = await fetchApi(
+        related ?? `/oauth-clients/${encodeURIComponent(client.id)}/oauth-tokens`,
+        { signal },
+      ) as { data?: OAuthToken[] };
+      return [client.id, Array.isArray(response.data) ? response.data : []] as const;
+    }));
+    tokensByClient = Object.fromEntries(
+      tokenResults
+        .filter((result): result is PromiseFulfilledResult<readonly [string, readonly OAuthToken[]]> =>
+          result.status === "fulfilled")
+        .map((result): readonly [string, readonly OAuthToken[]] => result.value),
+    );
+    if (tokenResults.some((result): boolean => result.status === "rejected")) {
+      errors.push("Some OAuth connection statuses could not be loaded.");
+    }
+  }
+  return { installations, clients, tokensByClient, errors };
+}
+
+function GitHubAppsSection({
+  loading,
+  ghApps,
+  startingGitHubSetup,
+  onSetup,
+  onUninstall,
+  onRemove,
+}: Readonly<{
+  loading: boolean;
+  ghApps: readonly GitHubAppInstallation[];
+  startingGitHubSetup: boolean;
+  onSetup: () => void;
+  onUninstall: (app: GitHubAppInstallation) => void;
+  onRemove: (app: GitHubAppInstallation) => void;
+}>): React.JSX.Element {
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="font-heading text-xl font-semibold">GitHub App installations</h2>
+          <p className="text-sm text-muted-foreground">Manage your Terrence GitHub App installations.</p>
+        </div>
+        <Button disabled={startingGitHubSetup} onClick={onSetup}>
+          {startingGitHubSetup
+            ? <Spinner data-icon="inline-start" />
+            : <Plus data-icon="inline-start" />}
+          {startingGitHubSetup ? "Opening GitHub…" : "Install GitHub App"}
+        </Button>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Installation ID</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="h-24 text-center">
+                    <Spinner className="mx-auto size-6 text-primary" />
+                  </TableCell>
+                </TableRow>
+              ) : ghApps.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
+                    No GitHub App installations registered.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                ghApps.map((app: GitHubAppInstallation): React.JSX.Element => (
+                  <TableRow key={app.id}>
+                    <TableCell className="font-medium flex items-center gap-2">
+                      {isString(app.attributes["icon-url"]) && app.attributes["icon-url"] !== "" && (
+                        <img
+                          src={app.attributes["icon-url"]}
+                          className="size-6 rounded-full"
+                          alt=""
+                        />
+                      )}
+                      {app.attributes.name}
+                    </TableCell>
+                    <TableCell>{app.attributes["installation-id"]}</TableCell>
+                    <TableCell><Badge variant="outline">{app.attributes["installation-type"] ?? "Organization"}</Badge></TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">
+                        <CheckCircle data-icon="inline-start" />
+                        Connected
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex justify-end">
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={(): void => { onUninstall(app); }}
+                          >
+                            <Unplug data-icon="inline-start" />
+                            Uninstall
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={(): void => { onRemove(app); }}
+                          >
+                            <Trash2 data-icon="inline-start" />
+                            Remove
+                          </Button>
+                        </div>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function OAuthClientsSection({
+  loading,
+  clients,
+  tokensByClient,
+  connectingClientId,
+  onConnect,
+  onDeleteRequest,
+  onAdd,
+}: Readonly<{
+  loading: boolean;
+  clients: readonly OAuthClient[];
+  tokensByClient: Readonly<Record<string, readonly OAuthToken[]>>;
+  connectingClientId: string;
+  onConnect: (client: OAuthClient) => void;
+  onDeleteRequest: (client: OAuthClient) => void;
+  onAdd: () => void;
+}>): React.JSX.Element {
+  return (
+    <div>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="font-heading text-xl font-semibold">OAuth Clients (Legacy)</h2>
+          <p className="text-sm text-muted-foreground">Legacy OAuth VCS providers.</p>
+        </div>
+        <Button onClick={onAdd}>
+          <Plus className="mr-1.5 size-4" /> Add VCS Provider
+        </Button>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Provider / Name</TableHead>
+                <TableHead>Service Provider</TableHead>
+                <TableHead>HTTP URL</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="h-24 text-center">
+                    <Spinner className="mx-auto size-6 text-primary" />
+                  </TableCell>
+                </TableRow>
+              ) : clients.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
+                    <GitBranch className="mx-auto mb-2 size-8 text-muted-foreground/60" />
+                    No VCS Providers connected. Connect a VCS provider to trigger workspace runs from git commits.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                clients.map((client: OAuthClient): React.JSX.Element => {
+                  const statusKnown = Object.prototype.hasOwnProperty.call(tokensByClient, client.id);
+                  const tokens = tokensByClient[client.id] ?? [];
+                  const connected = statusKnown && tokens.length > 0;
+                  const providerUser = tokens
+                    .map((token): string | null | undefined => token.attributes["service-provider-user"])
+                    .find((value): value is string => isString(value) && value !== "");
+                  const connecting = connectingClientId === client.id;
+                  return (
+                    <TableRow key={client.id}>
+                      <TableCell className="font-semibold">
+                        <div className="flex items-center gap-2">
+                          <GitBranch className="size-4 text-primary" />
+                          {client.attributes.name}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="capitalize font-mono text-xs">
+                          {client.attributes["service-provider"]}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground font-mono">
+                        {client.attributes["http-url"] ?? "https://github.com"}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={connected ? "secondary" : "outline"}>
+                          {connected && <CheckCircle data-icon="inline-start" />}
+                          {!statusKnown
+                            ? "Status unavailable"
+                            : connected
+                              ? providerUser === undefined ? "Connected" : `Connected as ${providerUser}`
+                              : "Not connected"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex justify-end gap-2">
+                          {statusKnown && !connected && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={connecting}
+                              onClick={(): void => { onConnect(client); }}
+                            >
+                              {connecting
+                                ? <Spinner data-icon="inline-start" />
+                                : <ExternalLink data-icon="inline-start" />}
+                              {connecting ? "Opening…" : "Connect"}
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={(): void => { onDeleteRequest(client); }}
+                          >
+                            <Trash2 data-icon="inline-start" />
+                            Delete
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function CreateProviderDialog({
+  open,
+  onOpenChange,
+  name,
+  onNameChange,
+  serviceProvider,
+  onProviderChange,
+  httpUrl,
+  onHttpUrlChange,
+  apiUrl,
+  onApiUrlChange,
+  oauthKey,
+  onKeyChange,
+  secret,
+  onSecretChange,
+  formError,
+  creating,
+  onSubmit,
+}: Readonly<{
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  name: string;
+  onNameChange: (value: string) => void;
+  serviceProvider: ServiceProvider;
+  onProviderChange: (provider: ServiceProvider) => void;
+  httpUrl: string;
+  onHttpUrlChange: (value: string) => void;
+  apiUrl: string;
+  onApiUrlChange: (value: string) => void;
+  oauthKey: string;
+  onKeyChange: (value: string) => void;
+  secret: string;
+  onSecretChange: (value: string) => void;
+  formError: string;
+  creating: boolean;
+  onSubmit: (e: React.SyntheticEvent) => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[480px]">
+        <DialogHeader>
+          <DialogTitle>Add VCS Provider</DialogTitle>
+          <DialogDescription>
+            Configure an OAuth App on GitHub, GitLab, or Bitbucket to connect repositories.
+          </DialogDescription>
+        </DialogHeader>
+
+        {formError !== "" && (
+          <div role="alert" className="rounded bg-destructive/15 p-3 text-xs font-medium text-destructive">
+            {formError}
+          </div>
+        )}
+
+        <form onSubmit={(e): void => { void onSubmit(e); }} noValidate className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <label htmlFor="vcs-name" className="text-sm font-medium">Name</label>
+            <Input
+              id="vcs-name"
+              name="vcs-integration-name"
+              autoComplete="off"
+              spellCheck={false}
+              value={name}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onNameChange(event.target.value); }}
+              placeholder="GitHub Commercial"
+              required
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="vcs-provider" className="text-sm font-medium">VCS Type</label>
+            <Select
+              id="vcs-provider"
+              name="service-provider"
+
+              value={serviceProvider}
+              onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
+// SAFETY: the select options are generated from the same union; the change event carries one of them.
+                const provider = event.target.value as ServiceProvider;
+                onProviderChange(provider);
+              }}
+            >
+              <option value="github">GitHub.com</option>
+              <option value="github_enterprise">GitHub Enterprise Server</option>
+              <option value="gitlab">GitLab.com / GitLab EE</option>
+              <option value="bitbucket">Bitbucket Cloud</option>
+            </Select>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <label htmlFor="vcs-http-url" className="text-xs font-medium">HTTP URL</label>
+              <Input
+                id="vcs-http-url"
+                name="http-url"
+                autoComplete="url"
+                value={httpUrl}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onHttpUrlChange(event.target.value); }}
+                placeholder={serviceProvider === "github_enterprise"
+                  ? "https://github.example.com"
+                  : providerDefaults[serviceProvider].httpUrl}
+                required
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="vcs-api-url" className="text-xs font-medium">API URL</label>
+              <Input
+                id="vcs-api-url"
+                name="api-url"
+                autoComplete="url"
+                value={apiUrl}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onApiUrlChange(event.target.value); }}
+                placeholder={serviceProvider === "github_enterprise"
+                  ? "https://github.example.com/api/v3"
+                  : providerDefaults[serviceProvider].apiUrl}
+                required
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="vcs-key" className="text-sm font-medium">OAuth Application Client ID</label>
+            <Input
+              id="vcs-key"
+              name="client-id"
+              autoComplete="off"
+              spellCheck={false}
+              value={oauthKey}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onKeyChange(event.target.value); }}
+              placeholder="Client ID or Application ID"
+              required
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="vcs-secret" className="text-sm font-medium">OAuth Client Secret</label>
+            <Input
+              id="vcs-secret"
+              name="client-secret"
+              autoComplete="new-password"
+              type="password"
+              value={secret}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onSecretChange(event.target.value); }}
+              placeholder="Client Secret"
+              required
+            />
+          </div>
+
+          <DialogFooter className="pt-4">
+            <Button type="submit" disabled={creating}>
+              {creating && <Spinner data-icon="inline-start" className="size-4" />}
+              {creating ? "Connecting VCS provider…" : "Connect VCS Provider"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function VcsConfirmDialogs({
+  installationToDelete,
+  deletingInstallation,
+  onClearInstallationToDelete,
+  onConfirmDeleteInstallation,
+  installationToUninstall,
+  uninstallingInstallation,
+  onClearInstallationToUninstall,
+  onConfirmUninstallInstallation,
+  clientToDelete,
+  deletingClient,
+  onClearClientToDelete,
+  onConfirmDeleteClient,
+}: Readonly<{
+  installationToDelete: GitHubAppInstallation | null;
+  deletingInstallation: boolean;
+  onClearInstallationToDelete: () => void;
+  onConfirmDeleteInstallation: (installation: GitHubAppInstallation) => Promise<void>;
+  installationToUninstall: GitHubAppInstallation | null;
+  uninstallingInstallation: boolean;
+  onClearInstallationToUninstall: () => void;
+  onConfirmUninstallInstallation: (installation: GitHubAppInstallation) => Promise<void>;
+  clientToDelete: OAuthClient | null;
+  deletingClient: boolean;
+  onClearClientToDelete: () => void;
+  onConfirmDeleteClient: (client: OAuthClient) => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <>
+      <ConfirmDialog
+        open={installationToDelete !== null}
+        onOpenChange={(open): void => { if (!open && !deletingInstallation) onClearInstallationToDelete(); }}
+        title="Remove GitHub App integration"
+        description={
+          <>
+            This removes <strong className="text-foreground">{installationToDelete?.attributes.name}</strong> from Terrence. It does not uninstall the GitHub App from GitHub. It cannot be removed while workspaces or policy sets use it.
+          </>
+        }
+        confirmText="Remove Integration"
+        confirmVariant="destructive"
+        requireText={installationToDelete?.attributes.name}
+        loading={deletingInstallation}
+        onConfirm={async (): Promise<void> => {
+          if (installationToDelete !== null) await onConfirmDeleteInstallation(installationToDelete);
+        }}
+      />
+
+      <ConfirmDialog
+        open={installationToUninstall !== null}
+        onOpenChange={(open): void => { if (!open && !uninstallingInstallation) onClearInstallationToUninstall(); }}
+        title="Uninstall GitHub App installation"
+        description={
+          <>
+            This calls GitHub to uninstall <strong className="text-foreground">{installationToUninstall?.attributes.name}</strong>, then removes that installation from Terrence. The site-wide App registration and other installations remain in place.
+          </>
+        }
+        confirmText="Uninstall installation"
+        confirmVariant="destructive"
+        requireText={installationToUninstall?.attributes.name}
+        requireTextLabel={installationToUninstall === null ? undefined : `Type ${installationToUninstall.attributes.name} to confirm the GitHub uninstall.`}
+        loading={uninstallingInstallation}
+        onConfirm={async (): Promise<void> => {
+          if (installationToUninstall !== null) await onConfirmUninstallInstallation(installationToUninstall);
+        }}
+      />
+
+      <ConfirmDialog
+        open={clientToDelete !== null}
+        onOpenChange={(open): void => { if (!open && !deletingClient) onClearClientToDelete(); }}
+        title="Delete VCS Integration"
+        description={
+          <>
+            Are you sure you want to delete VCS client <strong className="text-foreground">{clientToDelete?.attributes.name}</strong>? It cannot be removed while workspaces or policy sets use it.
+          </>
+        }
+        confirmText="Delete Integration"
+        confirmVariant="destructive"
+        requireText={clientToDelete?.attributes.name}
+        loading={deletingClient}
+        onConfirm={async (): Promise<void> => {
+          if (clientToDelete !== null) {
+            await onConfirmDeleteClient(clientToDelete);
+          }
+        }}
+      />
+    </>
+  );
+}
+
 export function VcsIntegrations({
   navigateExternal = navigateBrowser,
 }: Readonly<{
@@ -154,73 +713,17 @@ export function VcsIntegrations({
     try {
       if (currentOrgName === "") throw new Error("Organization not found.");
       const encodedOrgName = encodeURIComponent(currentOrgName);
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const organizationResponse = await fetchApi(
-        `/organizations/${encodedOrgName}`,
-        { signal: controller.signal },
-      ) as {
-        data?: {
-          attributes?: {
-            permissions?: { "can-manage-vcs-settings"?: boolean };
-          };
-        };
-      };
+      const allowed = await fetchVcsPermission(encodedOrgName, controller.signal);
       if (!requestIsCurrent()) return;
-      const allowed =
-        organizationResponse.data?.attributes?.permissions?.["can-manage-vcs-settings"] === true;
       setAccess({ orgName: currentOrgName, status: allowed ? "allowed" : "denied" });
       if (!allowed) return;
 
-      const [installationResult, clientResult] = await Promise.allSettled([
-        fetchApi(
-          `/organizations/${encodedOrgName}/github-app/installations`,
-          { signal: controller.signal },
-        ),
-        fetchApi(
-          `/organizations/${encodedOrgName}/oauth-clients`,
-          { signal: controller.signal },
-        ),
-      ]);
+      const loaded = await loadInstallationsAndClients(encodedOrgName, controller.signal);
       if (!requestIsCurrent()) return;
-      const errors: string[] = [];
-
-      if (installationResult.status === "fulfilled") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const data = (installationResult.value as { data?: GitHubAppInstallation[] }).data;
-        setGhApps(Array.isArray(data) ? data : []);
-      } else {
-        errors.push("Failed to load GitHub App installations.");
-      }
-
-      if (clientResult.status === "rejected") {
-        errors.push("Failed to load OAuth clients.");
-      } else {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const data = (clientResult.value as { data?: OAuthClient[] }).data;
-        const loadedClients = Array.isArray(data) ? data : [];
-        setClients(loadedClients);
-        const tokenResults = await Promise.allSettled(loadedClients.map(async (client): Promise<readonly [string, readonly OAuthToken[]]> => {
-          const related = client.relationships?.["oauth-tokens"]?.links?.related;
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-          const response = await fetchApi(
-            related ?? `/oauth-clients/${encodeURIComponent(client.id)}/oauth-tokens`,
-            { signal: controller.signal },
-          ) as { data?: OAuthToken[] };
-          return [client.id, Array.isArray(response.data) ? response.data : []] as const;
-        }));
-        if (!requestIsCurrent()) return;
-        setOauthTokensByClient(Object.fromEntries(
-          tokenResults
-            .filter((result): result is PromiseFulfilledResult<readonly [string, readonly OAuthToken[]]> =>
-              result.status === "fulfilled")
-            .map((result): readonly [string, readonly OAuthToken[]] => result.value),
-        ));
-        if (tokenResults.some((result): boolean => result.status === "rejected")) {
-          errors.push("Some OAuth connection statuses could not be loaded.");
-        }
-      }
-
-      setError(errors.join(" "));
+      setGhApps(loaded.installations);
+      setClients(loaded.clients);
+      setOauthTokensByClient(loaded.tokensByClient);
+      setError(loaded.errors.join(" "));
     } catch (caught: unknown) {
       if (!requestIsCurrent()) return;
       setAccess({ orgName: currentOrgName, status: "error" });
@@ -471,390 +974,69 @@ export function VcsIntegrations({
             </div>
           )}
 
-        {/* GitHub App Installations Section */}
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <h2 className="font-heading text-xl font-semibold">GitHub App installations</h2>
-              <p className="text-sm text-muted-foreground">Manage your Terrence GitHub App installations.</p>
-            </div>
-            <Button disabled={startingGitHubSetup} onClick={(): void => { void handleGitHubSetup(); }}>
-              {startingGitHubSetup
-                ? <Spinner data-icon="inline-start" />
-                : <Plus data-icon="inline-start" />}
-              {startingGitHubSetup ? "Opening GitHub…" : "Install GitHub App"}
-            </Button>
-          </div>
+        <GitHubAppsSection
+          loading={loading}
+          ghApps={ghApps}
+          startingGitHubSetup={startingGitHubSetup}
+          onSetup={(): void => { void handleGitHubSetup(); }}
+          onUninstall={(app: GitHubAppInstallation): void => { setInstallationToUninstall(app); }}
+          onRemove={(app: GitHubAppInstallation): void => { setInstallationToDelete(app); }}
+        />
 
-          <Card>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Installation ID</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {loading ? (
-                    <TableRow>
-                      <TableCell colSpan={5} className="h-24 text-center">
-                        <Spinner className="mx-auto size-6 text-primary" />
-                      </TableCell>
-                    </TableRow>
-                  ) : ghApps.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-                        No GitHub App installations registered.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    ghApps.map((app: GitHubAppInstallation): React.JSX.Element => (
-                      <TableRow key={app.id}>
-                        <TableCell className="font-medium flex items-center gap-2">
-                          {isString(app.attributes["icon-url"]) && app.attributes["icon-url"] !== "" && (
-                            <img
-                              src={app.attributes["icon-url"]}
-                              className="size-6 rounded-full"
-                              alt=""
-                            />
-                          )}
-                          {app.attributes.name}
-                        </TableCell>
-                        <TableCell>{app.attributes["installation-id"]}</TableCell>
-                        <TableCell><Badge variant="outline">{app.attributes["installation-type"] ?? "Organization"}</Badge></TableCell>
-                        <TableCell>
-                          <Badge variant="secondary">
-                            <CheckCircle data-icon="inline-start" />
-                            Connected
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex justify-end">
-                            <div className="flex flex-wrap justify-end gap-2">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={(): void => { setInstallationToUninstall(app); }}
-                              >
-                                <Unplug data-icon="inline-start" />
-                                Uninstall
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={(): void => { setInstallationToDelete(app); }}
-                              >
-                                <Trash2 data-icon="inline-start" />
-                                Remove
-                              </Button>
-                            </div>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        </div>
+        <OAuthClientsSection
+          loading={loading}
+          clients={clients}
+          tokensByClient={oauthTokensByClient}
+          connectingClientId={connectingClientId}
+          onConnect={(client: OAuthClient): void => { void handleConnect(client); }}
+          onDeleteRequest={(client: OAuthClient): void => {
+            const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+            if (isTestEnv) {
+              void handleDelete(client);
+            } else {
+              setClientToDelete(client);
+            }
+          }}
+          onAdd={(): void => { setDialogOpen(true); }}
+        />
 
-        {/* OAuth Section (Existing) */}
-        <div>
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <h2 className="font-heading text-xl font-semibold">OAuth Clients (Legacy)</h2>
-              <p className="text-sm text-muted-foreground">Legacy OAuth VCS providers.</p>
-            </div>
-            <Button onClick={(): void => { setDialogOpen(true); }}>
-              <Plus className="mr-1.5 size-4" /> Add VCS Provider
-            </Button>
-          </div>
-
-      <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Provider / Name</TableHead>
-                <TableHead>Service Provider</TableHead>
-                <TableHead>HTTP URL</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="h-24 text-center">
-                    <Spinner className="mx-auto size-6 text-primary" />
-                  </TableCell>
-                </TableRow>
-              ) : clients.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-                    <GitBranch className="mx-auto mb-2 size-8 text-muted-foreground/60" />
-                    No VCS Providers connected. Connect a VCS provider to trigger workspace runs from git commits.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                clients.map((client: OAuthClient): React.JSX.Element => {
-                  const statusKnown = Object.prototype.hasOwnProperty.call(oauthTokensByClient, client.id);
-                  const tokens = oauthTokensByClient[client.id] ?? [];
-                  const connected = statusKnown && tokens.length > 0;
-                  const providerUser = tokens
-                    .map((token): string | null | undefined => token.attributes["service-provider-user"])
-                    .find((value): value is string => isString(value) && value !== "");
-                  const connecting = connectingClientId === client.id;
-                  return (
-                    <TableRow key={client.id}>
-                      <TableCell className="font-semibold">
-                        <div className="flex items-center gap-2">
-                          <GitBranch className="size-4 text-primary" />
-                          {client.attributes.name}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="capitalize font-mono text-xs">
-                          {client.attributes["service-provider"]}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground font-mono">
-                        {client.attributes["http-url"] ?? "https://github.com"}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={connected ? "secondary" : "outline"}>
-                          {connected && <CheckCircle data-icon="inline-start" />}
-                          {!statusKnown
-                            ? "Status unavailable"
-                            : connected
-                              ? providerUser === undefined ? "Connected" : `Connected as ${providerUser}`
-                              : "Not connected"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-2">
-                          {statusKnown && !connected && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={connecting}
-                              onClick={(): void => { void handleConnect(client); }}
-                            >
-                              {connecting
-                                ? <Spinner data-icon="inline-start" />
-                                : <ExternalLink data-icon="inline-start" />}
-                              {connecting ? "Opening…" : "Connect"}
-                            </Button>
-                          )}
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={(): void => {
-                              const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
-                              if (isTestEnv) {
-                                void handleDelete(client);
-                              } else {
-                                setClientToDelete(client);
-                              }
-                            }}
-                          >
-                            <Trash2 data-icon="inline-start" />
-                            Delete
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-        </div>
-
-      {/* Connect VCS Provider Modal */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-[480px]">
-          <DialogHeader>
-            <DialogTitle>Add VCS Provider</DialogTitle>
-            <DialogDescription>
-              Configure an OAuth App on GitHub, GitLab, or Bitbucket to connect repositories.
-            </DialogDescription>
-          </DialogHeader>
-
-          {formError !== "" && (
-            <div role="alert" className="rounded bg-destructive/15 p-3 text-xs font-medium text-destructive">
-              {formError}
-            </div>
-          )}
-
-          <form onSubmit={handleCreate} noValidate className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <label htmlFor="vcs-name" className="text-sm font-medium">Name</label>
-              <Input
-                id="vcs-name"
-                name="vcs-integration-name"
-                autoComplete="off"
-                spellCheck={false}
-                value={name}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }}
-                placeholder="GitHub Commercial"
-                required
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label htmlFor="vcs-provider" className="text-sm font-medium">VCS Type</label>
-              <Select
-                id="vcs-provider"
-                name="service-provider"
-
-                value={serviceProvider}
-                onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
-// SAFETY: the select options are generated from the same union; the change event carries one of them.
-                  const provider = event.target.value as ServiceProvider;
-                  setServiceProvider(provider);
-                  setHttpUrl(providerDefaults[provider].httpUrl);
-                  setApiUrl(providerDefaults[provider].apiUrl);
-                }}
-              >
-                <option value="github">GitHub.com</option>
-                <option value="github_enterprise">GitHub Enterprise Server</option>
-                <option value="gitlab">GitLab.com / GitLab EE</option>
-                <option value="bitbucket">Bitbucket Cloud</option>
-              </Select>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <label htmlFor="vcs-http-url" className="text-xs font-medium">HTTP URL</label>
-                <Input
-                  id="vcs-http-url"
-                  name="http-url"
-                  autoComplete="url"
-                  value={httpUrl}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setHttpUrl(event.target.value); }}
-                  placeholder={serviceProvider === "github_enterprise"
-                    ? "https://github.example.com"
-                    : providerDefaults[serviceProvider].httpUrl}
-                  required
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label htmlFor="vcs-api-url" className="text-xs font-medium">API URL</label>
-                <Input
-                  id="vcs-api-url"
-                  name="api-url"
-                  autoComplete="url"
-                  value={apiUrl}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setApiUrl(event.target.value); }}
-                  placeholder={serviceProvider === "github_enterprise"
-                    ? "https://github.example.com/api/v3"
-                    : providerDefaults[serviceProvider].apiUrl}
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <label htmlFor="vcs-key" className="text-sm font-medium">OAuth Application Client ID</label>
-              <Input
-                id="vcs-key"
-                name="client-id"
-                autoComplete="off"
-                spellCheck={false}
-                value={key}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setKey(event.target.value); }}
-                placeholder="Client ID or Application ID"
-                required
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label htmlFor="vcs-secret" className="text-sm font-medium">OAuth Client Secret</label>
-              <Input
-                id="vcs-secret"
-                name="client-secret"
-                autoComplete="new-password"
-                type="password"
-                value={secret}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setSecret(event.target.value); }}
-                placeholder="Client Secret"
-                required
-              />
-            </div>
-
-            <DialogFooter className="pt-4">
-              <Button type="submit" disabled={creating}>
-                {creating && <Spinner data-icon="inline-start" className="size-4" />}
-                {creating ? "Connecting VCS provider…" : "Connect VCS Provider"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      <ConfirmDialog
-        open={installationToDelete !== null}
-        onOpenChange={(open): void => { if (!open && !deletingInstallation) setInstallationToDelete(null); }}
-        title="Remove GitHub App integration"
-        description={
-          <>
-            This removes <strong className="text-foreground">{installationToDelete?.attributes.name}</strong> from Terrence. It does not uninstall the GitHub App from GitHub. It cannot be removed while workspaces or policy sets use it.
-          </>
-        }
-        confirmText="Remove Integration"
-        confirmVariant="destructive"
-        requireText={installationToDelete?.attributes.name}
-        loading={deletingInstallation}
-        onConfirm={async (): Promise<void> => {
-          if (installationToDelete !== null) await handleDeleteInstallation(installationToDelete);
+      <CreateProviderDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        name={name}
+        onNameChange={setName}
+        serviceProvider={serviceProvider}
+        onProviderChange={(provider: ServiceProvider): void => {
+          setServiceProvider(provider);
+          setHttpUrl(providerDefaults[provider].httpUrl);
+          setApiUrl(providerDefaults[provider].apiUrl);
         }}
+        httpUrl={httpUrl}
+        onHttpUrlChange={setHttpUrl}
+        apiUrl={apiUrl}
+        onApiUrlChange={setApiUrl}
+        oauthKey={key}
+        onKeyChange={setKey}
+        secret={secret}
+        onSecretChange={setSecret}
+        formError={formError}
+        creating={creating}
+        onSubmit={handleCreate}
       />
 
-      <ConfirmDialog
-        open={installationToUninstall !== null}
-        onOpenChange={(open): void => { if (!open && !uninstallingInstallation) setInstallationToUninstall(null); }}
-        title="Uninstall GitHub App installation"
-        description={
-          <>
-            This calls GitHub to uninstall <strong className="text-foreground">{installationToUninstall?.attributes.name}</strong>, then removes that installation from Terrence. The site-wide App registration and other installations remain in place.
-          </>
-        }
-        confirmText="Uninstall installation"
-        confirmVariant="destructive"
-        requireText={installationToUninstall?.attributes.name}
-        requireTextLabel={installationToUninstall === null ? undefined : `Type ${installationToUninstall.attributes.name} to confirm the GitHub uninstall.`}
-        loading={uninstallingInstallation}
-        onConfirm={async (): Promise<void> => {
-          if (installationToUninstall !== null) await handleUninstallInstallation(installationToUninstall);
-        }}
-      />
-
-      <ConfirmDialog
-        open={clientToDelete !== null}
-        onOpenChange={(open): void => { if (!open && !deletingClient) setClientToDelete(null); }}
-        title="Delete VCS Integration"
-        description={
-          <>
-            Are you sure you want to delete VCS client <strong className="text-foreground">{clientToDelete?.attributes.name}</strong>? It cannot be removed while workspaces or policy sets use it.
-          </>
-        }
-        confirmText="Delete Integration"
-        confirmVariant="destructive"
-        requireText={clientToDelete?.attributes.name}
-        loading={deletingClient}
-        onConfirm={async (): Promise<void> => {
-          if (clientToDelete !== null) {
-            await handleDelete(clientToDelete);
-          }
-        }}
+      <VcsConfirmDialogs
+        installationToDelete={installationToDelete}
+        deletingInstallation={deletingInstallation}
+        onClearInstallationToDelete={(): void => { setInstallationToDelete(null); }}
+        onConfirmDeleteInstallation={handleDeleteInstallation}
+        installationToUninstall={installationToUninstall}
+        uninstallingInstallation={uninstallingInstallation}
+        onClearInstallationToUninstall={(): void => { setInstallationToUninstall(null); }}
+        onConfirmUninstallInstallation={handleUninstallInstallation}
+        clientToDelete={clientToDelete}
+        deletingClient={deletingClient}
+        onClearClientToDelete={(): void => { setClientToDelete(null); }}
+        onConfirmDeleteClient={handleDelete}
       />
         </>
       )}
