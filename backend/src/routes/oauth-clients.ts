@@ -706,6 +706,39 @@ async function applyOAuthClientCredentialUpdates(
   return { credentialsInvalidated };
 }
 
+function validateOAuthClientCreate(
+  attributes: Record<string, unknown>,
+  set: SetObj,
+): { name: string; serviceProvider: string } | { error: unknown } {
+  const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
+  if (name === "") return { error: unprocessable(set, "Name is required") };
+  const rawServiceProvider = attributes["service-provider"];
+  if (rawServiceProvider !== undefined && typeof rawServiceProvider !== "string") return { error: unprocessable(set, "Unsupported service provider") };
+  const serviceProvider = rawServiceProvider ?? "github";
+  if (!SERVICE_PROVIDERS.has(serviceProvider)) return { error: unprocessable(set, "Unsupported service provider") };
+  const urlError = configuredVcsUrlError(normalizedConfiguredUrl(attributes["api-url"]) ?? null, normalizedConfiguredUrl(attributes["http-url"]) ?? null);
+  if (urlError !== undefined) return { error: unprocessable(set, urlError) };
+  if (attributes["organization-scoped"] !== undefined && typeof attributes["organization-scoped"] !== "boolean") {
+    return { error: unprocessable(set, "organization-scoped must be a boolean") };
+  }
+  return { name, serviceProvider };
+}
+
+function resolveOAuthClientSecretFields(attributes: Record<string, unknown>): {
+  apiUrl: string | null; httpUrl: string | null; key: string | null; secret: string | null; rsaPublicKey: string | null; organizationScoped: boolean;
+} {
+  const apiUrlValue = normalizedConfiguredUrl(attributes["api-url"]);
+  const httpUrlValue = normalizedConfiguredUrl(attributes["http-url"]);
+  return {
+    apiUrl: typeof apiUrlValue === "string" ? apiUrlValue : null,
+    httpUrl: typeof httpUrlValue === "string" ? httpUrlValue : null,
+    key: typeof attributes["key"] === "string" ? attributes["key"] : null,
+    secret: typeof attributes["secret"] === "string" ? attributes["secret"] : null,
+    rsaPublicKey: typeof attributes["rsa-public-key"] === "string" ? attributes["rsa-public-key"] : null,
+    organizationScoped: attributes["organization-scoped"] === true,
+  };
+}
+
 export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/oauth-clients", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -719,45 +752,26 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
-    if (name === "") return unprocessable(set, "Name is required");
+    const { data, attributes } = oauthClientPatchDocument(body);
+    const validated = validateOAuthClientCreate(attributes, set);
+    if ("error" in validated) return validated.error;
+    const { name, serviceProvider } = validated;
     const id = newResourceId("oc");
-    const rawServiceProvider = attributes["service-provider"];
-    if (rawServiceProvider !== undefined && typeof rawServiceProvider !== "string") return unprocessable(set, "Unsupported service provider");
-    const serviceProvider = rawServiceProvider ?? "github";
-    if (!SERVICE_PROVIDERS.has(serviceProvider)) return unprocessable(set, "Unsupported service provider");
-    const projectIds = relationshipProjectIds(data);
-    if (projectIds === null) return unprocessable(set, "Projects must be valid project resource identifiers");
-    if (projectIds !== undefined && !(await validProjectScope(projectIds, org.id))) return unprocessable(set, "One or more projects do not belong to the organization");
-    const agentPoolId = relationshipAgentPoolId(data);
-    if (agentPoolId === false) return unprocessable(set, "Agent pool must be a valid agent-pools resource identifier");
-    if (typeof agentPoolId === "string" && !(await validAgentPool(agentPoolId, org.id))) {
-      return unprocessable(set, "Agent pool does not belong to the organization");
-    }
-    const rawApiUrl = attributes["api-url"];
-    const rawHttpUrl = attributes["http-url"];
-    const apiUrlValue = normalizedConfiguredUrl(rawApiUrl);
-    const httpUrlValue = normalizedConfiguredUrl(rawHttpUrl);
-    const urlError = configuredVcsUrlError(apiUrlValue ?? null, httpUrlValue ?? null);
-    if (urlError !== undefined) return unprocessable(set, urlError);
-    const apiUrl = typeof apiUrlValue === "string" ? apiUrlValue : null;
-    const httpUrl = typeof httpUrlValue === "string" ? httpUrlValue : null;
-    const key = typeof attributes["key"] === "string" ? attributes["key"] : null;
-    const secret = typeof attributes["secret"] === "string" ? attributes["secret"] : null;
-    const rsaPublicKey = typeof attributes["rsa-public-key"] === "string" ? attributes["rsa-public-key"] : null;
-    if (attributes["organization-scoped"] !== undefined && typeof attributes["organization-scoped"] !== "boolean") return unprocessable(set, "organization-scoped must be a boolean");
+    const scopeUpdates: Partial<typeof oauthClients.$inferInsert> = {};
+    const scope = await resolveOAuthClientScope(data, org.id, scopeUpdates, set);
+    if ("error" in scope) return scope.error;
+    const { projectIds } = scope;
+    const agentPoolId = scopeUpdates.agentPoolId ?? null;
+    const { apiUrl, httpUrl, key, secret, rsaPublicKey, organizationScoped } = resolveOAuthClientSecretFields(attributes);
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
       await t.insert(oauthClients).values({
         id,
         orgId: org.id,
-        agentPoolId: agentPoolId ?? null,
+        agentPoolId,
         name,
         serviceProvider,
-        organizationScoped: typeof attributes["organization-scoped"] === "boolean" ? attributes["organization-scoped"] : false,
+        organizationScoped,
         apiUrl,
         httpUrl,
         key,
