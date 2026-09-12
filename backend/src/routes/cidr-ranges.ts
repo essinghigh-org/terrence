@@ -35,6 +35,64 @@ function isCidrBlock(value: string): boolean {
   return maxPrefix >= 0 && numericPrefix <= maxPrefix;
 }
 
+function parseCidrRangeBody(body: unknown): { attributes: Record<string, unknown>; listId: string } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
+  const rels = (data?.["relationships"] as Record<string, unknown>) ?? {};
+  const listRel = rels["cidr-range-list"] as Record<string, unknown> | undefined;
+  const listId = typeof (listRel?.["data"] as Record<string, unknown>)?.["id"] === "string" ? ((listRel?.["data"] as Record<string, unknown>)["id"] as string) : "";
+  return { attributes, listId };
+}
+
+async function findCidrListForWrite(
+  listId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+  set: ParamCtx["set"],
+): Promise<{ list: typeof cidrRangeLists.$inferSelect } | { error: unknown }> {
+  const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, listId) });
+  if (list === undefined) { (set as { status: number }).status = 404; return { error: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  if (!(await checkOrgPermission(userId, list.orgId, "owner", tokenOrgId, tokenTeamId))) {
+    (set as { status: number }).status = 404; return { error: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { list };
+}
+
+async function persistCidrRange(
+  listId: string,
+  attributes: Record<string, unknown>,
+  set: ParamCtx["set"],
+): Promise<{ range: CidrRangeItem } | { error: unknown }> {
+  const range = await createCidrRange(listId, attributes);
+  if (range === undefined || range === "invalid") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: range === undefined ? "cidr-block is required" : "cidr-block must be a valid CIDR block" }] } };
+  }
+  (set as { status: number }).status = 201;
+  return { range };
+}
+
+function parseCidrRangeUpdates(
+  attributes: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { updates: Record<string, unknown> } | { error: unknown } {
+  const updates: Record<string, unknown> = {};
+  const cidrBlock = typeof attributes["cidr-block"] === "string"
+    ? attributes["cidr-block"].trim()
+    : typeof attributes["value"] === "string" ? attributes["value"].trim() : "";
+  if (cidrBlock !== "") {
+    if (!isCidrBlock(cidrBlock)) {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "cidr-block must be a valid CIDR block" }] } };
+    }
+    updates["value"] = cidrBlock;
+  }
+  if (typeof attributes["description"] === "string") updates["description"] = attributes["description"];
+  return { updates };
+}
+
 async function createCidrRange(listId: string, attributes: Record<string, unknown>): Promise<CidrRangeItem | "invalid" | undefined> {
   const rawValue = typeof attributes["cidr-block"] === "string"
     ? attributes["cidr-block"].trim()
@@ -208,25 +266,13 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     return { data: ranges.map((r) => cidrRangeResource(r)) };
   })
   .post("/api/v2/cidr-ranges", async ({ body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
-    const rels = (data?.["relationships"] as Record<string, unknown>) ?? {};
-    const listRel = rels["cidr-range-list"] as Record<string, unknown> | undefined;
-    const listId = typeof (listRel?.["data"] as Record<string, unknown>)?.["id"] === "string" ? ((listRel?.["data"] as Record<string, unknown>)["id"] as string) : "";
+    const { attributes, listId } = parseCidrRangeBody(body);
 
-    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, listId) });
-    if (list === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkOrgPermission(user?.id, list.orgId, "owner", tokenOrgId, tokenTeamId))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const range = await createCidrRange(list.id, attributes);
-    if (range === undefined || range === "invalid") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: range === undefined ? "cidr-block is required" : "cidr-block must be a valid CIDR block" }] };
-    }
-    (set as { status: number }).status = 201;
-    return { data: cidrRangeResource(range) };
+    const found = await findCidrListForWrite(listId, user?.id, tokenOrgId, tokenTeamId, set);
+    if ("error" in found) return found.error;
+    const created = await persistCidrRange(found.list.id, attributes, set);
+    if ("error" in created) return created.error;
+    return { data: cidrRangeResource(created.range) };
   })
   .get("/api/v2/cidr-ranges/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const range = await db.query.cidrRanges.findFirst({ where: eq(cidrRanges.id, params["id"] ?? "") });
@@ -247,20 +293,10 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
-    const updates: Record<string, unknown> = {};
-    const cidrBlock = typeof attributes["cidr-block"] === "string"
-      ? attributes["cidr-block"].trim()
-      : typeof attributes["value"] === "string" ? attributes["value"].trim() : "";
-    if (cidrBlock !== "") {
-      if (!isCidrBlock(cidrBlock)) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "cidr-block must be a valid CIDR block" }] };
-      }
-      updates["value"] = cidrBlock;
-    }
-    if (typeof attributes["description"] === "string") updates["description"] = attributes["description"];
+    const parsed = parseCidrRangeUpdates(attributes, set);
+    if ("error" in parsed) return parsed.error;
 
-    await db.update(cidrRanges).set(updates).where(eq(cidrRanges.id, range.id));
+    await db.update(cidrRanges).set(parsed.updates).where(eq(cidrRanges.id, range.id));
     const updated = await db.query.cidrRanges.findFirst({ where: eq(cidrRanges.id, range.id) });
     if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
     return { data: cidrRangeResource(updated) };
