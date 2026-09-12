@@ -493,54 +493,111 @@ async function applyStackExecutionUpdates(
   return null;
 }
 
+function stackRelationId(rels: Record<string, unknown>, key: string): string | undefined {
+  const relData = (rels[key] as { data?: { id?: unknown } } | undefined)?.data;
+  return typeof relData?.id === "string" ? relData.id : undefined;
+}
+
+type StackCreateFields = Readonly<{
+  attrs: Record<string, unknown>;
+  name: string;
+  description: string;
+  projectId: string;
+  agentPoolId: string | undefined;
+  workingDirectory: string | undefined;
+  executionMode: unknown;
+  speculative: boolean;
+  triggerPatterns: string[];
+}>;
+
+function parseStackCreateFields(data: Record<string, unknown>): StackCreateFields {
+  const attributes = data["attributes"];
+  const attrs = attributes !== null && typeof attributes === "object" ? attributes as Record<string, unknown> : {};
+  const relationships = data["relationships"];
+  const rels = relationships !== null && typeof relationships === "object" ? relationships as Record<string, unknown> : {};
+  const agentPoolId = stackRelationId(rels, "agent-pool");
+  return {
+    attrs,
+    name: typeof attrs["name"] === "string" ? attrs["name"].trim() : "",
+    description: typeof attrs["description"] === "string" ? attrs["description"] : "",
+    projectId: stackRelationId(rels, "project") ?? "",
+    agentPoolId,
+    workingDirectory: typeof attrs["working-directory"] === "string" ? attrs["working-directory"] : undefined,
+    executionMode: attrs["execution-mode"] === undefined ? (agentPoolId === undefined ? "remote" : "agent") : attrs["execution-mode"],
+    speculative: attrs["speculative-enabled"] === true,
+    triggerPatterns: Array.isArray(attrs["trigger-patterns"]) ? (attrs["trigger-patterns"] as unknown[]).filter((item): item is string => typeof item === "string") : [],
+  };
+}
+
+async function authorizeStackProject(
+  projectId: string,
+  agentPoolId: string | undefined,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  teamId: string | null,
+): Promise<{ project: typeof projects.$inferSelect } | { status: 404 }> {
+  const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
+  if (project === undefined || !(await checkOrganizationPermission(project.orgId, userId, tokenOrgId, teamId, "manage-projects"))) {
+    return { status: 404 };
+  }
+  if (agentPoolId !== undefined) {
+    const pool = await db.query.agentPools.findFirst({
+      where: and(eq(agentPools.id, agentPoolId), eq(agentPools.orgId, project.orgId)),
+    });
+    if (pool === undefined) return { status: 404 };
+  }
+  return { project };
+}
+
+function buildStackInsert(
+  id: string,
+  orgId: string,
+  fields: StackCreateFields,
+  executionMode: string,
+  vcs: StackVcsAttributes,
+  now: number,
+): typeof stacks.$inferInsert {
+  return {
+    id, orgId, projectId: fields.projectId, agentPoolId: fields.agentPoolId ?? null, executionMode, name: fields.name,
+    description: fields.description === "" ? null : fields.description,
+    speculativeEnabled: fields.speculative, triggerDisabled: vcs.triggerDisabled, debuggingMode: fields.attrs["debugging-mode"] === true,
+    workingDirectory: fields.workingDirectory ?? null, triggerPatterns: fields.triggerPatterns,
+    vcsIdentifier: vcs.vcsIdentifier, vcsServiceProvider: vcs.vcsServiceProvider, vcsBranch: vcs.vcsBranch,
+    vcsTagsRegex: vcs.vcsTagsRegex, vcsDisplayIdentifier: vcs.vcsDisplayIdentifier,
+    vcsRepositoryHttpUrl: vcs.vcsRepositoryHttpUrl, vcsSparseCheckoutPattern: vcs.vcsSparseCheckoutPattern,
+    vcsOAuthTokenId: vcs.vcsOAuthTokenId, vcsGhaInstallationId: vcs.vcsGhaInstallationId,
+    createdAt: now, updatedAt: now,
+  };
+}
+
+function stackExecutionModeError(executionMode: unknown, agentPoolId: string | undefined): string | null {
+  if (executionMode !== "remote" && executionMode !== "agent") return "execution-mode must be remote or agent";
+  if (executionMode === "agent" && agentPoolId === undefined) return "agent execution requires an agent-pool relationship";
+  return null;
+}
+
 export const stackRoutes = new Elysia({ name: "stacks" })
   .use(authPlugin)
   .post("/api/v2/stacks", async ({ body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
     const data = payload["data"];
     if (data === null || typeof data !== "object") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data is required" }] }; }
-    const attributes = (data as Record<string, unknown>)["attributes"];
-    const attrs = attributes !== null && typeof attributes === "object" ? attributes as Record<string, unknown> : {};
-    const relationships = (data as Record<string, unknown>)["relationships"];
-    const rels = relationships !== null && typeof relationships === "object" ? relationships as Record<string, unknown> : {};
-    const name = typeof attrs["name"] === "string" ? attrs["name"].trim() : "";
-    const description = typeof attrs["description"] === "string" ? attrs["description"] : "";
-    const projectData = (rels["project"] as { data?: { id?: unknown } } | undefined)?.data;
-    const projectId = typeof projectData?.id === "string" ? projectData.id : "";
-    const agentPoolData = (rels["agent-pool"] as { data?: { id?: unknown } } | undefined)?.data;
-    const agentPoolId = typeof agentPoolData?.id === "string" ? agentPoolData.id : undefined;
-    const workingDirectory = typeof attrs["working-directory"] === "string" ? attrs["working-directory"] : undefined;
-    const executionMode = attrs["execution-mode"] === undefined ? (agentPoolId === undefined ? "remote" : "agent") : attrs["execution-mode"];
-    const speculative = attrs["speculative-enabled"] === true;
-    const triggerPatterns = Array.isArray(attrs["trigger-patterns"]) ? (attrs["trigger-patterns"] as unknown[]).filter((item): item is string => typeof item === "string") : [];
-    if (name === "" || projectId === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "name and project are required" }] }; }
-    if (executionMode !== "remote" && executionMode !== "agent") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "execution-mode must be remote or agent" }] }; }
-    if (executionMode === "agent" && agentPoolId === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "agent execution requires an agent-pool relationship" }] }; }
-    const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
-    if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) {
+    const fields = parseStackCreateFields(data as Record<string, unknown>);
+    const { projectId, agentPoolId, executionMode } = fields;
+    if (fields.name === "" || projectId === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "name and project are required" }] }; }
+    const modeError = stackExecutionModeError(executionMode, agentPoolId);
+    if (modeError !== null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: modeError }] }; }
+    const authorized = await authorizeStackProject(projectId, agentPoolId, user?.id, tokenOrgId ?? null, teamId ?? null);
+    if ("status" in authorized) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    if (agentPoolId !== undefined) {
-      const pool = await db.query.agentPools.findFirst({
-        where: and(eq(agentPools.id, agentPoolId), eq(agentPools.orgId, project.orgId)),
-      });
-      if (pool === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    }
-    const vcs = stackVcsRepoAttributes(attrs);
+    const project = authorized.project;
+    const vcs = stackVcsRepoAttributes(fields.attrs);
     const vcsError = await validStackVcs(vcs, project.orgId);
     if (vcsError !== null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: vcsError }] }; }
     const id = newResourceId("st");
     const now = Date.now();
-    const row: typeof stacks.$inferInsert = {
-      id, orgId: project.orgId, projectId, agentPoolId: agentPoolId ?? null, executionMode, name, description: description === "" ? null : description,
-      speculativeEnabled: speculative, triggerDisabled: vcs.triggerDisabled, debuggingMode: attrs["debugging-mode"] === true,
-      workingDirectory: workingDirectory ?? null, triggerPatterns,
-      vcsIdentifier: vcs.vcsIdentifier, vcsServiceProvider: vcs.vcsServiceProvider, vcsBranch: vcs.vcsBranch,
-      vcsTagsRegex: vcs.vcsTagsRegex, vcsDisplayIdentifier: vcs.vcsDisplayIdentifier,
-      vcsRepositoryHttpUrl: vcs.vcsRepositoryHttpUrl, vcsSparseCheckoutPattern: vcs.vcsSparseCheckoutPattern,
-      vcsOAuthTokenId: vcs.vcsOAuthTokenId, vcsGhaInstallationId: vcs.vcsGhaInstallationId,
-      createdAt: now, updatedAt: now,
-    };
+    const row = buildStackInsert(id, project.orgId, fields, executionMode as string, vcs, now);
     await db.insert(stacks).values(row);
     (set as { status: number }).status = 201;
     return { data: stackResource(row as StackItem, project.name) };
