@@ -1667,6 +1667,35 @@ async function latestCommitSha(workspace: DeepReadonly<typeof workspaces.$inferS
 }
 
 /** Create a configuration version from VCS for a manual run, fetching the latest code on the default branch. */
+async function resolveVcsSource(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  vcs: DeepReadonly<NonNullable<typeof workspaces.$inferSelect["vcsRepo"]>>,
+): Promise<string> {
+  if (vcs.githubAppInstallationId !== undefined && vcs.githubAppInstallationId !== "") {
+    return "github";
+  }
+  if (vcs.oauthTokenId === undefined || vcs.oauthTokenId === "") {
+    return "tfe-api";
+  }
+  const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, vcs.oauthTokenId) });
+  if (token === undefined) return "tfe-api";
+  const client = await db.query.oauthClients.findFirst({
+    where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
+  });
+  return providerForServiceProvider(client?.serviceProvider ?? "") ?? "tfe-api";
+}
+
+function buildVcsCommitUrl(
+  identity: Awaited<ReturnType<typeof configuredVcsSource>>,
+  vcsIdentifier: string,
+  sha: string,
+): string | undefined {
+  if (identity === undefined) return undefined;
+  const repositoryPath = vcsIdentifier.split("/").map(encodeURIComponent).join("/");
+  const commitPath = identity.provider === "gitlab" ? "-/commit" : identity.provider === "bitbucket" ? "commits" : "commit";
+  return `https://${identity.host}/${repositoryPath}/${commitPath}/${encodeURIComponent(sha)}`;
+}
+
 export async function createConfigurationVersionFromVcs(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
 ): Promise<string | { error: string }> {
@@ -1678,24 +1707,10 @@ export async function createConfigurationVersionFromVcs(
   if (sha === undefined) return { error: "Failed to retrieve the latest commit from VCS. Check VCS credentials." };
 
   // Determine the VCS source
-  let source = "tfe-api";
-  if (vcs.githubAppInstallationId !== undefined && vcs.githubAppInstallationId !== "") {
-    source = "github";
-  } else if (vcs.oauthTokenId !== undefined && vcs.oauthTokenId !== "") {
-    const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, vcs.oauthTokenId) });
-    if (token !== undefined) {
-      const client = await db.query.oauthClients.findFirst({
-        where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
-      });
-      const provider = providerForServiceProvider(client?.serviceProvider ?? "");
-      source = provider ?? "tfe-api";
-    }
-  }
+  const source = await resolveVcsSource(workspace, vcs);
 
   const identity = await configuredVcsSource(workspace);
-  const repositoryPath = vcs.identifier.split("/").map(encodeURIComponent).join("/");
-  const commitPath = identity?.provider === "gitlab" ? "-/commit" : identity?.provider === "bitbucket" ? "commits" : "commit";
-  const commitUrl = identity === undefined ? undefined : `https://${identity.host}/${repositoryPath}/${commitPath}/${encodeURIComponent(sha)}`;
+  const commitUrl = buildVcsCommitUrl(identity, vcs.identifier, sha);
 
   const cvId = newResourceId("cv");
   await db.insert(configurationVersions).values({
@@ -1727,6 +1742,35 @@ export function clearDefaultBranchCacheForTests(): void {
   defaultBranchCache.clear();
 }
 
+async function resolveExpectedBranch(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  vcsRepo: DeepReadonly<NonNullable<typeof workspaces.$inferSelect["vcsRepo"]>>,
+  configuredSource?: VcsSourceIdentity,
+): Promise<string | undefined> {
+  if (vcsRepo.branch !== undefined && vcsRepo.branch !== "") return vcsRepo.branch;
+  const source = configuredSource ?? await configuredVcsSource(workspace);
+  const connectionId = vcsRepo.githubAppInstallationId ?? vcsRepo.oauthTokenId ?? "unknown";
+  const sourceKey = source === undefined
+    ? "unknown"
+    : `${source.provider}:${source.host}:${source.installationId ?? "oauth"}:${connectionId}`;
+  const cacheKey = `${workspace.orgId}:${sourceKey}:${vcsRepo.identifier ?? ""}`;
+  const now = Date.now();
+  const cached = defaultBranchCache.get(cacheKey);
+  let expectedBranch: string | undefined;
+  if (cached !== undefined && cached.expiresAt > now) {
+    expectedBranch = cached.value;
+  } else {
+    if (cached !== undefined) defaultBranchCache.delete(cacheKey);
+    expectedBranch = await fetchDefaultBranch(workspace);
+    defaultBranchCache.set(cacheKey, {
+      value: expectedBranch,
+      expiresAt: now + (expectedBranch === undefined ? DEFAULT_BRANCH_NEGATIVE_TTL_MS : DEFAULT_BRANCH_CACHE_TTL_MS),
+    });
+  }
+  if (expectedBranch === undefined || expectedBranch === "") return undefined;
+  return expectedBranch;
+}
+
 async function matchesConfiguredBranch(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
@@ -1741,28 +1785,8 @@ async function matchesConfiguredBranch(
   // feat/* push into a real applyable run (run-157ebcd9cff343). Resolve the
   // default branch via the provider API and compare; fail closed if it
   // cannot be determined so we never mis-route a push.
-  let expectedBranch = vcsRepo.branch;
-  if (expectedBranch === undefined || expectedBranch === "") {
-    const source = configuredSource ?? await configuredVcsSource(workspace);
-    const connectionId = vcsRepo.githubAppInstallationId ?? vcsRepo.oauthTokenId ?? "unknown";
-    const sourceKey = source === undefined
-      ? "unknown"
-      : `${source.provider}:${source.host}:${source.installationId ?? "oauth"}:${connectionId}`;
-    const cacheKey = `${workspace.orgId}:${sourceKey}:${vcsRepo.identifier ?? ""}`;
-    const now = Date.now();
-    const cached = defaultBranchCache.get(cacheKey);
-    if (cached !== undefined && cached.expiresAt > now) {
-      expectedBranch = cached.value;
-    } else {
-      if (cached !== undefined) defaultBranchCache.delete(cacheKey);
-      expectedBranch = await fetchDefaultBranch(workspace);
-      defaultBranchCache.set(cacheKey, {
-        value: expectedBranch,
-        expiresAt: now + (expectedBranch === undefined ? DEFAULT_BRANCH_NEGATIVE_TTL_MS : DEFAULT_BRANCH_CACHE_TTL_MS),
-      });
-    }
-    if (expectedBranch === undefined || expectedBranch === "") return false;
-  }
+  const expectedBranch = await resolveExpectedBranch(workspace, vcsRepo, configuredSource);
+  if (expectedBranch === undefined) return false;
   // PR/MR events are matched against the target (base) branch: a workspace
   // pinned to `main` must trigger on PRs/MRs from feature branches that
   // target main, not on the source branch name (kanban 1.6).
