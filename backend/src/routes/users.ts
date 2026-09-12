@@ -143,6 +143,67 @@ async function createMembershipTx(
   return { targetUser: txTargetUser, mem: createdMembership, teamIds };
 }
 
+async function findVisibleApiToken(
+  tokenId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null | undefined,
+): Promise<Readonly<typeof apiTokens.$inferSelect> | undefined> {
+  const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) });
+  if (token !== undefined && userId === token.userId) {
+    return token;
+  }
+  // Team tokens: generic lookup requires manage-teams on the token's org
+  // (todo 45).
+  if (token !== undefined && token.teamId !== null) {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, token.teamId) });
+    if (team !== undefined && (await checkOrganizationPermission(team.orgId, userId, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) {
+      return token;
+    }
+  }
+  return undefined;
+}
+
+async function findAuthorizedAgentToken(
+  tokenId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null | undefined,
+): Promise<{ agentToken: Readonly<typeof agentPoolTokens.$inferSelect>; pool: Readonly<typeof agentPools.$inferSelect> } | undefined> {
+  const agentToken = await db.query.agentPoolTokens.findFirst({ where: eq(agentPoolTokens.id, tokenId) });
+  const pool = agentToken === undefined
+    ? undefined
+    : await db.query.agentPools.findFirst({ where: eq(agentPools.id, agentToken.agentPoolId) });
+  if (
+    agentToken === undefined
+    || pool === undefined
+    || !(await checkOrganizationPermission(pool.orgId, userId, tokenOrgId, tokenTeamId ?? null, "manage-agent-pools"))
+  ) {
+    return undefined;
+  }
+  return { agentToken, pool };
+}
+
+function agentTokenResource(
+  agentToken: Readonly<typeof agentPoolTokens.$inferSelect>,
+  pool: Readonly<typeof agentPools.$inferSelect>,
+): Record<string, unknown> {
+  return {
+    id: agentToken.id,
+    type: "authentication-tokens",
+    attributes: {
+      description: agentToken.description,
+      "created-at": new Date(agentToken.createdAt).toISOString(),
+      "last-used-at": agentToken.lastUsedAt === null ? null : new Date(agentToken.lastUsedAt).toISOString(),
+      "expired-at": new Date(agentPoolTokenExpiresAt(agentToken)).toISOString(),
+      "revoked-at": agentToken.revokedAt === null ? null : new Date(agentToken.revokedAt).toISOString(),
+    },
+    relationships: {
+      "agent-pool": { data: { id: pool.id, type: "agent-pools" } },
+    },
+  };
+}
+
 export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
   .get("/api/v2/users", async ({ query, user, set }: ParamCtx): Promise<unknown> => {
@@ -848,46 +909,16 @@ export const userRoutes = new Elysia({ name: "users" })
   })
   .get("/api/v2/authentication-tokens/:token_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const tokenId = params["token_id"] ?? "";
-    const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) });
-    if (token !== undefined && user?.id === token.userId) {
+    const token = await findVisibleApiToken(tokenId, user?.id, tokenOrgId, tokenTeamId);
+    if (token !== undefined) {
       return { data: tokenResource(token) };
     }
-    // Team tokens: generic lookup requires manage-teams on the token's org
-    // (todo 45).
-    if (token !== undefined && token.teamId !== null) {
-      const team = await db.query.teams.findFirst({ where: eq(teams.id, token.teamId) });
-      if (team !== undefined && (await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) {
-        return { data: tokenResource(token) };
-      }
-    }
-    const agentToken = await db.query.agentPoolTokens.findFirst({ where: eq(agentPoolTokens.id, tokenId) });
-    const pool = agentToken === undefined
-      ? undefined
-      : await db.query.agentPools.findFirst({ where: eq(agentPools.id, agentToken.agentPoolId) });
-    if (
-      agentToken === undefined
-      || pool === undefined
-      || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-agent-pools"))
-    ) {
+    const agent = await findAuthorizedAgentToken(tokenId, user?.id, tokenOrgId, tokenTeamId);
+    if (agent === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    return {
-      data: {
-        id: agentToken.id,
-        type: "authentication-tokens",
-        attributes: {
-          description: agentToken.description,
-          "created-at": new Date(agentToken.createdAt).toISOString(),
-          "last-used-at": agentToken.lastUsedAt === null ? null : new Date(agentToken.lastUsedAt).toISOString(),
-          "expired-at": new Date(agentPoolTokenExpiresAt(agentToken)).toISOString(),
-          "revoked-at": agentToken.revokedAt === null ? null : new Date(agentToken.revokedAt).toISOString(),
-        },
-        relationships: {
-          "agent-pool": { data: { id: pool.id, type: "agent-pools" } },
-        },
-      },
-    };
+    return { data: agentTokenResource(agent.agentToken, agent.pool) };
   })
   .delete("/api/v2/authentication-tokens/:token_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const tokenId = params["token_id"] ?? "";
