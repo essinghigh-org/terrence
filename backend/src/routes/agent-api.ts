@@ -763,6 +763,76 @@ function statusResponseHeaders(ctx: AgentCtx, set: { headers?: Record<string, st
   return {};
 }
 
+function parseForwardedStatus(body: Record<string, unknown> | undefined): number | null {
+  const status = body?.["status"];
+  return typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599 ? status : null;
+}
+
+function parseForwardedBody(
+  body: Record<string, unknown> | undefined,
+  set: { status?: number },
+): { responseBody: string | null } | { error: unknown } {
+  // A forwarded response without a body is valid (204 No Content, 304 Not
+  // Modified, HEAD responses). Only require responseStatus; default an
+  // omitted body to "" so these responses are not rejected as 422 while a
+  // non-string body (a malformed payload) still fails loudly.
+  const rawResponseBody = body?.["body"];
+  if (typeof rawResponseBody === "string" && rawResponseBody.length > MAX_FORWARDED_RESPONSE_BASE64_BYTES) {
+    set.status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Forwarded response body exceeds the size limit" }] } };
+  }
+  return { responseBody: typeof rawResponseBody === "string" ? rawResponseBody : rawResponseBody === undefined ? "" : null };
+}
+
+function parseForwardedHeaders(
+  body: Record<string, unknown> | undefined,
+  set: { status?: number },
+): { responseHeaders: Record<string, string[]> } | { error: unknown } {
+  const rawHeaders = body?.["headers"];
+  const responseHeaders: Record<string, string[]> = {};
+  if (rawHeaders !== null && typeof rawHeaders === "object" && !Array.isArray(rawHeaders)) {
+    for (const [name, values] of Object.entries(rawHeaders as Record<string, unknown>)) {
+      if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || !Array.isArray(values) || !values.every((value): value is string => typeof value === "string" && !/[\r\n]/.test(value))) {
+        set.status = 422;
+        return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid forwarded response headers" }] } };
+      }
+      responseHeaders[name] = values;
+    }
+  }
+  return { responseHeaders };
+}
+
+async function completeForwardedRequest(
+  agentId: string,
+  requestId: string,
+  fields: { responseStatus: number | null; responseHeaders: Record<string, string[]>; responseBody: string | null; errorMessage: string | null },
+  set: { status?: number },
+): Promise<unknown> {
+  const updated = await db.update(agentForwardedRequests).set({
+    status: fields.errorMessage === null ? "completed" : "errored",
+    responseStatus: fields.responseStatus,
+    responseHeaders: fields.responseHeaders,
+    responseBody: fields.responseBody,
+    errorMessage: fields.errorMessage,
+    completedAt: Date.now(),
+    // The request is done; the agent no longer needs the original request
+    // headers/body to replay it. Drop them so credentials that may have
+    // been forwarded (Authorization, cookies) are not persisted with the
+    // completed row in the database or a support bundle.
+    headers: {},
+    body: null,
+  }).where(and(
+    eq(agentForwardedRequests.id, requestId),
+    eq(agentForwardedRequests.agentId, agentId),
+    eq(agentForwardedRequests.status, "claimed"),
+  )).returning({ id: agentForwardedRequests.id });
+  if (updated.length === 0) {
+    set.status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
+  return {};
+}
+
 export const agentApiRoutes = new Elysia({ name: "agent-api" })
   .use(authPlugin)
 
@@ -948,56 +1018,22 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const body = await jsonBodyValue(ctx);
-    const responseStatus = typeof body?.["status"] === "number" && Number.isInteger(body["status"]) && body["status"] >= 100 && body["status"] <= 599 ? body["status"] : null;
-    // A forwarded response without a body is valid (204 No Content, 304 Not
-    // Modified, HEAD responses). Only require responseStatus; default an
-    // omitted body to "" so these responses are not rejected as 422 while a
-    // non-string body (a malformed payload) still fails loudly.
-    const rawResponseBody = body?.["body"];
-    if (typeof rawResponseBody === "string" && rawResponseBody.length > MAX_FORWARDED_RESPONSE_BASE64_BYTES) {
-      set.status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Forwarded response body exceeds the size limit" }] };
-    }
-    const responseBody = typeof rawResponseBody === "string" ? rawResponseBody : rawResponseBody === undefined ? "" : null;
+    const responseStatus = parseForwardedStatus(body);
+    const parsedBody = parseForwardedBody(body, set);
+    if ("error" in parsedBody) return parsedBody.error;
     const errorMessage = typeof body?.["error"] === "string" ? body["error"].slice(0, 2_000) : null;
-    const rawHeaders = body?.["headers"];
-    const responseHeaders: Record<string, string[]> = {};
-    if (rawHeaders !== null && typeof rawHeaders === "object" && !Array.isArray(rawHeaders)) {
-      for (const [name, values] of Object.entries(rawHeaders as Record<string, unknown>)) {
-        if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || !Array.isArray(values) || !values.every((value): value is string => typeof value === "string" && !/[\r\n]/.test(value))) {
-          set.status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid forwarded response headers" }] };
-        }
-        responseHeaders[name] = values;
-      }
-    }
-    if ((responseStatus === null || responseBody === null) && errorMessage === null) {
+    const parsedHeaders = parseForwardedHeaders(body, set);
+    if ("error" in parsedHeaders) return parsedHeaders.error;
+    if ((responseStatus === null || parsedBody.responseBody === null) && errorMessage === null) {
       set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A forwarded response or error is required" }] };
     }
-    const updated = await db.update(agentForwardedRequests).set({
-      status: errorMessage === null ? "completed" : "errored",
+    return completeForwardedRequest(agent.id, ctx.params["request_id"] ?? "", {
       responseStatus,
-      responseHeaders,
-      responseBody,
+      responseHeaders: parsedHeaders.responseHeaders,
+      responseBody: parsedBody.responseBody,
       errorMessage,
-      completedAt: Date.now(),
-      // The request is done; the agent no longer needs the original request
-      // headers/body to replay it. Drop them so credentials that may have
-      // been forwarded (Authorization, cookies) are not persisted with the
-      // completed row in the database or a support bundle.
-      headers: {},
-      body: null,
-    }).where(and(
-      eq(agentForwardedRequests.id, ctx.params["request_id"] ?? ""),
-      eq(agentForwardedRequests.agentId, agent.id),
-      eq(agentForwardedRequests.status, "claimed"),
-    )).returning({ id: agentForwardedRequests.id });
-    if (updated.length === 0) {
-      set.status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    return {};
+    }, set);
   })
 
   // --- Job claim ------------------------------------------------------------
