@@ -33,6 +33,174 @@ type WorkspaceDeletionResource = {
   };
 };
 
+function DestroyPlanSection({
+  allowDestroyPlan,
+  canUpdate,
+  canQueueDestroy,
+  savingDestroySetting,
+  settingError,
+  queueingDestroy,
+  queueError,
+  onToggleAllow,
+  onQueueDestroy,
+}: Readonly<{
+  allowDestroyPlan: boolean;
+  canUpdate: boolean;
+  canQueueDestroy: boolean;
+  savingDestroySetting: boolean;
+  settingError: string;
+  queueingDestroy: boolean;
+  queueError: string;
+  onToggleAllow: (checked: boolean) => void;
+  onQueueDestroy: () => void;
+}>): React.JSX.Element {
+  return (
+    <SettingsSection
+      title="Destroy infrastructure"
+      description="Queue a plan that destroys every resource this workspace manages. The workspace itself stays."
+    >
+      <div className="space-y-4">
+        <div className="flex items-start gap-3">
+          <Checkbox
+            id="allow-destroy-plans"
+            checked={allowDestroyPlan}
+            disabled={!canUpdate || savingDestroySetting || queueingDestroy}
+            onCheckedChange={(checked: boolean): void => {
+              onToggleAllow(checked);
+            }}
+          />
+          <div className="space-y-1">
+            <Label htmlFor="allow-destroy-plans">Allow destroy plans</Label>
+            <p className="text-sm text-muted-foreground">
+              When disabled, new destroy plans cannot be queued.
+            </p>
+          </div>
+        </div>
+        {savingDestroySetting && <p role="status" className="text-sm text-muted-foreground">Saving setting…</p>}
+        {settingError !== "" && <p role="alert" className="text-sm text-destructive">{settingError}</p>}
+        {!canUpdate && (
+          <p role="status" className="text-sm text-muted-foreground">
+            You do not have permission to change this setting.
+          </p>
+        )}
+        <Button
+          variant="outline"
+          className="border-destructive text-destructive hover:bg-destructive/10 hover:text-destructive"
+          disabled={!canQueueDestroy || !allowDestroyPlan || savingDestroySetting || queueingDestroy}
+          onClick={onQueueDestroy}
+        >
+          {queueingDestroy && <Spinner data-icon="inline-start" />}
+          {queueingDestroy ? "Queueing destroy plan…" : "Queue destroy plan"}
+        </Button>
+        {queueError !== "" && <p role="alert" className="text-sm text-destructive">{queueError}</p>}
+        {!canQueueDestroy && (
+          <p role="status" className="text-sm text-muted-foreground">
+            You do not have permission to queue a destroy plan.
+          </p>
+        )}
+      </div>
+    </SettingsSection>
+  );
+}
+
+function DeleteWorkspaceSection({
+  workspaceName,
+  canDelete,
+  open,
+  onOpenChange,
+  confirmation,
+  onConfirmationChange,
+  deleting,
+  error,
+  onSubmit,
+}: Readonly<{
+  workspaceName: string;
+  canDelete: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  confirmation: string;
+  onConfirmationChange: (value: string) => void;
+  deleting: boolean;
+  error: string;
+  onSubmit: (event: React.SyntheticEvent<HTMLFormElement>) => Promise<void>;
+}>): React.JSX.Element {
+  const confirmed = confirmation === workspaceName;
+  return (
+    <SettingsSection
+      tone="danger"
+      title="Delete workspace"
+      description="Permanently removes this workspace and its runs, state, variables and settings. Infrastructure it manages is left running."
+    >
+      <div className="flex flex-col items-start gap-4">
+        <p className="text-sm text-muted-foreground">
+          This action cannot be undone. Destroy the infrastructure first if you also want it gone.
+        </p>
+        <Dialog open={open} onOpenChange={onOpenChange}>
+          <DialogTrigger render={
+            <Button variant="destructive" disabled={!canDelete}>
+              <Trash2 data-icon="inline-start" />
+              Delete workspace
+            </Button>
+          } />
+          <DialogContent>
+            <form onSubmit={onSubmit}>
+              <DialogHeader>
+                <DialogTitle>Delete {workspaceName}?</DialogTitle>
+                <DialogDescription>
+                  Type <strong className="text-foreground">{workspaceName}</strong> to confirm
+                  permanent deletion.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="my-5 space-y-2">
+                <Label htmlFor="workspace-delete-confirmation">Workspace name</Label>
+                <Input
+                  id="workspace-delete-confirmation"
+                  name="workspace-delete-confirmation"
+                  value={confirmation}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                    onConfirmationChange(event.target.value);
+                  }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                    onConfirmationChange(event.currentTarget.value);
+                  }}
+                  autoComplete="off"
+                  disabled={deleting}
+                  aria-describedby={error === "" ? undefined : "workspace-delete-error"}
+                  autoFocus
+                />
+                {error !== "" && (
+                  <p id="workspace-delete-error" role="alert" className="text-sm text-destructive">
+                    {error}
+                  </p>
+                )}
+              </div>
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={deleting}
+                  onClick={(): void => { onOpenChange(false); }}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" variant="destructive" disabled={!confirmed || deleting || !canDelete}>
+                  {deleting && <Spinner data-icon="inline-start" />}
+                  {deleting ? "Deleting" : "Delete workspace permanently"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+        {!canDelete && (
+          <p role="status" className="text-sm text-muted-foreground">
+            You do not have permission to delete this workspace.
+          </p>
+        )}
+      </div>
+    </SettingsSection>
+  );
+}
+
 export function WorkspaceDestruction({
   workspace,
   onDeleted,
@@ -146,124 +314,29 @@ export function WorkspaceDestruction({
 
   return (
     <div className="space-y-6">
-      <SettingsSection
-        title="Destroy infrastructure"
-        description="Queue a plan that destroys every resource this workspace manages. The workspace itself stays."
-      >
-        <div className="space-y-4">
-          <div className="flex items-start gap-3">
-            <Checkbox
-              id="allow-destroy-plans"
-              checked={allowDestroyPlan}
-              disabled={!canUpdate || savingDestroySetting || queueingDestroy}
-              onCheckedChange={(checked: boolean): void => {
-                void updateAllowDestroyPlan(checked);
-              }}
-            />
-            <div className="space-y-1">
-              <Label htmlFor="allow-destroy-plans">Allow destroy plans</Label>
-              <p className="text-sm text-muted-foreground">
-                When disabled, new destroy plans cannot be queued.
-              </p>
-            </div>
-          </div>
-          {savingDestroySetting && <p role="status" className="text-sm text-muted-foreground">Saving setting…</p>}
-          {settingError !== "" && <p role="alert" className="text-sm text-destructive">{settingError}</p>}
-          {!canUpdate && (
-            <p role="status" className="text-sm text-muted-foreground">
-              You do not have permission to change this setting.
-            </p>
-          )}
-          <Button
-            variant="outline"
-            className="border-destructive text-destructive hover:bg-destructive/10 hover:text-destructive"
-            disabled={!canQueueDestroy || !allowDestroyPlan || savingDestroySetting || queueingDestroy}
-            onClick={(): void => { void queueDestroyPlan(); }}
-          >
-            {queueingDestroy && <Spinner data-icon="inline-start" />}
-            {queueingDestroy ? "Queueing destroy plan…" : "Queue destroy plan"}
-          </Button>
-          {queueError !== "" && <p role="alert" className="text-sm text-destructive">{queueError}</p>}
-          {!canQueueDestroy && (
-            <p role="status" className="text-sm text-muted-foreground">
-              You do not have permission to queue a destroy plan.
-            </p>
-          )}
-        </div>
-      </SettingsSection>
+      <DestroyPlanSection
+        allowDestroyPlan={allowDestroyPlan}
+        canUpdate={canUpdate}
+        canQueueDestroy={canQueueDestroy}
+        savingDestroySetting={savingDestroySetting}
+        settingError={settingError}
+        queueingDestroy={queueingDestroy}
+        queueError={queueError}
+        onToggleAllow={(checked: boolean): void => { void updateAllowDestroyPlan(checked); }}
+        onQueueDestroy={(): void => { void queueDestroyPlan(); }}
+      />
 
-      <SettingsSection
-        tone="danger"
-        title="Delete workspace"
-        description="Permanently removes this workspace and its runs, state, variables and settings. Infrastructure it manages is left running."
-      >
-        <div className="flex flex-col items-start gap-4">
-          <p className="text-sm text-muted-foreground">
-            This action cannot be undone. Destroy the infrastructure first if you also want it gone.
-          </p>
-          <Dialog open={open} onOpenChange={setDialogOpen}>
-            <DialogTrigger render={
-              <Button variant="destructive" disabled={!canDelete}>
-                <Trash2 data-icon="inline-start" />
-                Delete workspace
-              </Button>
-            } />
-            <DialogContent>
-              <form onSubmit={deleteWorkspace}>
-                <DialogHeader>
-                  <DialogTitle>Delete {workspace.attributes.name}?</DialogTitle>
-                  <DialogDescription>
-                    Type <strong className="text-foreground">{workspace.attributes.name}</strong> to confirm
-                    permanent deletion.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="my-5 space-y-2">
-                  <Label htmlFor="workspace-delete-confirmation">Workspace name</Label>
-                  <Input
-                    id="workspace-delete-confirmation"
-                    name="workspace-delete-confirmation"
-                    value={confirmation}
-                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                      setConfirmation(event.target.value);
-                    }}
-                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
-                      setConfirmation(event.currentTarget.value);
-                    }}
-                    autoComplete="off"
-                    disabled={deleting}
-                    aria-describedby={error === "" ? undefined : "workspace-delete-error"}
-                    autoFocus
-                  />
-                  {error !== "" && (
-                    <p id="workspace-delete-error" role="alert" className="text-sm text-destructive">
-                      {error}
-                    </p>
-                  )}
-                </div>
-                <DialogFooter>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={deleting}
-                    onClick={(): void => { setDialogOpen(false); }}
-                  >
-                    Cancel
-                  </Button>
-                  <Button type="submit" variant="destructive" disabled={!confirmed || deleting || !canDelete}>
-                    {deleting && <Spinner data-icon="inline-start" />}
-                    {deleting ? "Deleting" : "Delete workspace permanently"}
-                  </Button>
-                </DialogFooter>
-              </form>
-            </DialogContent>
-          </Dialog>
-          {!canDelete && (
-            <p role="status" className="text-sm text-muted-foreground">
-              You do not have permission to delete this workspace.
-            </p>
-          )}
-        </div>
-      </SettingsSection>
+      <DeleteWorkspaceSection
+        workspaceName={workspace.attributes.name}
+        canDelete={canDelete}
+        open={open}
+        onOpenChange={setDialogOpen}
+        confirmation={confirmation}
+        onConfirmationChange={(value: string): void => { setConfirmation(value); }}
+        deleting={deleting}
+        error={error}
+        onSubmit={deleteWorkspace}
+      />
     </div>
   );
 }
