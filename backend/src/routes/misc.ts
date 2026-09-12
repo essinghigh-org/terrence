@@ -394,6 +394,22 @@ async function buildNewVariableInsert(
   };
 }
 
+function parseRunTriggerSourceable(body: unknown): { srcId: string; srcType: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+  const sourceable = rels["sourceable"] as Record<string, unknown> | undefined;
+  const srcData = typeof sourceable?.["data"] === "object" && sourceable["data"] !== null ? (sourceable["data"] as Record<string, unknown>) : undefined;
+  return { srcId: typeof srcData?.["id"] === "string" ? srcData["id"] : "", srcType: srcData?.["type"] };
+}
+
+async function resolveRunTriggerSource(srcId: string, orgId: string, workspaceId: string): Promise<Readonly<{ name: string }> | Readonly<{ error: string }>> {
+  const srcWs = await db.query.workspaces.findFirst({ where: eq(workspaces.id, srcId) });
+  if (srcWs === undefined || srcWs.orgId !== orgId) return { error: "Sourceable workspace must belong to the same organization" };
+  if (srcId === workspaceId) return { error: "Sourceable workspace cannot be the workspace itself" };
+  return { name: srcWs.name };
+}
+
 export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
@@ -805,23 +821,20 @@ export const miscRoutes = new Elysia({ name: "misc" })
     const workspaceId = params["workspace_id"] ?? "";
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId, "admin")) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-    const sourceable = rels["sourceable"] as Record<string, unknown> | undefined;
-    const srcData = typeof sourceable?.["data"] === "object" && sourceable["data"] !== null ? (sourceable["data"] as Record<string, unknown>) : undefined;
-    const srcId = typeof srcData?.["id"] === "string" ? srcData["id"] : "";
-    if (srcData?.["type"] !== "workspaces" || srcId === "") {
+    const { srcId, srcType } = parseRunTriggerSourceable(body);
+    if (srcType !== "workspaces" || srcId === "") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace must be a workspace resource identifier" }] };
     }
-    const srcWs = await db.query.workspaces.findFirst({ where: eq(workspaces.id, srcId) });
-    if (srcWs === undefined || srcWs.orgId !== ws.orgId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace must belong to the same organization" }] }; }
-    if (srcId === workspaceId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace cannot be the workspace itself" }] }; }
+    const resolved = await resolveRunTriggerSource(srcId, ws.orgId, workspaceId);
+    if ("error" in resolved) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: resolved.error }] };
+    }
     const id = newResourceId("rt");
     await db.insert(runTriggers).values({ id, workspaceId, sourceWorkspaceId: srcId }).onConflictDoNothing();
     (set as { status: number }).status = 201;
-    return { data: { id, type: "run-triggers", attributes: { "created-at": new Date().toISOString(), "sourceable-name": srcWs.name, "workspace-name": ws.name }, relationships: { sourceable: { data: { id: srcId, type: "workspaces" } }, "sourceable-workspace": { data: { id: srcId, type: "workspaces" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };
+    return { data: { id, type: "run-triggers", attributes: { "created-at": new Date().toISOString(), "sourceable-name": resolved.name, "workspace-name": ws.name }, relationships: { sourceable: { data: { id: srcId, type: "workspaces" } }, "sourceable-workspace": { data: { id: srcId, type: "workspaces" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };
   })
   .get("/api/v2/run-triggers/:run_trigger_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const triggerId = params["run_trigger_id"] ?? "";
