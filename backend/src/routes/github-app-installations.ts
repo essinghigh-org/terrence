@@ -8,7 +8,7 @@ import { db, isPostgres } from "../db";
 import { apiTokens, githubAppInstallations, oauthClients, oauthTokens, organizations, users } from "../db/schema";
 import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission, requestBaseUrl } from "../lib/utils";
 import { decryptSecret } from "../lib/secrets";
-import { fetchVcsUrl, getGitHubAppAccessToken, getGitHubAppAccessTokenDetails } from "../lib/webhooks";
+import { fetchVcsUrl, getGitHubAppAccessToken, getGitHubAppAccessTokenDetails, type GitHubAppAccessTokenDetails } from "../lib/webhooks";
 import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail, type VcsIntegrationUsage } from "../lib/vcs-integration-usage";
 import { AvatarService } from "../lib/avatars";
 import { githubAppApiBase } from "../lib/github-api";
@@ -927,6 +927,112 @@ function buildGitHubAppAttributes(
   };
 }
 
+type DiagnosticCheck = Readonly<{
+  id: string;
+  label: string;
+  ok: boolean;
+  status: number | null;
+  detail: string;
+}>;
+
+type RepositoryProbe = Readonly<
+  { repo: Readonly<{ full_name: string }>; scopeCheck: null }
+  | { repo: undefined; scopeCheck: DiagnosticCheck }
+>;
+
+async function probeInstallationRepositories(
+  githubApiBase: string,
+  repoHeaders: Readonly<Record<string, string>>,
+): Promise<RepositoryProbe> {
+  // Listing repositories is the read path Terrence uses to resolve a
+  // workspace's VCS repo; an install scoped to too few repos breaks it.
+  // GitHub returns archived repositories in this list, but archived repos
+  // reject status writes even when the App has the required permission.
+  let repositoryUrl = repositoryEndpoint(new URL(githubApiBase), "installation/repositories", {
+    per_page: String(REPOSITORY_PAGE_SIZE),
+  });
+  let repo: { full_name: string } | undefined;
+  let sawRepository = false;
+  for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
+    const statusRes = await fetchVcsUrl(repositoryUrl.toString(), {
+      headers: repoHeaders,
+      timeoutMs: GITHUB_TIMEOUT_MS,
+    });
+    if (!statusRes.ok) {
+      return {
+        repo: undefined,
+        scopeCheck: { id: "installation-access", label: "Installation repo access", ok: false, status: statusRes.status, detail: `Installation could not list repositories (HTTP ${statusRes.status}). Re-install the app and grant repository access.` },
+      };
+    }
+    const repoList = await statusRes.json() as { repositories?: { full_name?: unknown; archived?: unknown }[] };
+    for (const candidate of repoList.repositories ?? []) {
+      if (typeof candidate.full_name !== "string" || candidate.full_name === "") continue;
+      sawRepository = true;
+      if (candidate.archived !== true) {
+        repo = { full_name: candidate.full_name };
+        break;
+      }
+    }
+    if (repo !== undefined) break;
+    const next = safeNextRepositoryUrl(nextLink(statusRes.headers), new URL(githubApiBase));
+    if (next === null) break;
+    repositoryUrl = next;
+  }
+  if (repo === undefined) {
+    return {
+      repo: undefined,
+      scopeCheck: {
+        id: "repo-scope",
+        label: "Repository access scope",
+        ok: false,
+        status: null,
+        detail: sawRepository
+          ? "The installation only exposes archived repositories, which cannot accept commit statuses. Select at least one active repository for the installation."
+          : "The installation has access to no repositories. Select at least one repository (including the ones this workspace points at).",
+      },
+    };
+  }
+  return { repo, scopeCheck: null };
+}
+
+async function checkCommitStatusesPermission(
+  permissions: GitHubAppAccessTokenDetails["permissions"],
+  githubApiBase: string,
+  repoHeaders: Readonly<Record<string, string>>,
+  repoFullName: string,
+): Promise<DiagnosticCheck> {
+  if (permissions !== null) {
+    const statusesPermission = permissions["statuses"];
+    if (statusesPermission === "write") {
+      return { id: "commit-statuses", label: "Commit statuses (write)", ok: true, status: null, detail: `The installation access token grants Commit statuses write on active repository ${repoFullName}.` };
+    }
+    return { id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: null, detail: `The installation access token reports Commit statuses permission as ${statusesPermission === undefined ? "not granted" : JSON.stringify(statusesPermission)} on ${repoFullName}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` };
+  }
+  // Some GitHub-compatible APIs omit permissions from the access-token
+  // response. Keep the synthetic write probe for those deployments.
+  const testSha = "a".repeat(40);
+  const writeRes = await fetchVcsUrl(`${githubApiBase}/repos/${encodeURIComponent(repoFullName)}/statuses/${testSha}`, {
+    method: "POST",
+    headers: repoHeaders,
+    body: JSON.stringify({ state: "pending", context: "terrence/diagnostics", description: "Terrence permission check" }),
+    timeoutMs: GITHUB_TIMEOUT_MS,
+  });
+  // GitHub-compatible APIs commonly return 422 for a synthetic
+  // (non-existent) SHA when the token has the commit-statuses permission.
+  // A 200 also proves the permission. 403/404 remain failure signals when
+  // the API did not provide explicit permission metadata above.
+  if (writeRes.ok || writeRes.status === 422) {
+    return { id: "commit-statuses", label: "Commit statuses (write)", ok: true, status: writeRes.status, detail: `Commit statuses write path is authorized on active repository ${repoFullName}.` };
+  }
+  if (writeRes.status === 404) {
+    return { id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: 404, detail: `Commit statuses write returned 404 on ${repoFullName}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` };
+  }
+  if (writeRes.status === 403) {
+    return { id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: 403, detail: `Commit statuses write returned 403 on ${repoFullName}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` };
+  }
+  return { id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: writeRes.status, detail: `Commit statuses write returned HTTP ${writeRes.status}. Check the GitHub App's permission settings.` };
+}
+
 export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstallations" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/vcs-connections/:connection_id/repositories", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -1420,99 +1526,29 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       return { errors: [{ status: "409", title: "Conflict", detail: "No GitHub App installation is registered for this organization. Install the app on the target repository first." }] };
     }
     const config = await githubAppConfig();
+    const appId = config?.appId ?? null;
+    const githubApiBase = config?.apiUrl ?? "https://api.github.com";
     const results = await Promise.all(installations.map(async (installation) => {
-      const checks: {
-        id: string; label: string; ok: boolean; status: number | null; detail: string;
-      }[] = [];
+      const checks: DiagnosticCheck[] = [];
       const tokenDetails = await getGitHubAppAccessTokenDetails(installation.installationId);
       if (tokenDetails === null) {
         checks.push({ id: "app-token", label: "GitHub App token creation", ok: false, status: null, detail: "GITHUB_APP_ID or GITHUB_APP_PRIVATE_KEY is missing or invalid — token generation failed." });
-        return { installationId: installation.installationId, config: config?.appId ?? null, checks };
+        return { installationId: installation.installationId, config: appId, checks };
       }
       const token = tokenDetails.token;
-      const githubApiBase = config?.apiUrl ?? "https://api.github.com";
       const repoHeaders = {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,
         "User-Agent": "Terrence",
         "X-GitHub-Api-Version": "2022-11-28",
       };
-      // Listing repositories is the read path Terrence uses to resolve a
-      // workspace's VCS repo; an install scoped to too few repos breaks it.
-      // GitHub returns archived repositories in this list, but archived repos
-      // reject status writes even when the App has the required permission.
-      let repositoryUrl = repositoryEndpoint(new URL(githubApiBase), "installation/repositories", {
-        per_page: String(REPOSITORY_PAGE_SIZE),
-      });
-      let repo: { full_name: string } | undefined;
-      let sawRepository = false;
-      for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
-        const statusRes = await fetchVcsUrl(repositoryUrl.toString(), {
-          headers: repoHeaders,
-          timeoutMs: GITHUB_TIMEOUT_MS,
-        });
-        if (!statusRes.ok) {
-          checks.push({ id: "installation-access", label: "Installation repo access", ok: false, status: statusRes.status, detail: `Installation could not list repositories (HTTP ${statusRes.status}). Re-install the app and grant repository access.` });
-          return { installationId: installation.installationId, config: config?.appId ?? null, checks };
-        }
-        const repoList = await statusRes.json() as { repositories?: { full_name?: unknown; archived?: unknown }[] };
-        for (const candidate of repoList.repositories ?? []) {
-          if (typeof candidate.full_name !== "string" || candidate.full_name === "") continue;
-          sawRepository = true;
-          if (candidate.archived !== true) {
-            repo = { full_name: candidate.full_name };
-            break;
-          }
-        }
-        if (repo !== undefined) break;
-        const next = safeNextRepositoryUrl(nextLink(statusRes.headers), new URL(githubApiBase));
-        if (next === null) break;
-        repositoryUrl = next;
+      const probe = await probeInstallationRepositories(githubApiBase, repoHeaders);
+      if (probe.scopeCheck !== null) {
+        checks.push(probe.scopeCheck);
+        return { installationId: installation.installationId, config: appId, checks };
       }
-      if (repo === undefined) {
-        checks.push({
-          id: "repo-scope",
-          label: "Repository access scope",
-          ok: false,
-          status: null,
-          detail: sawRepository
-            ? "The installation only exposes archived repositories, which cannot accept commit statuses. Select at least one active repository for the installation."
-            : "The installation has access to no repositories. Select at least one repository (including the ones this workspace points at).",
-        });
-        return { installationId: installation.installationId, config: config?.appId ?? null, checks };
-      }
-      if (tokenDetails.permissions !== null) {
-        const statusesPermission = tokenDetails.permissions["statuses"];
-        if (statusesPermission === "write") {
-          checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: true, status: null, detail: `The installation access token grants Commit statuses write on active repository ${repo.full_name}.` });
-        } else {
-          checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: null, detail: `The installation access token reports Commit statuses permission as ${statusesPermission === undefined ? "not granted" : JSON.stringify(statusesPermission)} on ${repo.full_name}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` });
-        }
-        return { installationId: installation.installationId, config: config?.appId ?? null, checks };
-      }
-      // Some GitHub-compatible APIs omit permissions from the access-token
-      // response. Keep the synthetic write probe for those deployments.
-      const testSha = "a".repeat(40);
-      const writeRes = await fetchVcsUrl(`${githubApiBase}/repos/${encodeURIComponent(repo.full_name)}/statuses/${testSha}`, {
-        method: "POST",
-        headers: repoHeaders,
-        body: JSON.stringify({ state: "pending", context: "terrence/diagnostics", description: "Terrence permission check" }),
-        timeoutMs: GITHUB_TIMEOUT_MS,
-      });
-      // GitHub-compatible APIs commonly return 422 for a synthetic
-      // (non-existent) SHA when the token has the commit-statuses permission.
-      // A 200 also proves the permission. 403/404 remain failure signals when
-      // the API did not provide explicit permission metadata above.
-      if (writeRes.ok || writeRes.status === 422) {
-        checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: true, status: writeRes.status, detail: `Commit statuses write path is authorized on active repository ${repo.full_name}.` });
-      } else if (writeRes.status === 404) {
-        checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: 404, detail: `Commit statuses write returned 404 on ${repo.full_name}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` });
-      } else if (writeRes.status === 403) {
-        checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: 403, detail: `Commit statuses write returned 403 on ${repo.full_name}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` });
-      } else {
-        checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: writeRes.status, detail: `Commit statuses write returned HTTP ${writeRes.status}. Check the GitHub App's permission settings.` });
-      }
-      return { installationId: installation.installationId, config: config?.appId ?? null, checks };
+      checks.push(await checkCommitStatusesPermission(tokenDetails.permissions, githubApiBase, repoHeaders, probe.repo.full_name));
+      return { installationId: installation.installationId, config: appId, checks };
     }));
     return { data: results };
   });
