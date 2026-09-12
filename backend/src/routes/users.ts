@@ -689,6 +689,161 @@ async function persistUserUpdates(
   }
 }
 
+async function requireMembershipManagerOrThrow(
+  orgName: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null | undefined,
+): Promise<CachedOrg> {
+  const org = await cachedOrgByName(orgName);
+  if (org === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
+    throw new HttpStatusError(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  return org;
+}
+
+function membershipCreateInputOrThrow(body: unknown): { data: Record<string, unknown>; attrs: Readonly<Record<string, unknown>> } {
+  const root = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  const data = childRecord(root, "data");
+  if (typeof data["type"] === "string" && data["type"] !== "organization-memberships") {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be \"organization-memberships\"" }] });
+  }
+  return { data, attrs: childRecord(data, "attributes") };
+}
+
+function resolveCreateEmailOrThrow(attrs: Readonly<Record<string, unknown>>): string | null | undefined {
+  const rawEmail = typeof attrs["email"] === "string" ? attrs["email"] : undefined;
+  const email = rawEmail === undefined ? undefined : normalizeEmail(rawEmail);
+  if (rawEmail !== undefined && email === null) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email address" }] });
+  }
+  return email;
+}
+
+async function lookupMembershipTarget(
+  email: string | null | undefined,
+  attrs: Readonly<Record<string, unknown>>,
+): Promise<Readonly<typeof users.$inferSelect> | undefined> {
+  const username = typeof attrs["username"] === "string" ? attrs["username"] : undefined;
+  let targetUser: Readonly<typeof users.$inferSelect> | undefined;
+  if (email !== undefined && email !== null) targetUser = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
+  if (targetUser === undefined && username !== undefined) targetUser = await db.query.users.findFirst({ where: eq(users.username, username) });
+  return targetUser;
+}
+
+function resolveRequestedStatusOrThrow(attrs: Readonly<Record<string, unknown>>): string | undefined {
+  const allowedStatuses = new Set(["active", "invited"]);
+  const rawRequestedStatus = typeof attrs["status"] === "string" ? attrs["status"] : undefined;
+  if (rawRequestedStatus !== undefined && !allowedStatuses.has(rawRequestedStatus)) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be one of: active, invited" }] });
+  }
+  return rawRequestedStatus;
+}
+
+function teamRelResourceIdOrThrow(item: unknown): string {
+  if (item === null || typeof item !== "object" || Array.isArray(item) || typeof (item as Record<string, unknown>)["id"] !== "string" || (item as Record<string, unknown>)["id"] === "") {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "relationships.teams.data[] must contain team resource identifiers" }] });
+  }
+  const record = item as Record<string, unknown>;
+  if (typeof record["type"] === "string" && record["type"] !== "teams") {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "relationships.teams.data[].type must be \"teams\"" }] });
+  }
+  return record["id"] as string;
+}
+
+function parseTeamRelIdsOrThrow(data: Record<string, unknown>): string[] {
+  // Pre-validate relationships.teams before inserting the membership so a 422
+  // does not leave an orphan organizationMembership row behind.
+  const rels = childRecord(data, "relationships");
+  if (Object.hasOwn(rels, "teams") && (rels["teams"] === null || typeof rels["teams"] !== "object" || Array.isArray(rels["teams"]))) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "relationships.teams must be an object" }] });
+  }
+  const teamRelData: unknown = childRecord(rels, "teams")["data"];
+  if (teamRelData === undefined) return [];
+  if (!Array.isArray(teamRelData)) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "relationships.teams.data must be an array" }] });
+  }
+  return teamRelData.map((t): string => teamRelResourceIdOrThrow(t));
+}
+
+async function validateTeamIdsOrThrow(
+  uniqueIds: string[],
+  orgId: string,
+  orgName: string,
+): Promise<{ id: string; orgId: string }[]> {
+  const allTeams = await db.query.teams.findMany({ where: inArray(teams.id, uniqueIds), columns: { id: true, orgId: true } });
+  const byIdMap = new Map(allTeams.map((tm: { id: string; orgId: string }): [string, string] => [tm.id, tm.orgId]));
+  for (const cid of uniqueIds) {
+    const owner = byIdMap.get(cid);
+    if (owner === undefined) {
+      throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Team \"${cid}\" does not exist` }] });
+    }
+    if (owner !== orgId) {
+      throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Team \"${cid}\" does not belong to organization \"${orgName}\"` }] });
+    }
+  }
+  return allTeams;
+}
+
+async function resolveValidatedTeams(
+  data: Record<string, unknown>,
+  orgId: string,
+  orgName: string,
+): Promise<{ id: string; orgId: string }[] | null> {
+  const candidateIds = parseTeamRelIdsOrThrow(data);
+  if (candidateIds.length === 0) return null;
+  const uniqueIds = [...new Set(candidateIds)];
+  if (uniqueIds.length !== candidateIds.length) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Duplicate team IDs in relationships.teams" }] });
+  }
+  return validateTeamIdsOrThrow(uniqueIds, orgId, orgName);
+}
+
+function assertMembershipTargetOrThrow(
+  targetUser: Readonly<typeof users.$inferSelect> | undefined,
+  email: string | null | undefined,
+): void {
+  if (targetUser === undefined && (email === undefined || email === null)) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "An email address is required to add an organization member" }] });
+  }
+  if (targetUser !== undefined && (targetUser.email === null || targetUser.email === "")) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "An email address is required for the organization member" }] });
+  }
+  if (targetUser !== undefined && email !== undefined && email !== null && normalizeEmail(targetUser.email) !== email) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The email address does not match the selected user" }] });
+  }
+}
+
+async function executeMembershipCreate(
+  args: Readonly<{
+    targetUser: Readonly<typeof users.$inferSelect> | undefined;
+    email: string | null | undefined;
+    orgId: string;
+    rawRequestedStatus: string | undefined;
+    validatedTeams: { id: string; orgId: string }[] | null;
+    actorId: string | null | undefined;
+  }>,
+): Promise<{ targetUser: Readonly<typeof users.$inferSelect>; mem: Readonly<typeof organizationMemberships.$inferSelect>; teamIds: string[] }> {
+  // Provisioning, membership creation, and team assignment are one unit:
+  // an unexpected constraint/FK failure must not leave a provisional user
+  // or a half-created organization membership behind.
+  const memId = newResourceId("orgmem");
+  const duplicateMembership = new Error("organization membership already exists");
+  try {
+    const result = await db.transaction(async (tx: unknown): Promise<{ targetUser: Readonly<typeof users.$inferSelect>; mem: Readonly<typeof organizationMemberships.$inferSelect>; teamIds: string[] }> => {
+      const t = tx as typeof db;
+      return createMembershipTx(t, { targetUser: args.targetUser, email: args.email, orgId: args.orgId, rawRequestedStatus: args.rawRequestedStatus, validatedTeams: args.validatedTeams, memId, duplicate: duplicateMembership });
+    });
+    await auditLog("create", "organization-memberships", memId, args.actorId ?? null, args.orgId, { userId: result.targetUser.id, email: args.email ?? result.targetUser.email, role: "member", status: result.mem.status });
+    return result;
+  } catch (error: unknown) {
+    if (error === duplicateMembership || isUniqueConstraintError(error)) {
+      throw new HttpStatusError(409, { errors: [{ status: "409", title: "Conflict", detail: "User is already a member of this organization" }] });
+    }
+    throw error;
+  }
+}
+
 export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
   .get("/api/v2/users", async ({ query, user, set }: ParamCtx): Promise<unknown> => {
@@ -889,121 +1044,24 @@ export const userRoutes = new Elysia({ name: "users" })
   })
   .post("/api/v2/organizations/:org_name/organization-memberships", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    if (data !== undefined && typeof data["type"] === "string" && data["type"] !== "organization-memberships") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be \"organization-memberships\"" }] };
-    }
-    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const rawEmail = typeof attrs["email"] === "string" ? attrs["email"] : undefined;
-    const email = rawEmail === undefined ? undefined : normalizeEmail(rawEmail);
-    if (rawEmail !== undefined && email === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email address" }] };
-    }
-    const username = typeof attrs["username"] === "string" ? attrs["username"] : undefined;
-    let targetUser: Readonly<typeof users.$inferSelect> | undefined;
-    if (email !== undefined && email !== null) targetUser = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
-    if (targetUser === undefined && username !== undefined) targetUser = await db.query.users.findFirst({ where: eq(users.username, username) });
-    const memId = newResourceId("orgmem");
-    const allowedStatuses = new Set(["active", "invited"]);
-    const rawRequestedStatus = typeof attrs["status"] === "string" ? attrs["status"] : undefined;
-    if (rawRequestedStatus !== undefined && !allowedStatuses.has(rawRequestedStatus)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be one of: active, invited" }] };
-    }
-    // Pre-validate relationships.teams before inserting the membership so a 422
-    // does not leave an orphan organizationMembership row behind.
-    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-    if (Object.hasOwn(rels, "teams") && (rels["teams"] === null || typeof rels["teams"] !== "object" || Array.isArray(rels["teams"]))) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "relationships.teams must be an object" }] };
-    }
-    const teamsRel = typeof rels["teams"] === "object" && rels["teams"] !== null ? (rels["teams"] as Record<string, unknown>) : {};
-    const teamRelData = teamsRel["data"];
-    const candidateIds: string[] = [];
-    let validatedTeams: { id: string; orgId: string }[] | null = null;
-    if (teamRelData !== undefined && !Array.isArray(teamRelData)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "relationships.teams.data must be an array" }] };
-    }
-    if (Array.isArray(teamRelData)) {
-      for (const t of teamRelData) {
-        if (t === null || typeof t !== "object" || Array.isArray(t) || typeof (t as Record<string, unknown>)["id"] !== "string" || (t as Record<string, unknown>)["id"] === "") {
-          (set as { status: number }).status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "relationships.teams.data[] must contain team resource identifiers" }] };
-        }
-        if (t !== null && typeof t === "object" && typeof (t as Record<string, unknown>)["type"] === "string" && (t as Record<string, unknown>)["type"] !== "teams") {
-          (set as { status: number }).status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "relationships.teams.data[].type must be \"teams\"" }] };
-        }
-        if (t !== null && typeof t === "object" && typeof (t as Record<string, unknown>)["id"] === "string") {
-          candidateIds.push((t as Record<string, unknown>)["id"] as string);
-        }
-      }
-      if (candidateIds.length > 0) {
-        const uniqueIds = [...new Set(candidateIds)];
-        if (uniqueIds.length !== candidateIds.length) {
-          (set as { status: number }).status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Duplicate team IDs in relationships.teams" }] };
-        }
-        const allTeams = await db.query.teams.findMany({ where: inArray(teams.id, uniqueIds), columns: { id: true, orgId: true } });
-        const byIdMap = new Map(allTeams.map((tm: { id: string; orgId: string }): [string, string] => [tm.id, tm.orgId]));
-        for (const cid of uniqueIds) {
-          const owner = byIdMap.get(cid);
-          if (owner === undefined) {
-            (set as { status: number }).status = 422;
-            return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Team \"${cid}\" does not exist` }] };
-          }
-          if (owner !== org.id) {
-            (set as { status: number }).status = 422;
-            return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Team \"${cid}\" does not belong to organization \"${org.name}\"` }] };
-          }
-        }
-        validatedTeams = allTeams;
-      }
-    }
-
-    if (targetUser === undefined && (email === undefined || email === null)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "An email address is required to add an organization member" }] };
-    }
-    if (targetUser !== undefined && (targetUser.email === null || targetUser.email === "")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "An email address is required for the organization member" }] };
-    }
-    if (targetUser !== undefined && email !== undefined && email !== null && normalizeEmail(targetUser.email) !== email) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The email address does not match the selected user" }] };
-    }
-    // Provisioning, membership creation, and team assignment are one unit:
-    // an unexpected constraint/FK failure must not leave a provisional user
-    // or a half-created organization membership behind.
-    const duplicateMembership = new Error("organization membership already exists");
-    let result: { targetUser: Readonly<typeof users.$inferSelect>; mem: Readonly<typeof organizationMemberships.$inferSelect>; teamIds: string[] };
     try {
-      result = await db.transaction(async (tx: unknown): Promise<{ targetUser: Readonly<typeof users.$inferSelect>; mem: Readonly<typeof organizationMemberships.$inferSelect>; teamIds: string[] }> => {
-        const t = tx as typeof db;
-        return createMembershipTx(t, { targetUser, email, orgId: org.id, rawRequestedStatus, validatedTeams, memId, duplicate: duplicateMembership });
-      });
+      const org = await requireMembershipManagerOrThrow(orgName, user?.id, tokenOrgId, tokenTeamId);
+      const { data, attrs } = membershipCreateInputOrThrow(body);
+      const email = resolveCreateEmailOrThrow(attrs);
+      const targetUser = await lookupMembershipTarget(email, attrs);
+      const rawRequestedStatus = resolveRequestedStatusOrThrow(attrs);
+      const validatedTeams = await resolveValidatedTeams(data, org.id, org.name);
+      assertMembershipTargetOrThrow(targetUser, email);
+      const created = await executeMembershipCreate({ targetUser, email, orgId: org.id, rawRequestedStatus, validatedTeams, actorId: user?.id });
+      (set as { status: number }).status = 201;
+      return { data: await orgMembershipResource(created.mem, created.targetUser, created.teamIds) };
     } catch (error: unknown) {
-      if (error === duplicateMembership || isUniqueConstraintError(error)) {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "User is already a member of this organization" }] };
+      if (error instanceof HttpStatusError) {
+        (set as { status: number }).status = error.status;
+        return error.body;
       }
       throw error;
     }
-    targetUser = result.targetUser;
-    const mem = result.mem;
-    const effectiveStatus = mem.status;
-    await auditLog("create", "organization-memberships", memId, user?.id ?? null, org.id, { userId: targetUser.id, email: email ?? targetUser.email, role: "member", status: effectiveStatus });
-    (set as { status: number }).status = 201;
-    return { data: await orgMembershipResource(mem, targetUser, result.teamIds) };
   })
   .get("/api/v2/organizations/:org_name/organization-memberships", async ({ params, query, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
