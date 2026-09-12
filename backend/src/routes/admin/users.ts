@@ -15,6 +15,71 @@ import { type UserItem, adminUserResource } from "./helpers";
 import { publish } from "../../lib/event-bus";
 import { normalizeEmail, normalizeUsername } from "../../lib/identity";
 import { IMPERSONATION_TOKEN_PREFIX, isImpersonationTokenId } from "../../lib/impersonation";
+function parseAdminUserCreate(
+  body: unknown,
+  set: ParamCtx["set"],
+): { username: string; email: string | null; password: string; isSiteAdmin: boolean } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  const username = typeof attrs["username"] === "string" ? normalizeUsername(attrs["username"]) : null;
+  const rawEmail = typeof attrs["email"] === "string" ? attrs["email"].trim() : null;
+  const email = rawEmail === null || rawEmail === "" ? null : normalizeEmail(rawEmail);
+  const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
+  const isSiteAdmin = attrs["is-site-admin"] === true;
+  if (username === null) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username is required" }] } };
+  }
+  if (rawEmail !== null && rawEmail !== "" && email === null) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email" }] } };
+  }
+  return { username, email, password, isSiteAdmin };
+}
+
+async function checkAdminUserCreate(
+  username: string,
+  email: string | null,
+  password: string,
+  set: ParamCtx["set"],
+): Promise<{ ok: true } | { error: unknown }> {
+  const adminPolicy = checkPasswordPolicy(loadPasswordPolicy(), password, username);
+  if (!adminPolicy.ok) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: adminPolicy.errors.join(" ") }] } };
+  }
+  const existing = await db.query.users.findFirst({ where: or(eq(users.username, username), ...(email === null ? [] : [eq(users.email, email)])) });
+  if (existing !== undefined) {
+    (set as { status: number }).status = 409;
+    return { error: { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] } };
+  }
+  return { ok: true };
+}
+
+async function insertAdminUser(
+  username: string,
+  email: string | null,
+  password: string,
+  isSiteAdmin: boolean,
+  set: ParamCtx["set"],
+): Promise<{ created: typeof users.$inferSelect } | { error: unknown }> {
+  const passwordHash = await hashPassword(password);
+  const id = newResourceId("user");
+  try {
+    await db.insert(users).values({ id, username, email, passwordHash, isSiteAdmin });
+  } catch (e: unknown) {
+    if (isUniqueConstraintError(e)) {
+      (set as { status: number }).status = 409;
+      return { error: { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] } };
+    }
+    throw e;
+  }
+  const created = await db.query.users.findFirst({ where: eq(users.id, id) });
+  if (created === undefined) { (set as { status: number }).status = 500; return { error: { errors: [{ status: "500", title: "Internal Server Error" }] } }; }
+  return { created };
+}
+
 export const usersRoutes = new Elysia({ name: "admin-users" })
   .use(authPlugin)
   .get("/api/v2/admin/users", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
@@ -43,47 +108,14 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   })
   .post("/api/v2/admin/users", async ({ body, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const username = typeof attrs["username"] === "string" ? normalizeUsername(attrs["username"]) : null;
-    const rawEmail = typeof attrs["email"] === "string" ? attrs["email"].trim() : null;
-    const email = rawEmail === null || rawEmail === "" ? null : normalizeEmail(rawEmail);
-    const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
-    const isSiteAdmin = attrs["is-site-admin"] === true;
-    if (username === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username is required" }] };
-    }
-    if (rawEmail !== null && rawEmail !== "" && email === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email" }] };
-    }
-    const adminPolicy = checkPasswordPolicy(loadPasswordPolicy(), password, username);
-    if (!adminPolicy.ok) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: adminPolicy.errors.join(" ") }] };
-    }
-    const existing = await db.query.users.findFirst({ where: or(eq(users.username, username), ...(email === null ? [] : [eq(users.email, email)])) });
-    if (existing !== undefined) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
-    }
-    const passwordHash = await hashPassword(password);
-    const id = newResourceId("user");
-    try {
-      await db.insert(users).values({ id, username, email, passwordHash, isSiteAdmin });
-    } catch (e: unknown) {
-      if (isUniqueConstraintError(e)) {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
-      }
-      throw e;
-    }
-    const created = await db.query.users.findFirst({ where: eq(users.id, id) });
-    if (created === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    const parsed = parseAdminUserCreate(body, set);
+    if ("error" in parsed) return parsed.error;
+    const checked = await checkAdminUserCreate(parsed.username, parsed.email, parsed.password, set);
+    if ("error" in checked) return checked.error;
+    const inserted = await insertAdminUser(parsed.username, parsed.email, parsed.password, parsed.isSiteAdmin, set);
+    if ("error" in inserted) return inserted.error;
     (set as { status: number }).status = 201;
-    return { data: adminUserResource(created) };
+    return { data: adminUserResource(inserted.created) };
   })
   .get("/api/v2/admin/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const userId = params["user_id"] ?? "";
