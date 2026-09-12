@@ -568,23 +568,30 @@ function recordValue(value: unknown): RepositoryRecord | null {
     : null;
 }
 
-function normalizedRepository(record: RepositoryRecord, provider: RepositoryProvider): RepositoryResource | null {
+function gitlabFullName(record: RepositoryRecord): string | null {
+  const direct = stringValue(record["path_with_namespace"]);
+  if (direct !== null) return direct;
   const namespace = recordValue(record["namespace"]);
-  const ownerRecord = recordValue(record["owner"]);
-  const fullName = provider === "gitlab"
-    ? stringValue(record["path_with_namespace"])
-      ?? (stringValue(namespace?.["full_path"]) === null || stringValue(record["path"]) === null
-        ? null
-        : `${stringValue(namespace?.["full_path"])}/${stringValue(record["path"])}`)
-    : stringValue(record["full_name"]);
-  if (fullName === null) return null;
+  const namespacePath = stringValue(namespace?.["full_path"]);
+  const path = stringValue(record["path"]);
+  if (namespacePath === null || path === null) return null;
+  return `${namespacePath}/${path}`;
+}
 
+function repositoryOwner(record: RepositoryRecord, provider: RepositoryProvider): string | null {
+  const ownerRecord = recordValue(record["owner"]);
+  if (provider === "github") return stringValue(ownerRecord?.["login"]);
+  if (provider === "bitbucket") {
+    return stringValue(ownerRecord?.["display_name"]) ?? stringValue(ownerRecord?.["nickname"]) ?? stringValue(ownerRecord?.["username"]);
+  }
+  return null;
+}
+
+function normalizedRepository(record: RepositoryRecord, provider: RepositoryProvider): RepositoryResource | null {
+  const fullName = provider === "gitlab" ? gitlabFullName(record) : stringValue(record["full_name"]);
+  if (fullName === null) return null;
   const name = stringValue(record["name"]) ?? fullName.split("/").at(-1) ?? fullName;
-  const owner = provider === "github"
-    ? stringValue(ownerRecord?.["login"])
-    : provider === "bitbucket"
-      ? stringValue(ownerRecord?.["display_name"]) ?? stringValue(ownerRecord?.["nickname"]) ?? stringValue(ownerRecord?.["username"])
-      : null;
+  const owner = repositoryOwner(record, provider);
   const pathOwner = fullName.split("/").slice(0, -1).join("/");
   return {
     id: fullName,
