@@ -87,6 +87,273 @@ const emptyForm: StackForm = {
   speculative: false,
 };
 
+function vcsRepo(stack: Stack): VcsRepo {
+  return stack.attributes["vcs-repo"] ?? null;
+}
+
+function stackHasVcsRemote(stack: Stack): boolean {
+  const repo = vcsRepo(stack);
+  return ((repo?.identifier ?? "").trim()) !== "" || ((repo?.["repository-http-url"] ?? "").trim()) !== "";
+}
+
+function stackVcsFormFields(repo: VcsRepo): Pick<StackForm,
+  "vcsIdentifier" | "vcsBranch" | "vcsServiceProvider" | "vcsDisplayIdentifier" | "vcsRepositoryHttpUrl" | "vcsTagsRegex" | "vcsSparseCheckoutPattern"
+> {
+  return {
+    vcsIdentifier: repo?.identifier ?? "",
+    vcsBranch: repo?.branch ?? "",
+    vcsServiceProvider: repo?.["service-provider"] ?? "github",
+    vcsDisplayIdentifier: repo?.["display-identifier"] ?? "",
+    vcsRepositoryHttpUrl: repo?.["repository-http-url"] ?? "",
+    vcsTagsRegex: repo?.["tags-regex"] ?? "",
+    vcsSparseCheckoutPattern: repo?.["sparse-checkout-pattern"] ?? "",
+  };
+}
+
+function stackFormFromStack(stack: Stack): StackForm {
+  return {
+    name: stack.attributes.name,
+    projectId: "",
+    agentPoolId: stack.relationships?.["agent-pool"]?.data?.id ?? "",
+    description: stack.attributes.description ?? "",
+    workingDirectory: stack.attributes["working-directory"] ?? "",
+    ...stackVcsFormFields(vcsRepo(stack)),
+    triggerDisabled: stack.attributes["trigger-disabled"] === true || vcsRepo(stack)?.["trigger-disabled"] === true,
+    debuggingMode: stack.attributes["debugging-mode"] === true,
+    executionMode: stack.attributes["execution-mode"] === "agent" ? "agent" : "remote",
+    speculative: stack.attributes["speculative-enabled"] === true,
+  };
+}
+
+function validateStackForm(form: StackForm, isEditing: boolean): string | null {
+  if (form.name.trim() === "") return "A stack name is required.";
+  if (form.executionMode === "agent" && form.agentPoolId === "") return "Select an agent pool for agent execution.";
+  if (!isEditing && form.projectId === "") return "A project is required.";
+  return null;
+}
+
+function stackVcsPayload(form: StackForm): Record<string, unknown> | undefined {
+  const vcsIdentifier = form.vcsIdentifier.trim();
+  const vcsBranch = form.vcsBranch.trim();
+  const vcsServiceProvider = form.vcsServiceProvider.trim();
+  const vcsDisplayIdentifier = form.vcsDisplayIdentifier.trim();
+  const vcsRepositoryHttpUrl = form.vcsRepositoryHttpUrl.trim();
+  const vcsTagsRegex = form.vcsTagsRegex.trim();
+  const vcsSparseCheckoutPattern = form.vcsSparseCheckoutPattern.trim();
+  // Only send vcs-repo when an identifier is supplied, otherwise omit it
+  // (an empty object would otherwise clear/override the stored VCS values).
+  if (vcsIdentifier === "" && vcsRepositoryHttpUrl === "") return undefined;
+  return {
+    ...(vcsIdentifier === "" ? undefined : { identifier: vcsIdentifier }),
+    ...(vcsServiceProvider === "" ? undefined : { "service-provider": vcsServiceProvider }),
+    ...(vcsBranch === "" ? undefined : { branch: vcsBranch }),
+    ...(vcsDisplayIdentifier === "" ? undefined : { "display-identifier": vcsDisplayIdentifier }),
+    ...(vcsRepositoryHttpUrl === "" ? undefined : { "repository-http-url": vcsRepositoryHttpUrl }),
+    ...(vcsTagsRegex === "" ? undefined : { "tags-regex": vcsTagsRegex }),
+    ...(vcsSparseCheckoutPattern === "" ? undefined : { "sparse-checkout-pattern": vcsSparseCheckoutPattern }),
+    "trigger-disabled": form.triggerDisabled,
+  };
+}
+
+function stackSubmitAttributes(form: StackForm, editingStack: Stack | null): Record<string, unknown> {
+  const vcs = stackVcsPayload(form);
+  const originalVcs = editingStack?.attributes["vcs-repo"];
+  const originalVcsConfigured = (originalVcs?.identifier ?? "").trim() !== ""
+    || (originalVcs?.["repository-http-url"] ?? "").trim() !== "";
+  return {
+    name: form.name.trim(),
+    description: form.description,
+    "working-directory": form.workingDirectory === "" ? (editingStack === null ? undefined : form.workingDirectory) : form.workingDirectory,
+    "speculative-enabled": form.speculative,
+    "trigger-disabled": form.triggerDisabled,
+    "debugging-mode": form.debuggingMode,
+    "execution-mode": form.executionMode,
+    ...(vcs === undefined
+      ? (editingStack !== null && originalVcsConfigured
+        // Editing a stack that currently has a VCS repo but the identifier was
+        // cleared: explicitly clear the stored VCS config.
+        ? { "vcs-repo": null }
+        : undefined)
+      : { "vcs-repo": vcs }),
+  };
+}
+
+function StackTriggerFlags({ stack }: Readonly<{ stack: Stack }>): React.JSX.Element | null {
+  const triggersDisabled = stack.attributes["trigger-disabled"] === true || vcsRepo(stack)?.["trigger-disabled"] === true;
+  const debugging = stack.attributes["debugging-mode"] === true;
+  if (!triggersDisabled && !debugging) return null;
+  return (
+    <div className="text-xs">{triggersDisabled ? "Triggers disabled" : ""}{triggersDisabled && debugging ? " · " : ""}{debugging ? "Debugging" : ""}</div>
+  );
+}
+
+function StackLatestCell({ latest, canManage, busy, onPrepare }: Readonly<{
+  latest: LatestConfiguration | undefined;
+  canManage: boolean;
+  busy: boolean;
+  onPrepare: () => void;
+}>): React.JSX.Element {
+  if (latest === "loading" || latest === undefined) return <span>Loading…</span>;
+  if (latest === "error") return <span>Unavailable</span>;
+  if (latest === null) {
+    return canManage
+      ? <Button variant="outline" size="sm" onClick={onPrepare} disabled={busy}>Prepare</Button>
+      : <span>—</span>;
+  }
+  return <span>#{latest.attributes["sequence-number"] ?? "—"} · {latest.attributes.status ?? "pending"}</span>;
+}
+
+function StackFormDialog({
+  open,
+  onOpenChange,
+  editingStack,
+  form,
+  projects,
+  agentPools,
+  agentPoolsAvailable,
+  saving,
+  onField,
+  updateForm,
+  onSubmit,
+  onCancel,
+}: Readonly<{
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  editingStack: Stack | null;
+  form: StackForm;
+  projects: Project[];
+  agentPools: AgentPool[];
+  agentPoolsAvailable: boolean;
+  saving: boolean;
+  onField: (key: keyof StackForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => void;
+  updateForm: (updater: (prev: StackForm) => StackForm) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}>): React.JSX.Element {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{editingStack === null ? "Create stack" : `Edit ${editingStack.attributes.name}`}</DialogTitle>
+          <DialogDescription>
+            {editingStack === null
+              ? "Create a new stack. The project is required."
+              : "Update this stack's configuration."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="stack-name">Name</Label>
+            <Input id="stack-name" name="name" autoComplete="off" spellCheck={false} value={form.name} onChange={onField("name")} placeholder="my-stack…" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="stack-project">Project</Label>
+            <Select
+              id="stack-project"
+              name="project"
+              value={form.projectId}
+              onChange={onField("projectId")}
+
+              disabled={editingStack !== null}
+            >
+              <option value="">Select a project</option>
+              {projects.map((project): React.JSX.Element => (
+                <option key={project.id} value={project.id}>{project.attributes.name}</option>
+              ))}
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="stack-vcs">VCS repository identifier</Label>
+            <Input id="stack-vcs" name="vcs-repository" autoComplete="off" spellCheck={false} value={form.vcsIdentifier} onChange={onField("vcsIdentifier")} placeholder="owner/repository…" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="stack-execution-mode">Execution mode</Label>
+            <Select id="stack-execution-mode" name="execution-mode" value={form.executionMode} onChange={onField("executionMode")} >
+              <option value="remote">Remote</option>
+              <option value="agent">Agent</option>
+            </Select>
+            {form.executionMode === "agent" && <p className="text-xs text-muted-foreground">Agent mode requires an agent-pool relationship.</p>}
+          </div>
+          {form.executionMode === "agent" && agentPoolsAvailable && (
+            <div className="space-y-1.5">
+              <Label htmlFor="stack-agent-pool">Agent pool</Label>
+              <Select id="stack-agent-pool" name="agent-pool" value={form.agentPoolId} onChange={onField("agentPoolId")} >
+                <option value="">Select an agent pool</option>
+                {agentPools.map((pool): React.JSX.Element => <option key={pool.id} value={pool.id}>{pool.attributes.name ?? pool.id}</option>)}
+              </Select>
+            </div>
+          )}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="stack-provider">VCS service provider</Label>
+              <Select id="stack-provider" name="service-provider" value={form.vcsServiceProvider} onChange={onField("vcsServiceProvider")} >
+                <option value="github">GitHub</option>
+                <option value="github_enterprise">GitHub Enterprise</option>
+                <option value="gitlab_hosted">GitLab</option>
+                <option value="gitlab_community_edition">GitLab Community Edition</option>
+                <option value="gitlab_enterprise_edition">GitLab Enterprise Edition</option>
+                <option value="ado_server">Azure DevOps Server</option>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="stack-branch">Branch</Label>
+              <Input id="stack-branch" name="branch" autoComplete="off" value={form.vcsBranch} onChange={onField("vcsBranch")} placeholder="main (optional)…" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="stack-working-dir">Working directory</Label>
+              <Input id="stack-working-dir" name="working-directory" autoComplete="off" value={form.workingDirectory} onChange={onField("workingDirectory")} placeholder="terraform (optional)…" />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="stack-repository-url">Repository HTTP URL</Label>
+            <Input id="stack-repository-url" name="repository-http-url" autoComplete="url" value={form.vcsRepositoryHttpUrl} onChange={onField("vcsRepositoryHttpUrl")} placeholder="https://git.example.com/org/repo.git" />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="stack-display-identifier">Display identifier</Label>
+              <Input id="stack-display-identifier" name="display-identifier" autoComplete="off" value={form.vcsDisplayIdentifier} onChange={onField("vcsDisplayIdentifier")} placeholder="Optional label…" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="stack-tags-regex">Tags regex</Label>
+              <Input id="stack-tags-regex" name="tags-regex" autoComplete="off" value={form.vcsTagsRegex} onChange={onField("vcsTagsRegex")} placeholder="Optional tag pattern…" />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="stack-sparse-checkout">Sparse checkout pattern</Label>
+            <Input id="stack-sparse-checkout" name="sparse-checkout-pattern" autoComplete="off" value={form.vcsSparseCheckoutPattern} onChange={onField("vcsSparseCheckoutPattern")} placeholder="Optional path pattern…" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="stack-description">Description</Label>
+            <Input id="stack-description" name="description" autoComplete="off" value={form.description} onChange={onField("description")} placeholder="Optional…" />
+          </div>
+          <label htmlFor="stack-speculative" className="flex cursor-pointer items-center gap-2 text-sm">
+            <Checkbox
+              id="stack-speculative"
+              checked={form.speculative}
+              onCheckedChange={(checked: boolean | "indeterminate"): void => { updateForm((prev): StackForm => ({ ...prev, speculative: checked === true })); }}
+            />
+            Speculative planner enabled
+          </label>
+          <label htmlFor="stack-trigger-disabled" className="flex cursor-pointer items-center gap-2 text-sm">
+            <Checkbox id="stack-trigger-disabled" checked={form.triggerDisabled} onCheckedChange={(checked: boolean | "indeterminate"): void => { updateForm((prev): StackForm => ({ ...prev, triggerDisabled: checked === true })); }} />
+            Disable VCS-triggered runs
+          </label>
+          <label htmlFor="stack-debugging" className="flex cursor-pointer items-center gap-2 text-sm">
+            <Checkbox id="stack-debugging" checked={form.debuggingMode} onCheckedChange={(checked: boolean | "indeterminate"): void => { updateForm((prev): StackForm => ({ ...prev, debuggingMode: checked === true })); }} />
+            Enable debugging mode
+          </label>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel}>Cancel</Button>
+          <Button onClick={onSubmit} disabled={saving}>
+            {saving ? "Saving…" : editingStack === null ? "Create stack" : "Save changes"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function StackSettings(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
@@ -212,26 +479,8 @@ export function StackSettings(): React.JSX.Element {
   };
 
   const openEdit = (stack: Stack): void => {
-    const vcs = stack.attributes["vcs-repo"] ?? null;
     setEditingStack(stack);
-    setForm({
-      name: stack.attributes.name,
-      projectId: "",
-      agentPoolId: stack.relationships?.["agent-pool"]?.data?.id ?? "",
-      description: stack.attributes.description ?? "",
-      workingDirectory: stack.attributes["working-directory"] ?? "",
-      vcsIdentifier: vcs?.identifier ?? "",
-      vcsBranch: vcs?.branch ?? "",
-      vcsServiceProvider: vcs?.["service-provider"] ?? "github",
-      vcsDisplayIdentifier: vcs?.["display-identifier"] ?? "",
-      vcsRepositoryHttpUrl: vcs?.["repository-http-url"] ?? "",
-      vcsTagsRegex: vcs?.["tags-regex"] ?? "",
-      vcsSparseCheckoutPattern: vcs?.["sparse-checkout-pattern"] ?? "",
-      triggerDisabled: stack.attributes["trigger-disabled"] === true || vcs?.["trigger-disabled"] === true,
-      debuggingMode: stack.attributes["debugging-mode"] === true,
-      executionMode: stack.attributes["execution-mode"] === "agent" ? "agent" : "remote",
-      speculative: stack.attributes["speculative-enabled"] === true,
-    });
+    setForm(stackFormFromStack(stack));
     setDialogOpen(true);
   };
 
@@ -241,61 +490,13 @@ export function StackSettings(): React.JSX.Element {
   const submit = async (): Promise<void> => {
     setSaving(true);
     setError("");
-    const safe = (value: string): string => value.trim();
-    const name = safe(form.name);
-    if (name === "") {
-      setError("A stack name is required.");
+    const validationError = validateStackForm(form, editingStack !== null);
+    if (validationError !== null) {
+      setError(validationError);
       setSaving(false);
       return;
     }
-    if (form.executionMode === "agent" && form.agentPoolId === "") {
-      setError("Select an agent pool for agent execution.");
-      setSaving(false);
-      return;
-    }
-    if (editingStack === null && form.projectId === "") {
-      setError("A project is required.");
-      setSaving(false);
-      return;
-    }
-    // Only send vcs-repo when an identifier is supplied, otherwise omit it
-    // (an empty object would otherwise clear/override the stored VCS values).
-    const vcsIdentifier = safe(form.vcsIdentifier);
-    const vcsBranch = form.vcsBranch.trim();
-    const vcsServiceProvider = form.vcsServiceProvider.trim();
-    const vcsDisplayIdentifier = form.vcsDisplayIdentifier.trim();
-    const vcsRepositoryHttpUrl = form.vcsRepositoryHttpUrl.trim();
-    const vcsTagsRegex = form.vcsTagsRegex.trim();
-    const vcsSparseCheckoutPattern = form.vcsSparseCheckoutPattern.trim();
-    const originalVcs = editingStack?.attributes["vcs-repo"];
-    const originalVcsConfigured = (originalVcs?.identifier ?? "").trim() !== ""
-      || (originalVcs?.["repository-http-url"] ?? "").trim() !== "";
-    const hasVcs = vcsIdentifier !== "" || vcsRepositoryHttpUrl !== "";
-    const attributes = {
-      name,
-      description: form.description,
-      "working-directory": form.workingDirectory === "" ? (editingStack === null ? undefined : form.workingDirectory) : form.workingDirectory,
-      "speculative-enabled": form.speculative,
-      "trigger-disabled": form.triggerDisabled,
-      "debugging-mode": form.debuggingMode,
-      "execution-mode": form.executionMode,
-      ...(hasVcs
-        ? { "vcs-repo": {
-            ...(vcsIdentifier === "" ? undefined : { identifier: vcsIdentifier }),
-            ...(vcsServiceProvider === "" ? undefined : { "service-provider": vcsServiceProvider }),
-            ...(vcsBranch === "" ? undefined : { branch: vcsBranch }),
-            ...(vcsDisplayIdentifier === "" ? undefined : { "display-identifier": vcsDisplayIdentifier }),
-            ...(vcsRepositoryHttpUrl === "" ? undefined : { "repository-http-url": vcsRepositoryHttpUrl }),
-            ...(vcsTagsRegex === "" ? undefined : { "tags-regex": vcsTagsRegex }),
-            ...(vcsSparseCheckoutPattern === "" ? undefined : { "sparse-checkout-pattern": vcsSparseCheckoutPattern }),
-            "trigger-disabled": form.triggerDisabled,
-          } }
-        : editingStack !== null && originalVcsConfigured
-          // Editing a stack that currently has a VCS repo but the identifier was
-          // cleared: explicitly clear the stored VCS config.
-          ? { "vcs-repo": null }
-          : undefined),
-    };
+    const attributes = stackSubmitAttributes(form, editingStack);
     try {
       if (editingStack === null) {
         await fetchApi("/stacks", {
@@ -365,8 +566,6 @@ export function StackSettings(): React.JSX.Element {
       setStackToDelete(null);
     }
   };
-
-  const vcsRepo = (stack: Stack): VcsRepo => stack.attributes["vcs-repo"] ?? null;
 
   return (
     <PageShell>
@@ -446,28 +645,15 @@ export function StackSettings(): React.JSX.Element {
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                         {stack.attributes["speculative-enabled"] === true ? "Enabled" : "Disabled"}
-                        {(stack.attributes["trigger-disabled"] === true || vcsRepo(stack)?.["trigger-disabled"] === true || stack.attributes["debugging-mode"] === true) && (
-                          <div className="text-xs">{stack.attributes["trigger-disabled"] === true || vcsRepo(stack)?.["trigger-disabled"] === true ? "Triggers disabled" : ""}{(stack.attributes["trigger-disabled"] === true || vcsRepo(stack)?.["trigger-disabled"] === true) && stack.attributes["debugging-mode"] === true ? " · " : ""}{stack.attributes["debugging-mode"] === true ? "Debugging" : ""}</div>
-                        )}
+                        <StackTriggerFlags stack={stack} />
                   </TableCell>
                   <TableCell className="text-muted-foreground">
-                    {latest === "loading" || latest === undefined
-                      ? <span>Loading…</span>
-                      : latest === "error"
-                      ? <span>Unavailable</span>
-                      : latest === null
-                        ? canManage
-                          ? <Button variant="outline" size="sm" onClick={(): void => { void prepareConfiguration(stack); }} disabled={busyStackIds.has(stack.id)}>Prepare</Button>
-                          : <span>—</span>
-                        : <span>#{latest.attributes["sequence-number"] ?? "—"} · {latest.attributes.status ?? "pending"}</span>}
+                    <StackLatestCell latest={latest} canManage={canManage} busy={busyStackIds.has(stack.id)} onPrepare={(): void => { void prepareConfiguration(stack); }} />
                   </TableCell>
                   <TableCell>
                     {canManage && (
                       <div className="flex items-center justify-end gap-1">
-                        {(
-                          ((vcsRepo(stack)?.identifier ?? "").trim()) !== ""
-                          || (vcsRepo(stack)?.["repository-http-url"] ?? "").trim() !== ""
-                        ) && (
+                        {stackHasVcsRemote(stack) && (
                           <Button variant="ghost" size="icon" onClick={(): void => { void fetchLatest(stack); }} aria-label={`Fetch latest for ${stack.attributes.name}`} disabled={fetchingStackId === stack.id}>
                             <RefreshCw className={`h-4 w-4 ${fetchingStackId === stack.id ? "animate-spin" : ""}`} />
                           </Button>
@@ -489,126 +675,20 @@ export function StackSettings(): React.JSX.Element {
         </CardContent>
       </Card>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{editingStack === null ? "Create stack" : `Edit ${editingStack.attributes.name}`}</DialogTitle>
-            <DialogDescription>
-              {editingStack === null
-                ? "Create a new stack. The project is required."
-                : "Update this stack's configuration."}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="stack-name">Name</Label>
-              <Input id="stack-name" name="name" autoComplete="off" spellCheck={false} value={form.name} onChange={set("name")} placeholder="my-stack…" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="stack-project">Project</Label>
-              <Select
-                id="stack-project"
-                name="project"
-                value={form.projectId}
-                onChange={set("projectId")}
-
-                disabled={editingStack !== null}
-              >
-                <option value="">Select a project</option>
-                {projects.map((project): React.JSX.Element => (
-                  <option key={project.id} value={project.id}>{project.attributes.name}</option>
-                ))}
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="stack-vcs">VCS repository identifier</Label>
-              <Input id="stack-vcs" name="vcs-repository" autoComplete="off" spellCheck={false} value={form.vcsIdentifier} onChange={set("vcsIdentifier")} placeholder="owner/repository…" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="stack-execution-mode">Execution mode</Label>
-              <Select id="stack-execution-mode" name="execution-mode" value={form.executionMode} onChange={set("executionMode")} >
-                <option value="remote">Remote</option>
-                <option value="agent">Agent</option>
-              </Select>
-              {form.executionMode === "agent" && <p className="text-xs text-muted-foreground">Agent mode requires an agent-pool relationship.</p>}
-            </div>
-            {form.executionMode === "agent" && agentPoolsAvailable && (
-              <div className="space-y-1.5">
-                <Label htmlFor="stack-agent-pool">Agent pool</Label>
-                <Select id="stack-agent-pool" name="agent-pool" value={form.agentPoolId} onChange={set("agentPoolId")} >
-                  <option value="">Select an agent pool</option>
-                  {agentPools.map((pool): React.JSX.Element => <option key={pool.id} value={pool.id}>{pool.attributes.name ?? pool.id}</option>)}
-                </Select>
-              </div>
-            )}
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="stack-provider">VCS service provider</Label>
-                <Select id="stack-provider" name="service-provider" value={form.vcsServiceProvider} onChange={set("vcsServiceProvider")} >
-                  <option value="github">GitHub</option>
-                  <option value="github_enterprise">GitHub Enterprise</option>
-                  <option value="gitlab_hosted">GitLab</option>
-                  <option value="gitlab_community_edition">GitLab Community Edition</option>
-                  <option value="gitlab_enterprise_edition">GitLab Enterprise Edition</option>
-                  <option value="ado_server">Azure DevOps Server</option>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="stack-branch">Branch</Label>
-                <Input id="stack-branch" name="branch" autoComplete="off" value={form.vcsBranch} onChange={set("vcsBranch")} placeholder="main (optional)…" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="stack-working-dir">Working directory</Label>
-                <Input id="stack-working-dir" name="working-directory" autoComplete="off" value={form.workingDirectory} onChange={set("workingDirectory")} placeholder="terraform (optional)…" />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="stack-repository-url">Repository HTTP URL</Label>
-              <Input id="stack-repository-url" name="repository-http-url" autoComplete="url" value={form.vcsRepositoryHttpUrl} onChange={set("vcsRepositoryHttpUrl")} placeholder="https://git.example.com/org/repo.git" />
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="stack-display-identifier">Display identifier</Label>
-                <Input id="stack-display-identifier" name="display-identifier" autoComplete="off" value={form.vcsDisplayIdentifier} onChange={set("vcsDisplayIdentifier")} placeholder="Optional label…" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="stack-tags-regex">Tags regex</Label>
-                <Input id="stack-tags-regex" name="tags-regex" autoComplete="off" value={form.vcsTagsRegex} onChange={set("vcsTagsRegex")} placeholder="Optional tag pattern…" />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="stack-sparse-checkout">Sparse checkout pattern</Label>
-              <Input id="stack-sparse-checkout" name="sparse-checkout-pattern" autoComplete="off" value={form.vcsSparseCheckoutPattern} onChange={set("vcsSparseCheckoutPattern")} placeholder="Optional path pattern…" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="stack-description">Description</Label>
-              <Input id="stack-description" name="description" autoComplete="off" value={form.description} onChange={set("description")} placeholder="Optional…" />
-            </div>
-            <label htmlFor="stack-speculative" className="flex cursor-pointer items-center gap-2 text-sm">
-              <Checkbox
-                id="stack-speculative"
-                checked={form.speculative}
-                onCheckedChange={(checked: boolean | "indeterminate"): void => { setForm((prev): StackForm => ({ ...prev, speculative: checked === true })); }}
-              />
-              Speculative planner enabled
-            </label>
-            <label htmlFor="stack-trigger-disabled" className="flex cursor-pointer items-center gap-2 text-sm">
-              <Checkbox id="stack-trigger-disabled" checked={form.triggerDisabled} onCheckedChange={(checked: boolean | "indeterminate"): void => { setForm((prev): StackForm => ({ ...prev, triggerDisabled: checked === true })); }} />
-              Disable VCS-triggered runs
-            </label>
-            <label htmlFor="stack-debugging" className="flex cursor-pointer items-center gap-2 text-sm">
-              <Checkbox id="stack-debugging" checked={form.debuggingMode} onCheckedChange={(checked: boolean | "indeterminate"): void => { setForm((prev): StackForm => ({ ...prev, debuggingMode: checked === true })); }} />
-              Enable debugging mode
-            </label>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={(): void => { setDialogOpen(false); }}>Cancel</Button>
-            <Button onClick={submit} disabled={saving}>
-              {saving ? "Saving…" : editingStack === null ? "Create stack" : "Save changes"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <StackFormDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        editingStack={editingStack}
+        form={form}
+        projects={projects}
+        agentPools={agentPools}
+        agentPoolsAvailable={agentPoolsAvailable}
+        saving={saving}
+        onField={set}
+        updateForm={setForm}
+        onSubmit={submit}
+        onCancel={(): void => { setDialogOpen(false); }}
+      />
 
       <ConfirmDialog
         open={stackToDelete !== null}
