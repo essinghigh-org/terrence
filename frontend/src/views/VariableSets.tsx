@@ -465,7 +465,7 @@ function VariablesDialog({
             variables={variables}
             canManage={canManage}
             error={error}
-            onAdd={openForm}
+            onAdd={(): void => { openForm(); }}
             onEdit={openForm}
             onDeleteRequest={(variable: VariableSetVariable): void => {
               const isTestEnv = window.navigator.userAgent.includes("jsdom");

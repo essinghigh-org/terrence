@@ -1233,7 +1233,7 @@ export function WorkspaceVariables({
           canUpdate={canUpdate}
           pageError={pageError}
           renderRow={renderVariableRow}
-          onAdd={openEditor}
+          onAdd={(): void => { openEditor(); }}
         />
 
         <VariableSetsCard
