@@ -27,6 +27,13 @@ type ParamCtx = Readonly<{
   set: SetObj;
 }>;
 
+async function sshKeyUpdates(attrs: Record<string, unknown>): Promise<Partial<typeof sshKeys.$inferInsert>> {
+  const updates: Partial<typeof sshKeys.$inferInsert> = {};
+  if (typeof attrs["name"] === "string") updates.name = attrs["name"];
+  if (typeof attrs["value"] === "string") updates.value = await encryptSecret(attrs["value"]);
+  return updates;
+}
+
 export const sshKeyRoutes = new Elysia({ name: "sshKeys" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/ssh-keys", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -69,9 +76,7 @@ export const sshKeyRoutes = new Elysia({ name: "sshKeys" })
     const key = await db.query.sshKeys.findFirst({ where: eq(sshKeys.id, sshKeyId) });
     if (key === undefined || !(await checkOrganizationPermission(key.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attrs = getAttrs(body);
-    const updates: Partial<typeof sshKeys.$inferInsert> = {};
-    if (typeof attrs["name"] === "string") updates.name = attrs["name"];
-    if (typeof attrs["value"] === "string") updates.value = await encryptSecret(attrs["value"]);
+    const updates = await sshKeyUpdates(attrs);
     if (Object.keys(updates).length > 0) await db.update(sshKeys).set(updates).where(eq(sshKeys.id, sshKeyId));
     if (strictAuditEnabled()) {
       await auditLog("update", "ssh-key", sshKeyId, user?.id ?? null, key.orgId, { name: key.name, "value-replaced": attrs["value"] !== undefined });
