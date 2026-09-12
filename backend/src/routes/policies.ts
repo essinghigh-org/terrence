@@ -884,6 +884,21 @@ async function deleteTagSelector(policySetId: string, item: unknown): Promise<vo
   await db.delete(policySetTagSelectors).where(and(eq(policySetTagSelectors.policySetId, policySetId), eq(policySetTagSelectors.key, key), value === null ? isNull(policySetTagSelectors.value) : eq(policySetTagSelectors.value, value), eq(policySetTagSelectors.isExclude, isExclude)));
 }
 
+function resolveParameterCreateFields(
+  attrs: Record<string, unknown>,
+): Readonly<{ value: Readonly<{ key: string; value: string; sensitive: boolean; hcl: boolean }> }> | Readonly<{ error: true }> {
+  const key = typeof attrs["key"] === "string" ? attrs["key"] : "";
+  if (key === "") return { error: true as const };
+  return {
+    value: {
+      key,
+      value: typeof attrs["value"] === "string" ? attrs["value"] : "",
+      sensitive: typeof attrs["sensitive"] === "boolean" ? attrs["sensitive"] : false,
+      hcl: typeof attrs["hcl"] === "boolean" ? attrs["hcl"] : false,
+    },
+  };
+}
+
 export const policyRoutes = new Elysia({ name: "policies" })
   .use(authPlugin)
   // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
@@ -1677,15 +1692,11 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const policySetId = params["policy_set_id"] ?? "";
     const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
     if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const key = typeof attrs["key"] === "string" ? attrs["key"] : "";
-    if (key === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
+    const { attributes: attrs } = parsePatchPayload(body);
+    const fields = resolveParameterCreateFields(attrs);
+    if ("error" in fields) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
     const id = newResourceId("psparam");
-    const value = typeof attrs["value"] === "string" ? attrs["value"] : "";
-    const sensitive = typeof attrs["sensitive"] === "boolean" ? attrs["sensitive"] : false;
-    const hcl = typeof attrs["hcl"] === "boolean" ? attrs["hcl"] : false;
+    const { key, value, sensitive, hcl } = fields.value;
     // Sensitive values are encrypted at rest like workspace variables
     // (issue #577): plaintext never lands in the value column.
     const stored = await variableValueForWrite(sensitive, value);
