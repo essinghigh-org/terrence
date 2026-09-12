@@ -66,6 +66,83 @@ function validateOrgTokenType(value: string): (typeof ORG_TOKEN_TYPES)[number] |
 
 const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 
+async function provisionMembershipTxUser(
+  t: typeof db,
+  targetUser: Readonly<typeof users.$inferSelect> | undefined,
+  email: string | null | undefined,
+): Promise<Readonly<typeof users.$inferSelect>> {
+  let txTargetUser = targetUser === undefined
+    ? undefined
+    : await t.query.users.findFirst({ where: eq(users.id, targetUser.id) });
+  if (txTargetUser === undefined && email !== undefined && email !== null) {
+    const uid = newResourceId("user");
+    const emailPrefix = email.split("@")[0] ?? "user";
+    const uname = `${emailPrefix}_${uid}`;
+    await t.insert(users).values({ id: uid, username: uname, email, passwordHash: `$disabled$${randomBytes(32).toString("base64url")}`, isProvisional: true });
+    txTargetUser = await t.query.users.findFirst({ where: eq(users.id, uid) });
+  }
+  if (txTargetUser === undefined) throw new Error("membership target user disappeared");
+  return txTargetUser;
+}
+
+function resolveMembershipStatus(
+  txTargetUser: Readonly<typeof users.$inferSelect>,
+  email: string | null | undefined,
+  rawRequestedStatus: string | undefined,
+): string {
+  // TFE compat: an auto-provisioned identity starts invited; an existing
+  // identity defaults to active unless the caller explicitly requests invited.
+  const isNewProvisional = txTargetUser.isProvisional === true && txTargetUser.email !== null && email !== undefined && email !== null && txTargetUser.email.toLowerCase() === email;
+  return isNewProvisional ? "invited" : (rawRequestedStatus ?? "active");
+}
+
+async function insertMembershipTeamRows(
+  t: typeof db,
+  validatedTeams: { id: string; orgId: string }[] | null,
+  userId: string,
+): Promise<string[]> {
+  const teamIds = validatedTeams?.map((team): string => team.id) ?? [];
+  if (validatedTeams !== null && validatedTeams.length > 0) {
+    // Team rows are safe to materialize while the org membership is invited:
+    // authorization requires an active org membership, and preserving them
+    // makes activation deterministic instead of dropping the assignment.
+    await t.insert(teamMemberships).values(validatedTeams.map((team): typeof teamMemberships.$inferInsert => ({
+      id: newResourceId("tm"),
+      teamId: team.id,
+      userId,
+      createdAt: Date.now(),
+    }))).onConflictDoNothing();
+  }
+  return teamIds;
+}
+
+async function createMembershipTx(
+  t: typeof db,
+  args: Readonly<{
+    targetUser: Readonly<typeof users.$inferSelect> | undefined;
+    email: string | null | undefined;
+    orgId: string;
+    rawRequestedStatus: string | undefined;
+    validatedTeams: { id: string; orgId: string }[] | null;
+    memId: string;
+    duplicate: Error;
+  }>,
+): Promise<{ targetUser: Readonly<typeof users.$inferSelect>; mem: Readonly<typeof organizationMemberships.$inferSelect>; teamIds: string[] }> {
+  const txTargetUser = await provisionMembershipTxUser(t, args.targetUser, args.email);
+  const existingMem = await t.query.organizationMemberships.findFirst({
+    where: and(eq(organizationMemberships.orgId, args.orgId), eq(organizationMemberships.userId, txTargetUser.id)),
+  });
+  if (existingMem !== undefined) throw args.duplicate;
+  const effectiveStatus = resolveMembershipStatus(txTargetUser, args.email, args.rawRequestedStatus);
+  await t.insert(organizationMemberships).values({
+    id: args.memId, orgId: args.orgId, userId: txTargetUser.id, role: "member", status: effectiveStatus,
+  });
+  const teamIds = await insertMembershipTeamRows(t, args.validatedTeams, txTargetUser.id);
+  const createdMembership = await t.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, args.memId) });
+  if (createdMembership === undefined) throw new Error("organization membership was not created");
+  return { targetUser: txTargetUser, mem: createdMembership, teamIds };
+}
+
 export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
   .get("/api/v2/users", async ({ query, user, set }: ParamCtx): Promise<unknown> => {
@@ -402,43 +479,7 @@ export const userRoutes = new Elysia({ name: "users" })
     try {
       result = await db.transaction(async (tx: unknown): Promise<{ targetUser: Readonly<typeof users.$inferSelect>; mem: Readonly<typeof organizationMemberships.$inferSelect>; teamIds: string[] }> => {
         const t = tx as typeof db;
-        let txTargetUser = targetUser === undefined
-          ? undefined
-          : await t.query.users.findFirst({ where: eq(users.id, targetUser.id) });
-        if (txTargetUser === undefined && email !== undefined && email !== null) {
-          const uid = newResourceId("user");
-          const emailPrefix = email.split("@")[0] ?? "user";
-          const uname = `${emailPrefix}_${uid}`;
-          await t.insert(users).values({ id: uid, username: uname, email, passwordHash: `$disabled$${randomBytes(32).toString("base64url")}`, isProvisional: true });
-          txTargetUser = await t.query.users.findFirst({ where: eq(users.id, uid) });
-        }
-        if (txTargetUser === undefined) throw new Error("membership target user disappeared");
-        const existingMem = await t.query.organizationMemberships.findFirst({
-          where: and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.userId, txTargetUser.id)),
-        });
-        if (existingMem !== undefined) throw duplicateMembership;
-        // TFE compat: an auto-provisioned identity starts invited; an existing
-        // identity defaults to active unless the caller explicitly requests invited.
-        const isNewProvisional = txTargetUser.isProvisional === true && txTargetUser.email !== null && email !== undefined && email !== null && txTargetUser.email.toLowerCase() === email;
-        const effectiveStatus = isNewProvisional ? "invited" : (rawRequestedStatus ?? "active");
-        await t.insert(organizationMemberships).values({
-          id: memId, orgId: org.id, userId: txTargetUser.id, role: "member", status: effectiveStatus,
-        });
-        const teamIds = validatedTeams?.map((team): string => team.id) ?? [];
-        if (validatedTeams !== null && validatedTeams.length > 0) {
-          // Team rows are safe to materialize while the org membership is invited:
-          // authorization requires an active org membership, and preserving them
-          // makes activation deterministic instead of dropping the assignment.
-          await t.insert(teamMemberships).values(validatedTeams.map((team): typeof teamMemberships.$inferInsert => ({
-            id: newResourceId("tm"),
-            teamId: team.id,
-            userId: txTargetUser.id,
-            createdAt: Date.now(),
-          }))).onConflictDoNothing();
-        }
-        const createdMembership = await t.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
-        if (createdMembership === undefined) throw new Error("organization membership was not created");
-        return { targetUser: txTargetUser, mem: createdMembership, teamIds };
+        return createMembershipTx(t, { targetUser, email, orgId: org.id, rawRequestedStatus, validatedTeams, memId, duplicate: duplicateMembership });
       });
     } catch (error: unknown) {
       if (error === duplicateMembership || isUniqueConstraintError(error)) {
