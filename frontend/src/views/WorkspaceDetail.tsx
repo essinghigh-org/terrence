@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, Link, useLocation, useNavigate } from "react-router-dom";
 import { fetchApi, ApiError } from "../lib/api";
+import { removeWorkspaceVisit } from "../lib/workspace-shortcuts";
 import { Button, buttonVariants } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
 import { WorkspaceGettingStarted } from "../components/WorkspaceGettingStarted";
@@ -965,6 +966,18 @@ function LockingSection({ activeSection, workspace, canToggleLock, togglingLock,
   );
 }
 
+/**
+ * Drop a sidebar recent whose detail fetch 404s: the URL names no workspace
+ * (renamed, deleted, or never existed), so the visit Layout recorded from
+ * the route would otherwise linger forever. Other failures (403, 500,
+ * offline) leave the entry alone: the workspace may still exist.
+ */
+function pruneMissingWorkspaceVisit(error: unknown, orgName: string | undefined, workspaceName: string | undefined): void {
+  if (!(error instanceof ApiError) || error.status !== 404) return;
+  if (orgName === undefined || orgName === "" || workspaceName === undefined || workspaceName === "") return;
+  removeWorkspaceVisit(orgName, workspaceName);
+}
+
 export function WorkspaceDetail({
   section,
 }: Readonly<{ readonly section?: WorkspaceSection }>): React.JSX.Element {
@@ -1057,6 +1070,7 @@ export function WorkspaceDetail({
       activeWorkspaceId.current = null;
       setWorkspace(null);
       setLoadError(error instanceof Error ? error.message : "Could not load workspace");
+      pruneMissingWorkspaceVisit(error, orgName, workspaceName);
     } finally {
       if (!controller.signal.aborted && workspaceRequest.current === controller) {
         setLoading(false);

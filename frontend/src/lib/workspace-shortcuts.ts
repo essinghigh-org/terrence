@@ -124,6 +124,19 @@ export function recordWorkspaceVisit(orgName: string, workspaceName: string): vo
   }
 }
 
+/** Drop a workspace from recents (e.g. its detail fetch 404s: renamed, deleted, or never existed). */
+export function removeWorkspaceVisit(orgName: string, workspaceName: string): void {
+  try {
+    const entries = getRecentWorkspaces().filter(
+      (entry): boolean => entry.orgName !== orgName || entry.workspaceName !== workspaceName,
+    );
+    window.localStorage.setItem(getRecentKey(), JSON.stringify(entries.slice(0, MAX_RECENT)));
+    notifyShortcutChange();
+  } catch {
+    // localStorage unavailable; shortcuts are a convenience.
+  }
+}
+
 export function getPinnedWorkspaces(): WorkspaceVisit[] {
   try {
     const key = getPinnedKey();

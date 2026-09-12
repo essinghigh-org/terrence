@@ -15,6 +15,7 @@ import {
   getSingleKeyShortcutsEnabled,
   isWorkspacePinned,
   recordWorkspaceVisit,
+  removeWorkspaceVisit,
   setSingleKeyShortcutsEnabled,
   setWorkspacePinned,
 } from "../src/lib/workspace-shortcuts";
@@ -248,7 +249,7 @@ test("legacy unnamespaced localStorage migration", () => {
   // Scoped key should now contain the migrated items
   const scoped = window.localStorage.getItem("terrence-recent-workspaces:migrated-user");
   expect(scoped).not.toBeNull();
-  expect(JSON.parse(scoped as string)).toEqual([
+  expect(JSON.parse(scoped!)).toEqual([
     { orgName: "legacy-org", workspaceName: "legacy-ws", visitedAt: 12345 },
   ]);
 });
@@ -260,4 +261,28 @@ test("single-key navigation can be disabled without affecting identity-scoped re
   expect(getRecentWorkspaces()).toEqual([]);
   setSingleKeyShortcutsEnabled(true);
   expect(getSingleKeyShortcutsEnabled()).toBe(true);
+});
+
+test("removeWorkspaceVisit drops only the matching recent", () => {
+  recordWorkspaceVisit("org-a", "gone");
+  recordWorkspaceVisit("org-a", "stays");
+  recordWorkspaceVisit("org-b", "gone");
+  expect(getRecentWorkspaces().map((visit) => `${visit.orgName}/${visit.workspaceName}`)).toEqual([
+    "org-b/gone",
+    "org-a/stays",
+    "org-a/gone",
+  ]);
+
+  removeWorkspaceVisit("org-a", "gone");
+  expect(getRecentWorkspaces().map((visit) => `${visit.orgName}/${visit.workspaceName}`)).toEqual([
+    "org-b/gone",
+    "org-a/stays",
+  ]);
+
+  // Removing an absent entry is a no-op that keeps the remaining order.
+  removeWorkspaceVisit("org-a", "never-existed");
+  expect(getRecentWorkspaces().map((visit) => `${visit.orgName}/${visit.workspaceName}`)).toEqual([
+    "org-b/gone",
+    "org-a/stays",
+  ]);
 });
