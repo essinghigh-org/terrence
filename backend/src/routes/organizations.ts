@@ -558,6 +558,34 @@ async function collectRetentionGc(orgId: string): Promise<Record<string, unknown
   return gc;
 }
 
+async function resolveOrganizationIds(
+  user: ParamCtx["user"],
+  orgId: string | null | undefined,
+): Promise<string[]> {
+  if (orgId !== null && orgId !== undefined) return [orgId];
+  if (user?.isSiteAdmin === true) {
+    return (await db.query.organizations.findMany({ columns: { id: true } })).map((organization): string => organization.id);
+  }
+  if (user === null || user === undefined) return [];
+  return [...new Set((await db.query.organizationMemberships.findMany({
+    where: and(
+      eq(organizationMemberships.userId, user.id),
+      eq(organizationMemberships.status, "active"),
+    ),
+  })).map((membership: Readonly<{ readonly orgId: string }>): string => membership.orgId))];
+}
+
+function intersectOrgScope(
+  organizationIds: string[],
+  scopes: ReturnType<typeof currentTokenScopes>,
+): string[] {
+  if (scopes !== null && scopes.orgs.length > 0) {
+    const scopeSet = new Set(scopes.orgs);
+    return organizationIds.filter((id): boolean => scopeSet.has(id));
+  }
+  return organizationIds;
+}
+
 export const organizationRoutes = new Elysia({ name: "organizations" })
   .use(authPlugin)
   .post("/api/v2/organizations", async ({ user, orgId: tokenOrgId, teamId: tokenTeamId, body, set }: ParamCtx): Promise<unknown> => {
@@ -585,24 +613,9 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     const { number, size } = pageRequest(request);
     const urlParams = new URL(request.url).searchParams;
     const search = (urlParams.get("q[name]") ?? urlParams.get("q") ?? "").trim();
-    let organizationIds = orgId !== null && orgId !== undefined
-      ? [orgId]
-      : user?.isSiteAdmin === true
-        ? (await db.query.organizations.findMany({ columns: { id: true } })).map((organization): string => organization.id)
-        : user !== null && user !== undefined
-          ? [...new Set((await db.query.organizationMemberships.findMany({
-              where: and(
-                eq(organizationMemberships.userId, user.id),
-                eq(organizationMemberships.status, "active"),
-              ),
-            })).map((membership: Readonly<{ readonly orgId: string }>): string => membership.orgId))]
-          : [];
+    let organizationIds = await resolveOrganizationIds(user, orgId);
     // Fine-grained token: intersect with declared org scope.
-    const scopes = currentTokenScopes();
-    if (scopes !== null && scopes.orgs.length > 0) {
-      const scopeSet = new Set(scopes.orgs);
-      organizationIds = organizationIds.filter((id): boolean => scopeSet.has(id));
-    }
+    organizationIds = intersectOrgScope(organizationIds, currentTokenScopes());
     if (organizationIds.length === 0) {
       return { data: [], ...pagination(request, number, size, 0) };
     }
