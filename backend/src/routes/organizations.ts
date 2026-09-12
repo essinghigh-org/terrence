@@ -139,6 +139,224 @@ async function reservedTagKeyResource(tag: ReservedTagKey): Promise<Record<strin
   };
 }
 
+class OrgPatchError extends Error {
+  constructor(public status: number, public body: unknown) {
+    super("organization patch rejected");
+  }
+}
+
+type OrgRow = Exclude<Awaited<ReturnType<typeof cachedOrgByName>>, undefined>;
+
+function patchFlag(value: unknown, current: boolean): boolean {
+  return value === undefined ? current : value === true;
+}
+
+function patchRequiredName(value: unknown, current: string): string {
+  if (value === undefined) return current;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function patchStringOrCurrent(value: unknown, current: string): string {
+  return typeof value === "string" ? value : current;
+}
+
+function patchNullableTrimmed(value: unknown, current: string | null): string | null | undefined {
+  if (value === undefined) return current;
+  if (typeof value === "string") return value.trim();
+  if (value === null) return null;
+  return undefined;
+}
+
+function patchNullableEmail(value: unknown, current: string | null): string | null | undefined {
+  if (value === undefined) return current;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed === "" ? null : trimmed;
+  }
+  if (value === null) return null;
+  return undefined;
+}
+
+function patchSessionTimeout(value: unknown, current: number | null): number | null | undefined {
+  if (value === undefined) return current;
+  if (value === null) return null;
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
+}
+
+function patchSessionRemember(value: unknown, current: boolean | null): boolean | null | undefined {
+  if (value === undefined) return current;
+  if (value === null) return null;
+  return value === true || value === false ? value : undefined;
+}
+
+function patchCollaboratorAuthPolicy(value: unknown, current: string): string | undefined {
+  if (value === undefined) return current;
+  return typeof value === "string" && ["password", "sso"].includes(value) ? value : undefined;
+}
+
+function patchDefaultAgentPoolId(value: unknown, current: string | null): string | null | undefined {
+  if (value === undefined) return current;
+  if (value === null) return null;
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+function patchExecutionMode(value: unknown, current: string | null): string | null | undefined {
+  if (value === undefined) return current;
+  return typeof value === "string" ? value : undefined;
+}
+
+function parsePatchAttributes(body: unknown): Record<string, unknown> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data: Record<string, unknown> | undefined = typeof payload["data"] === "object" && payload["data"] !== null
+    ? payload["data"] as Record<string, unknown>
+    : undefined;
+  if (data !== undefined && "type" in data && data["type"] !== undefined && data["type"] !== "organizations") {
+    throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid type" }] });
+  }
+  return typeof data?.["attributes"] === "object" && data["attributes"] !== null ? data["attributes"] as Record<string, unknown> : {};
+}
+
+function parseOrganizationPatch(attributes: Record<string, unknown>, org: OrgRow) {
+  return {
+    newName: patchRequiredName(attributes["name"], org.name),
+    defaultIacBinary: patchStringOrCurrent(attributes["default-iac-binary"], org.defaultIacBinary ?? "terraform"),
+    defaultTerraformVersion: patchStringOrCurrent(attributes["default-terraform-version"], org.defaultTerraformVersion ?? "latest"),
+    assessmentsEnforced: patchFlag(attributes["assessments-enforced"], org.assessmentsEnforced),
+    ownersTeamSamlRoleId: patchNullableTrimmed(attributes["owners-team-saml-role-id"], org.ownersTeamSamlRoleId),
+    email: patchNullableEmail(attributes["email"], org.email),
+    allowForceDeleteWorkspaces: patchFlag(attributes["allow-force-delete-workspaces"], org.allowForceDeleteWorkspaces),
+    stacksEnabled: patchFlag(attributes["stacks-enabled"], org.stacksEnabled),
+    showPreReleases: patchFlag(attributes["show-pre-releases"], org.showPreReleases),
+    aggregatedCommitStatusEnabled: patchFlag(attributes["aggregated-commit-status-enabled"], org.aggregatedCommitStatusEnabled),
+    sendPassingStatusesForUntriggeredSpeculativePlans: patchFlag(attributes["send-passing-statuses-for-untriggered-speculative-plans"], org.sendPassingStatusesForUntriggeredSpeculativePlans),
+    moduleTestTokenTtl: attributes["module-test-token-ttl"] === undefined ? org.moduleTestTokenTtl : parseModuleTestTokenTtl(attributes["module-test-token-ttl"]),
+    costEstimationEnabled: patchFlag(attributes["cost-estimation-enabled"], org.costEstimationEnabled),
+    sessionTimeout: patchSessionTimeout(attributes["session-timeout"], org.sessionTimeout),
+    sessionRemember: patchSessionRemember(attributes["session-remember"], org.sessionRemember),
+    collaboratorAuthPolicy: patchCollaboratorAuthPolicy(attributes["collaborator-auth-policy"], org.collaboratorAuthPolicy),
+    userTokensEnabled: patchFlag(attributes["user-tokens-enabled"], org.userTokensEnabled),
+    defaultAgentPoolId: patchDefaultAgentPoolId(attributes["default-agent-pool-id"], org.defaultAgentPoolId),
+    defaultExecutionMode: patchExecutionMode(attributes["default-execution-mode"], org.defaultExecutionMode),
+  };
+}
+
+type OrgPatchFields = ReturnType<typeof parseOrganizationPatch>;
+
+type ValidatedOrgPatchFields = OrgPatchFields & {
+  email: string | null;
+  sessionTimeout: number | null;
+  sessionRemember: boolean | null;
+  collaboratorAuthPolicy: string;
+  defaultAgentPoolId: string | null;
+  defaultExecutionMode: string;
+  moduleTestTokenTtl: number;
+  ownersTeamSamlRoleId: string | null;
+};
+
+function assertPatchIdentity(fields: OrgPatchFields): void {
+  if (fields.newName === "" || !["tofu", "terraform"].includes(fields.defaultIacBinary) || fields.defaultTerraformVersion.trim() === "") {
+    throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity" }] });
+  }
+}
+
+function assertPatchSettings(fields: OrgPatchFields): asserts fields is OrgPatchFields & {
+  email: string | null;
+  sessionTimeout: number | null;
+  sessionRemember: boolean | null;
+  collaboratorAuthPolicy: string;
+  defaultAgentPoolId: string | null;
+  defaultExecutionMode: string;
+} {
+  if (fields.email === undefined || fields.sessionTimeout === undefined || fields.sessionRemember === undefined || fields.collaboratorAuthPolicy === undefined || fields.defaultAgentPoolId === undefined || typeof fields.defaultExecutionMode !== "string" || (fields.defaultExecutionMode !== "remote" && fields.defaultExecutionMode !== "local" && fields.defaultExecutionMode !== "agent")) {
+    throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid organization settings" }] });
+  }
+}
+
+function assertPatchNaming(fields: OrgPatchFields, org: OrgRow): asserts fields is OrgPatchFields & {
+  moduleTestTokenTtl: number;
+  ownersTeamSamlRoleId: string | null;
+} {
+  if (fields.moduleTestTokenTtl === undefined) {
+    throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Module test token TTL must be between ${moduleTestTokenTtlBounds.min} and ${moduleTestTokenTtlBounds.max} seconds` }] });
+  }
+  const nameError = fields.newName === org.name ? null : organizationNameError(fields.newName);
+  if (nameError !== null) {
+    throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: nameError }] });
+  }
+  if (fields.ownersTeamSamlRoleId === undefined) {
+    throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "owners-team-saml-role-id must be a string or null" }] });
+  }
+}
+
+async function assertOwnersTeamSamlRoleId(ownersTeamSamlRoleId: string | null | undefined, orgId: string): Promise<void> {
+  if (ownersTeamSamlRoleId !== null && ownersTeamSamlRoleId !== "" && ownersTeamSamlRoleId !== undefined) {
+    const conflictingTeam = await db.query.teams.findFirst({
+      where: and(eq(teams.orgId, orgId), eq(teams.name, ownersTeamSamlRoleId)),
+    });
+    if (conflictingTeam !== undefined && conflictingTeam.name !== "owners") {
+      throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "owners-team-saml-role-id conflicts with an existing team name" }] });
+    }
+  }
+}
+
+async function assertDefaultAgentPool(defaultAgentPoolId: string | null | undefined, orgId: string): Promise<void> {
+  if (defaultAgentPoolId !== null && defaultAgentPoolId !== undefined) {
+    const pool = await db.query.agentPools.findFirst({ where: and(eq(agentPools.id, defaultAgentPoolId), eq(agentPools.orgId, orgId)) });
+    if (pool === undefined) {
+      throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "default-agent-pool-id must reference an agent pool in this organization" }] });
+    }
+  }
+}
+
+async function applyOrganizationPatch(org: OrgRow, fields: ValidatedOrgPatchFields) {
+  const updated = {
+    ...org,
+    name: fields.newName,
+    email: fields.email,
+    defaultIacBinary: fields.defaultIacBinary,
+    defaultTerraformVersion: fields.defaultTerraformVersion.trim(),
+    costEstimationEnabled: fields.costEstimationEnabled,
+    sessionTimeout: fields.sessionTimeout,
+    sessionRemember: fields.sessionRemember,
+    collaboratorAuthPolicy: fields.collaboratorAuthPolicy,
+    userTokensEnabled: fields.userTokensEnabled,
+    defaultAgentPoolId: fields.defaultAgentPoolId,
+    assessmentsEnforced: fields.assessmentsEnforced,
+    ownersTeamSamlRoleId: fields.ownersTeamSamlRoleId === "" ? null : fields.ownersTeamSamlRoleId,
+    allowForceDeleteWorkspaces: fields.allowForceDeleteWorkspaces,
+    stacksEnabled: fields.stacksEnabled,
+    showPreReleases: fields.showPreReleases,
+    defaultExecutionMode: fields.defaultExecutionMode,
+    aggregatedCommitStatusEnabled: fields.aggregatedCommitStatusEnabled,
+    sendPassingStatusesForUntriggeredSpeculativePlans: fields.sendPassingStatusesForUntriggeredSpeculativePlans,
+    moduleTestTokenTtl: fields.moduleTestTokenTtl,
+  };
+  await db.update(organizations).set({
+    name: updated.name,
+    email: updated.email,
+    defaultIacBinary: updated.defaultIacBinary,
+    defaultTerraformVersion: updated.defaultTerraformVersion,
+    costEstimationEnabled: updated.costEstimationEnabled,
+    sessionTimeout: updated.sessionTimeout,
+    sessionRemember: updated.sessionRemember,
+    collaboratorAuthPolicy: updated.collaboratorAuthPolicy,
+    userTokensEnabled: updated.userTokensEnabled,
+    defaultAgentPoolId: updated.defaultAgentPoolId,
+    assessmentsEnforced: updated.assessmentsEnforced,
+    ownersTeamSamlRoleId: updated.ownersTeamSamlRoleId,
+    allowForceDeleteWorkspaces: updated.allowForceDeleteWorkspaces,
+    stacksEnabled: updated.stacksEnabled,
+    showPreReleases: updated.showPreReleases,
+    defaultExecutionMode: updated.defaultExecutionMode,
+    aggregatedCommitStatusEnabled: updated.aggregatedCommitStatusEnabled,
+    sendPassingStatusesForUntriggeredSpeculativePlans: updated.sendPassingStatusesForUntriggeredSpeculativePlans,
+    moduleTestTokenTtl: updated.moduleTestTokenTtl,
+  }).where(eq(organizations.id, org.id));
+  // The cached org name would otherwise stay stale for the TTL window.
+  invalidateOrganizationName(org.id);
+  return updated;
+}
+
 export const organizationRoutes = new Elysia({ name: "organizations" })
   .use(authPlugin)
   .post("/api/v2/organizations", async ({ user, orgId: tokenOrgId, teamId: tokenTeamId, body, set }: ParamCtx): Promise<unknown> => {
@@ -552,159 +770,25 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    if (data !== null && typeof data === "object" && "type" in data && (data as Record<string, unknown>)["type"] !== undefined && (data as Record<string, unknown>)["type"] !== "organizations") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid type" }] };
-    }
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const newName = attributes["name"] === undefined ? org.name : (typeof attributes["name"] === "string" ? attributes["name"].trim() : "");
-    const defaultIacBinary = typeof attributes["default-iac-binary"] === "string" ? attributes["default-iac-binary"] : (org.defaultIacBinary ?? "terraform");
-    const defaultTerraformVersion = typeof attributes["default-terraform-version"] === "string" ? attributes["default-terraform-version"] : (org.defaultTerraformVersion ?? "latest");
-    const assessmentsEnforced = attributes["assessments-enforced"] === undefined
-      ? org.assessmentsEnforced
-      : attributes["assessments-enforced"] === true;
-    const ownersTeamSamlRoleId = attributes["owners-team-saml-role-id"] === undefined
-      ? org.ownersTeamSamlRoleId
-      : typeof attributes["owners-team-saml-role-id"] === "string"
-        ? attributes["owners-team-saml-role-id"].trim()
-        : attributes["owners-team-saml-role-id"] === null
-          ? null
-          : undefined;
-    const email = attributes["email"] === undefined
-      ? org.email
-      : typeof attributes["email"] === "string"
-        ? attributes["email"].trim() === "" ? null : attributes["email"].trim()
-        : attributes["email"] === null
-          ? null
-          : undefined;
-    const allowForceDeleteWorkspaces = attributes["allow-force-delete-workspaces"] === undefined
-      ? org.allowForceDeleteWorkspaces
-      : attributes["allow-force-delete-workspaces"] === true;
-    const stacksEnabled = attributes["stacks-enabled"] === undefined
-      ? org.stacksEnabled
-      : attributes["stacks-enabled"] === true;
-    const showPreReleases = attributes["show-pre-releases"] === undefined
-      ? org.showPreReleases
-      : attributes["show-pre-releases"] === true;
-    const aggregatedCommitStatusEnabled = attributes["aggregated-commit-status-enabled"] === undefined
-      ? org.aggregatedCommitStatusEnabled
-      : attributes["aggregated-commit-status-enabled"] === true;
-    const sendPassingStatusesForUntriggeredSpeculativePlans = attributes["send-passing-statuses-for-untriggered-speculative-plans"] === undefined
-      ? org.sendPassingStatusesForUntriggeredSpeculativePlans
-        : attributes["send-passing-statuses-for-untriggered-speculative-plans"] === true;
-    const moduleTestTokenTtl = attributes["module-test-token-ttl"] === undefined
-      ? org.moduleTestTokenTtl
-        : parseModuleTestTokenTtl(attributes["module-test-token-ttl"]);
-    const costEstimationEnabled = attributes["cost-estimation-enabled"] === undefined ? org.costEstimationEnabled : attributes["cost-estimation-enabled"] === true;
-    const sessionTimeout = attributes["session-timeout"] === undefined
-      ? org.sessionTimeout
-      : attributes["session-timeout"] === null ? null : Number.isSafeInteger(attributes["session-timeout"]) && Number(attributes["session-timeout"]) >= 0 ? Number(attributes["session-timeout"]) : undefined;
-    const sessionRemember = attributes["session-remember"] === undefined
-      ? org.sessionRemember
-      : attributes["session-remember"] === null ? null : attributes["session-remember"] === true || attributes["session-remember"] === false ? attributes["session-remember"] : undefined;
-    const collaboratorAuthPolicy = attributes["collaborator-auth-policy"] === undefined
-      ? org.collaboratorAuthPolicy
-      : typeof attributes["collaborator-auth-policy"] === "string" && ["password", "sso"].includes(attributes["collaborator-auth-policy"]) ? attributes["collaborator-auth-policy"] : undefined;
-    const userTokensEnabled = attributes["user-tokens-enabled"] === undefined ? org.userTokensEnabled : attributes["user-tokens-enabled"] === true;
-    const defaultAgentPoolId = attributes["default-agent-pool-id"] === undefined
-      ? org.defaultAgentPoolId
-      : attributes["default-agent-pool-id"] === null ? null : typeof attributes["default-agent-pool-id"] === "string" && attributes["default-agent-pool-id"] !== "" ? attributes["default-agent-pool-id"] : undefined;
-    const defaultExecutionMode = attributes["default-execution-mode"] === undefined
-      ? org.defaultExecutionMode
-      : typeof attributes["default-execution-mode"] === "string"
-        ? attributes["default-execution-mode"]
-        : undefined;
-    if (newName === "" || !["tofu", "terraform"].includes(defaultIacBinary) || defaultTerraformVersion.trim() === "") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
-    }
-    if (email === undefined || sessionTimeout === undefined || sessionRemember === undefined || collaboratorAuthPolicy === undefined || defaultAgentPoolId === undefined || defaultExecutionMode === undefined || (defaultExecutionMode !== "remote" && defaultExecutionMode !== "local" && defaultExecutionMode !== "agent")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid organization settings" }] };
-    }
-    if (moduleTestTokenTtl === undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Module test token TTL must be between ${moduleTestTokenTtlBounds.min} and ${moduleTestTokenTtlBounds.max} seconds` }] };
-    }
-    const nameError = newName === org.name ? null : organizationNameError(newName);
-    if (nameError !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: nameError }] };
-    }
-    if (ownersTeamSamlRoleId === undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "owners-team-saml-role-id must be a string or null" }] };
-    }
-    if (ownersTeamSamlRoleId !== null && ownersTeamSamlRoleId !== "") {
-      const conflictingTeam = await db.query.teams.findFirst({
-        where: and(eq(teams.orgId, org.id), eq(teams.name, ownersTeamSamlRoleId)),
-      });
-      if (conflictingTeam !== undefined && conflictingTeam.name !== "owners") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "owners-team-saml-role-id conflicts with an existing team name" }] };
-      }
-    }
-    if (defaultAgentPoolId !== null) {
-      const pool = await db.query.agentPools.findFirst({ where: and(eq(agentPools.id, defaultAgentPoolId), eq(agentPools.orgId, org.id)) });
-      if (pool === undefined) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "default-agent-pool-id must reference an agent pool in this organization" }] };
-      }
-    }
     try {
-      const updated = {
-        ...org,
-        name: newName,
-        email,
-        defaultIacBinary,
-        defaultTerraformVersion: defaultTerraformVersion.trim(),
-        costEstimationEnabled,
-        sessionTimeout,
-        sessionRemember,
-        collaboratorAuthPolicy,
-        userTokensEnabled,
-        defaultAgentPoolId,
-        assessmentsEnforced,
-        ownersTeamSamlRoleId: ownersTeamSamlRoleId === "" ? null : ownersTeamSamlRoleId,
-        allowForceDeleteWorkspaces,
-        stacksEnabled,
-        showPreReleases,
-        defaultExecutionMode: defaultExecutionMode as string,
-        aggregatedCommitStatusEnabled,
-        sendPassingStatusesForUntriggeredSpeculativePlans,
-        moduleTestTokenTtl,
-      };
-      await db.update(organizations).set({
-        name: updated.name,
-        email: updated.email,
-        defaultIacBinary: updated.defaultIacBinary,
-        defaultTerraformVersion: updated.defaultTerraformVersion,
-        costEstimationEnabled: updated.costEstimationEnabled,
-        sessionTimeout: updated.sessionTimeout,
-        sessionRemember: updated.sessionRemember,
-        collaboratorAuthPolicy: updated.collaboratorAuthPolicy,
-        userTokensEnabled: updated.userTokensEnabled,
-        defaultAgentPoolId: updated.defaultAgentPoolId,
-        assessmentsEnforced: updated.assessmentsEnforced,
-        ownersTeamSamlRoleId: updated.ownersTeamSamlRoleId,
-        allowForceDeleteWorkspaces: updated.allowForceDeleteWorkspaces,
-        stacksEnabled: updated.stacksEnabled,
-        showPreReleases: updated.showPreReleases,
-        defaultExecutionMode: updated.defaultExecutionMode,
-        aggregatedCommitStatusEnabled: updated.aggregatedCommitStatusEnabled,
-        sendPassingStatusesForUntriggeredSpeculativePlans: updated.sendPassingStatusesForUntriggeredSpeculativePlans,
-        moduleTestTokenTtl: updated.moduleTestTokenTtl,
-      }).where(eq(organizations.id, org.id));
-      // The cached org name would otherwise stay stale for the TTL window.
-      invalidateOrganizationName(org.id);
+      const attributes = parsePatchAttributes(body);
+      const fields = parseOrganizationPatch(attributes, org);
+      assertPatchIdentity(fields);
+      assertPatchSettings(fields);
+      assertPatchNaming(fields, org);
+      await assertOwnersTeamSamlRoleId(fields.ownersTeamSamlRoleId, org.id);
+      await assertDefaultAgentPool(fields.defaultAgentPoolId, org.id);
+      const updated = await applyOrganizationPatch(org, fields);
       return { data: await organizationResourceForPrincipal(updated, user?.id, orgId, teamId) };
-    } catch (e: unknown) {
-      if (isUniqueConstraintError(e)) {
+    } catch (error: unknown) {
+      if (error instanceof OrgPatchError) {
+        (set as { status: number }).status = error.status;
+        return error.body;
+      }
+      if (isUniqueConstraintError(error)) {
         (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict" }] };
       }
-      throw e;
+      throw error;
     }
   })
   .delete("/api/v2/organizations/:org_name", async ({ params, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
