@@ -563,6 +563,206 @@ async function upsertRegistrationAgent(
   return agentId;
 }
 
+type StatusJobPayload = {
+  jobStatus: unknown;
+  jobPayload: Record<string, unknown> | null;
+  jobData: Record<string, unknown> | null;
+  runId: string | null;
+  operation: string | null;
+};
+
+function parseStatusJobPayload(body: Record<string, unknown>): StatusJobPayload {
+  const jobPayload = typeof body["job"] === "object" && body["job"] !== null ? body["job"] as Record<string, unknown> : null;
+  const jobData = jobPayload !== null && typeof jobPayload["data"] === "object" && jobPayload["data"] !== null
+    ? jobPayload["data"] as Record<string, unknown>
+    : null;
+  return {
+    jobStatus: jobPayload === null ? null : jobPayload["status"],
+    jobPayload,
+    jobData,
+    runId: jobData !== null && typeof jobData["run_id"] === "string" ? jobData["run_id"] : null,
+    operation: jobData !== null && typeof jobData["operation"] === "string" ? jobData["operation"] : null,
+  };
+}
+
+function statusResultFields(jobData: Record<string, unknown> | null, keys: readonly string[]): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  if (jobData !== null) {
+    for (const key of keys) {
+      if (jobData[key] !== undefined) result[key] = jobData[key];
+    }
+  }
+  return result;
+}
+
+async function findStatusAgentJob(
+  agentId: string,
+  runId: string,
+  phase: string,
+  fencingToken: number | undefined,
+): Promise<typeof agentJobs.$inferSelect | undefined> {
+  if (fencingToken === undefined) return undefined;
+  return db.query.agentJobs.findFirst({
+    where: and(
+      eq(agentJobs.runId, runId),
+      eq(agentJobs.phase, phase),
+      eq(agentJobs.agentId, agentId),
+      eq(agentJobs.fencingToken, fencingToken),
+      inArray(agentJobs.status, ["claimed", "canceled"]),
+    ),
+  });
+}
+
+async function completeStatusAgentJob(
+  agent: Readonly<{ id: string }>,
+  job: typeof agentJobs.$inferSelect,
+  jobPayload: Record<string, unknown>,
+  jobData: Record<string, unknown> | null,
+  jobStatus: unknown,
+  fencingToken: number,
+  set: { status?: number },
+): Promise<unknown | undefined> {
+  const errorMessage = typeof jobPayload["error"] === "string" ? jobPayload["error"] : null;
+  const result = statusResultFields(jobData, ["has_changes", "generated_configuration", "resource_additions",
+    "resource_changes", "resource_destructions", "resource_imports", "action_failures",
+    "action_invocations"]);
+  const statePayload = jsonStringOrNull(jobData?.["state"]);
+  const jsonState = jsonStringOrNull(jobData?.["json_state"]);
+  const jsonStateOutputs = jsonStringOrNull(jobData?.["json_state_outputs"]);
+  if (statePayload === undefined || jsonState === undefined || jsonStateOutputs === undefined) {
+    set.status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent state payload must be valid JSON strings" }] };
+  }
+  if (isClientEncryptedState(statePayload)) {
+    set.status = 422;
+    return { errors: [{ status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR }] };
+  }
+  if (!isAgentResultValid(result)) {
+    set.status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `result exceeds ${MAX_AGENT_RESULT_BYTES} bytes or structural limits` }] };
+  }
+  const completion: AgentJobCompletion = {
+    status: jobStatus === "finished" ? "completed" : "errored",
+    errorMessage,
+    result,
+    planJson: null,
+    statePayload,
+    jsonState,
+    jsonStateOutputs,
+    resourceAdditions: numberOrNull(result["resource_additions"]),
+    resourceChanges: numberOrNull(result["resource_changes"]),
+    resourceDestructions: numberOrNull(result["resource_destructions"]),
+    resourceImports: numberOrNull(result["resource_imports"]),
+  };
+  const completed = await completeAgentJob(agent.id, job.id, fencingToken, completion);
+  if (completed === undefined) return fencingConflict(set);
+  return undefined;
+}
+
+async function findStatusStackJob(
+  agentId: string,
+  phase: string,
+  runId: string,
+  explicitStackJobId: string | null,
+  fencingToken: number | undefined,
+): Promise<typeof stackAgentJobs.$inferSelect | undefined> {
+  const fencing = fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)];
+  if (explicitStackJobId !== null) {
+    return db.query.stackAgentJobs.findFirst({
+      where: and(
+        eq(stackAgentJobs.id, explicitStackJobId),
+        eq(stackAgentJobs.phase, phase),
+        eq(stackAgentJobs.agentId, agentId),
+        eq(stackAgentJobs.status, "claimed"),
+        ...fencing,
+      ),
+    });
+  }
+  return db.query.stackAgentJobs.findFirst({
+    where: and(
+      eq(stackAgentJobs.deploymentRunId, runId),
+      eq(stackAgentJobs.phase, phase),
+      eq(stackAgentJobs.agentId, agentId),
+      eq(stackAgentJobs.status, "claimed"),
+      ...fencing,
+    ),
+  });
+}
+
+async function completeStatusStackJob(
+  agent: Readonly<{ id: string }>,
+  jobPayload: Record<string, unknown>,
+  jobData: Record<string, unknown> | null,
+  jobStatus: unknown,
+  phase: string,
+  runId: string,
+  fencingToken: number | undefined,
+  set: { status?: number },
+): Promise<unknown | undefined> {
+  const explicitStackJobId = jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
+  const stackJob = await findStatusStackJob(agent.id, phase, runId, explicitStackJobId, fencingToken);
+  if (stackJob === undefined) return fencingConflict(set);
+  const result = statusResultFields(jobData, ["has_changes", "has-changes", "deferred_changes", "deferred-changes", "resource_additions", "resource_changes", "resource_destructions", "resource_imports"]);
+  for (const key of ["state", "json_state"]) {
+    if (jobData?.[key] === undefined) continue;
+    const value = jsonStringOrNull(jobData?.[key]);
+    if (value === undefined) {
+      set.status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Agent ${key} payload must be a valid JSON string` }] };
+    }
+    result[key] = value;
+  }
+  const completed = await completeStackAgentJob(agent.id, stackJob.id, { status: jobStatus === "finished" ? "completed" : "errored", errorMessage: typeof jobPayload["error"] === "string" ? jobPayload["error"] : null, result }, fencingToken);
+  if (completed === undefined) return fencingConflict(set);
+  return undefined;
+}
+
+async function heartbeatStatusStackJob(
+  agent: Readonly<{ id: string }>,
+  jobData: Record<string, unknown> | null,
+  operation: string | null,
+  fencingToken: number | undefined,
+): Promise<void> {
+  const explicitStackJobId = jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
+  const stackPhase = operation === "apply" || operation === "plan" ? operation : undefined;
+  const stackJob = explicitStackJobId === null
+    ? await activeStackJobForStatus(agent.id, stackPhase)
+    : await db.query.stackAgentJobs.findFirst({
+        where: and(
+          eq(stackAgentJobs.id, explicitStackJobId),
+          eq(stackAgentJobs.agentId, agent.id),
+          eq(stackAgentJobs.status, "claimed"),
+          ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
+        ),
+      });
+  if (stackJob !== undefined) await heartbeatStackAgentJob(agent.id, stackJob.id, fencingToken);
+}
+
+async function handleStatusCompletion(
+  agent: Readonly<{ id: string }>,
+  jobPayload: Record<string, unknown>,
+  jobData: Record<string, unknown> | null,
+  jobStatus: unknown,
+  phase: string,
+  runId: string,
+  fencingToken: number | undefined,
+  set: { status?: number },
+): Promise<unknown | undefined> {
+  const job = await findStatusAgentJob(agent.id, runId, phase, fencingToken);
+  if (job !== undefined && fencingToken !== undefined) {
+    return completeStatusAgentJob(agent, job, jobPayload, jobData, jobStatus, fencingToken, set);
+  }
+  return completeStatusStackJob(agent, jobPayload, jobData, jobStatus, phase, runId, fencingToken, set);
+}
+
+function statusResponseHeaders(ctx: AgentCtx, set: { headers?: Record<string, string | number> }): Record<string, never> {
+  const messageIndex = ctx.request.headers.get("tfc-agent-message-index");
+  if (set.headers === undefined) set.headers = {};
+  if (messageIndex !== null) set.headers["tfc-agent-message-index"] = messageIndex;
+  set.headers["content-type"] = "application/json";
+  return {};
+}
+
 export const agentApiRoutes = new Elysia({ name: "agent-api" })
   .use(authPlugin)
 
@@ -631,141 +831,24 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     const status = typeof body["status"] === "string" ? body["status"] : "idle";
     const now = Date.now();
 
-    const jobPayload = typeof body["job"] === "object" && body["job"] !== null ? body["job"] as Record<string, unknown> : null;
-    const jobStatus = jobPayload === null ? null : jobPayload["status"];
-    const jobData = jobPayload !== null && typeof jobPayload["data"] === "object" && jobPayload["data"] !== null
-      ? jobPayload["data"] as Record<string, unknown>
-      : null;
-    const runId = jobData !== null && typeof jobData["run_id"] === "string" ? jobData["run_id"] : null;
-    const operation = jobData !== null && typeof jobData["operation"] === "string" ? jobData["operation"] : null;
+    const payload = parseStatusJobPayload(body);
+    const fencingToken = parseAgentFencingToken(
+      payload.jobData?.["fencing_token"] ?? ctx.request.headers.get("tfc-agent-fencing-token"),
+    );
 
-    if ((jobStatus === "finished" || jobStatus === "errored") && jobPayload !== null && runId !== null) {
-      const fencingToken = parseAgentFencingToken(
-        jobData?.["fencing_token"] ?? ctx.request.headers.get("tfc-agent-fencing-token"),
-      );
+    if ((payload.jobStatus === "finished" || payload.jobStatus === "errored") && payload.jobPayload !== null && payload.runId !== null) {
       // Completion signal: the agent finished (or failed) its claimed job.
-      const phase = operation === "apply" ? "apply" : "plan";
-      const job = fencingToken === undefined
-        ? undefined
-        : await db.query.agentJobs.findFirst({
-            where: and(
-              eq(agentJobs.runId, runId),
-              eq(agentJobs.phase, phase),
-              eq(agentJobs.agentId, agent.id),
-              eq(agentJobs.fencingToken, fencingToken),
-              inArray(agentJobs.status, ["claimed", "canceled"]),
-            ),
-          });
-      if (job !== undefined && fencingToken !== undefined) {
-        const errorMessage = typeof jobPayload["error"] === "string" ? jobPayload["error"] : null;
-        const result: Record<string, unknown> = {};
-        if (jobData !== null) {
-          for (const key of ["has_changes", "generated_configuration", "resource_additions",
-            "resource_changes", "resource_destructions", "resource_imports", "action_failures",
-            "action_invocations"]) {
-            if (jobData[key] !== undefined) result[key] = jobData[key];
-          }
-        }
-        const statePayload = jsonStringOrNull(jobData?.["state"]);
-        const jsonState = jsonStringOrNull(jobData?.["json_state"]);
-        const jsonStateOutputs = jsonStringOrNull(jobData?.["json_state_outputs"]);
-        if (statePayload === undefined || jsonState === undefined || jsonStateOutputs === undefined) {
-          set.status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent state payload must be valid JSON strings" }] };
-        }
-        if (isClientEncryptedState(statePayload)) {
-          set.status = 422;
-          return { errors: [{ status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR }] };
-        }
-        if (!isAgentResultValid(result)) {
-          set.status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `result exceeds ${MAX_AGENT_RESULT_BYTES} bytes or structural limits` }] };
-        }
-        const completion: AgentJobCompletion = {
-          status: jobStatus === "finished" ? "completed" : "errored",
-          errorMessage,
-          result,
-          planJson: null,
-          statePayload,
-          jsonState,
-          jsonStateOutputs,
-          resourceAdditions: numberOrNull(result["resource_additions"]),
-          resourceChanges: numberOrNull(result["resource_changes"]),
-          resourceDestructions: numberOrNull(result["resource_destructions"]),
-          resourceImports: numberOrNull(result["resource_imports"]),
-        };
-        const completed = await completeAgentJob(agent.id, job.id, fencingToken, completion);
-        if (completed === undefined) return fencingConflict(set);
-      } else {
-        const explicitStackJobId = jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
-        const stackJob = explicitStackJobId !== null
-          ? await db.query.stackAgentJobs.findFirst({
-              where: and(
-                eq(stackAgentJobs.id, explicitStackJobId),
-                eq(stackAgentJobs.phase, phase),
-                eq(stackAgentJobs.agentId, agent.id),
-                eq(stackAgentJobs.status, "claimed"),
-                ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
-              ),
-            })
-          : await db.query.stackAgentJobs.findFirst({
-              where: and(
-                eq(stackAgentJobs.deploymentRunId, runId),
-                eq(stackAgentJobs.phase, phase),
-                eq(stackAgentJobs.agentId, agent.id),
-                eq(stackAgentJobs.status, "claimed"),
-                ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
-              ),
-            });
-        if (stackJob !== undefined) {
-          const result: Record<string, unknown> = {};
-          if (jobData !== null) {
-            for (const key of ["has_changes", "has-changes", "deferred_changes", "deferred-changes", "resource_additions", "resource_changes", "resource_destructions", "resource_imports"]) {
-              if (jobData[key] !== undefined) result[key] = jobData[key];
-            }
-            for (const key of ["state", "json_state"]) {
-              if (jobData[key] === undefined) continue;
-              const value = jsonStringOrNull(jobData[key]);
-              if (value === undefined) {
-                set.status = 422;
-                return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Agent ${key} payload must be a valid JSON string` }] };
-              }
-              result[key] = value;
-            }
-          }
-          const completed = await completeStackAgentJob(agent.id, stackJob.id, { status: jobStatus === "finished" ? "completed" : "errored", errorMessage: typeof jobPayload["error"] === "string" ? jobPayload["error"] : null, result }, fencingToken);
-          if (completed === undefined) return fencingConflict(set);
-        } else {
-          return fencingConflict(set);
-        }
-      }
+      const phase = payload.operation === "apply" ? "apply" : "plan";
+      const done = await handleStatusCompletion(agent, payload.jobPayload, payload.jobData, payload.jobStatus, phase, payload.runId, fencingToken, set);
+      if (done !== undefined) return done;
       await db.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agent.id));
     } else {
       const agentStatus = status === "busy" ? "busy" : status === "exited" ? "exited" : "idle";
       await db.update(agents).set({ status: agentStatus, lastPingAt: now }).where(eq(agents.id, agent.id));
-      const fencingToken = parseAgentFencingToken(
-        jobData?.["fencing_token"] ?? ctx.request.headers.get("tfc-agent-fencing-token"),
-      );
-      const explicitStackJobId = jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
-      const stackPhase = operation === "apply" || operation === "plan" ? operation : undefined;
-      const stackJob = explicitStackJobId === null
-        ? await activeStackJobForStatus(agent.id, stackPhase)
-        : await db.query.stackAgentJobs.findFirst({
-            where: and(
-              eq(stackAgentJobs.id, explicitStackJobId),
-              eq(stackAgentJobs.agentId, agent.id),
-              eq(stackAgentJobs.status, "claimed"),
-              ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
-            ),
-          });
-      if (stackJob !== undefined) await heartbeatStackAgentJob(agent.id, stackJob.id, fencingToken);
+      await heartbeatStatusStackJob(agent, payload.jobData, payload.operation, fencingToken);
     }
 
-    const messageIndex = ctx.request.headers.get("tfc-agent-message-index");
-    if (set.headers === undefined) set.headers = {};
-    if (messageIndex !== null) set.headers["tfc-agent-message-index"] = messageIndex;
-    set.headers["content-type"] = "application/json";
-    return {};
+    return statusResponseHeaders(ctx, set);
   })
 
   .get("/api/agent/update", async (ctx: AgentCtx): Promise<unknown> => {
