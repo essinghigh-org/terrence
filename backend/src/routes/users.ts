@@ -388,6 +388,106 @@ async function membershipStatusCounts(orgId: string): Promise<{ total: number; a
   };
 }
 
+async function requireManageableMembership(
+  memId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null | undefined,
+): Promise<Readonly<typeof organizationMemberships.$inferSelect>> {
+  const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
+  if (mem === undefined || !(await checkOrganizationPermission(mem.orgId, userId, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
+    throw new HttpStatusError(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  return mem;
+}
+
+function membershipPatchInputOrThrow(body: unknown): Readonly<Record<string, unknown>> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  if (data !== undefined && typeof data["type"] === "string" && data["type"] !== "organization-memberships") {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be \"organization-memberships\"" }] });
+  }
+  return typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+}
+
+function membershipStatusOrThrow(attrs: Readonly<Record<string, unknown>>): string | undefined {
+  if (attrs["status"] === undefined) return undefined;
+  // Status: invited <-> active is the activation path for provisioned members.
+  if (typeof attrs["status"] !== "string" || !["active", "invited"].includes(attrs["status"])) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be one of: active, invited" }] });
+  }
+  return attrs["status"];
+}
+
+function membershipRoleOrThrow(attrs: Readonly<Record<string, unknown>>): string | undefined {
+  if (attrs["role"] === undefined) return undefined;
+  if (typeof attrs["role"] !== "string" || !["owner", "member"].includes(attrs["role"])) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "role must be one of: owner, member" }] });
+  }
+  return attrs["role"];
+}
+
+function resolveMembershipUpdates(
+  attrs: Readonly<Record<string, unknown>>,
+  currentRole: string,
+): Partial<typeof organizationMemberships.$inferInsert> {
+  const updates: Partial<typeof organizationMemberships.$inferInsert> = {};
+  const status = membershipStatusOrThrow(attrs);
+  if (status !== undefined) updates.status = status;
+  // Role: owner promotion/demotion. The final owner guard is repeated inside
+  // the write lock below so status changes cannot bypass it.
+  const role = membershipRoleOrThrow(attrs);
+  if (role !== undefined && role !== currentRole) updates.role = role;
+  if (Object.keys(updates).length === 0) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No changes requested" }] });
+  }
+  return updates;
+}
+
+async function applyMembershipUpdates(
+  orgId: string,
+  memId: string,
+  updates: Readonly<Partial<typeof organizationMemberships.$inferInsert>>,
+): Promise<{ lockedMem: Readonly<typeof organizationMemberships.$inferSelect>; lostActiveAccess: boolean }> {
+  let blockedLastOwner = false;
+  let changed = false;
+  let lostActiveAccess = false;
+  let lockedMem: typeof organizationMemberships.$inferSelect | undefined = undefined;
+  await withDbLock(`organization-membership:${orgId}`, async (): Promise<void> => {
+    const current = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
+    if (current === undefined) return;
+    lockedMem = current;
+    const lockedUpdates: Partial<typeof organizationMemberships.$inferInsert> = {};
+    if (updates.status !== undefined && updates.status !== current.status) lockedUpdates.status = updates.status;
+    if (updates.role !== undefined && updates.role !== current.role) lockedUpdates.role = updates.role;
+    if ((lockedUpdates.role === "member" || lockedUpdates.status === "invited") && current.role === "owner" && current.status === "active") {
+      const owners = await db.query.organizationMemberships.findMany({
+        where: and(eq(organizationMemberships.orgId, current.orgId), eq(organizationMemberships.role, "owner"), eq(organizationMemberships.status, "active")),
+        columns: { id: true },
+      });
+      if (owners.length <= 1) {
+        blockedLastOwner = true;
+        return;
+      }
+    }
+    if (Object.keys(lockedUpdates).length > 0) {
+      await db.update(organizationMemberships).set(lockedUpdates).where(eq(organizationMemberships.id, memId));
+      changed = true;
+      if (current.status === "active" && lockedUpdates.status === "invited") lostActiveAccess = true;
+    }
+  });
+  if (blockedLastOwner) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Cannot remove the last active owner of the organization" }] });
+  }
+  if (lockedMem === undefined) {
+    throw new HttpStatusError(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  if (!changed) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No changes requested" }] });
+  }
+  return { lockedMem, lostActiveAccess };
+}
+
 export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
   .get("/api/v2/users", async ({ query, user, set }: ParamCtx): Promise<unknown> => {
@@ -872,94 +972,29 @@ export const userRoutes = new Elysia({ name: "users" })
   })
   .patch("/api/v2/organization-memberships/:id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }): Promise<unknown> => {
     const memId = params.id ?? "";
-    const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
-    if (mem === undefined || !(await checkOrganizationPermission(mem.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    if (data !== undefined && typeof data["type"] === "string" && data["type"] !== "organization-memberships") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be \"organization-memberships\"" }] };
-    }
-    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const updates: Partial<typeof organizationMemberships.$inferInsert> = {};
-
-    // Status: invited <-> active is the activation path for provisioned members.
-    if (attrs["status"] !== undefined) {
-      if (typeof attrs["status"] !== "string" || !["active", "invited"].includes(attrs["status"])) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be one of: active, invited" }] };
+    try {
+      const mem = await requireManageableMembership(memId, user?.id, tokenOrgId, tokenTeamId);
+      const updates = resolveMembershipUpdates(membershipPatchInputOrThrow(body), mem.role);
+      const { lostActiveAccess } = await applyMembershipUpdates(mem.orgId, memId, updates);
+      await auditLog("update", "organization-memberships", memId, user?.id ?? null, mem.orgId, { userId: mem.userId, ...updates });
+      // Status/role changes alter permissions immediately; revoke stale streams.
+      publish("authz.changed", { "user-id": mem.userId, "org-id": mem.orgId });
+      // Losing active status removes org access like a removal does (issue
+      // #699): outstanding run-log capabilities must not outlive it.
+      if (lostActiveAccess) {
+        await rotateOrgRunLogTokens(mem.orgId);
       }
-      updates.status = attrs["status"];
-    }
-
-    // Role: owner promotion/demotion. The final owner guard is repeated inside
-    // the write lock below so status changes cannot bypass it.
-    if (attrs["role"] !== undefined) {
-      if (typeof attrs["role"] !== "string" || !["owner", "member"].includes(attrs["role"])) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "role must be one of: owner, member" }] };
+      const updated = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
+      if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+      const targetUser = await db.query.users.findFirst({ where: eq(users.id, updated.userId) });
+      return { data: await orgMembershipResource(updated, targetUser) };
+    } catch (error: unknown) {
+      if (error instanceof HttpStatusError) {
+        (set as { status: number }).status = error.status;
+        return error.body;
       }
-      if (mem.role !== attrs["role"]) updates.role = attrs["role"];
+      throw error;
     }
-
-    if (Object.keys(updates).length === 0) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No changes requested" }] };
-    }
-
-    let blockedLastOwner = false;
-    let changed = false;
-    let lostActiveAccess = false;
-    let lockedMem: typeof mem | undefined = undefined;
-    await withDbLock(`organization-membership:${mem.orgId}`, async (): Promise<void> => {
-      const current = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
-      if (current === undefined) return;
-      lockedMem = current;
-      const lockedUpdates: Partial<typeof organizationMemberships.$inferInsert> = {};
-      if (updates.status !== undefined && updates.status !== current.status) lockedUpdates.status = updates.status;
-      if (updates.role !== undefined && updates.role !== current.role) lockedUpdates.role = updates.role;
-      if ((lockedUpdates.role === "member" || lockedUpdates.status === "invited") && current.role === "owner" && current.status === "active") {
-        const owners = await db.query.organizationMemberships.findMany({
-          where: and(eq(organizationMemberships.orgId, current.orgId), eq(organizationMemberships.role, "owner"), eq(organizationMemberships.status, "active")),
-          columns: { id: true },
-        });
-        if (owners.length <= 1) {
-          blockedLastOwner = true;
-          return;
-        }
-      }
-      if (Object.keys(lockedUpdates).length > 0) {
-        await db.update(organizationMemberships).set(lockedUpdates).where(eq(organizationMemberships.id, memId));
-        changed = true;
-        if (current.status === "active" && lockedUpdates.status === "invited") lostActiveAccess = true;
-      }
-    });
-    if (blockedLastOwner) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Cannot remove the last active owner of the organization" }] };
-    }
-    if (lockedMem === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (!changed) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No changes requested" }] };
-    }
-    await auditLog("update", "organization-memberships", memId, user?.id ?? null, mem.orgId, { userId: mem.userId, ...updates });
-    // Status/role changes alter permissions immediately; revoke stale streams.
-    publish("authz.changed", { "user-id": mem.userId, "org-id": mem.orgId });
-    // Losing active status removes org access like a removal does (issue
-    // #699): outstanding run-log capabilities must not outlive it.
-    if (lostActiveAccess) {
-      await rotateOrgRunLogTokens(mem.orgId);
-    }
-    const updated = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
-    if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const targetUser = await db.query.users.findFirst({ where: eq(users.id, updated.userId) });
-    return { data: await orgMembershipResource(updated, targetUser) };
   })
   // --- Auth Tokens ---
   .get("/api/v2/users/:user_id/authentication-tokens", async ({ params, user, request, set }: ParamCtx): Promise<unknown> => {
