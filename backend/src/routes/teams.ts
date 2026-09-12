@@ -527,6 +527,39 @@ function teamTokenResponse(tokenId: string, secret: string, description: string,
   return { data: { id: tokenId, type: "authentication-tokens", attributes: { token: secret, description, "created-at": new Date().toISOString(), "expired-at": expiresAt !== null ? new Date(expiresAt).toISOString() : null } } };
 }
 
+// the reference format's Atlas convention lets `data[].id` be either a user UUID or a
+// username; the go-tfe v2 client sends usernames.
+function parseRelationshipIds(userItems: unknown): string[] {
+  if (!Array.isArray(userItems)) return [];
+  return userItems
+    .map((item: unknown): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string") ? (item as Record<string, unknown>)["id"] as string : "")
+    .filter((s: string): boolean => s !== "");
+}
+
+async function addTeamMembersByIds(teamOrgId: string, teamId: string, rawIds: string[]): Promise<void> {
+  const userIds = await resolveUserIds(rawIds);
+  const memberships = userIds.length === 0
+    ? new Map<string, typeof organizationMemberships.$inferSelect>()
+    : new Map(
+        (await db.query.organizationMemberships.findMany({
+          where: and(eq(organizationMemberships.orgId, teamOrgId), inArray(organizationMemberships.userId, userIds)),
+        })).map((m): [string, typeof organizationMemberships.$inferSelect] => [m.userId, m]),
+      );
+  const batch: (typeof teamMemberships.$inferInsert)[] = [];
+  for (const userId of userIds) {
+    const membership = memberships.get(userId);
+    if (membership?.status === "active") {
+      batch.push({ id: newResourceId("tm"), teamId, userId, createdAt: Date.now() });
+    }
+  }
+  if (batch.length > 0) await db.insert(teamMemberships).values(batch).onConflictDoNothing();
+}
+
+async function removeTeamMembersByIds(teamId: string, rawIds: string[]): Promise<void> {
+  const userIds = await resolveUserIds(rawIds);
+  if (userIds.length > 0) await db.delete(teamMemberships).where(and(eq(teamMemberships.teamId, teamId), inArray(teamMemberships.userId, userIds)));
+}
+
 export const teamRoutes = new Elysia({ name: "teams" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/team-tokens", async ({ params, request, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -704,30 +737,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const userItems = payload["data"];
-    if (Array.isArray(userItems)) {
-      const batch: (typeof teamMemberships.$inferInsert)[] = [];
-      // the reference format's Atlas convention lets `data[].id` be either a user UUID or a
-      // username; the go-tfe v2 client sends usernames.
-      const rawIds = userItems
-        .map((item): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string") ? (item as Record<string, unknown>)["id"] as string : "")
-        .filter((s: string): boolean => s !== "");
-      const userIds = await resolveUserIds(rawIds);
-      const memberships = userIds.length === 0
-        ? new Map<string, typeof organizationMemberships.$inferSelect>()
-        : new Map(
-            (await db.query.organizationMemberships.findMany({
-              where: and(eq(organizationMemberships.orgId, team.orgId), inArray(organizationMemberships.userId, userIds)),
-            })).map((m): [string, typeof organizationMemberships.$inferSelect] => [m.userId, m]),
-          );
-      for (const userId of userIds) {
-        const membership = memberships.get(userId);
-        if (membership?.status === "active") {
-          batch.push({ id: newResourceId("tm"), teamId, userId, createdAt: Date.now() });
-        }
-      }
-      if (batch.length > 0) await db.insert(teamMemberships).values(batch).onConflictDoNothing();
-    }
+    await addTeamMembersByIds(team.orgId, teamId, parseRelationshipIds(payload["data"]));
     (set as { status: number }).status = 204;
     return {};
   })
@@ -737,12 +747,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const userItems = payload["data"];
-    if (Array.isArray(userItems)) {
-      const rawIds = userItems.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>)["id"] === "string") ? (i as Record<string, unknown>)["id"] as string : "").filter((s: string): boolean => s !== "");
-      const userIds = await resolveUserIds(rawIds);
-      if (userIds.length > 0) await db.delete(teamMemberships).where(and(eq(teamMemberships.teamId, teamId), inArray(teamMemberships.userId, userIds)));
-    }
+    await removeTeamMembersByIds(teamId, parseRelationshipIds(payload["data"]));
     (set as { status: number }).status = 204;
     return {};
   })
