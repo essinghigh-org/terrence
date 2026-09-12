@@ -911,6 +911,19 @@ function policyListWhere(orgId: string, kind: string | null, searchName: string 
   return and(...conditions);
 }
 
+async function resolvePolicyCheckContext(
+  pc: Pick<typeof policyChecks.$inferSelect, "policyId" | "policySetId">,
+): Promise<Readonly<{ policy: typeof policies.$inferSelect | undefined; isOverridable: boolean }>> {
+  const policy = pc.policyId === null
+    ? undefined
+    : await db.query.policies.findFirst({ where: eq(policies.id, pc.policyId) });
+  const setId = pc.policySetId ?? policy?.policySetId ?? null;
+  const pset = setId === null
+    ? undefined
+    : await db.query.policySets.findFirst({ where: eq(policySets.id, setId), columns: { overridable: true } });
+  return { policy, isOverridable: pset?.overridable === true };
+}
+
 export const policyRoutes = new Elysia({ name: "policies" })
   .use(authPlugin)
   // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
@@ -1149,9 +1162,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const policySetId = params["policy_set_id"] ?? "";
     const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
     if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const { data, attributes } = parsePatchPayload(body);
     const updates: Partial<typeof policySets.$inferInsert> = {};
     const content = await resolvePolicySetPatchContent(ps, attributes);
     if ("error" in content) {
@@ -1636,15 +1647,9 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const policy = pc.policyId === null
-      ? undefined
-      : await db.query.policies.findFirst({ where: eq(policies.id, pc.policyId) });
-    const setId = pc.policySetId ?? policy?.policySetId ?? null;
-    const pset = setId === null
-      ? undefined
-      : await db.query.policySets.findFirst({ where: eq(policySets.id, setId), columns: { overridable: true } });
+    const { policy, isOverridable } = await resolvePolicyCheckContext(pc);
     const canOverride = await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "policy-override");
-    return { data: policyCheckResource(pc, policy, { isOverridable: pset?.overridable === true, canOverride }) };
+    return { data: policyCheckResource(pc, policy, { isOverridable, canOverride }) };
   })
   .get("/api/v2/policy-checks/:check_id/output", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     // Audit finding 4: go-tfe PolicyChecks.Logs polls Read until finished,
