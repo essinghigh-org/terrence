@@ -289,6 +289,55 @@ function sqlColumn(name: string): SQL {
   return sql.raw(`"${name}"`);
 }
 
+type ExplorerColumnType = "boolean" | "numeric" | "date" | "text";
+
+function sqlBoundValue(value: string, operator: string, columnType: ExplorerColumnType): string | number | boolean | undefined {
+  const comparison = comparisonOperators.has(operator);
+  if (columnType === "boolean" && comparison) {
+    return value.toLowerCase() === "true" ? true : value.toLowerCase() === "false" ? false : undefined;
+  }
+  if (columnType === "numeric" && comparison) return Number(value);
+  if (columnType === "date" && comparison) return Date.parse(value);
+  return value;
+}
+
+function sqlBoundGuard(bound: string | number | boolean | undefined, operator: string, numeric: boolean, date: boolean, booleanColumn: boolean): SQL | null {
+  if (booleanColumn && comparisonOperators.has(operator) && typeof bound !== "boolean") return sql`1 = 0`;
+  if ((numeric || date) && comparisonOperators.has(operator) && typeof bound === "number" && !Number.isFinite(bound)) return sql`1 = 0`;
+  return null;
+}
+
+function sqlTextPredicate(operator: string, column: SQL, textColumn: SQL, value: string, bound: string | number | boolean | undefined, typed: boolean): SQL | undefined {
+  switch (operator) {
+    case "contains": return sql`lower(${textColumn}) LIKE lower(${`%${value}%`})`;
+    case "does not contain": return sql`lower(${textColumn}) NOT LIKE lower(${`%${value}%`})`;
+    case "starts-with": return sql`lower(${textColumn}) LIKE lower(${`${value}%`})`;
+    case "ends-with": return sql`lower(${textColumn}) LIKE lower(${`%${value}`})`;
+    case "is": return typed ? sql`${column} = ${bound}` : sql`lower(${textColumn}) = lower(${value})`;
+    case "not-is":
+    case "is_not": return typed ? sql`${column} <> ${bound}` : sql`lower(${textColumn}) <> lower(${value})`;
+    case "is-null":
+    case "is_empty": return sql`(${column} IS NULL OR ${textColumn} = '')`;
+    case "is-not-null":
+    case "is_not_empty": return sql`(${column} IS NOT NULL AND ${textColumn} <> '')`;
+    default: return undefined;
+  }
+}
+
+function sqlComparisonPredicate(operator: string, column: SQL, bound: string | number | boolean | undefined): SQL | undefined {
+  switch (operator) {
+    case "greater-than":
+    case "gt":
+    case "is_after": return sql`${column} > ${bound}`;
+    case "less-than":
+    case "lt":
+    case "is_before": return sql`${column} < ${bound}`;
+    case "gteq": return sql`${column} >= ${bound}`;
+    case "lteq": return sql`${column} <= ${bound}`;
+    default: return undefined;
+  }
+}
+
 function sqlFilter(columnName: string, filter: ExplorerFilter): SQL | undefined {
   const column = sqlColumn(columnName);
   const values = filter.value.length === 0 ? [""] : filter.value;
@@ -299,37 +348,13 @@ function sqlFilter(columnName: string, filter: ExplorerFilter): SQL | undefined 
     ? sql`CASE WHEN ${column} THEN 'true' ELSE 'false' END`
     : sql`CAST(${column} AS TEXT)`;
   const make = (value: string): SQL => {
-    const bound = boolean && comparisonOperators.has(filter.operator)
-      ? value.toLowerCase() === "true" ? true : value.toLowerCase() === "false" ? false : undefined
-      : numeric && comparisonOperators.has(filter.operator)
-      ? Number(value)
-      : date && comparisonOperators.has(filter.operator)
-        ? Date.parse(value)
-        : value;
-    if (boolean && comparisonOperators.has(filter.operator) && typeof bound !== "boolean") return sql`1 = 0`;
-    if ((numeric || date) && comparisonOperators.has(filter.operator) && typeof bound === "number" && !Number.isFinite(bound)) return sql`1 = 0`;
-    switch (filter.operator) {
-      case "contains": return sql`lower(${textColumn}) LIKE lower(${`%${value}%`})`;
-      case "does not contain": return sql`lower(${textColumn}) NOT LIKE lower(${`%${value}%`})`;
-      case "starts-with": return sql`lower(${textColumn}) LIKE lower(${`${value}%`})`;
-      case "ends-with": return sql`lower(${textColumn}) LIKE lower(${`%${value}`})`;
-      case "is": return numeric || date || boolean ? sql`${column} = ${bound}` : sql`lower(${textColumn}) = lower(${value})`;
-      case "not-is":
-      case "is_not": return numeric || date || boolean ? sql`${column} <> ${bound}` : sql`lower(${textColumn}) <> lower(${value})`;
-      case "is-null":
-      case "is_empty": return sql`(${column} IS NULL OR ${textColumn} = '')`;
-      case "is-not-null":
-      case "is_not_empty": return sql`(${column} IS NOT NULL AND ${textColumn} <> '')`;
-      case "greater-than":
-      case "gt":
-      case "is_after": return sql`${column} > ${bound}`;
-      case "less-than":
-      case "lt":
-      case "is_before": return sql`${column} < ${bound}`;
-      case "gteq": return sql`${column} >= ${bound}`;
-      case "lteq": return sql`${column} <= ${bound}`;
-      default: return sql`1 = 1`;
-    }
+    const columnType: ExplorerColumnType = boolean ? "boolean" : numeric ? "numeric" : date ? "date" : "text";
+    const bound = sqlBoundValue(value, filter.operator, columnType);
+    const guard = sqlBoundGuard(bound, filter.operator, numeric, date, boolean);
+    if (guard !== null) return guard;
+    return sqlTextPredicate(filter.operator, column, textColumn, value, bound, numeric || date || boolean)
+      ?? sqlComparisonPredicate(filter.operator, column, bound)
+      ?? sql`1 = 1`;
   };
   return values.length === 1 ? make(values[0] ?? "") : sql`(${sql.join(values.map(make), negativeFilterOperators.has(filter.operator) ? sql` AND ` : sql` OR `)})`;
 }
