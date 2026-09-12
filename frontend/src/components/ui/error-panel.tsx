@@ -8,6 +8,38 @@ const SAFE_DIAGNOSTIC_KEYS = new Set([
   "screen", "workspaceId", "projectId", "organizationId", "runId", "resourceId", "endpoint", "operation", "phase",
 ]);
 
+function resolveErrorCode(code: string | undefined, apiError: ApiError | null): string {
+  return code ?? apiError?.code ?? "UI_UNEXPECTED_ERROR";
+}
+
+function resolveRequestReference(reference: string | undefined, apiError: ApiError | null): string | undefined {
+  return reference ?? apiError?.requestId ?? undefined;
+}
+
+function hasVisibleText(value: string | undefined): boolean {
+  return value !== undefined && value !== "";
+}
+
+function hasReferenceText(reference: string | undefined): boolean {
+  return reference !== undefined && reference.trim() !== "";
+}
+
+function buildDiagnosticDetails(
+  stableCode: string,
+  apiError: ApiError | null,
+  requestReference: string | undefined,
+  diagnosticContext: Readonly<Record<string, string | number | boolean>> | undefined,
+): string {
+  return [
+    `code=${stableCode}`,
+    ...(apiError === null ? [] : [`status=${String(apiError.status)}`]),
+    ...(requestReference === undefined || requestReference.trim() === "" ? [] : [`reference=${requestReference}`]),
+    ...Object.entries(diagnosticContext ?? {})
+      .filter(([key]): boolean => SAFE_DIAGNOSTIC_KEYS.has(key))
+      .map(([key, value]): string => `${key}=${String(value)}`),
+  ].join("\n");
+}
+
 /**
  * Consistent, retryable error panel for failed reads (kanban 14.12).
  *
@@ -43,16 +75,9 @@ export function ErrorPanel({
   const [copied, setCopied] = useState(false);
   const apiError = error instanceof ApiError ? error : null;
   const displayMessage = message ?? (error instanceof Error ? error.message : undefined);
-  const stableCode = code ?? apiError?.code ?? "UI_UNEXPECTED_ERROR";
-  const requestReference = reference ?? apiError?.requestId ?? undefined;
-  const diagnosticDetails = [
-    `code=${stableCode}`,
-    ...(apiError === null ? [] : [`status=${String(apiError.status)}`]),
-    ...(requestReference === undefined || requestReference.trim() === "" ? [] : [`reference=${requestReference}`]),
-    ...Object.entries(diagnosticContext ?? {})
-      .filter(([key]): boolean => SAFE_DIAGNOSTIC_KEYS.has(key))
-      .map(([key, value]): string => `${key}=${String(value)}`),
-  ].join("\n");
+  const stableCode = resolveErrorCode(code, apiError);
+  const requestReference = resolveRequestReference(reference, apiError);
+  const diagnosticDetails = buildDiagnosticDetails(stableCode, apiError, requestReference, diagnosticContext);
 
   const copyDiagnostics = (): void => {
     void copyTextToClipboard(diagnosticDetails).then((didCopy): void => {
@@ -69,12 +94,12 @@ export function ErrorPanel({
         <AlertTriangle data-icon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
         <div className="min-w-0">
           <p className="font-medium text-destructive">{title}</p>
-          {displayMessage !== undefined && displayMessage !== "" && (
+          {hasVisibleText(displayMessage) && (
             <p className="mt-0.5 text-sm text-destructive/90">{displayMessage}</p>
           )}
           <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-xs text-destructive/80">
             <span data-testid="error-code">Code: {stableCode}</span>
-            {requestReference !== undefined && requestReference.trim() !== "" && (
+            {hasReferenceText(requestReference) && (
               <span data-testid="error-reference">Reference: {requestReference}</span>
             )}
           </div>
