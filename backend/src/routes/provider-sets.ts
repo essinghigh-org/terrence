@@ -55,6 +55,16 @@ async function findOrg(orgName: string): Promise<{ id: string; name: string } | 
   return org === undefined ? undefined : { id: org.id, name: org.name };
 }
 
+function providerSetUpdates(attrs: Record<string, unknown>): Partial<typeof providerSets.$inferInsert> {
+  const updates: Partial<typeof providerSets.$inferInsert> = {};
+  if (typeof attrs["name"] === "string") updates.name = attrs["name"];
+  if (attrs["description"] !== undefined) updates.description = typeof attrs["description"] === "string" ? attrs["description"] : null;
+  if (typeof attrs["provider-source"] === "string") updates.providerSource = attrs["provider-source"];
+  if (attrs["configuration-hcl"] !== undefined) updates.configurationHcl = typeof attrs["configuration-hcl"] === "string" ? attrs["configuration-hcl"] : null;
+  if (typeof attrs["global"] === "boolean") updates.global = attrs["global"];
+  return updates;
+}
+
 export const providerSetRoutes = new Elysia({ name: "provider-sets" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/provider-sets", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -114,12 +124,7 @@ export const providerSetRoutes = new Elysia({ name: "provider-sets" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, row.orgId) });
     if (org === undefined || !(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
     const attrs = attrsFrom(body);
-    const updates: Partial<typeof providerSets.$inferInsert> = {};
-    if (typeof attrs["name"] === "string") updates.name = attrs["name"];
-    if (attrs["description"] !== undefined) updates.description = typeof attrs["description"] === "string" ? attrs["description"] : null;
-    if (typeof attrs["provider-source"] === "string") updates.providerSource = attrs["provider-source"];
-    if (attrs["configuration-hcl"] !== undefined) updates.configurationHcl = typeof attrs["configuration-hcl"] === "string" ? attrs["configuration-hcl"] : null;
-    if (typeof attrs["global"] === "boolean") updates.global = attrs["global"];
+    const updates = providerSetUpdates(attrs);
     if (Object.keys(updates).length > 0) await db.update(providerSets).set(updates).where(eq(providerSets.id, id));
     const updated = await db.query.providerSets.findFirst({ where: eq(providerSets.id, id) });
     if (updated === undefined) return notFound(set);
