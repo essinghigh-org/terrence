@@ -189,6 +189,94 @@ export async function reconcileScimSiteAdmins(transaction: unknown): Promise<voi
   }
 }
 
+function validateSettingsFlags(attributes: Readonly<Record<string, unknown>>): { detail: string } | null {
+  if (attributes["enabled"] !== undefined && typeof attributes["enabled"] !== "boolean") {
+    return { detail: "enabled must be a boolean" };
+  }
+  if (attributes["enabled"] === false) {
+    return { detail: "Use DELETE to disable SCIM" };
+  }
+  if (attributes["paused"] !== undefined && typeof attributes["paused"] !== "boolean") {
+    return { detail: "paused must be a boolean" };
+  }
+  const requestedGroup = attributes["site-admin-group-scim-id"];
+  if (requestedGroup !== undefined && requestedGroup !== null && typeof requestedGroup !== "string") {
+    return { detail: "site-admin-group-scim-id must be a string or null" };
+  }
+  if (requestedGroup === "") {
+    return { detail: "site-admin-group-scim-id must not be empty" };
+  }
+  return null;
+}
+
+async function resolveSettingsPatch(
+  attributes: Readonly<Record<string, unknown>>,
+  current: ScimSettings,
+): Promise<{ enabled: boolean; paused: boolean } | { detail: string }> {
+  if (attributes["enabled"] === true && !current.enabled) {
+    const saml = await db.query.samlSettings.findFirst({ where: eq(samlSettings.id, "saml") });
+    if (saml?.enabled !== true) return { detail: "SAML must be enabled before SCIM" };
+  }
+  const enabled = attributes["enabled"] === true || current.enabled;
+  const paused = typeof attributes["paused"] === "boolean" ? attributes["paused"] : current.paused;
+  if (paused && !enabled) return { detail: "SCIM must be enabled before it can be paused" };
+  if (typeof attributes["site-admin-group-scim-id"] === "string") {
+    const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, attributes["site-admin-group-scim-id"]) });
+    if (group === undefined) return { detail: "SCIM group not found" };
+  }
+  return { enabled, paused };
+}
+
+async function persistSettingsPatch(
+  current: ScimSettings,
+  requestedGroup: unknown,
+  enabled: boolean,
+  paused: boolean,
+): Promise<void> {
+  // validateSettingsFlags already rejected non-string non-null values; treat
+  // anything outside string|null|undefined as "not provided".
+  const groupId = typeof requestedGroup === "string" ? requestedGroup : requestedGroup === null ? null : undefined;
+  await db.transaction(async (tx): Promise<void> => {
+    await tx.update(scimSettings).set({
+      enabled,
+      paused,
+      siteAdminGroupScimId: groupId === undefined
+        ? current.siteAdminGroupScimId
+        : groupId,
+      updatedAt: Date.now(),
+    }).where(eq(scimSettings.id, SCIM_SETTINGS_ID));
+    await reconcileScimSiteAdmins(tx);
+  });
+}
+
+async function checkMappingPreconditions(
+  team: typeof teams.$inferSelect | undefined,
+  group: typeof scimGroups.$inferSelect | undefined,
+  settings: ScimSettings,
+  set: SetObj,
+): Promise<{ error: unknown } | { ok: true }> {
+  if (team === undefined || group === undefined) return { error: apiError(set, 404, "Not Found") };
+  if (!settings.enabled) return { error: apiError(set, 422, "Unprocessable Entity", "SCIM is not enabled") };
+  if (team.name.toLocaleLowerCase() === "owners" || settings.siteAdminGroupScimId === group.id) {
+    return { error: apiError(set, 422, "Unprocessable Entity", "Owners and site administrator groups cannot be mapped") };
+  }
+  return { ok: true };
+}
+
+async function checkMappingLimits(teamId: string, groupId: string, set: SetObj): Promise<{ error: unknown } | { ok: true }> {
+  const existing = await db.query.teamScimGroupMappings.findFirst({
+    where: eq(teamScimGroupMappings.teamId, teamId),
+  });
+  if (existing !== undefined) return { error: apiError(set, 409, "Conflict", "Team already has a SCIM group mapping") };
+  const memberCount = (await db.select({ value: count() }).from(scimGroupMemberships)
+    .where(eq(scimGroupMemberships.groupId, groupId)))[0]?.value ?? 0;
+  if (memberCount > 1_000) return { error: apiError(set, 413, "Payload Too Large") };
+  const linkCount = (await db.select({ value: count() }).from(teamScimGroupMappings)
+    .where(eq(teamScimGroupMappings.scimGroupId, groupId)))[0]?.value ?? 0;
+  if (linkCount >= 10_000) return { error: apiError(set, 422, "Unprocessable Entity", "SCIM group mapping limit reached") };
+  return { ok: true };
+}
+
 export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
   .use(authPlugin)
   .get("/api/v2/admin/scim-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -204,45 +292,12 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     const current = await currentSettings();
     const attributes = input.attributes;
 
-    if (attributes["enabled"] !== undefined && typeof attributes["enabled"] !== "boolean") {
-      return apiError(set, 422, "Unprocessable Entity", "enabled must be a boolean");
-    }
-    if (attributes["enabled"] === false) {
-      return apiError(set, 422, "Unprocessable Entity", "Use DELETE to disable SCIM");
-    }
-    if (attributes["paused"] !== undefined && typeof attributes["paused"] !== "boolean") {
-      return apiError(set, 422, "Unprocessable Entity", "paused must be a boolean");
-    }
-    const requestedGroup = attributes["site-admin-group-scim-id"];
-    if (requestedGroup !== undefined && requestedGroup !== null && typeof requestedGroup !== "string") {
-      return apiError(set, 422, "Unprocessable Entity", "site-admin-group-scim-id must be a string or null");
-    }
-    if (requestedGroup === "") {
-      return apiError(set, 422, "Unprocessable Entity", "site-admin-group-scim-id must not be empty");
-    }
-    if (attributes["enabled"] === true && !current.enabled) {
-      const saml = await db.query.samlSettings.findFirst({ where: eq(samlSettings.id, "saml") });
-      if (saml?.enabled !== true) return apiError(set, 422, "Unprocessable Entity", "SAML must be enabled before SCIM");
-    }
-    const enabled = attributes["enabled"] === true || current.enabled;
-    const paused = typeof attributes["paused"] === "boolean" ? attributes["paused"] : current.paused;
-    if (paused && !enabled) return apiError(set, 422, "Unprocessable Entity", "SCIM must be enabled before it can be paused");
-    if (typeof requestedGroup === "string") {
-      const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, requestedGroup) });
-      if (group === undefined) return apiError(set, 422, "Unprocessable Entity", "SCIM group not found");
-    }
+    const flagError = validateSettingsFlags(attributes);
+    if (flagError !== null) return apiError(set, 422, "Unprocessable Entity", flagError.detail);
+    const resolved = await resolveSettingsPatch(attributes, current);
+    if ("detail" in resolved) return apiError(set, 422, "Unprocessable Entity", resolved.detail);
 
-    await db.transaction(async (tx): Promise<void> => {
-      await tx.update(scimSettings).set({
-        enabled,
-        paused,
-        siteAdminGroupScimId: requestedGroup === undefined
-          ? current.siteAdminGroupScimId
-          : requestedGroup,
-        updatedAt: Date.now(),
-      }).where(eq(scimSettings.id, SCIM_SETTINGS_ID));
-      await reconcileScimSiteAdmins(tx);
-    });
+    await persistSettingsPatch(current, attributes["site-admin-group-scim-id"], resolved.enabled, resolved.paused);
     return { data: await settingsResource(await currentSettings()) };
   })
   .delete("/api/v2/admin/scim-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -378,21 +433,11 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
       db.query.scimGroups.findFirst({ where: eq(scimGroups.id, groupId) }),
       currentSettings(),
     ]);
+    const preconditions = await checkMappingPreconditions(team, group, settings, set);
+    if ("error" in preconditions) return preconditions.error;
     if (team === undefined || group === undefined) return apiError(set, 404, "Not Found");
-    if (!settings.enabled) return apiError(set, 422, "Unprocessable Entity", "SCIM is not enabled");
-    if (team.name.toLocaleLowerCase() === "owners" || settings.siteAdminGroupScimId === group.id) {
-      return apiError(set, 422, "Unprocessable Entity", "Owners and site administrator groups cannot be mapped");
-    }
-    const existing = await db.query.teamScimGroupMappings.findFirst({
-      where: eq(teamScimGroupMappings.teamId, team.id),
-    });
-    if (existing !== undefined) return apiError(set, 409, "Conflict", "Team already has a SCIM group mapping");
-    const memberCount = (await db.select({ value: count() }).from(scimGroupMemberships)
-      .where(eq(scimGroupMemberships.groupId, group.id)))[0]?.value ?? 0;
-    if (memberCount > 1_000) return apiError(set, 413, "Payload Too Large");
-    const linkCount = (await db.select({ value: count() }).from(teamScimGroupMappings)
-      .where(eq(teamScimGroupMappings.scimGroupId, group.id)))[0]?.value ?? 0;
-    if (linkCount >= 10_000) return apiError(set, 422, "Unprocessable Entity", "SCIM group mapping limit reached");
+    const limits = await checkMappingLimits(team.id, group.id, set);
+    if ("error" in limits) return limits.error;
 
     await db.transaction(async (tx): Promise<void> => {
       await tx.insert(teamScimGroupMappings).values({
