@@ -194,7 +194,6 @@ export default tseslint.config(
     files: [
       'frontend/src/components/CommandPalette.tsx',
       'frontend/src/components/CreateWorkspaceModal.tsx',
-      'frontend/src/components/ShortcutsHelpModal.tsx',
       'frontend/src/components/WorkspaceVcs.tsx',
       'frontend/src/views/RunList.tsx',
     ],
