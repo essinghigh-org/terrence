@@ -17,6 +17,79 @@ function numberValue(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+function QueueExplanationCell({
+  inspection,
+  reason,
+  state,
+  position,
+  positionQualified,
+}: Readonly<{
+  inspection: JsonRecord | null;
+  reason: string | null;
+  state: string | null;
+  position: number | null;
+  positionQualified: boolean;
+}>): React.JSX.Element {
+  if (inspection === null) return <>No queue explanation available.</>;
+  return (
+    <div className="space-y-1">
+      <div className="font-medium text-foreground">{reason ?? "Queue state unavailable"}</div>
+      <div>{state ?? "unknown"}{positionQualified ? ` · position ${String(position)}` : ""}</div>
+      {typeof inspection["reason-code"] === "string" && <div className="font-mono text-[11px]">{inspection["reason-code"]}</div>}
+    </div>
+  );
+}
+
+function RunQueueRow({
+  r,
+  onCancelRun,
+}: Readonly<{
+  r: DataItem;
+  onCancelRun: (runId: string, force?: boolean) => Promise<void>;
+}>): React.JSX.Element {
+  const inspection = record(r.attributes["queue-inspection"]);
+  const reason = inspection !== null && typeof inspection["reason"] === "string" ? inspection["reason"] : null;
+  const state = inspection !== null && typeof inspection["state"] === "string" ? inspection["state"] : null;
+  const position = inspection === null ? null : numberValue(inspection["position"]);
+  const positionQualified = inspection?.["position-qualified"] === true;
+  return (
+    <TableRow className="hover:bg-muted/50">
+      <TableCell className="px-4 py-3 font-mono text-xs font-semibold text-foreground">{r.id}</TableCell>
+      <TableCell className="px-4 py-3">
+        <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+          {r.attributes.status}
+        </span>
+      </TableCell>
+      <TableCell className="px-4 py-3 text-muted-foreground">{r.attributes.message ?? "—"}</TableCell>
+      <TableCell className="px-4 py-3 text-xs text-muted-foreground">
+        <QueueExplanationCell
+          inspection={inspection}
+          reason={reason}
+          state={state}
+          position={position}
+          positionQualified={positionQualified}
+        />
+      </TableCell>
+      <TableCell className="px-4 py-3">
+        {r.attributes.actions !== undefined && (
+          <div className="flex gap-2">
+            {r.attributes.actions["is-cancelable"] === true && (
+              <Button size="sm" variant="outline" onClick={(): void => { void onCancelRun(r.id, false); }}>
+                Cancel
+              </Button>
+            )}
+            {r.attributes.actions["is-force-cancelable"] === true && (
+              <Button size="sm" variant="destructive" onClick={(): void => { void onCancelRun(r.id, true); }}>
+                Force Cancel
+              </Button>
+            )}
+          </div>
+        )}
+      </TableCell>
+    </TableRow>
+  );
+}
+
 export function RunsAdmin(props: Readonly<{ runs: DataItem[]; queueMeta?: JsonRecord | null; handleCancelRun: (runId: string, force?: boolean) => Promise<void>; }>): React.JSX.Element {
   const { runs, queueMeta = null, handleCancelRun } = props;
   const [queue, setQueue] = useState<QueueStats | null>(null);
@@ -90,49 +163,7 @@ export function RunsAdmin(props: Readonly<{ runs: DataItem[]; queueMeta?: JsonRe
                 </TableRow>
               ) : (
                 runs.map((r): React.JSX.Element => (
-                  ((): React.JSX.Element => {
-                    const inspection = record(r.attributes["queue-inspection"]);
-                    const reason = inspection !== null && typeof inspection["reason"] === "string" ? inspection["reason"] : null;
-                    const state = inspection !== null && typeof inspection["state"] === "string" ? inspection["state"] : null;
-                    const position = inspection === null ? null : numberValue(inspection["position"]);
-                    const positionQualified = inspection?.["position-qualified"] === true;
-                    return (
-                  <TableRow key={r.id} className="hover:bg-muted/50">
-                    <TableCell className="px-4 py-3 font-mono text-xs font-semibold text-foreground">{r.id}</TableCell>
-                    <TableCell className="px-4 py-3">
-                      <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
-                        {r.attributes.status}
-                      </span>
-                    </TableCell>
-                    <TableCell className="px-4 py-3 text-muted-foreground">{r.attributes.message ?? "—"}</TableCell>
-                    <TableCell className="px-4 py-3 text-xs text-muted-foreground">
-                      {inspection === null ? "No queue explanation available." : (
-                        <div className="space-y-1">
-                          <div className="font-medium text-foreground">{reason ?? "Queue state unavailable"}</div>
-                          <div>{state ?? "unknown"}{positionQualified ? ` · position ${String(position)}` : ""}</div>
-                          {typeof inspection["reason-code"] === "string" && <div className="font-mono text-[11px]">{inspection["reason-code"]}</div>}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="px-4 py-3">
-                      {r.attributes.actions !== undefined && (
-                        <div className="flex gap-2">
-                          {r.attributes.actions["is-cancelable"] === true && (
-                            <Button size="sm" variant="outline" onClick={(): void => { void handleCancelRun(r.id, false); }}>
-                              Cancel
-                            </Button>
-                          )}
-                          {r.attributes.actions["is-force-cancelable"] === true && (
-                            <Button size="sm" variant="destructive" onClick={(): void => { void handleCancelRun(r.id, true); }}>
-                              Force Cancel
-                            </Button>
-                          )}
-                        </div>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                    );
-                  })()
+                  <RunQueueRow key={r.id} r={r} onCancelRun={handleCancelRun} />
                 ))
               )}
             </TableBody>
