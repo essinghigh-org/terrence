@@ -7,7 +7,40 @@ import { getSettings, invalidateSettingsCache } from "../../lib/settings";
 import { ldapSettings } from "../../lib/sso";
 import { invalidatePingSsoCache } from "../health";
 import type { ParamCtx } from "./types";
-import { SAML_SETTINGS_ID, withAuthSettingsLock, currentSamlSettings, authLockoutResponse, samlSettingsResource, samlInput } from "./helpers";
+import { SAML_SETTINGS_ID, withAuthSettingsLock, currentSamlSettings, authLockoutResponse, samlSettingsResource, samlInput, type SamlSettings } from "./helpers";
+
+function checkSamlEnvelopeType(
+  data: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { ok: true } | { error: unknown } {
+  if (data["type"] !== undefined && data["type"] !== "" && data["type"] !== "saml-settings" && data["type"] !== "admin-saml-settings") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: `data.type must be saml-settings (got ${String(data["type"])})` }] } };
+  }
+  return { ok: true };
+}
+
+async function persistSamlSettings(
+  values: typeof samlSettings.$inferInsert,
+  current: SamlSettings,
+  linkByEmail: boolean,
+): Promise<void> {
+  await db.transaction(async (tx: unknown): Promise<void> => {
+    const t = tx as typeof db;
+    await t.update(samlSettings).set(values).where(eq(samlSettings.id, SAML_SETTINGS_ID));
+    if (values.enabled !== current.enabled) {
+      await t.update(organizations).set({ samlEnabled: values.enabled });
+    }
+    // The companion link-by-email setting must land atomically with the
+    // SAML row: a partial write could leave SAML enabled while the linking
+    // policy silently reverts, or vice versa.
+    const linkRow = await t.query.adminSettings.findFirst({ where: eq(adminSettings.id, "saml") });
+    const linkValues = { ...(linkRow?.values ?? { "link-by-email": false }), "link-by-email": linkByEmail };
+    await t.insert(adminSettings).values({ id: "saml", values: linkValues, updatedAt: Date.now() })
+      .onConflictDoUpdate({ target: adminSettings.id, set: { values: linkValues, updatedAt: Date.now() } });
+  });
+}
+
 export const samlRoutes = new Elysia({ name: "admin-saml" })
   .use(authPlugin)
   .get("/api/v2/admin/saml-settings", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
@@ -28,10 +61,8 @@ export const samlRoutes = new Elysia({ name: "admin-saml" })
     const data = payload["data"] !== null && typeof payload["data"] === "object"
       ? payload["data"] as Record<string, unknown>
       : {};
-    if (data["type"] !== undefined && data["type"] !== "" && data["type"] !== "saml-settings" && data["type"] !== "admin-saml-settings") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `data.type must be saml-settings (got ${String(data["type"])})` }] };
-    }
+    const checked = checkSamlEnvelopeType(data, set);
+    if ("error" in checked) return checked.error;
     const attributes = data["attributes"] !== null && typeof data["attributes"] === "object"
       ? data["attributes"] as Record<string, unknown>
       : {};
@@ -59,20 +90,7 @@ export const samlRoutes = new Elysia({ name: "admin-saml" })
       ldap: ldapEnabledForSso,
     });
     if (authError !== null) return authError;
-    await db.transaction(async (tx: unknown): Promise<void> => {
-      const t = tx as typeof db;
-      await t.update(samlSettings).set(input.values).where(eq(samlSettings.id, SAML_SETTINGS_ID));
-      if (input.values.enabled !== current.enabled) {
-        await t.update(organizations).set({ samlEnabled: input.values.enabled });
-      }
-      // The companion link-by-email setting must land atomically with the
-      // SAML row: a partial write could leave SAML enabled while the linking
-      // policy silently reverts, or vice versa.
-      const linkRow = await t.query.adminSettings.findFirst({ where: eq(adminSettings.id, "saml") });
-      const linkValues = { ...(linkRow?.values ?? { "link-by-email": false }), "link-by-email": linkByEmail };
-      await t.insert(adminSettings).values({ id: "saml", values: linkValues, updatedAt: Date.now() })
-        .onConflictDoUpdate({ target: adminSettings.id, set: { values: linkValues, updatedAt: Date.now() } });
-    });
+    await persistSamlSettings(input.values, current, linkByEmail);
     invalidateSettingsCache();
     invalidatePingSsoCache();
     return { data: samlSettingsResource(await currentSamlSettings(), request, linkByEmail) };
