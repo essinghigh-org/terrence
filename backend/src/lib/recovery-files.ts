@@ -130,37 +130,45 @@ function evidenceForPayload(payload: string, capturedAt: string): RecoveryCaptur
   };
 }
 
+function validEvidenceShape(record: Record<string, unknown>): boolean {
+  return record["version"] === RECOVERY_EVIDENCE_VERSION
+    && typeof record["capturedAt"] === "string"
+    && /^\d{4}-\d{2}-\d{2}T/.test(record["capturedAt"])
+    && typeof record["digest"] === "string"
+    && /^[a-f0-9]{64}$/.test(record["digest"])
+    && Number.isSafeInteger(record["size"])
+    && (record["size"] as number) >= 0
+    && ["terraform-v4", "opentofu-encrypted", "invalid"].includes(String(record["representation"]))
+    && ["captured", "promoted"].includes(String(record["status"]))
+    && (record["serial"] === null || Number.isSafeInteger(record["serial"]))
+    && (record["lineage"] === null || boundedStateString(record["lineage"]) !== null);
+}
+
+function validPromotedFields(record: Record<string, unknown>): boolean {
+  const promotedStateVersionId = record["promotedStateVersionId"];
+  const promotedAt = record["promotedAt"];
+  const promotedSerial = record["promotedSerial"];
+  if (record["status"] === "promoted"
+    && (typeof promotedStateVersionId !== "string" || promotedStateVersionId === "" || typeof promotedAt !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(promotedAt))) {
+    return false;
+  }
+  return promotedSerial === undefined || Number.isSafeInteger(promotedSerial);
+}
+
 function parseRecoveryEvidence(raw: string): RecoveryCaptureEvidence | null {
   if (raw.length > MAX_RECOVERY_EVIDENCE_BYTES) return null;
   try {
     const value: unknown = JSON.parse(raw);
     if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
     const record = value as Record<string, unknown>;
-    if (record["version"] !== RECOVERY_EVIDENCE_VERSION
-      || typeof record["capturedAt"] !== "string"
-      || !/^\d{4}-\d{2}-\d{2}T/.test(record["capturedAt"])
-      || typeof record["digest"] !== "string"
-      || !/^[a-f0-9]{64}$/.test(record["digest"])
-      || !Number.isSafeInteger(record["size"])
-      || (record["size"] as number) < 0
-      || !["terraform-v4", "opentofu-encrypted", "invalid"].includes(String(record["representation"]))
-      || !["captured", "promoted"].includes(String(record["status"]))
-      || (record["serial"] !== null && !Number.isSafeInteger(record["serial"]))
-      || (record["lineage"] !== null && boundedStateString(record["lineage"]) === null)) {
-      return null;
-    }
-    const promotedStateVersionId = record["promotedStateVersionId"];
+    if (!validEvidenceShape(record) || !validPromotedFields(record)) return null;
     const promotedAt = record["promotedAt"];
+    const promotedStateVersionId = record["promotedStateVersionId"];
     const promotedSerial = record["promotedSerial"];
-    if (record["status"] === "promoted"
-      && (typeof promotedStateVersionId !== "string" || promotedStateVersionId === "" || typeof promotedAt !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(promotedAt))) {
-      return null;
-    }
-    if (promotedSerial !== undefined && !Number.isSafeInteger(promotedSerial)) return null;
     return {
       version: RECOVERY_EVIDENCE_VERSION,
-      capturedAt: record["capturedAt"],
-      digest: record["digest"],
+      capturedAt: record["capturedAt"] as string,
+      digest: record["digest"] as string,
       size: record["size"] as number,
       serial: record["serial"] as number | null,
       lineage: record["lineage"] as string | null,
@@ -183,6 +191,88 @@ async function readEvidence(storageDir: string, runId: string): Promise<Recovery
   }
 }
 
+async function missingMarkerInspection(storageDir: string, runId: string): Promise<RecoveryCopyInspection> {
+  let stateExists = false;
+  try { stateExists = await Bun.file(recoveryStatePathFor(storageDir, runId)).exists(); } catch { stateExists = false; }
+  return {
+    status: stateExists ? "incomplete" : "missing",
+    marker: null,
+    capturedAt: null,
+    evidence: await readEvidence(storageDir, runId),
+    digest: null,
+    size: null,
+    serial: null,
+    lineage: null,
+    terraformVersion: null,
+  };
+}
+
+async function evidenceFileExists(storageDir: string, runId: string): Promise<boolean> {
+  try { return await Bun.file(recoveryEvidencePathFor(storageDir, runId)).exists(); } catch { return false; }
+}
+
+function resolveMarkerCapturedAt(markerValue: string, evidence: RecoveryCaptureEvidence | null): string | null {
+  if (/^\d{4}-\d{2}-\d{2}T/.test(markerValue)) return markerValue;
+  // `complete` was the marker written by the pre-manifest recovery format.
+  // Continue to read those durable copies so an upgrade does not turn an
+  // already captured state into an inaccessible orphan.
+  if (markerValue === "complete") return evidence?.capturedAt ?? null;
+  return null;
+}
+
+function incompleteInspection(marker: string, capturedAt: string | null, evidence: RecoveryCaptureEvidence | null): RecoveryCopyInspection {
+  return { status: "incomplete", marker, capturedAt, evidence, digest: null, size: null, serial: null, lineage: null, terraformVersion: null };
+}
+
+function decodeRecoveryPayload(stored: string): string | null {
+  try {
+    return decodeStatePayload(stored);
+  } catch {
+    // Older/manual recovery captures were written as plaintext Terraform
+    // JSON. Keep those captures reviewable and promotable while preserving
+    // the encrypted representation used by normal capture writes.
+    return parseTerraformStatePayload(stored) === null ? null : stored;
+  }
+}
+
+function invalidPayloadInspection(marker: string, capturedAt: string | null, evidence: RecoveryCaptureEvidence | null, stored: string): RecoveryCopyInspection {
+  return { status: "invalid", marker, capturedAt, evidence, digest: null, size: Buffer.byteLength(stored), serial: null, lineage: null, terraformVersion: null };
+}
+
+function classifyRecoveryStatus(input: Readonly<{
+  evidence: RecoveryCaptureEvidence | null;
+  evidenceInvalid: boolean;
+  evidenceMatches: boolean;
+  parsed: unknown;
+  payload: string;
+}>): RecoveryCopyInspection["status"] {
+  if (input.evidence?.status === "promoted" && input.evidence.promotedStateVersionId !== undefined && input.evidenceMatches) return "promoted";
+  if (input.evidenceInvalid) return "invalid";
+  if (input.parsed !== null && input.evidenceMatches) return "candidate";
+  if (isClientEncryptedState(input.payload) && input.evidenceMatches) return "opaque";
+  return "invalid";
+}
+
+function invalidMarker(markerValue: string, capturedAt: string | null): boolean {
+  return markerValue === "" || (capturedAt === null && markerValue !== "complete");
+}
+
+function payloadSummary(payload: string): { digest: string; serial: number | null; lineage: string | null; terraformVersion: string | null; parsed: unknown } {
+  const parsed = parseTerraformStatePayload(payload);
+  return {
+    digest: createHash("sha256").update(payload).digest("hex"),
+    serial: parsed?.["serial"] !== undefined && Number.isSafeInteger(parsed["serial"]) ? parsed["serial"] as number : null,
+    lineage: boundedStateString(parsed?.["lineage"]),
+    terraformVersion: boundedStateString(parsed?.["terraform_version"]),
+    parsed,
+  };
+}
+
+function evidenceMatchesDigest(evidence: RecoveryCaptureEvidence | null, evidenceInvalid: boolean, digest: string, size: number): boolean {
+  if (evidenceInvalid) return false;
+  return evidence === null || (evidence.digest === digest && evidence.size === size);
+}
+
 /** Inspect a recovery copy without returning its raw state by default. The
  * marker, state bytes and manifest are checked together so callers cannot
  * accidentally offer a markerless or changed copy as a verified candidate. */
@@ -191,85 +281,32 @@ export async function inspectRecoveryCopy(
   runId: string,
   includePayload = false,
 ): Promise<RecoveryCopyInspection> {
-  const markerPath = recoveryMarkerPathFor(storageDir, runId);
-  let marker: string;
-  try {
-    marker = await readFile(markerPath, "utf8");
-  } catch {
-    let stateExists = false;
-    try { stateExists = await Bun.file(recoveryStatePathFor(storageDir, runId)).exists(); } catch { stateExists = false; }
-    return {
-      status: stateExists ? "incomplete" : "missing",
-      marker: null,
-      capturedAt: null,
-      evidence: await readEvidence(storageDir, runId),
-      digest: null,
-      size: null,
-      serial: null,
-      lineage: null,
-      terraformVersion: null,
-    };
-  }
+  const marker = await readOptionalFile(recoveryMarkerPathFor(storageDir, runId));
+  if (marker === null) return missingMarkerInspection(storageDir, runId);
   const evidence = await readEvidence(storageDir, runId);
-  let evidenceFilePresent = false;
-  try { evidenceFilePresent = await Bun.file(recoveryEvidencePathFor(storageDir, runId)).exists(); } catch { evidenceFilePresent = false; }
-  const evidenceInvalid = evidence === null && evidenceFilePresent;
+  const evidenceInvalid = evidence === null && await evidenceFileExists(storageDir, runId);
   const markerValue = marker.trim();
-  // `complete` was the marker written by the pre-manifest recovery format.
-  // Continue to read those durable copies so an upgrade does not turn an
-  // already captured state into an inaccessible orphan.
-  const capturedAt = /^\d{4}-\d{2}-\d{2}T/.test(markerValue)
-    ? markerValue
-    : markerValue === "complete"
-      ? evidence?.capturedAt ?? null
-      : null;
-  if (markerValue === "" || (capturedAt === null && markerValue !== "complete")) {
-    return { status: "incomplete", marker, capturedAt: null, evidence, digest: null, size: null, serial: null, lineage: null, terraformVersion: null };
+  const capturedAt = resolveMarkerCapturedAt(markerValue, evidence);
+  if (invalidMarker(markerValue, capturedAt)) {
+    return incompleteInspection(marker, null, evidence);
   }
-  let stored: string;
-  try {
-    stored = await readFile(recoveryStatePathFor(storageDir, runId), "utf8");
-  } catch {
-    return { status: "incomplete", marker, capturedAt, evidence, digest: null, size: null, serial: null, lineage: null, terraformVersion: null };
-  }
-  let payload: string;
-  try {
-    payload = decodeStatePayload(stored);
-  } catch {
-    // Older/manual recovery captures were written as plaintext Terraform
-    // JSON. Keep those captures reviewable and promotable while preserving
-    // the encrypted representation used by normal capture writes.
-    if (parseTerraformStatePayload(stored) === null) {
-      return { status: "invalid", marker, capturedAt, evidence, digest: null, size: Buffer.byteLength(stored), serial: null, lineage: null, terraformVersion: null };
-    }
-    payload = stored;
-  }
-  const parsed = parseTerraformStatePayload(payload);
-  const digest = createHash("sha256").update(payload).digest("hex");
-  const serial = parsed?.["serial"] !== undefined && Number.isSafeInteger(parsed["serial"]) ? parsed["serial"] as number : null;
-  const lineage = boundedStateString(parsed?.["lineage"]);
-  const terraformVersion = boundedStateString(parsed?.["terraform_version"]);
-  const evidenceMatches = !evidenceInvalid && (evidence === null
-    || (evidence.digest === digest && evidence.size === Buffer.byteLength(payload)));
-  const status = evidence?.status === "promoted" && evidence.promotedStateVersionId !== undefined && evidenceMatches
-    ? "promoted"
-    : evidenceInvalid
-      ? "invalid"
-      : parsed !== null && evidenceMatches
-        ? "candidate"
-        : isClientEncryptedState(payload) && evidenceMatches
-          ? "opaque"
-          : "invalid";
+  const stored = await readOptionalFile(recoveryStatePathFor(storageDir, runId));
+  if (stored === null) return incompleteInspection(marker, capturedAt, evidence);
+  const payload = decodeRecoveryPayload(stored);
+  if (payload === null) return invalidPayloadInspection(marker, capturedAt, evidence, stored);
+  const summary = payloadSummary(payload);
+  const evidenceMatches = evidenceMatchesDigest(evidence, evidenceInvalid, summary.digest, Buffer.byteLength(payload));
+  const status = classifyRecoveryStatus({ evidence, evidenceInvalid, evidenceMatches, parsed: summary.parsed, payload });
   return {
     status,
     marker,
     capturedAt,
     evidence,
-    digest,
+    digest: summary.digest,
     size: Buffer.byteLength(payload),
-    serial,
-    lineage,
-    terraformVersion,
+    serial: summary.serial,
+    lineage: summary.lineage,
+    terraformVersion: summary.terraformVersion,
     ...(includePayload ? { payload } : {}),
   };
 }
@@ -400,6 +437,102 @@ export async function writeFileDurable(
   }
 }
 
+async function findStateSource(workRoot: string): Promise<string | null> {
+  for await (const candidate of new Bun.Glob("**/terraform.tfstate").scan({ cwd: workRoot, onlyFiles: true })) {
+    return candidate.startsWith("/") ? candidate : join(workRoot, candidate);
+  }
+  return null;
+}
+
+type PreviousCapture = Readonly<{
+  marker: string | null;
+  evidence: string | null;
+  state: string | null;
+  promoted: string | null;
+}>;
+
+async function readOptionalFile(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+async function readPreviousCapture(storageDir: string, runId: string, markerPath: string): Promise<PreviousCapture> {
+  // A retry can run after a crash that landed between a previous
+  // capture's marker write and the run status change: drop any stale
+  // marker first so a replacement state is never mistaken for complete
+  // before it passes read-back verification below.
+  return {
+    marker: await readOptionalFile(markerPath),
+    evidence: await readOptionalFile(recoveryEvidencePathFor(storageDir, runId)),
+    state: await readOptionalFile(recoveryStatePathFor(storageDir, runId)),
+    promoted: await readOptionalFile(recoveryPromotedPathFor(storageDir, runId)),
+  };
+}
+
+async function clearSupersededCapture(recoveryDir: string, storageDir: string, runId: string, markerPath: string, previous: PreviousCapture): Promise<void> {
+  if (previous.marker !== null) {
+    await rm(markerPath, { force: true });
+    await fsyncDirectory(recoveryDir);
+  }
+  // A recapture supersedes any prior promotion metadata for this run. The
+  // old marker is retained above for rollback if the replacement fails.
+  if (previous.promoted !== null) {
+    await rm(recoveryPromotedPathFor(storageDir, runId), { force: true });
+    await fsyncDirectory(recoveryDir);
+  }
+}
+
+async function publishCapture(recoveryDir: string, storageDir: string, runId: string, payload: string): Promise<void> {
+  const encrypted = await encryptStatePayload(payload);
+  if (encrypted === null) throw new Error("state encryption produced no output");
+  await writeFileDurable(recoveryDir, RECOVERY_STATE_FILENAME, encrypted, 0o600);
+  // Verify the published copy before it becomes anyone's only record: a
+  // truncated or bit-rotted write must fail here, while the source still
+  // exists, and never surface later as a 404 on read. Decrypt-only on
+  // purpose: interrupted applies can leave partial, non-JSON bytes, and
+  // the cancel path contract is to preserve whatever the engine wrote
+  // (read-time parsing still gates the download/recover endpoints).
+  const stored = await readFile(recoveryStatePathFor(storageDir, runId), "utf8");
+  if (decryptStatePayload(stored) !== payload) {
+    throw new Error("recovery copy failed read-back verification");
+  }
+  const capturedAt = new Date().toISOString();
+  await writeFileDurable(recoveryDir, RECOVERY_EVIDENCE_FILENAME, JSON.stringify(evidenceForPayload(payload, capturedAt)), 0o600);
+  await writeFileDurable(recoveryDir, RECOVERY_MARKER_FILENAME, capturedAt, 0o600);
+}
+
+async function restorePreviousCapture(
+  recoveryDir: string,
+  storageDir: string,
+  runId: string,
+  previous: PreviousCapture & { marker: string; state: string },
+): Promise<boolean> {
+  // Restore every published part of the previous complete copy. A failure
+  // after replacing the state bytes (for example while writing its
+  // manifest) must not orphan the only verified recovery evidence.
+  try {
+    await writeFileDurable(recoveryDir, RECOVERY_STATE_FILENAME, previous.state, 0o600);
+    await writeFileDurable(recoveryDir, RECOVERY_MARKER_FILENAME, previous.marker, 0o600);
+    if (previous.evidence !== null) {
+      await writeFileDurable(recoveryDir, RECOVERY_EVIDENCE_FILENAME, previous.evidence, 0o600);
+    } else {
+      await rm(recoveryEvidencePathFor(storageDir, runId), { force: true });
+    }
+    if (previous.promoted !== null) {
+      await writeFileDurable(recoveryDir, RECOVERY_PROMOTED_FILENAME, previous.promoted, 0o600);
+    } else {
+      await rm(recoveryPromotedPathFor(storageDir, runId), { force: true });
+    }
+    return true;
+  } catch {
+    // Fall through to removal below.
+    return false;
+  }
+}
+
 /** Capture the run's terraform.tfstate into the recovery area (issue #579).
  *
  * Returns true when a copy was captured and read-back verified, false when
@@ -413,56 +546,16 @@ export async function captureInterruptedApplyState(
   runId: string,
   workRoot: string,
 ): Promise<boolean> {
-  let source: string | null = null;
-  for await (const candidate of new Bun.Glob("**/terraform.tfstate").scan({ cwd: workRoot, onlyFiles: true })) {
-    source = candidate.startsWith("/") ? candidate : join(workRoot, candidate);
-    break;
-  }
+  const source = await findStateSource(workRoot);
   if (source === null) return false;
 
   const recoveryDir = recoveryDirFor(storageDir, runId);
   const markerPath = recoveryMarkerPathFor(storageDir, runId);
   await mkdirDurable(recoveryDir);
   let markerWritten = false;
-  let previousMarker: string | null = null;
-  let previousEvidence: string | null = null;
-  let previousState: string | null = null;
-  let previousPromoted: string | null = null;
+  const previous = await readPreviousCapture(storageDir, runId, markerPath);
   try {
-    // A retry can run after a crash that landed between a previous
-    // capture's marker write and the run status change: drop any stale
-    // marker first so a replacement state is never mistaken for complete
-    // before it passes read-back verification below.
-    try {
-      previousMarker = await readFile(markerPath, "utf8");
-    } catch {
-      previousMarker = null;
-    }
-    try {
-      previousEvidence = await readFile(recoveryEvidencePathFor(storageDir, runId), "utf8");
-    } catch {
-      previousEvidence = null;
-    }
-    try {
-      previousState = await readFile(recoveryStatePathFor(storageDir, runId), "utf8");
-    } catch {
-      previousState = null;
-    }
-    try {
-      previousPromoted = await readFile(recoveryPromotedPathFor(storageDir, runId), "utf8");
-    } catch {
-      previousPromoted = null;
-    }
-    if (previousMarker !== null) {
-      await rm(markerPath, { force: true });
-      await fsyncDirectory(recoveryDir);
-    }
-    // A recapture supersedes any prior promotion metadata for this run. The
-    // old marker is retained above for rollback if the replacement fails.
-    if (previousPromoted !== null) {
-      await rm(recoveryPromotedPathFor(storageDir, runId), { force: true });
-      await fsyncDirectory(recoveryDir);
-    }
+    await clearSupersededCapture(recoveryDir, storageDir, runId, markerPath, previous);
     // Raw bytes on purpose: utf8 decoding replaces split multibyte
     // sequences, which would let a corrupted copy pass verification. If
     // the source is not valid UTF-8 the encryption layer cannot preserve
@@ -472,47 +565,13 @@ export async function captureInterruptedApplyState(
     if (!Buffer.from(payload, "utf8").equals(raw)) {
       throw new Error("source state file is not valid UTF-8; leaving the work directory for manual recovery");
     }
-    const encrypted = await encryptStatePayload(payload);
-    if (encrypted === null) throw new Error("state encryption produced no output");
-    await writeFileDurable(recoveryDir, RECOVERY_STATE_FILENAME, encrypted, 0o600);
-    // Verify the published copy before it becomes anyone's only record: a
-    // truncated or bit-rotted write must fail here, while the source still
-    // exists, and never surface later as a 404 on read. Decrypt-only on
-    // purpose: interrupted applies can leave partial, non-JSON bytes, and
-    // the cancel path contract is to preserve whatever the engine wrote
-    // (read-time parsing still gates the download/recover endpoints).
-    const stored = await readFile(recoveryStatePathFor(storageDir, runId), "utf8");
-    if (decryptStatePayload(stored) !== payload) {
-      throw new Error("recovery copy failed read-back verification");
-    }
-    const capturedAt = new Date().toISOString();
-    await writeFileDurable(recoveryDir, RECOVERY_EVIDENCE_FILENAME, JSON.stringify(evidenceForPayload(payload, capturedAt)), 0o600);
-    await writeFileDurable(recoveryDir, RECOVERY_MARKER_FILENAME, capturedAt, 0o600);
+    await publishCapture(recoveryDir, storageDir, runId, payload);
     markerWritten = true;
     return true;
   } catch (error: unknown) {
-    if (previousMarker !== null && previousState !== null) {
-      // Restore every published part of the previous complete copy. A failure
-      // after replacing the state bytes (for example while writing its
-      // manifest) must not orphan the only verified recovery evidence.
-      try {
-        await writeFileDurable(recoveryDir, RECOVERY_STATE_FILENAME, previousState, 0o600);
-        await writeFileDurable(recoveryDir, RECOVERY_MARKER_FILENAME, previousMarker, 0o600);
-        if (previousEvidence !== null) {
-          await writeFileDurable(recoveryDir, RECOVERY_EVIDENCE_FILENAME, previousEvidence, 0o600);
-        } else {
-          await rm(recoveryEvidencePathFor(storageDir, runId), { force: true });
-        }
-        if (previousPromoted !== null) {
-          await writeFileDurable(recoveryDir, RECOVERY_PROMOTED_FILENAME, previousPromoted, 0o600);
-        } else {
-          await rm(recoveryPromotedPathFor(storageDir, runId), { force: true });
-        }
-        markerWritten = true;
-      } catch {
-        // Fall through to removal below.
-      }
-    }
+    markerWritten = previous.marker !== null && previous.state !== null
+      ? await restorePreviousCapture(recoveryDir, storageDir, runId, { ...previous, marker: previous.marker, state: previous.state })
+      : false;
     // Never leave a markerless partial behind: without the marker the copy
     // is unreadable by design, so an incomplete capture is just garbage.
     // (When the replacement itself was published but unverifiable, the
