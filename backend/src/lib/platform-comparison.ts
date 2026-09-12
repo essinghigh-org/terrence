@@ -21,6 +21,16 @@ const SENSITIVE_KEY = /(secret|password|token|credential|private[_-]?key|access[
 const UNKNOWN_VALUE = { unknown: true } as const;
 const SENSITIVE_VALUE = { sensitive: true } as const;
 
+function sensitivePathPart(part: unknown): string | number | null {
+  if (typeof part === "string" || typeof part === "number") return part;
+  if (!record(part)) return null;
+  if ((part["type"] === "get_attr" || part["type"] === "index")
+    && (typeof part["value"] === "string" || typeof part["value"] === "number")) return part["value"];
+  if (part["type"] === "index" && record(part["value"])
+    && (typeof part["value"]["value"] === "string" || typeof part["value"]["value"] === "number")) return part["value"]["value"];
+  return null;
+}
+
 function sensitivePathSet(value: unknown): ReadonlySet<string> {
   if (value === undefined || value === null) return new Set();
   // Unknown metadata must not silently turn a sensitive attribute public.
@@ -30,12 +40,9 @@ function sensitivePathSet(value: unknown): ReadonlySet<string> {
     if (!Array.isArray(entry)) return new Set([""]);
     const parts: (string | number)[] = [];
     for (const part of entry) {
-      if (typeof part === "string" || typeof part === "number") parts.push(part);
-      else if (record(part) && (part["type"] === "get_attr" || part["type"] === "index")
-        && (typeof part["value"] === "string" || typeof part["value"] === "number")) parts.push(part["value"]);
-      else if (record(part) && part["type"] === "index" && record(part["value"])
-        && (typeof part["value"]["value"] === "string" || typeof part["value"]["value"] === "number")) parts.push(part["value"]["value"]);
-      else return new Set([""]);
+      const parsed = sensitivePathPart(part);
+      if (parsed === null) return new Set([""]);
+      parts.push(parsed);
     }
     paths.push(pathString(parts));
   }
@@ -80,28 +87,36 @@ type AttributeChange = Readonly<{
   changed: boolean | null;
 }>;
 
+function sensitiveAttributeChange(before: unknown, after: unknown, path: string): AttributeChange[] | null {
+  if (!isSensitiveMarker(before) && !isSensitiveMarker(after)) return null;
+  return equalSafe(before, after)
+    ? []
+    : [{ path: path || "<root>", before: SENSITIVE_VALUE, after: SENSITIVE_VALUE, changed: null }];
+}
+
+function recordAttributeChanges(before: unknown, after: unknown, path: string): AttributeChange[] | null {
+  if (!record(before) && !record(after)) return null;
+  const left = record(before) ? before : {};
+  const right = record(after) ? after : {};
+  const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
+  return keys.flatMap((key): AttributeChange[] => attributeChanges(left[key], right[key], path === "" ? key : `${path}.${key}`));
+}
+
+function arrayAttributeChanges(before: unknown, after: unknown, path: string): AttributeChange[] | null {
+  if (!Array.isArray(before) && !Array.isArray(after)) return null;
+  const left = Array.isArray(before) ? before : [];
+  const right = Array.isArray(after) ? after : [];
+  const count = Math.max(left.length, right.length);
+  return Array.from({ length: count }, (_, index): AttributeChange[] => attributeChanges(left[index], right[index], `${path}[${index}]`)).flat();
+}
+
 function attributeChanges(before: unknown, after: unknown, path = ""): AttributeChange[] {
-  const beforeSensitive = isSensitiveMarker(before);
-  const afterSensitive = isSensitiveMarker(after);
-  if (beforeSensitive || afterSensitive) {
-    return equalSafe(before, after)
-      ? []
-      : [{ path: path || "<root>", before: SENSITIVE_VALUE, after: SENSITIVE_VALUE, changed: null }];
-  }
+  const sensitive = sensitiveAttributeChange(before, after, path);
+  if (sensitive !== null) return sensitive;
   if (equalSafe(before, after)) return [];
-  if (record(before) || record(after)) {
-    const left = record(before) ? before : {};
-    const right = record(after) ? after : {};
-    const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
-    return keys.flatMap((key): AttributeChange[] => attributeChanges(left[key], right[key], path === "" ? key : `${path}.${key}`));
-  }
-  if (Array.isArray(before) || Array.isArray(after)) {
-    const left = Array.isArray(before) ? before : [];
-    const right = Array.isArray(after) ? after : [];
-    const count = Math.max(left.length, right.length);
-    return Array.from({ length: count }, (_, index): AttributeChange[] => attributeChanges(left[index], right[index], `${path}[${index}]`)).flat();
-  }
-  return [{ path: path || "<root>", before: before ?? null, after: after ?? null, changed: true }];
+  return recordAttributeChanges(before, after, path)
+    ?? arrayAttributeChanges(before, after, path)
+    ?? [{ path: path || "<root>", before: before ?? null, after: after ?? null, changed: true }];
 }
 
 type ParsedStateResource = Readonly<{
@@ -257,6 +272,19 @@ export function compareStateVersions(before: StateVersionComparisonInput, after:
   };
 }
 
+function outputSummary(name: string, output: JsonRecord): Record<string, unknown> {
+  return { name, sensitive: output["sensitive"] === true, type: output["type"] ?? null };
+}
+
+function compareSingleOutput(name: string, previous: JsonRecord, output: JsonRecord): Record<string, unknown> | null {
+  const sensitive = previous["sensitive"] === true || output["sensitive"] === true;
+  const beforeValue = sensitive ? SENSITIVE_VALUE : safeValue(previous["value"], "", new Set(), 0);
+  const afterValue = sensitive ? SENSITIVE_VALUE : safeValue(output["value"], "", new Set(), 0);
+  const difference = sensitive ? null : !equalSafe(beforeValue, afterValue);
+  if (difference === false && previous["type"] === output["type"] && previous["sensitive"] === output["sensitive"]) return null;
+  return { name, sensitive, type: output["type"] ?? previous["type"] ?? null, before: beforeValue, after: afterValue, changed: difference };
+}
+
 function compareStateOutputs(beforeRaw: unknown, afterRaw: unknown): StateComparison["outputs"] {
   const before = record(beforeRaw) ? beforeRaw : {};
   const after = record(afterRaw) ? afterRaw : {};
@@ -266,22 +294,17 @@ function compareStateOutputs(beforeRaw: unknown, afterRaw: unknown): StateCompar
   for (const name of Object.keys(after).sort()) {
     const output = record(after[name]) ? after[name] : {};
     if (!(name in before)) {
-      added.push({ name, sensitive: output["sensitive"] === true, type: output["type"] ?? null });
+      added.push(outputSummary(name, output));
       continue;
     }
     const previous = record(before[name]) ? before[name] : {};
-    const sensitive = previous["sensitive"] === true || output["sensitive"] === true;
-    const beforeValue = sensitive ? SENSITIVE_VALUE : safeValue(previous["value"], "", new Set(), 0);
-    const afterValue = sensitive ? SENSITIVE_VALUE : safeValue(output["value"], "", new Set(), 0);
-    const difference = sensitive ? null : !equalSafe(beforeValue, afterValue);
-    if (difference !== false || previous["type"] !== output["type"] || previous["sensitive"] !== output["sensitive"]) {
-      changed.push({ name, sensitive, type: output["type"] ?? previous["type"] ?? null, before: beforeValue, after: afterValue, changed: difference });
-    }
+    const entry = compareSingleOutput(name, previous, output);
+    if (entry !== null) changed.push(entry);
   }
   for (const name of Object.keys(before).sort()) {
     if (name in after) continue;
     const output = record(before[name]) ? before[name] : {};
-    removed.push({ name, sensitive: output["sensitive"] === true, type: output["type"] ?? null });
+    removed.push(outputSummary(name, output));
   }
   return { added, removed, changed };
 }
@@ -299,6 +322,36 @@ function planActions(raw: JsonRecord): readonly string[] {
   return Array.isArray(change["actions"]) ? change["actions"].filter((action): action is string => typeof action === "string") : [];
 }
 
+function classifyNewPlanResource(current: JsonRecord, beforeMap: Map<string, JsonRecord>): { kind: "moved"; from: string } | { kind: "added" } {
+  const previousAddress = typeof current["previous_address"] === "string" ? current["previous_address"] : null;
+  return previousAddress !== null && beforeMap.has(previousAddress)
+    ? { kind: "moved", from: previousAddress }
+    : { kind: "added" };
+}
+
+function replacePathStrings(afterChange: JsonRecord): string[] {
+  if (!Array.isArray(afterChange["replace_paths"])) return [];
+  return afterChange["replace_paths"].flatMap((path): string[] => Array.isArray(path) ? [path.map((part): string => String(part)).join(".")] : []);
+}
+
+function changedPlanEntry(address: string, previous: JsonRecord, current: JsonRecord, before: PlanJson, after: PlanJson): Record<string, unknown> | null {
+  const beforeActions = planActions(previous);
+  const afterActions = planActions(current);
+  const beforeChange = record(previous["change"]) ? previous["change"] : {};
+  const afterChange = record(current["change"]) ? current["change"] : {};
+  const paths = replacePathStrings(afterChange);
+  const differences = attributeChanges(beforeChange["after"], afterChange["after"]);
+  if (equalSafe(beforeActions, afterActions) && differences.length === 0 && paths.length === 0 && before["action_reason"] === after["action_reason"]) return null;
+  return {
+    address,
+    beforeActions,
+    afterActions,
+    "changed-attribute-paths": [...new Set([...paths, ...differences.map((difference): string => difference.path)])],
+    "newly-destructive": !beforeActions.includes("delete") && afterActions.includes("delete"),
+    "replacement-reason": after["action_reason"] ?? null,
+  };
+}
+
 export function comparePlanJson(beforeRaw: PlanJson, afterRaw: PlanJson): Record<string, unknown> {
   const before = sanitizePlanJson(beforeRaw);
   const after = sanitizePlanJson(afterRaw);
@@ -311,29 +364,13 @@ export function comparePlanJson(beforeRaw: PlanJson, afterRaw: PlanJson): Record
   for (const [address, current] of afterMap) {
     const previous = beforeMap.get(address);
     if (previous === undefined) {
-      const previousAddress = typeof current["previous_address"] === "string" ? current["previous_address"] : null;
-      if (previousAddress !== null && beforeMap.has(previousAddress)) moved.push({ from: previousAddress, to: address, actions: planActions(current) });
+      const classification = classifyNewPlanResource(current, beforeMap);
+      if (classification.kind === "moved") moved.push({ from: classification.from, to: address, actions: planActions(current) });
       else added.push({ address, actions: planActions(current), destructive: planActions(current).includes("delete") });
       continue;
     }
-    const beforeActions = planActions(previous);
-    const afterActions = planActions(current);
-    const beforeChange = record(previous["change"]) ? previous["change"] : {};
-    const afterChange = record(current["change"]) ? current["change"] : {};
-    const paths = Array.isArray(afterChange["replace_paths"])
-      ? afterChange["replace_paths"].flatMap((path): string[] => Array.isArray(path) ? [path.map((part): string => String(part)).join(".")] : [])
-      : [];
-    const differences = attributeChanges(beforeChange["after"], afterChange["after"]);
-    if (!equalSafe(beforeActions, afterActions) || differences.length > 0 || paths.length > 0 || before["action_reason"] !== after["action_reason"]) {
-      changed.push({
-        address,
-        beforeActions,
-        afterActions,
-        "changed-attribute-paths": [...new Set([...paths, ...differences.map((difference): string => difference.path)])],
-        "newly-destructive": !beforeActions.includes("delete") && afterActions.includes("delete"),
-        "replacement-reason": after["action_reason"] ?? null,
-      });
-    }
+    const entry = changedPlanEntry(address, previous, current, before, after);
+    if (entry !== null) changed.push(entry);
   }
   for (const [address, previous] of beforeMap) {
     if (afterMap.has(address) || moved.some((entry): boolean => entry["from"] === address)) continue;
@@ -449,25 +486,38 @@ export function dependencyImpact(input: Readonly<{
 
 export type ImportMapping = Readonly<{ address: string; providerId: string; provider?: string; mode?: string }>;
 
+const IMPORT_ADDRESS_PATTERN = /^(?:module\.[A-Za-z0-9_\-.]+)?[A-Za-z0-9_]+\.[A-Za-z0-9_]+(?:\[[^\]]+\])?$/;
+
+function validateImportMapping(value: unknown, index: number, ids: Set<string>): { mapping: ImportMapping | null; errors: string[] } {
+  const errors: string[] = [];
+  if (!record(value)) return { mapping: null, errors: [`mappings[${index}] must be an object`] };
+  const address = stringValue(value["address"]);
+  const providerId = stringValue(value["provider-id"] ?? value["providerId"] ?? value["id"]);
+  if (address === null || !IMPORT_ADDRESS_PATTERN.test(address)) errors.push(`mappings[${index}].address is invalid`);
+  if (providerId === null || providerId.length > 512) errors.push(`mappings[${index}].provider-id is required and bounded`);
+  if (providerId !== null && ids.has(providerId)) errors.push(`mappings[${index}].provider-id duplicates another mapping`);
+  if (providerId !== null) ids.add(providerId);
+  if (address === null || providerId === null) return { mapping: null, errors };
+  return {
+    mapping: {
+      address,
+      providerId,
+      ...(typeof value["provider"] === "string" ? { provider: value["provider"] } : {}),
+      ...(typeof value["mode"] === "string" ? { mode: value["mode"] } : {}),
+    },
+    errors,
+  };
+}
+
 export function validateImportMappings(raw: unknown): Readonly<{ mappings: readonly ImportMapping[]; errors: readonly string[] }> {
   if (!Array.isArray(raw)) return { mappings: [], errors: ["mappings must be an array"] };
   const mappings: ImportMapping[] = [];
   const errors: string[] = [];
   const ids = new Set<string>();
   for (const [index, value] of raw.entries()) {
-    if (!record(value)) { errors.push(`mappings[${index}] must be an object`); continue; }
-    const address = stringValue(value["address"]);
-    const providerId = stringValue(value["provider-id"] ?? value["providerId"] ?? value["id"]);
-    if (address === null || !/^(?:module\.[A-Za-z0-9_\-.]+\.)?[A-Za-z0-9_]+\.[A-Za-z0-9_]+(?:\[[^\]]+\])?$/.test(address)) errors.push(`mappings[${index}].address is invalid`);
-    if (providerId === null || providerId.length > 512) errors.push(`mappings[${index}].provider-id is required and bounded`);
-    if (providerId !== null && ids.has(providerId)) errors.push(`mappings[${index}].provider-id duplicates another mapping`);
-    if (providerId !== null) ids.add(providerId);
-    if (address !== null && providerId !== null) mappings.push({
-      address,
-      providerId,
-      ...(typeof value["provider"] === "string" ? { provider: value["provider"] } : {}),
-      ...(typeof value["mode"] === "string" ? { mode: value["mode"] } : {}),
-    });
+    const result = validateImportMapping(value, index, ids);
+    if (result.mapping !== null) mappings.push(result.mapping);
+    errors.push(...result.errors);
   }
   return { mappings, errors };
 }
