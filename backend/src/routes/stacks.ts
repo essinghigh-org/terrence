@@ -614,6 +614,31 @@ function validateStackConfigurationRequest(source: string, vcsIdentifier: string
   return null;
 }
 
+async function loadUploadableRecord(
+  recordId: string,
+  user: ParamCtx["user"],
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  request: ParamCtx["request"],
+): Promise<{ record: StackRecordItem; recordPayload: Record<string, unknown> } | { error: { status: 404 | 409 } }> {
+  const authorized = await authorizedStackRecord(recordId, user, tokenOrgId, teamId, "stack-configurations");
+  if (authorized === undefined && !validSignedApiURL(request, `/api/v2/stack-configurations/${recordId}/upload`, "PUT")) {
+    return { error: { status: 404 } };
+  }
+  const record = authorized?.record ?? await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, recordId), eq(stackRecords.recordType, "stack-configurations")) });
+  if (record === undefined) return { error: { status: 404 } };
+  const recordPayload = record.payload ?? {};
+  const existingPath = typeof recordPayload["archivePath"] === "string" ? recordPayload["archivePath"] : null;
+  if (record.status !== "pending" || existingPath !== null) return { error: { status: 409 } };
+  return { record, recordPayload };
+}
+
+async function readUploadBytes(body: unknown, request: ParamCtx["request"]): Promise<Uint8Array> {
+  if (body instanceof ArrayBuffer) return new Uint8Array(body);
+  if (body instanceof Blob) return new Uint8Array(await body.arrayBuffer());
+  return new Uint8Array(await request.arrayBuffer());
+}
+
 export const stackRoutes = new Elysia({ name: "stacks" })
   .use(authPlugin)
   .post("/api/v2/stacks", async ({ body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -726,21 +751,18 @@ export const stackRoutes = new Elysia({ name: "stacks" })
   })
   .put("/api/v2/stack-configurations/:stack_configuration_id/upload", async ({ params, body, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const recordId = params["stack_configuration_id"] ?? "";
-    const authorized = await authorizedStackRecord(recordId, user, tokenOrgId, teamId, "stack-configurations");
-    if (authorized === undefined && !validSignedApiURL(request, `/api/v2/stack-configurations/${recordId}/upload`, "PUT")) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    const loaded = await loadUploadableRecord(recordId, user, tokenOrgId, teamId, request);
+    if ("error" in loaded) {
+      (set as { status: number }).status = loaded.error.status;
+      return { errors: [{ status: String(loaded.error.status), title: loaded.error.status === 404 ? "Not Found" : "Conflict" }] };
     }
-    const record = authorized?.record ?? await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, recordId), eq(stackRecords.recordType, "stack-configurations")) });
-    if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const recordPayload = record.payload ?? {};
-    const existingPath = typeof recordPayload["archivePath"] === "string" ? recordPayload["archivePath"] : null;
-    if (record.status !== "pending" || existingPath !== null) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict" }] }; }
+    const { record, recordPayload } = loaded;
     const contentLength = Number(request.headers.get("content-length"));
     if (Number.isFinite(contentLength) && contentLength > 100 * 1024 * 1024) {
       (set as { status: number }).status = 413;
       return { errors: [{ status: "413", title: "Payload Too Large" }] };
     }
-    const bytes = body instanceof ArrayBuffer ? new Uint8Array(body) : body instanceof Blob ? new Uint8Array(await body.arrayBuffer()) : new Uint8Array(await request.arrayBuffer());
+    const bytes = await readUploadBytes(body, request);
     if (bytes.byteLength === 0) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Configuration archive is empty" }] }; }
     if (bytes.byteLength > 100 * 1024 * 1024) { (set as { status: number }).status = 413; return { errors: [{ status: "413", title: "Payload Too Large" }] }; }
     const claimed = await db.update(stackRecords).set({ status: "uploading", updatedAt: Date.now() }).where(and(eq(stackRecords.id, record.id), eq(stackRecords.status, "pending"))).returning({ id: stackRecords.id });
