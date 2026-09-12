@@ -697,6 +697,69 @@ async function attachPoliciesToSet(policyData: unknown, orgId: string, policySet
   }
 }
 
+type PolicyCreateScalars = Readonly<{
+  name: string;
+  description: string | null;
+  kind: string;
+  source: string | null;
+  query: string | null;
+  enforcementLevel: string;
+}>;
+
+function resolvePolicyCreateScalars(
+  attributes: Record<string, unknown>,
+): Readonly<{ value: PolicyCreateScalars }> | Readonly<{ error: string }> {
+  const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
+  if (name === "") return { error: "Name is required" };
+  const kind = typeof attributes["kind"] === "string" ? attributes["kind"] : "sentinel";
+  if (kind !== "sentinel" && kind !== "opa") return { error: "kind must be sentinel or opa" };
+  const source = typeof attributes["policy"] === "string"
+    ? attributes["policy"]
+    : typeof attributes["source"] === "string" ? attributes["source"] : null;
+  const query = kind === "opa"
+    ? typeof attributes["query"] === "string" && attributes["query"].trim() !== "" ? attributes["query"].trim() : "data"
+    : null;
+  const enforcementLevel = requestedPolicyEnforcementLevel(attributes)
+    ?? (kind === "opa" ? "mandatory" : "soft-mandatory");
+  const allowedLevels = policyEnforcementLevels(kind);
+  if (!allowedLevels.includes(enforcementLevel)) {
+    return { error: `enforcement-level must be ${allowedLevels.join(", ")}` };
+  }
+  return {
+    value: {
+      name,
+      description: typeof attributes["description"] === "string" ? attributes["description"] : null,
+      kind,
+      source,
+      query,
+      enforcementLevel,
+    },
+  };
+}
+
+async function resolvePolicySetAttachment(
+  data: Record<string, unknown> | undefined,
+  orgId: string,
+): Promise<Readonly<{ value: string | null }> | Readonly<{ error: string }>> {
+  const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+  const psRel = typeof rels["policy-sets"] === "object" && rels["policy-sets"] !== null ? (rels["policy-sets"] as Record<string, unknown>) : {};
+  const psData = Array.isArray(psRel["data"]) ? (psRel["data"] as Record<string, string>[]) : [];
+  if (psData.length > 1) {
+    return { error: "a policy can belong to at most one policy set" };
+  }
+  if (psData.length > 0 && typeof psData[0]?.["id"] === "string") {
+    const targetSet = await db.query.policySets.findFirst({ where: eq(policySets.id, psData[0]["id"]) });
+    if (targetSet === undefined || targetSet.orgId !== orgId) {
+      return { error: "policy-sets relationship must reference a policy set in this organization" };
+    }
+    if (targetSet.vcsRepo !== null) {
+      return { error: "VCS-backed policy sets cannot have uploaded policies attached" };
+    }
+    return { value: targetSet.id };
+  }
+  return { value: null };
+}
+
 export const policyRoutes = new Elysia({ name: "policies" })
   .use(authPlugin)
   // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
@@ -739,51 +802,22 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const { data, attributes } = parsePatchPayload(body);
     if (data?.["type"] !== "policies") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be policies" }] }; }
-    const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
-    if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
-    const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
-    const kind = typeof attributes["kind"] === "string" ? attributes["kind"] : "sentinel";
-    if (kind !== "sentinel" && kind !== "opa") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "kind must be sentinel or opa" }] }; }
-    const source = typeof attributes["policy"] === "string"
-      ? attributes["policy"]
-      : typeof attributes["source"] === "string" ? attributes["source"] : null;
-    const query = kind === "opa"
-      ? typeof attributes["query"] === "string" && attributes["query"].trim() !== "" ? attributes["query"].trim() : "data"
-      : null;
-    const enforcementLevel = requestedPolicyEnforcementLevel(attributes)
-      ?? (kind === "opa" ? "mandatory" : "soft-mandatory");
-    const allowedLevels = policyEnforcementLevels(kind);
-    if (!allowedLevels.includes(enforcementLevel)) {
+    const scalars = resolvePolicyCreateScalars(attributes);
+    if ("error" in scalars) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `enforcement-level must be ${allowedLevels.join(", ")}` }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: scalars.error }] };
     }
     const id = newResourceId("pol");
-    // Optional policy_sets relationship attaches this standalone policy to a set.
-    let policySetId: string | null = null;
-    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-    const psRel = typeof rels["policy-sets"] === "object" && rels["policy-sets"] !== null ? (rels["policy-sets"] as Record<string, unknown>) : {};
-    const psData = Array.isArray(psRel["data"]) ? (psRel["data"] as Record<string, string>[]) : [];
-    if (psData.length > 1) {
+    const attachment = await resolvePolicySetAttachment(data, org.id);
+    if ("error" in attachment) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "a policy can belong to at most one policy set" }] };
-    }
-    if (psData.length > 0 && typeof psData[0]?.["id"] === "string") {
-      const targetSet = await db.query.policySets.findFirst({ where: eq(policySets.id, psData[0]["id"]) });
-      if (targetSet === undefined || targetSet.orgId !== org.id) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "policy-sets relationship must reference a policy set in this organization" }] };
-      }
-      if (targetSet.vcsRepo !== null) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "VCS-backed policy sets cannot have uploaded policies attached" }] };
-      }
-      policySetId = targetSet.id;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: attachment.error }] };
     }
     const createdAt = Date.now();
+    const { name, description, kind, enforcementLevel, query, source } = scalars.value;
+    const policySetId = attachment.value;
     await db.insert(policies).values({ id, orgId: org.id, policySetId, name, description, kind, enforcementLevel, query, source, createdAt });
     (set as { status: number }).status = 201;
     return { data: await policyResource({ id, orgId: org.id, policySetId, policySetVersionId: null, name, description, kind, enforcementLevel, query, source, sourcePath: null, createdAt }, org.name) };
