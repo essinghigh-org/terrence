@@ -6,6 +6,7 @@ import { eq, and, count, inArray, asc, desc, or } from "drizzle-orm";
 import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
 import { TOKEN_DESCRIPTION_MAX_LENGTH } from "../lib/constants";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
+import type { TtlPolicyResolution } from "../lib/token-ttl-policy";
 
 const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 
@@ -493,6 +494,39 @@ async function loadTeamDetailIncludes(
   return { included, linkage: undefined };
 }
 
+function resolveRequestedTokenExpiry(attrs: Record<string, unknown>): Readonly<{ expiry: number }> | Readonly<{ error: string }> {
+  const expiredAtVal = attrs["expired-at"] ?? attrs["expires-at"] ?? attrs["expiredAt"] ?? attrs["expiresAt"];
+  const expiredAtStr = typeof expiredAtVal === "string" ? expiredAtVal : "";
+  if (expiredAtStr === "") return { expiry: Date.now() + TWO_YEARS_MS };
+  const parsedMs = new Date(expiredAtStr).getTime();
+  if (Number.isNaN(parsedMs)) return { error: "expired-at must be a valid ISO-8601 date" };
+  if (parsedMs <= Date.now()) return { error: "expired-at must be in the future" };
+  return { expiry: parsedMs };
+}
+
+function parseTeamTokenRequest(attrs: Record<string, unknown>): Readonly<{ value: { description: string; expiry: number } }> | Readonly<{ error: string }> {
+  // TFE parity: modern team tokens require an explicit description and
+  // default to a two-year expiration when none is supplied. The org TTL
+  // policy caps or forbids the result (todo 72-74).
+  const description = typeof attrs["description"] === "string" ? attrs["description"].trim() : "";
+  if (description === "" || description.length > TOKEN_DESCRIPTION_MAX_LENGTH) {
+    return { error: `Description is required for team tokens and must be at most ${TOKEN_DESCRIPTION_MAX_LENGTH} characters` };
+  }
+  const expiry = resolveRequestedTokenExpiry(attrs);
+  if ("error" in expiry) return expiry;
+  return { value: { description, expiry: expiry.expiry } };
+}
+
+function teamTokenPolicyError(resolution: TtlPolicyResolution): { status: 422 | 403; detail: string } | null {
+  if (resolution.kind === "invalid") return { status: 422, detail: resolution.detail };
+  if (resolution.kind === "forbidden") return { status: 403, detail: resolution.detail };
+  return null;
+}
+
+function teamTokenResponse(tokenId: string, secret: string, description: string, expiresAt: number | null): unknown {
+  return { data: { id: tokenId, type: "authentication-tokens", attributes: { token: secret, description, "created-at": new Date().toISOString(), "expired-at": expiresAt !== null ? new Date(expiresAt).toISOString() : null } } };
+}
+
 export const teamRoutes = new Elysia({ name: "teams" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/team-tokens", async ({ params, request, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -840,45 +874,19 @@ export const teamRoutes = new Elysia({ name: "teams" })
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const secret = generateAuthenticationToken("team");
     const tokenId = newResourceId("tok");
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    // TFE parity: modern team tokens require an explicit description and
-    // default to a two-year expiration when none is supplied. The org TTL
-    // policy caps or forbids the result (todo 72-74).
-    const description = typeof attrs["description"] === "string" ? attrs["description"].trim() : "";
-    if (description === "" || description.length > TOKEN_DESCRIPTION_MAX_LENGTH) {
+    const tokenRequest = parseTeamTokenRequest(parseTeamPatchAttributes(body));
+    if ("error" in tokenRequest) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Description is required for team tokens and must be at most ${TOKEN_DESCRIPTION_MAX_LENGTH} characters` }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: tokenRequest.error }] };
     }
-    const expiredAtVal = attrs["expired-at"] ?? attrs["expires-at"] ?? attrs["expiredAt"] ?? attrs["expiresAt"];
-    const expiredAtStr = typeof expiredAtVal === "string" ? expiredAtVal : "";
-    let requestedExpiry: number;
-    if (expiredAtStr === "") {
-      requestedExpiry = Date.now() + TWO_YEARS_MS;
-    } else {
-      const parsed = new Date(expiredAtStr);
-      const parsedMs = parsed.getTime();
-      if (Number.isNaN(parsedMs)) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "expired-at must be a valid ISO-8601 date" }] };
-      }
-      if (parsedMs <= Date.now()) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "expired-at must be in the future" }] };
-      }
-      requestedExpiry = parsedMs;
-    }
+    const { description, expiry: requestedExpiry } = tokenRequest.value;
     const policyResolution = await resolveTokenExpiryUnderPolicy(team.orgId, "team", requestedExpiry);
-    if (policyResolution.kind === "invalid") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
+    const policyError = teamTokenPolicyError(policyResolution);
+    if (policyError !== null) {
+      (set as { status: number }).status = policyError.status;
+      return { errors: [{ status: String(policyError.status), title: policyError.status === 403 ? "Forbidden" : "Unprocessable Entity", detail: policyError.detail }] };
     }
-    if (policyResolution.kind === "forbidden") {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
-    }
-    const expiresAt = policyResolution.expiresAt;
+    const expiresAt = policyResolution.kind === "ok" ? policyResolution.expiresAt : null;
     // TFE parity: descriptions must be unique among a team's modern tokens.
     const duplicate = await db.query.apiTokens.findFirst({ where: and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, false), eq(apiTokens.description, description)), columns: { id: true } });
     if (duplicate !== undefined) {
@@ -889,7 +897,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     await db.insert(apiTokens).values({ id: tokenId, token: tokenHash, orgId: team.orgId, teamId: team.id, description, createdAt: Date.now(), expiresAt, legacy: false });
     await auditLog("create", "team-authentication-token", tokenId, user?.id ?? null, team.orgId, { teamId, description });
     (set as { status: number }).status = 201;
-    return { data: { id: tokenId, type: "authentication-tokens", attributes: { token: secret, description, "created-at": new Date().toISOString(), "expired-at": expiresAt !== null ? new Date(expiresAt).toISOString() : null } } };
+    return teamTokenResponse(tokenId, secret, description, expiresAt);
   })
   .get("/api/v2/teams/:team_id/authentication-tokens", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const teamId = params["team_id"] ?? "";
