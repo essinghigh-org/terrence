@@ -551,6 +551,54 @@ function parseMintScopesOrThrow(rawScopes: unknown): TokenScopes | null {
   }
 }
 
+async function requireTokenMintTarget(
+  userId: string,
+  user: Readonly<typeof users.$inferSelect> | null | undefined,
+): Promise<Readonly<typeof users.$inferSelect>> {
+  const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
+  if (target === undefined || user?.id !== userId) {
+    throw new HttpStatusError(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  if ((target as unknown as { deletedAt?: unknown }).deletedAt != null) {
+    throw new HttpStatusError(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  if (target.isProvisional === true) {
+    throw new HttpStatusError(403, { errors: [{ status: "403", title: "Forbidden", detail: "Provisional accounts cannot create tokens" }] });
+  }
+  if (target.isSuspended === true) {
+    throw new HttpStatusError(403, { errors: [{ status: "403", title: "Forbidden", detail: "Suspended accounts cannot create tokens" }] });
+  }
+  // A fine-grained token must not be able to mint a new token (which could
+  // be unscoped = full access), or its restrictions are trivially bypassed.
+  if (currentTokenScopes() !== null) {
+    throw new HttpStatusError(403, { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot create additional tokens" }] });
+  }
+  return target;
+}
+
+function parseUserTokenInputOrThrow(body: unknown): { description: string; requestedExpiry: number | null; rawScopes: unknown } {
+  const attributes = tokenAttributes(body);
+  const description = typeof attributes["description"] === "string" ? attributes["description"].trim() : "API token";
+  const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
+  if (description === "" || description.length > TOKEN_DESCRIPTION_MAX_LENGTH || Number.isNaN(requestedExpiry)) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: `description is required and must be at most ${TOKEN_DESCRIPTION_MAX_LENGTH} characters` }] });
+  }
+  return { description, requestedExpiry, rawScopes: attributes["scopes"] };
+}
+
+async function resolveUserTokenExpiryOrThrow(requestedExpiry: number | null): Promise<number | null> {
+  // Organization TTL policy governs user tokens (todo 72-74): the effective
+  // expiry is capped by the policy; max-ttl-ms = 0 forbids minting.
+  const policyResolution = await resolveTokenExpiryUnderPolicy(null, "user", requestedExpiry);
+  if (policyResolution.kind === "invalid") {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] });
+  }
+  if (policyResolution.kind === "forbidden") {
+    throw new HttpStatusError(403, { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] });
+  }
+  return policyResolution.expiresAt;
+}
+
 export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
   .get("/api/v2/users", async ({ query, user, set }: ParamCtx): Promise<unknown> => {
@@ -1084,77 +1132,40 @@ export const userRoutes = new Elysia({ name: "users" })
   })
   .post("/api/v2/users/:user_id/authentication-tokens", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
     const userId = params["user_id"] ?? "";
-    const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    if (target === undefined || user?.id !== userId) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if ((target as unknown as { deletedAt?: unknown }).deletedAt != null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (target.isProvisional === true) {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: "Provisional accounts cannot create tokens" }] };
-    }
-    if (target.isSuspended === true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Suspended accounts cannot create tokens" }] }; }
-    // A fine-grained token must not be able to mint a new token (which could
-    // be unscoped = full access), or its restrictions are trivially bypassed.
-    if (currentTokenScopes() !== null) {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot create additional tokens" }] };
-    }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const description = typeof attributes["description"] === "string" ? attributes["description"].trim() : "API token";
-    const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
-    if (description === "" || description.length > TOKEN_DESCRIPTION_MAX_LENGTH || Number.isNaN(requestedExpiry)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `description is required and must be at most ${TOKEN_DESCRIPTION_MAX_LENGTH} characters` }] };
-    }
-    // Organization TTL policy governs user tokens (todo 72-74): the effective
-    // expiry is capped by the policy; max-ttl-ms = 0 forbids minting.
-    const policyResolution = await resolveTokenExpiryUnderPolicy(null, "user", requestedExpiry);
-    if (policyResolution.kind === "invalid") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
-    }
-    if (policyResolution.kind === "forbidden") {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
-    }
-    const expiresAt = policyResolution.expiresAt;
-    // Fine-grained scopes (optional): when present, the token is restricted
-    // to the listed orgs/projects/workspaces/tags and permission grants.
-    let scopes: TokenScopes | null = null;
-    if (attributes["scopes"] !== undefined) {
-      try {
-        scopes = parseTokenScopes(attributes["scopes"]);
-      } catch (error: unknown) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Invalid scopes" }] };
+    try {
+      await requireTokenMintTarget(userId, user);
+      const input = parseUserTokenInputOrThrow(body);
+      const expiresAt = await resolveUserTokenExpiryOrThrow(input.requestedExpiry);
+      const scopes = parseMintScopesOrThrow(input.rawScopes);
+      const rawToken = generateAuthenticationToken("user");
+      const createdToken = {
+        id: crypto.randomUUID(),
+        token: hashAuthenticationToken(rawToken),
+        userId,
+        orgId: null,
+        description: input.description,
+        scopes: scopes === null ? null : JSON.stringify(scopes),
+        tokenType: "",
+        legacy: false,
+        createdAt: Date.now(),
+        lastUsedAt: null,
+        expiresAt,
+        teamId: null,
+      };
+      await db.insert(apiTokens).values(createdToken);
+      await auditLog("create", "authentication-token", createdToken.id, user?.id ?? null, null, {
+        description: input.description,
+        source: "user",
+      });
+      (set as { status: number }).status = 201;
+      return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
+    } catch (error: unknown) {
+      if (error instanceof HttpStatusError) {
+        (set as { status: number }).status = error.status;
+        return error.body;
       }
+      throw error;
     }
-    const rawToken = generateAuthenticationToken("user");
-    const createdToken = {
-      id: crypto.randomUUID(),
-      token: hashAuthenticationToken(rawToken),
-      userId,
-      orgId: null,
-      description,
-      scopes: scopes === null ? null : JSON.stringify(scopes),
-      tokenType: "",
-      legacy: false,
-      createdAt: Date.now(),
-      lastUsedAt: null,
-      expiresAt,
-      teamId: null,
-    };
-    await db.insert(apiTokens).values(createdToken);
-    await auditLog("create", "authentication-token", createdToken.id, user?.id ?? null, null, {
-      description,
-      source: "user",
-    });
-    (set as { status: number }).status = 201;
-    return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
   .get("/api/v2/authentication-tokens/:token_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const tokenId = params["token_id"] ?? "";
