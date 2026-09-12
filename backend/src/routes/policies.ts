@@ -608,6 +608,95 @@ function resolvePolicyPatchEnforcement(
   return null;
 }
 
+type PolicySetCreateScalars = Readonly<{
+  name: string;
+  description: string | null;
+  kind: string;
+  global: boolean;
+  overridable: boolean;
+  agentEnabled: boolean;
+  policyToolVersion: string | null;
+}>;
+
+function resolvePolicySetCreateScalars(
+  attributes: Record<string, unknown>,
+): Readonly<{ value: PolicySetCreateScalars }> | Readonly<{ error: string }> {
+  const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
+  if (name === "") return { error: "Name is required" };
+  const kind = typeof attributes["kind"] === "string" ? attributes["kind"] : "sentinel";
+  if (!["sentinel", "opa"].includes(kind)) return { error: "kind must be sentinel or opa" };
+  return {
+    value: {
+      name,
+      description: typeof attributes["description"] === "string" ? attributes["description"] : null,
+      kind,
+      global: typeof attributes["global"] === "boolean" ? attributes["global"] : false,
+      overridable: typeof attributes["overridable"] === "boolean" ? attributes["overridable"] : false,
+      agentEnabled: typeof attributes["agent-enabled"] === "boolean" ? attributes["agent-enabled"] : false,
+      policyToolVersion: typeof attributes["policy-tool-version"] === "string" ? attributes["policy-tool-version"] : null,
+    },
+  };
+}
+
+function extractPolicyRelationship(data: Record<string, unknown> | undefined): Record<string, unknown> {
+  const relationships = data?.["relationships"] !== null && typeof data?.["relationships"] === "object"
+    ? data["relationships"] as Record<string, unknown>
+    : {};
+  return relationships["policies"] !== null && typeof relationships["policies"] === "object"
+    ? relationships["policies"] as Record<string, unknown>
+    : {};
+}
+
+type PolicySetCreateContent = Readonly<{
+  vcsRepo: PolicySetVcsRepo | null;
+  policiesPath: string | null;
+  patterns: string[];
+  policyRelationship: Record<string, unknown>;
+}>;
+
+async function resolvePolicySetCreateContent(
+  attributes: Record<string, unknown>,
+  data: Record<string, unknown> | undefined,
+  orgId: string,
+): Promise<Readonly<{ value: PolicySetCreateContent }> | Readonly<{ error: string }>> {
+  const normalizedVcsRepo = await normalizePolicySetVcsRepo(attributes["vcs-repo"], orgId);
+  if ("error" in normalizedVcsRepo) return normalizedVcsRepo;
+  const normalizedPath = normalizePoliciesPath(attributes["policies-path"] ?? null);
+  if ("error" in normalizedPath) return normalizedPath;
+  const normalizedPatterns = normalizePolicyUpdatePatterns(attributes["policy-update-patterns"] ?? []);
+  if ("error" in normalizedPatterns) return normalizedPatterns;
+  if (
+    normalizedVcsRepo.value === null
+    && (normalizedPath.value !== null || normalizedPatterns.value.length > 0)
+  ) return { error: "policies-path and policy-update-patterns require vcs-repo" };
+  const policyRelationship = extractPolicyRelationship(data);
+  if (normalizedVcsRepo.value !== null && Array.isArray(policyRelationship["data"]) && policyRelationship["data"].length > 0) {
+    return { error: "vcs-repo and policies relationships are mutually exclusive" };
+  }
+  return {
+    value: {
+      vcsRepo: normalizedVcsRepo.value,
+      policiesPath: normalizedPath.value,
+      patterns: normalizedPatterns.value,
+      policyRelationship,
+    },
+  };
+}
+
+async function attachPoliciesToSet(policyData: unknown, orgId: string, policySetId: string): Promise<void> {
+  if (!Array.isArray(policyData)) return;
+  const validPolicyIds = policyData
+    .map((ref: unknown): string => (ref !== null && typeof ref === "object" && typeof (ref as { id?: unknown }).id === "string" ? (ref as { id: string }).id : ""))
+    .filter((pid: string): boolean => pid !== "");
+  const validated = validPolicyIds.length === 0
+    ? []
+    : await db.query.policies.findMany({ where: and(eq(policies.orgId, orgId), inArray(policies.id, validPolicyIds)), columns: { id: true } });
+  if (validated.length > 0) {
+    await db.update(policies).set({ policySetId: policySetId })
+      .where(and(eq(policies.orgId, orgId), inArray(policies.id, validated.map((p): string => p.id))));
+  }
+}
+
 export const policyRoutes = new Elysia({ name: "policies" })
   .use(authPlugin)
   // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
@@ -893,85 +982,32 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
-    if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
+    const { data, attributes } = parsePatchPayload(body);
+    const scalars = resolvePolicySetCreateScalars(attributes);
+    if ("error" in scalars) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: scalars.error }] };
+    }
     const id = `polset-${Array.from(crypto.getRandomValues(new Uint8Array(8))).map((b: number): string => b.toString(16).padStart(2, "0")).join("")}`;
-    const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
-    const kind = typeof attributes["kind"] === "string" ? attributes["kind"] : "sentinel";
-    if (!["sentinel", "opa"].includes(kind)) {
+    const content = await resolvePolicySetCreateContent(attributes, data, org.id);
+    if ("error" in content) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "kind must be sentinel or opa" }] };
-    }
-    const global = typeof attributes["global"] === "boolean" ? attributes["global"] : false;
-    const overridable = typeof attributes["overridable"] === "boolean" ? attributes["overridable"] : false;
-    const agentEnabled = typeof attributes["agent-enabled"] === "boolean" ? attributes["agent-enabled"] : false;
-    const policyToolVersion = typeof attributes["policy-tool-version"] === "string" ? attributes["policy-tool-version"] : null;
-    const normalizedVcsRepo = await normalizePolicySetVcsRepo(attributes["vcs-repo"], org.id);
-    if ("error" in normalizedVcsRepo) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: normalizedVcsRepo.error }] };
-    }
-    const normalizedPath = normalizePoliciesPath(attributes["policies-path"] ?? null);
-    if ("error" in normalizedPath) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: normalizedPath.error }] };
-    }
-    const normalizedPatterns = normalizePolicyUpdatePatterns(attributes["policy-update-patterns"] ?? []);
-    if ("error" in normalizedPatterns) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: normalizedPatterns.error }] };
-    }
-    if (
-      normalizedVcsRepo.value === null
-      && (normalizedPath.value !== null || normalizedPatterns.value.length > 0)
-    ) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "policies-path and policy-update-patterns require vcs-repo" }] };
-    }
-    const relationships = data?.["relationships"] !== null && typeof data?.["relationships"] === "object"
-      ? data["relationships"] as Record<string, unknown>
-      : {};
-    const policyRelationship = relationships["policies"] !== null && typeof relationships["policies"] === "object"
-      ? relationships["policies"] as Record<string, unknown>
-      : {};
-    if (normalizedVcsRepo.value !== null && Array.isArray(policyRelationship["data"]) && policyRelationship["data"].length > 0) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "vcs-repo and policies relationships are mutually exclusive" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: content.error }] };
     }
     await db.insert(policySets).values({
       id,
       orgId: org.id,
-      name,
-      description,
-      kind,
-      global,
-      overridable,
-      agentEnabled,
-      policyToolVersion,
-      policiesPath: normalizedPath.value,
-      vcsRepo: normalizedVcsRepo.value,
-      policyUpdatePatterns: normalizedPatterns.value,
+      ...scalars.value,
+      policiesPath: content.value.policiesPath,
+      vcsRepo: content.value.vcsRepo,
+      policyUpdatePatterns: content.value.patterns,
       createdAt: Date.now(),
     });
     const created = await db.query.policySets.findFirst({ where: eq(policySets.id, id) });
     if (created === undefined) throw new Error("Policy set disappeared after creation");
     // Attach any policy_ids supplied at create so the policies relationship
     // round-trips (otherwise the provider sees drift on every re-apply).
-    if (Array.isArray(policyRelationship["data"])) {
-      const validPolicyIds = policyRelationship["data"]
-        .map((ref: unknown): string => (ref !== null && typeof ref === "object" && typeof (ref as { id?: unknown }).id === "string" ? (ref as { id: string }).id : ""))
-        .filter((pid: string): boolean => pid !== "");
-      const validated = validPolicyIds.length === 0
-        ? []
-        : await db.query.policies.findMany({ where: and(eq(policies.orgId, org.id), inArray(policies.id, validPolicyIds)), columns: { id: true } });
-      if (validated.length > 0) {
-        await db.update(policies).set({ policySetId: id })
-          .where(and(eq(policies.orgId, org.id), inArray(policies.id, validated.map((p): string => p.id))));
-      }
-    }
+    await attachPoliciesToSet(content.value.policyRelationship["data"], org.id, id);
     (set as { status: number }).status = 201;
     return { data: { id, type: "policy-sets", attributes: await policySetAttributes(created), relationships: await policySetRelationships(created) } };
   })
