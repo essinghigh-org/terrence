@@ -330,6 +330,37 @@ function firstWebhookHeader(request: Request, names: readonly string[]): string 
   return null;
 }
 
+function parseVariableAttributes(body: unknown): { data: Record<string, unknown>; attributes: Record<string, unknown> } {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  return { data, attributes };
+}
+
+async function buildVariablePatchUpdates(
+  attributes: Record<string, unknown>,
+  variable: typeof workspaceVariables.$inferSelect,
+): Promise<Partial<typeof workspaceVariables.$inferInsert>> {
+  let sensitive = typeof attributes["sensitive"] === "boolean" ? attributes["sensitive"] : variable.sensitive === true;
+  if (variable.sensitive === true && !sensitive && attributes["value"] === undefined) sensitive = true;
+  // Re-encrypt when the value or sensitive flag changed; flipping sensitive
+  // on encrypts the existing plaintext (todo 169).
+  const suppliedValue = typeof attributes["value"] === "string" ? attributes["value"] : null;
+  const effectiveValue = suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value);
+  const stored = await variableValueForWrite(sensitive, effectiveValue);
+  return {
+    key: typeof attributes["key"] === "string" ? attributes["key"] : variable.key,
+    value: stored.value,
+    valueEncrypted: stored.valueEncrypted,
+    category: typeof attributes["category"] === "string" ? attributes["category"] : variable.category,
+    sensitive,
+    hcl: typeof attributes["hcl"] === "boolean" ? attributes["hcl"] : variable.hcl === true,
+    description: attributes["description"] === null
+      ? null
+      : typeof attributes["description"] === "string" ? attributes["description"] : variable.description,
+  };
+}
+
 export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
@@ -637,31 +668,12 @@ export const miscRoutes = new Elysia({ name: "misc" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+    const { data, attributes } = parseVariableAttributes(body);
     if ((data["type"] !== undefined && data["type"] !== "vars") || !validVariableAttributes(attributes, true)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
-    let sensitive = typeof attributes["sensitive"] === "boolean" ? attributes["sensitive"] : variable.sensitive === true;
-    if (variable.sensitive === true && !sensitive && attributes["value"] === undefined) sensitive = true;
-    // Re-encrypt when the value or sensitive flag changed; flipping sensitive
-    // on encrypts the existing plaintext (todo 169).
-    const suppliedValue = typeof attributes["value"] === "string" ? attributes["value"] : null;
-    const effectiveValue = suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value);
-    const stored = await variableValueForWrite(sensitive, effectiveValue);
-    const updates: Partial<typeof workspaceVariables.$inferInsert> = {
-      key: typeof attributes["key"] === "string" ? attributes["key"] : variable.key,
-      value: stored.value,
-      valueEncrypted: stored.valueEncrypted,
-      category: typeof attributes["category"] === "string" ? attributes["category"] : variable.category,
-      sensitive,
-      hcl: typeof attributes["hcl"] === "boolean" ? attributes["hcl"] : variable.hcl === true,
-      description: attributes["description"] === null
-        ? null
-        : typeof attributes["description"] === "string" ? attributes["description"] : variable.description,
-    };
+    const updates = await buildVariablePatchUpdates(attributes, variable);
     await db.update(workspaceVariables).set(updates).where(eq(workspaceVariables.id, variable.id));
     return { data: globalVariableResource({ ...variable, ...updates } as WorkspaceVariable) };
   })
