@@ -38,23 +38,22 @@ async function storedClientSecret(value: string): Promise<string> {
   return isEncryptedSecret(value) ? decryptSecret(value) : value;
 }
 
+function normalizeOAuthRequestBody(rawBody: unknown): { body: string | undefined } | { error: string } {
+  if (rawBody === undefined || rawBody === null) return { body: undefined };
+  if (typeof rawBody === "string") return { body: rawBody };
+  if (rawBody instanceof URLSearchParams) return { body: rawBody.toString() };
+  return { error: "Unsupported request body" };
+}
+
 async function oauthFetch(oc: OcItem, url: string, init?: RequestInit): Promise<Response> {
   if (!oauthUrlProtocolAllowed(url)) return new Response("OAuth endpoints must use HTTPS", { status: 422 });
   if (oc.agentPoolId !== null) return forwardFetch(oc.agentPoolId, url, init);
   const destination = await resolveExternalUrl(url, envFlag("TERRENCE_ALLOW_PRIVATE_VCS_URLS"));
   if ("error" in destination) return new Response(destination.error, { status: 422 });
   const headers = Object.fromEntries(new Headers(init?.headers).entries());
-  const rawBody = init?.body;
-  if (rawBody !== undefined && rawBody !== null
-    && typeof rawBody !== "string"
-    && !(rawBody instanceof URLSearchParams)) {
-    return new Response("Unsupported request body", { status: 422 });
-  }
-  const body = rawBody === undefined || rawBody === null
-    ? undefined
-    : typeof rawBody === "string"
-      ? rawBody
-      : rawBody.toString();
+  const normalized = normalizeOAuthRequestBody(init?.body);
+  if ("error" in normalized) return new Response(normalized.error, { status: 422 });
+  const body = normalized.body;
   const requestInit: { method: string; headers: Record<string, string>; timeoutMs: number; maxResponseBytes: number; body?: string } = {
     method: init?.method ?? "GET",
     headers,
@@ -199,43 +198,47 @@ function configuredUrlOriginChanged(previous: unknown, next: unknown): boolean {
   return configuredUrlOrigin(previous) !== configuredUrlOrigin(next);
 }
 
+function validatedOAuth2Endpoints(
+  authorization: URL | null,
+  token: URL | null,
+  user: URL | null,
+  extra: Readonly<{ scope: string }> | Readonly<{ basicTokenAuth: boolean }>,
+): OAuth2Endpoints | null {
+  if (authorization === null || token === null || user === null) return null;
+  if (!oauthUrlProtocolAllowed(authorization) || !oauthUrlProtocolAllowed(token) || !oauthUrlProtocolAllowed(user)) return null;
+  return { authorization, token, user, ...extra };
+}
+
+function providerDefaultUrls(serviceProvider: string): { httpUrl: string; apiUrl: string } {
+  if (serviceProvider === "github") return { httpUrl: "https://github.com", apiUrl: "https://api.github.com" };
+  if (serviceProvider === "gitlab") return { httpUrl: "https://gitlab.com", apiUrl: "https://gitlab.com/api/v4" };
+  return { httpUrl: "", apiUrl: "" };
+}
+
 function oauth2Endpoints(oc: OcItem): OAuth2Endpoints | null {
   if (oc.serviceProvider === "github" || oc.serviceProvider === "github_enterprise") {
-    const httpUrl = oc.httpUrl ?? (oc.serviceProvider === "github" ? "https://github.com" : "");
-    const apiUrl = oc.apiUrl ?? (oc.serviceProvider === "github" ? "https://api.github.com" : "");
+    const defaults = providerDefaultUrls(oc.serviceProvider);
+    const httpUrl = oc.httpUrl ?? defaults.httpUrl;
+    const apiUrl = oc.apiUrl ?? defaults.apiUrl;
     const authorization = endpoint(httpUrl, "/login/oauth/authorize");
     const token = endpoint(httpUrl, "/login/oauth/access_token");
     const user = endpoint(apiUrl, "/user");
-    return authorization !== null && token !== null && user !== null
-      && oauthUrlProtocolAllowed(authorization)
-      && oauthUrlProtocolAllowed(token)
-      && oauthUrlProtocolAllowed(user)
-      ? { authorization, token, user, scope: "repo user:email" }
-      : null;
+    return validatedOAuth2Endpoints(authorization, token, user, { scope: "repo user:email" });
   }
   if (["gitlab", "gitlab_ce", "gitlab_ee"].includes(oc.serviceProvider)) {
-    const httpUrl = oc.httpUrl ?? (oc.serviceProvider === "gitlab" ? "https://gitlab.com" : "");
-    const apiUrl = oc.apiUrl ?? (oc.serviceProvider === "gitlab" ? "https://gitlab.com/api/v4" : "");
+    const defaults = providerDefaultUrls(oc.serviceProvider);
+    const httpUrl = oc.httpUrl ?? defaults.httpUrl;
+    const apiUrl = oc.apiUrl ?? defaults.apiUrl;
     const authorization = endpoint(httpUrl, "/oauth/authorize");
     const token = endpoint(httpUrl, "/oauth/token");
     const user = endpoint(apiUrl, "/user");
-    return authorization !== null && token !== null && user !== null
-      && oauthUrlProtocolAllowed(authorization)
-      && oauthUrlProtocolAllowed(token)
-      && oauthUrlProtocolAllowed(user)
-      ? { authorization, token, user, scope: "api" }
-      : null;
+    return validatedOAuth2Endpoints(authorization, token, user, { scope: "api" });
   }
   if (oc.serviceProvider === "bitbucket") {
     const authorization = endpoint(oc.httpUrl ?? "https://bitbucket.org", "/site/oauth2/authorize");
     const token = endpoint(oc.httpUrl ?? "https://bitbucket.org", "/site/oauth2/access_token");
     const user = endpoint(oc.apiUrl ?? "https://api.bitbucket.org/2.0", "/user");
-    return authorization !== null && token !== null && user !== null
-      && oauthUrlProtocolAllowed(authorization)
-      && oauthUrlProtocolAllowed(token)
-      && oauthUrlProtocolAllowed(user)
-      ? { authorization, token, user, basicTokenAuth: true }
-      : null;
+    return validatedOAuth2Endpoints(authorization, token, user, { basicTokenAuth: true });
   }
   return null;
 }
