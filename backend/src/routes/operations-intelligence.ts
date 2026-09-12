@@ -200,21 +200,7 @@ function freshness(value: number | null | undefined): string | null {
   return value === null || value === undefined ? null : safeIso(value);
 }
 
-async function searchResources(ctx: ParamCtx): Promise<unknown> {
-  const { request, user, orgId: tokenOrgId, teamId: tokenTeamId, set } = ctx;
-  if (!hasPrincipal(user, tokenOrgId, tokenTeamId)) return unauthorized(set);
-  const needle = normalizedSearchText(queryValue(request, "q")).slice(0, 120);
-  if (needle === "") return apiError(set, 422, "Unprocessable Entity", "q is required");
-  const workspacesForUser = await visibleWorkspaces(user, tokenOrgId, tokenTeamId);
-  const workspaceIds = workspacesForUser.map((workspace): string => workspace.id);
-  const workspaceById = new Map(workspacesForUser.map((workspace): [string, SafeWorkspace] => [workspace.id, workspace]));
-  const projectIds = [...new Set(workspacesForUser.flatMap((workspace): string[] => workspace.projectId === null ? [] : [workspace.projectId]))];
-  const [projectRows, runRows, cvRows] = await Promise.all([
-    projectIds.length === 0 ? Promise.resolve([] as (typeof projects.$inferSelect)[]) : db.query.projects.findMany({ where: inArray(projects.id, projectIds), limit: MAX_CANDIDATES }),
-    workspaceIds.length === 0 ? Promise.resolve([] as (typeof runs.$inferSelect)[]) : db.query.runs.findMany({ where: inArray(runs.workspaceId, workspaceIds), orderBy: [desc(runs.createdAt)], limit: MAX_CANDIDATES }),
-    workspaceIds.length === 0 ? Promise.resolve([] as (typeof configurationVersions.$inferSelect)[]) : db.query.configurationVersions.findMany({ where: inArray(configurationVersions.workspaceId, workspaceIds), orderBy: [desc(configurationVersions.createdAt)], limit: MAX_CANDIDATES }),
-  ]);
-
+function matchWorkspaceResults(workspacesForUser: readonly SafeWorkspace[], needle: string): Record<string, unknown>[] {
   const results: Record<string, unknown>[] = [];
   for (const workspace of workspacesForUser) {
     const repository = workspace.vcsRepo?.identifier ?? null;
@@ -229,11 +215,25 @@ async function searchResources(ctx: ParamCtx): Promise<unknown> {
       }, { self: `/api/v2/workspaces/${encodeURIComponent(workspace.id)}` }));
     }
   }
+  return results;
+}
+
+function matchProjectResults(projectRows: readonly (typeof projects.$inferSelect)[], needle: string): Record<string, unknown>[] {
+  const results: Record<string, unknown>[] = [];
   for (const project of projectRows) {
     const reasons = [project.id, project.name, project.description].flatMap((field, index): string[] => searchMatch(field, needle) ? [["id", "name", "description"][index] ?? "metadata"] : []);
     if (reasons.length > 0) results.push(resource(project.id, "projects", { name: project.name, description: project.description, "match-reasons": reasons, freshness: freshness(project.createdAt) }, { self: `/api/v2/projects/${encodeURIComponent(project.id)}` }));
   }
-  const cvById = new Map(cvRows.map((cv): [string, typeof cv] => [cv.id, cv]));
+  return results;
+}
+
+function matchRunResults(
+  runRows: readonly (typeof runs.$inferSelect)[],
+  cvById: ReadonlyMap<string, typeof configurationVersions.$inferSelect>,
+  workspaceById: ReadonlyMap<string, SafeWorkspace>,
+  needle: string,
+): Record<string, unknown>[] {
+  const results: Record<string, unknown>[] = [];
   for (const run of runRows) {
     const cv = run.configurationVersionId === null ? undefined : cvById.get(run.configurationVersionId);
     const ingress = cv?.ingressAttributes;
@@ -249,6 +249,11 @@ async function searchResources(ctx: ParamCtx): Promise<unknown> {
       freshness: freshness(run.createdAt),
     }, { self: `/api/v2/runs/${encodeURIComponent(run.id)}` }));
   }
+  return results;
+}
+
+function matchDocumentationResults(needle: string): Record<string, unknown>[] {
+  const results: Record<string, unknown>[] = [];
   for (const match of documentationMatches(needle, 20)) {
     results.push(resource(match.slug, "runbooks", {
       title: match.title,
@@ -258,6 +263,31 @@ async function searchResources(ctx: ParamCtx): Promise<unknown> {
       freshness: match.version,
     }, { self: `/api/v2/docs/${encodeURIComponent(match.slug)}` }));
   }
+  return results;
+}
+
+async function searchResources(ctx: ParamCtx): Promise<unknown> {
+  const { request, user, orgId: tokenOrgId, teamId: tokenTeamId, set } = ctx;
+  if (!hasPrincipal(user, tokenOrgId, tokenTeamId)) return unauthorized(set);
+  const needle = normalizedSearchText(queryValue(request, "q")).slice(0, 120);
+  if (needle === "") return apiError(set, 422, "Unprocessable Entity", "q is required");
+  const workspacesForUser = await visibleWorkspaces(user, tokenOrgId, tokenTeamId);
+  const workspaceIds = workspacesForUser.map((workspace): string => workspace.id);
+  const workspaceById = new Map(workspacesForUser.map((workspace): [string, SafeWorkspace] => [workspace.id, workspace]));
+  const projectIds = [...new Set(workspacesForUser.flatMap((workspace): string[] => workspace.projectId === null ? [] : [workspace.projectId]))];
+  const [projectRows, runRows, cvRows] = await Promise.all([
+    projectIds.length === 0 ? Promise.resolve([] as (typeof projects.$inferSelect)[]) : db.query.projects.findMany({ where: inArray(projects.id, projectIds), limit: MAX_CANDIDATES }),
+    workspaceIds.length === 0 ? Promise.resolve([] as (typeof runs.$inferSelect)[]) : db.query.runs.findMany({ where: inArray(runs.workspaceId, workspaceIds), orderBy: [desc(runs.createdAt)], limit: MAX_CANDIDATES }),
+    workspaceIds.length === 0 ? Promise.resolve([] as (typeof configurationVersions.$inferSelect)[]) : db.query.configurationVersions.findMany({ where: inArray(configurationVersions.workspaceId, workspaceIds), orderBy: [desc(configurationVersions.createdAt)], limit: MAX_CANDIDATES }),
+  ]);
+
+  const cvById = new Map(cvRows.map((cv): [string, typeof cv] => [cv.id, cv]));
+  const results: Record<string, unknown>[] = [
+    ...matchWorkspaceResults(workspacesForUser, needle),
+    ...matchProjectResults(projectRows, needle),
+    ...matchRunResults(runRows, cvById, workspaceById, needle),
+    ...matchDocumentationResults(needle),
+  ];
   results.sort((a, b): number => `${String((a["type"] ?? ""))}:${String((a["id"] ?? ""))}`.localeCompare(`${String((b["type"] ?? ""))}:${String((b["id"] ?? ""))}`));
   const { number, size } = pageRequest(request);
   return { data: results.slice((number - 1) * size, number * size), ...pagination(request, number, size, results.length) };
@@ -270,6 +300,55 @@ function timelineEvent(
   attributes: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> {
   return resource(id, "operational-events", { type, "occurred-at": occurredAt, authoritative: true, uncertainty: "persisted", ...attributes });
+}
+
+function runStatusEvents(
+  statusTimestamps: typeof runs.$inferSelect["statusTimestamps"],
+  runId: string,
+): Record<string, unknown>[] {
+  const events: Record<string, unknown>[] = [];
+  for (const [status, timestamp] of Object.entries(statusTimestamps ?? {})) {
+    const occurredAt = safeIso(timestamp);
+    if (occurredAt !== null) events.push(timelineEvent(`run:${runId}:${status}`, "run-status", occurredAt, { status: status.replace(/-at$/, "") }));
+  }
+  return events;
+}
+
+function configurationIngressEvents(
+  configurationVersion: typeof configurationVersions.$inferSelect | undefined,
+): Record<string, unknown>[] {
+  const ingress = configurationVersion?.ingressAttributes ?? undefined;
+  const commitAt = safeIso(configurationVersion?.createdAt);
+  if (commitAt === null || ingress === undefined || (ingress.commitSha === undefined && ingress.branch === undefined)) return [];
+  return [timelineEvent(`configuration:${configurationVersion?.id ?? "unknown"}:ingress`, "configuration-ingress", commitAt, { "commit-sha": ingress.commitSha ?? null, branch: ingress.branch ?? null })];
+}
+
+function configurationStatusEvents(
+  configurationVersion: typeof configurationVersions.$inferSelect | undefined,
+): Record<string, unknown>[] {
+  const events: Record<string, unknown>[] = [];
+  for (const [status, timestamp] of Object.entries(configurationVersion?.statusTimestamps ?? {})) {
+    const occurredAt = safeIso(timestamp);
+    if (occurredAt !== null) events.push(timelineEvent(`configuration:${configurationVersion?.id ?? "unknown"}:${status}`, "configuration-status", occurredAt, { status: status.replace(/-at$/, ""), "configuration-version-id": configurationVersion?.id ?? null }));
+  }
+  return [...events, ...configurationIngressEvents(configurationVersion)];
+}
+
+function auditTimelineEvents(auditRows: readonly (typeof auditLogs.$inferSelect)[]): Record<string, unknown>[] {
+  const events: Record<string, unknown>[] = [];
+  for (const audit of auditRows) {
+    const occurredAt = safeIso(audit.createdAt);
+    if (occurredAt !== null) events.push(timelineEvent(`audit:${audit.id}`, "audit", occurredAt, { action: audit.action, "resource-type": audit.resourceType, "actor-id": audit.userId }));
+  }
+  return events;
+}
+
+function byOccurredAt(a: Record<string, unknown>, b: Record<string, unknown>): number {
+  const aAttributes = a["attributes"];
+  const bAttributes = b["attributes"];
+  const aTime = aAttributes !== null && typeof aAttributes === "object" ? (aAttributes as Record<string, unknown>)["occurred-at"] : "";
+  const bTime = bAttributes !== null && typeof bAttributes === "object" ? (bAttributes as Record<string, unknown>)["occurred-at"] : "";
+  return String(aTime ?? "").localeCompare(String(bTime ?? ""));
 }
 
 async function runTimeline({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> {
@@ -285,46 +364,28 @@ async function runTimeline({ params, user, orgId: tokenOrgId, teamId: tokenTeamI
       limit: MAX_TIMELINE_EVENTS,
     }),
   ]);
-  const events: Record<string, unknown>[] = [];
-  for (const [status, timestamp] of Object.entries(authorized.run.statusTimestamps ?? {})) {
-    const occurredAt = safeIso(timestamp);
-    if (occurredAt !== null) events.push(timelineEvent(`run:${runId}:${status}`, "run-status", occurredAt, { status: status.replace(/-at$/, "") }));
-  }
-  for (const [status, timestamp] of Object.entries(configurationVersion?.statusTimestamps ?? {})) {
-    const occurredAt = safeIso(timestamp);
-    if (occurredAt !== null) events.push(timelineEvent(`configuration:${configurationVersion?.id ?? "unknown"}:${status}`, "configuration-status", occurredAt, { status: status.replace(/-at$/, ""), "configuration-version-id": configurationVersion?.id ?? null }));
-  }
-  const ingress = configurationVersion?.ingressAttributes ?? undefined;
-  const commitAt = safeIso(configurationVersion?.createdAt);
-  if (commitAt !== null && ingress !== undefined && (ingress.commitSha !== undefined || ingress.branch !== undefined)) {
-    events.push(timelineEvent(`configuration:${configurationVersion?.id ?? "unknown"}:ingress`, "configuration-ingress", commitAt, { "commit-sha": ingress.commitSha ?? null, branch: ingress.branch ?? null }));
-  }
-  for (const audit of auditRows) {
-    const occurredAt = safeIso(audit.createdAt);
-    if (occurredAt !== null) events.push(timelineEvent(`audit:${audit.id}`, "audit", occurredAt, { action: audit.action, "resource-type": audit.resourceType, "actor-id": audit.userId }));
-  }
-  events.sort((a, b): number => {
-    const aAttributes = a["attributes"];
-    const bAttributes = b["attributes"];
-    const aTime = aAttributes !== null && typeof aAttributes === "object" ? (aAttributes as Record<string, unknown>)["occurred-at"] : "";
-    const bTime = bAttributes !== null && typeof bAttributes === "object" ? (bAttributes as Record<string, unknown>)["occurred-at"] : "";
-    return String(aTime ?? "").localeCompare(String(bTime ?? ""));
-  });
+  const events: Record<string, unknown>[] = [
+    ...runStatusEvents(authorized.run.statusTimestamps, runId),
+    ...configurationStatusEvents(configurationVersion),
+    ...auditTimelineEvents(auditRows),
+  ];
+  events.sort(byOccurredAt);
   const { number, size } = pageRequest(request);
   const page = events.slice((number - 1) * size, number * size);
   const pageInfo = pagination(request, number, size, events.length);
   return { data: page, ...pageInfo, meta: { ...pageInfo.meta, run: { id: runId, status: authorized.run.status, workspace: authorized.workspace.name }, "event-count": events.length } };
 }
 
-function blueprintPreview(blueprint: BlueprintDefinition, attributes: Readonly<Record<string, unknown>>): Readonly<{ valid: boolean; errors: readonly string[]; configuration: Record<string, unknown> }> {
+function missingBlueprintParameters(blueprint: BlueprintDefinition, parameters: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  const parameters = attributes["parameters"] !== null && typeof attributes["parameters"] === "object" && !Array.isArray(attributes["parameters"])
-    ? attributes["parameters"] as Record<string, unknown>
-    : attributes;
   for (const parameter of blueprint.parameters) {
     const value = parameters[parameter.name];
     if (parameter.required && (value === undefined || value === null || (typeof value === "string" && value.trim() === ""))) errors.push(`Missing required parameter: ${parameter.name}`);
   }
+  return errors;
+}
+
+function resolveBlueprintReferenceIds(parameters: Record<string, unknown>, errors: string[]): Record<string, unknown> {
   const referenceIds: Record<string, unknown> = {};
   for (const key of ["variable-set-ids", "policy-set-ids"] as const) {
     const value = parameters[key];
@@ -333,13 +394,26 @@ function blueprintPreview(blueprint: BlueprintDefinition, attributes: Readonly<R
       else referenceIds[key] = [...new Set(value.map((item): string => item.trim()))];
     }
   }
+  return referenceIds;
+}
+
+function trimmedParameter(parameters: Record<string, unknown>, key: string): string | null {
+  return typeof parameters[key] === "string" ? (parameters[key] as string).trim() : null;
+}
+
+function blueprintPreview(blueprint: BlueprintDefinition, attributes: Readonly<Record<string, unknown>>): Readonly<{ valid: boolean; errors: readonly string[]; configuration: Record<string, unknown> }> {
+  const parameters = attributes["parameters"] !== null && typeof attributes["parameters"] === "object" && !Array.isArray(attributes["parameters"])
+    ? attributes["parameters"] as Record<string, unknown>
+    : attributes as Record<string, unknown>;
+  const errors = missingBlueprintParameters(blueprint, parameters);
+  const referenceIds = resolveBlueprintReferenceIds(parameters, errors);
   const configuration: Record<string, unknown> = {
-    name: typeof parameters["name"] === "string" ? parameters["name"].trim() : null,
-    project: typeof parameters["project"] === "string" ? parameters["project"].trim() : null,
-    repository: typeof parameters["repository"] === "string" ? parameters["repository"].trim() : null,
-    branch: typeof parameters["branch"] === "string" ? parameters["branch"].trim() : null,
-    enforcement: typeof parameters["enforcement"] === "string" ? parameters["enforcement"].trim() : null,
-    "assessment-interval": typeof parameters["assessment-interval"] === "string" ? parameters["assessment-interval"].trim() : null,
+    name: trimmedParameter(parameters, "name"),
+    project: trimmedParameter(parameters, "project"),
+    repository: trimmedParameter(parameters, "repository"),
+    branch: trimmedParameter(parameters, "branch"),
+    enforcement: trimmedParameter(parameters, "enforcement"),
+    "assessment-interval": trimmedParameter(parameters, "assessment-interval"),
     ...referenceIds,
     "blueprint-id": blueprint.id,
     "blueprint-version": blueprint.version,
@@ -430,6 +504,26 @@ function durationFromBody(body: unknown): number {
   return DEFAULT_SNOOZE_MS;
 }
 
+async function applySnoozeDuration(
+  id: string,
+  configuration: Parameters<typeof notificationOrgId>[0],
+  body: unknown,
+  user: ParamCtx["user"],
+  set: SetObject,
+): Promise<{ ok: true } | { failure: unknown }> {
+  const duration = durationFromBody(body);
+  if (!Number.isFinite(duration)) return { failure: apiError(set, 422, "Unprocessable Entity", "duration must be finite") };
+  const next = duration <= 0 ? null : await setNotificationSnooze(id, Math.min(duration, MAX_NOTIFICATION_SNOOZE_MS));
+  const orgId = await notificationOrgId(configuration);
+  const reason = attributesFrom(body)["reason"];
+  await auditLog(duration <= 0 ? "unsnooze" : "snooze", "notification-configurations", id, user?.id ?? null, orgId, {
+    durationMs: duration <= 0 ? 0 : Math.min(duration, MAX_NOTIFICATION_SNOOZE_MS),
+    reason: typeof reason === "string" ? reason : null,
+    expiresAt: next?.until ?? null,
+  });
+  return { ok: true };
+}
+
 async function notificationSnoozeResponse(
   id: string,
   user: ParamCtx["user"],
@@ -444,18 +538,34 @@ async function notificationSnoozeResponse(
   if (configuration === undefined) return hidden(set);
   const before = await notificationSnooze(id);
   if (body !== undefined) {
-    const duration = durationFromBody(body);
-    if (!Number.isFinite(duration)) return apiError(set, 422, "Unprocessable Entity", "duration must be finite");
-    const next = duration <= 0 ? null : await setNotificationSnooze(id, Math.min(duration, MAX_NOTIFICATION_SNOOZE_MS));
-    const orgId = await notificationOrgId(configuration);
-    await auditLog(duration <= 0 ? "unsnooze" : "snooze", "notification-configurations", id, user?.id ?? null, orgId, {
-      durationMs: duration <= 0 ? 0 : Math.min(duration, MAX_NOTIFICATION_SNOOZE_MS),
-      reason: typeof attributesFrom(body)["reason"] === "string" ? attributesFrom(body)["reason"] : null,
-      expiresAt: next?.until ?? null,
-    });
+    const applied = await applySnoozeDuration(id, configuration, body, user, set);
+    if ("failure" in applied) return applied.failure;
   }
   const current = body === undefined ? before : await notificationSnooze(id);
   return { data: resource(id, "notification-snoozes", { active: current !== null, until: current === null ? null : safeIso(current.until), reason: current?.reason ?? null, "max-duration-ms": MAX_NOTIFICATION_SNOOZE_MS }) };
+}
+
+function affectedReviewGrants(
+  grants: readonly Record<string, unknown>[],
+  removeMembershipId: string | null,
+  removeTeamId: string | null,
+): Record<string, unknown>[] {
+  return grants.filter((grant): boolean =>
+    removeMembershipId !== null && grant["source"] === "organization-membership" && grant["id"] === removeMembershipId
+    || removeTeamId !== null && (grant["source"] === "team" && grant["id"] === removeTeamId || grant["source"] === "team-workspace" && grant["team-id"] === removeTeamId));
+}
+
+function reviewRemovalPreview(
+  current: Record<string, unknown>,
+  removeMembershipId: string | null,
+  removeTeamId: string | null,
+): { currentPermissions: Record<string, boolean>; afterPermissions: Record<string, boolean>; affected: Record<string, unknown>[] } {
+  const grants = Array.isArray(current["grants"]) ? current["grants"] as readonly Record<string, unknown>[] : [];
+  const affected = affectedReviewGrants(grants, removeMembershipId, removeTeamId);
+  const currentPermissions = current["permissions"] as Record<string, boolean>;
+  const afterPermissions = { ...currentPermissions };
+  if (affected.length > 0) for (const permission of Object.keys(afterPermissions)) afterPermissions[permission] = false;
+  return { currentPermissions, afterPermissions, affected };
 }
 
 export const operationsIntelligenceRoutes = new Elysia({ name: "operations-intelligence" })
@@ -577,13 +687,9 @@ export const operationsIntelligenceRoutes = new Elysia({ name: "operations-intel
     const current = await accessReviewForWorkspace(workspace, targetUserId, null, null);
     const removeMembershipId = typeof attributes["remove-membership-id"] === "string" ? attributes["remove-membership-id"] : null;
     const removeTeamId = typeof attributes["remove-team-id"] === "string" ? attributes["remove-team-id"] : null;
-    const grants = Array.isArray(current["grants"]) ? current["grants"] as readonly Record<string, unknown>[] : [];
-    const affected = grants.filter((grant): boolean => removeMembershipId !== null && grant["source"] === "organization-membership" && grant["id"] === removeMembershipId || removeTeamId !== null && (grant["source"] === "team" && grant["id"] === removeTeamId || grant["source"] === "team-workspace" && grant["team-id"] === removeTeamId));
-    const currentPermissions = current["permissions"] as Record<string, boolean>;
-    const afterPermissions = { ...currentPermissions };
-    if (affected.length > 0) for (const permission of Object.keys(afterPermissions)) afterPermissions[permission] = false;
-    await auditLog("access-review", "workspaces", workspace.id, user?.id ?? null, workspace.orgId, { targetUserId, removeMembershipId, removeTeamId, affectedGrantCount: affected.length });
-    return { data: resource(workspace.id, "workspace-access-review-previews", { target: targetUserId, "current-permissions": currentPermissions, "after-removal-permissions": afterPermissions, "affected-grants": affected, "automatic-revocation": false, "fresh-capabilities-rechecked": true, "pre-issued-capability-note": current["pre-issued-capability-note"] }) };
+    const preview = reviewRemovalPreview(current, removeMembershipId, removeTeamId);
+    await auditLog("access-review", "workspaces", workspace.id, user?.id ?? null, workspace.orgId, { targetUserId, removeMembershipId, removeTeamId, affectedGrantCount: preview.affected.length });
+    return { data: resource(workspace.id, "workspace-access-review-previews", { target: targetUserId, "current-permissions": preview.currentPermissions, "after-removal-permissions": preview.afterPermissions, "affected-grants": preview.affected, "automatic-revocation": false, "fresh-capabilities-rechecked": true, "pre-issued-capability-note": current["pre-issued-capability-note"] }) };
   })
   // --- Opinionated policy packs -----------------------------------------
   .get("/api/v2/policy-packs", async ({ user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
