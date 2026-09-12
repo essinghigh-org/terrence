@@ -6,6 +6,50 @@ import { ldapSettings } from "../../lib/sso";
 import { invalidatePingSsoCache } from "../health";
 import type { ParamCtx } from "./types";
 import { withAuthSettingsLock, updateSettings, settingResource, currentSamlSettings, authLockoutResponse } from "./helpers";
+function checkGeneralSettingsAttrs(
+  attrs: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { ok: true } | { error: unknown } {
+  if (attrs["local-signup-enabled"] !== undefined && attrs["local-signup-enabled"] !== null && typeof attrs["local-signup-enabled"] !== "boolean") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "local-signup-enabled must be a boolean or null to use the environment setting" }] } };
+  }
+  if (attrs["local-auth-enabled"] !== undefined && typeof attrs["local-auth-enabled"] !== "boolean") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "local-auth-enabled must be a boolean" }] } };
+  }
+  if (attrs["trusted-client-ip-headers"] !== undefined
+    && attrs["trusted-client-ip-headers"] !== null
+    && (!Array.isArray(attrs["trusted-client-ip-headers"])
+      || !(attrs["trusted-client-ip-headers"] as unknown[]).every((name: unknown): boolean => typeof name === "string"))) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "trusted-client-ip-headers must be an array of header names (highest priority first)" }] } };
+  }
+  return { ok: true };
+}
+
+async function checkGeneralAuthLockout(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  set: ParamCtx["set"],
+): Promise<{ ok: true } | { error: unknown }> {
+  const localAuthEnabled = typeof attrs["local-auth-enabled"] === "boolean"
+    ? attrs["local-auth-enabled"]
+    : current["local-auth-enabled"] !== false;
+  const [saml, oidc, ldap] = await Promise.all([
+    currentSamlSettings(),
+    getSettings("oidc"),
+    ldapSettings(),
+  ]);
+  const authError = await authLockoutResponse(set, {
+    saml: saml.enabled === true,
+    oidc: oidc["enabled"] === true,
+    ldap: ldap.enabled,
+  }, localAuthEnabled);
+  if (authError !== null) return { error: authError };
+  return { ok: true };
+}
+
 export const settingsRoutes = new Elysia({ name: "admin-settings" })
   .use(authPlugin)
   .get("/api/v2/admin/settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -31,35 +75,10 @@ export const settingsRoutes = new Elysia({ name: "admin-settings" })
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const current = await getSettingsFresh("general", false);
-    if (attrs["local-signup-enabled"] !== undefined && attrs["local-signup-enabled"] !== null && typeof attrs["local-signup-enabled"] !== "boolean") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "local-signup-enabled must be a boolean or null to use the environment setting" }] };
-    }
-    if (attrs["local-auth-enabled"] !== undefined && typeof attrs["local-auth-enabled"] !== "boolean") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "local-auth-enabled must be a boolean" }] };
-    }
-    if (attrs["trusted-client-ip-headers"] !== undefined
-      && attrs["trusted-client-ip-headers"] !== null
-      && (!Array.isArray(attrs["trusted-client-ip-headers"])
-        || !(attrs["trusted-client-ip-headers"] as unknown[]).every((name: unknown): boolean => typeof name === "string"))) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "trusted-client-ip-headers must be an array of header names (highest priority first)" }] };
-    }
-    const localAuthEnabled = typeof attrs["local-auth-enabled"] === "boolean"
-      ? attrs["local-auth-enabled"]
-      : current["local-auth-enabled"] !== false;
-    const [saml, oidc, ldap] = await Promise.all([
-      currentSamlSettings(),
-      getSettings("oidc"),
-      ldapSettings(),
-    ]);
-    const authError = await authLockoutResponse(set, {
-      saml: saml.enabled === true,
-      oidc: oidc["enabled"] === true,
-      ldap: ldap.enabled,
-    }, localAuthEnabled);
-    if (authError !== null) return authError;
+    const checked = checkGeneralSettingsAttrs(attrs, set);
+    if ("error" in checked) return checked.error;
+    const lockout = await checkGeneralAuthLockout(attrs, current, set);
+    if ("error" in lockout) return lockout.error;
     const updated = await updateSettings("general", attrs);
     await refreshTrustedClientIpHeaders();
     invalidatePingSsoCache();
