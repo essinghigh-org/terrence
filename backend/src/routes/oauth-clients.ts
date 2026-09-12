@@ -113,6 +113,8 @@ type OAuthHandshakeState = OAuthHandshakeStateBase & (
   | Readonly<{ flow: "oauth1"; requestToken: string; requestTokenSecret: string }>
 );
 
+type OAuth1HandshakeState = OAuthHandshakeStateBase & Readonly<{ flow: "oauth1"; requestToken: string; requestTokenSecret: string }>;
+
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 // ponytail (resolved): handshake state is now persisted in the database
 // (oauth_handshake_states) via src/lib/oauth-handshake.ts, so a callback can
@@ -848,6 +850,121 @@ async function resolveHandshakeProject(
   return { projectId };
 }
 
+async function resolveCallbackHandshake(
+  params: ParamCtx["params"],
+  query: ParamCtx["query"],
+  set: SetObj,
+): Promise<{ state: OAuthHandshakeState; oc: typeof oauthClients.$inferSelect } | { error: unknown }> {
+  await pruneOAuthStates();
+  const stateId = stringQuery(query, "state");
+  const state = await takeOAuthHandshakeState<OAuthHandshakeState>(stateId);
+  if (state?.clientId !== (params["oc_id"] ?? "")) {
+    return { error: oauthFlowError(set, 400, "Invalid OAuth Callback", "OAuth state is missing, expired, or invalid") };
+  }
+  if (stringQuery(query, "error") !== "") {
+    return { error: oauthFlowError(set, 400, "OAuth Authorization Failed", "The VCS provider did not authorize the connection") };
+  }
+  const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, state.clientId) });
+  const stillAuthorized = await checkOrganizationPermission(
+    oc?.orgId ?? "",
+    state.userId ?? undefined,
+    state.tokenOrgId,
+    state.tokenTeamId,
+    "manage-vcs-settings",
+  );
+  if (
+    oc === undefined
+    || !stillAuthorized
+    || !(await validHandshakeProjectScope(oc, state.projectId))
+  ) {
+    return { error: oauthFlowError(set, 403, "Forbidden", "OAuth client authorization is no longer valid") };
+  }
+  return { state, oc };
+}
+
+async function completeOAuth1Callback(
+  oc: typeof oauthClients.$inferSelect,
+  state: OAuth1HandshakeState,
+  query: ParamCtx["query"],
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<unknown> {
+  const callbackToken = stringQuery(query, "oauth_token");
+  const verifier = stringQuery(query, "oauth_verifier");
+  if (callbackToken !== state.requestToken || verifier === "") {
+    return oauthFlowError(set, 400, "Invalid OAuth Callback", "OAuth request token or verifier is invalid");
+  }
+  const endpoints = oauth1Endpoints(oc);
+  if (endpoints === null) return unprocessable(set, "This VCS provider does not support the OAuth 1.0 flow");
+
+  let exchanged: { token: string; tokenSecret: string } | null;
+  try {
+    exchanged = await oauth1TokenRequest(
+      oc,
+      endpoints.accessToken.toString(),
+      { oauth_verifier: verifier },
+      state.requestToken,
+      state.requestTokenSecret,
+    );
+  } catch {
+    exchanged = null;
+  }
+  if (exchanged === null) {
+    return oauthFlowError(set, 502, "VCS Provider Error", "Bitbucket Data Center did not return a usable access token");
+  }
+  let serviceProviderUser: string | null = null;
+  try {
+    serviceProviderUser = await oauth1ProviderUser(
+      oc,
+      endpoints.user.toString(),
+      exchanged.token,
+      exchanged.tokenSecret,
+    );
+  } catch {
+    // The token is still usable when Bitbucket's optional identity endpoint is unavailable.
+  }
+  return completeOAuthHandshake(
+    oc,
+    JSON.stringify({
+      oauth_token: exchanged.token,
+      oauth_token_secret: exchanged.tokenSecret,
+    }),
+    serviceProviderUser,
+    request,
+  );
+}
+
+async function completeOAuth2Callback(
+  oc: typeof oauthClients.$inferSelect,
+  state: OAuthHandshakeState,
+  query: ParamCtx["query"],
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<unknown> {
+  const code = stringQuery(query, "code");
+  if (code === "") return oauthFlowError(set, 400, "Invalid OAuth Callback", "Authorization code is required");
+  const endpoints = oauth2Endpoints(oc);
+  if (endpoints === null) return unprocessable(set, "This VCS provider does not support the OAuth2 authorization-code flow");
+
+  let exchanged: { accessToken: string; serviceProviderUser: string | null } | null;
+  try {
+    exchanged = await exchangeAuthorizationCode(
+      oc,
+      endpoints.token.toString(),
+      endpoints.user.toString(),
+      endpoints.basicTokenAuth === true,
+      code,
+      state.redirectUri,
+    );
+  } catch {
+    exchanged = null;
+  }
+  if (exchanged === null) {
+    return oauthFlowError(set, 502, "VCS Provider Error", "The VCS provider did not return a usable access token");
+  }
+  return completeOAuthHandshake(oc, exchanged.accessToken, exchanged.serviceProviderUser, request);
+}
+
 export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/oauth-clients", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -1028,99 +1145,14 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return connectOAuth2Flow(oc.id, oc.key ?? "", oauth2, redirectUri, state, ctx, request);
   })
   .get("/api/v2/oauth-clients/:oc_id/callback", async ({ params, query, request, set }: ParamCtx): Promise<unknown> => {
-    await pruneOAuthStates();
-    const stateId = stringQuery(query, "state");
-    const state = await takeOAuthHandshakeState<OAuthHandshakeState>(stateId);
-    if (state?.clientId !== (params["oc_id"] ?? "")) {
-      return oauthFlowError(set, 400, "Invalid OAuth Callback", "OAuth state is missing, expired, or invalid");
-    }
-    if (stringQuery(query, "error") !== "") {
-      return oauthFlowError(set, 400, "OAuth Authorization Failed", "The VCS provider did not authorize the connection");
-    }
-
-    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, state.clientId) });
-    const stillAuthorized = await checkOrganizationPermission(
-      oc?.orgId ?? "",
-      state.userId ?? undefined,
-      state.tokenOrgId,
-      state.tokenTeamId,
-      "manage-vcs-settings",
-    );
-    if (
-      oc === undefined
-      || !stillAuthorized
-      || !(await validHandshakeProjectScope(oc, state.projectId))
-    ) {
-      return oauthFlowError(set, 403, "Forbidden", "OAuth client authorization is no longer valid");
-    }
+    const resolved = await resolveCallbackHandshake(params, query, set);
+    if ("error" in resolved) return resolved.error;
+    const { state, oc } = resolved;
     if (state.flow === "oauth1") {
-      const callbackToken = stringQuery(query, "oauth_token");
-      const verifier = stringQuery(query, "oauth_verifier");
-      if (callbackToken !== state.requestToken || verifier === "") {
-        return oauthFlowError(set, 400, "Invalid OAuth Callback", "OAuth request token or verifier is invalid");
-      }
-      const endpoints = oauth1Endpoints(oc);
-      if (endpoints === null) return unprocessable(set, "This VCS provider does not support the OAuth 1.0 flow");
-
-      let exchanged: { token: string; tokenSecret: string } | null;
-      try {
-        exchanged = await oauth1TokenRequest(
-          oc,
-          endpoints.accessToken.toString(),
-          { oauth_verifier: verifier },
-          state.requestToken,
-          state.requestTokenSecret,
-        );
-      } catch {
-        exchanged = null;
-      }
-      if (exchanged === null) {
-        return oauthFlowError(set, 502, "VCS Provider Error", "Bitbucket Data Center did not return a usable access token");
-      }
-      let serviceProviderUser: string | null = null;
-      try {
-        serviceProviderUser = await oauth1ProviderUser(
-          oc,
-          endpoints.user.toString(),
-          exchanged.token,
-          exchanged.tokenSecret,
-        );
-      } catch {
-        // The token is still usable when Bitbucket's optional identity endpoint is unavailable.
-      }
-      return completeOAuthHandshake(
-        oc,
-        JSON.stringify({
-          oauth_token: exchanged.token,
-          oauth_token_secret: exchanged.tokenSecret,
-        }),
-        serviceProviderUser,
-        request,
-      );
+      return completeOAuth1Callback(oc, state, query, request, set);
     }
 
-    const code = stringQuery(query, "code");
-    if (code === "") return oauthFlowError(set, 400, "Invalid OAuth Callback", "Authorization code is required");
-    const endpoints = oauth2Endpoints(oc);
-    if (endpoints === null) return unprocessable(set, "This VCS provider does not support the OAuth2 authorization-code flow");
-
-    let exchanged: { accessToken: string; serviceProviderUser: string | null } | null;
-    try {
-      exchanged = await exchangeAuthorizationCode(
-        oc,
-        endpoints.token.toString(),
-        endpoints.user.toString(),
-        endpoints.basicTokenAuth === true,
-        code,
-        state.redirectUri,
-      );
-    } catch {
-      exchanged = null;
-    }
-    if (exchanged === null) {
-      return oauthFlowError(set, 502, "VCS Provider Error", "The VCS provider did not return a usable access token");
-    }
-    return completeOAuthHandshake(oc, exchanged.accessToken, exchanged.serviceProviderUser, request);
+    return completeOAuth2Callback(oc, state, query, request, set);
   })
   .get("/api/v2/oauth-clients/:oc_id/oauth-tokens", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const ocId = params["oc_id"] ?? "";
