@@ -41,6 +41,10 @@ type CommandItemType = {
 
 type NamedResource = Readonly<{ name: string }>;
 
+function isNonEmptyString(value: string | undefined): value is string {
+  return value !== undefined && value !== "";
+}
+
 function namedResources(value: unknown): NamedResource[] {
   if (!isRecord(value) || !Array.isArray(value["data"])) return [];
   return value["data"].flatMap((resource: unknown): NamedResource[] => {
@@ -120,7 +124,7 @@ export function CommandPalette({
       }
     }).catch(() => {});
 
-    if (currentOrgName !== undefined && currentOrgName !== "") {
+    if (isNonEmptyString(currentOrgName)) {
       void fetchApi(
         `/organizations/${encodeURIComponent(currentOrgName)}/workspaces?page[size]=20`,
         { signal: controller.signal },
@@ -156,7 +160,7 @@ export function CommandPalette({
     const params = new URLSearchParams({ "page[size]": "20" });
     params.set("q", query);
     const requests: Promise<unknown>[] = [fetchApi(`/organizations?${params.toString()}`, { signal: controller.signal })];
-    if (currentOrgName !== undefined && currentOrgName !== "") {
+    if (isNonEmptyString(currentOrgName)) {
       const workspaceParams = new URLSearchParams({ "page[size]": "20", "search[name]": query });
       requests.push(fetchApi(
         `/organizations/${encodeURIComponent(currentOrgName)}/workspaces?${workspaceParams.toString()}`,
@@ -200,7 +204,7 @@ export function CommandPalette({
         onOpenChange(false);
       },
     },
-    ...(currentOrgName !== undefined && currentOrgName !== ""
+    ...(isNonEmptyString(currentOrgName)
       ? [
           {
             id: "nav-workspaces",
@@ -265,7 +269,7 @@ export function CommandPalette({
         onOpenChange(false);
       },
     })),
-    ...(currentOrgName !== undefined && currentOrgName !== ""
+    ...(isNonEmptyString(currentOrgName)
       ? workspaces.map((ws) => ({
           id: `ws-${ws.name}`,
           category: "Workspaces" as const,
@@ -294,7 +298,7 @@ export function CommandPalette({
     // 14.17: permission-aware actions. Workspace-scoped actions are only shown
     // when a workspace is on screen; the "New workspace" action is gated on the
     // can-manage-workspaces permission.
-    ...(currentOrgName !== undefined && currentOrgName !== ""
+    ...(isNonEmptyString(currentOrgName)
       ? [
           ...(canManageWorkspaces
             ? [{
@@ -309,7 +313,7 @@ export function CommandPalette({
                 },
               }]
             : []),
-          ...(currentWorkspaceName !== undefined && currentWorkspaceName !== ""
+          ...(isNonEmptyString(currentWorkspaceName)
             ? [
                 {
                   id: "act-queue-plan",
