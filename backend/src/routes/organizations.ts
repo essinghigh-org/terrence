@@ -498,6 +498,66 @@ async function insertOrganization(args: {
   return { id, org };
 }
 
+function parseRetentionPolicyRequest(body: unknown): { attributes: Record<string, unknown>; policyType: string | null; rawDeleteOlderThanNDays: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data: Record<string, unknown> | undefined = typeof payload["data"] === "object" && payload["data"] !== null
+    ? payload["data"] as Record<string, unknown>
+    : undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null
+    ? data["attributes"] as Record<string, unknown>
+    : {};
+  const policyType = typeof data?.["type"] === "string" ? data["type"] : null;
+  const rawDeleteOlderThanNDays = attributes["delete-older-than-n-days"] ?? attributes["deleteOlderThanNDays"];
+  if (
+    policyType === "data-retention-policy-delete-olders"
+    && !(typeof rawDeleteOlderThanNDays === "number" && Number.isInteger(rawDeleteOlderThanNDays) && rawDeleteOlderThanNDays > 0)
+  ) {
+    throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity" }] });
+  }
+  return { attributes, policyType, rawDeleteOlderThanNDays };
+}
+
+async function resolveRetentionPolicyValues(
+  orgId: string,
+  attributes: Record<string, unknown>,
+  policyType: string | null,
+  rawDeleteOlderThanNDays: unknown,
+) {
+  const existing = await db.query.organizationDataRetentionPolicies.findFirst({
+    where: eq(organizationDataRetentionPolicies.organizationId, orgId),
+  });
+  const stateVersionsCount = typeof attributes["state-versions-count"] === "number"
+    ? attributes["state-versions-count"]
+    : existing?.stateVersionsCount ?? null;
+  const deleteOlderThanNDays = policyType === "data-retention-policy-dont-deletes"
+    ? null
+    : typeof rawDeleteOlderThanNDays === "number"
+      ? rawDeleteOlderThanNDays
+      : existing?.deleteOlderThanNDays ?? null;
+  return {
+    existing,
+    values: {
+      id: existing?.id ?? newResourceId("drp"),
+      organizationId: orgId,
+      stateVersionsCount,
+      deleteOlderThanNDays,
+      createdAt: existing?.createdAt ?? Date.now(),
+    },
+  };
+}
+
+async function collectRetentionGc(orgId: string): Promise<Record<string, unknown>> {
+  const organizationWorkspaces = await db.query.workspaces.findMany({
+    where: eq(workspaces.orgId, orgId),
+    columns: { id: true },
+  });
+  const gc: Record<string, unknown> = {};
+  for (const workspace of organizationWorkspaces) {
+    gc[workspace.id] = await applyDataRetentionGarbageCollection(workspace.id);
+  }
+  return gc;
+}
+
 export const organizationRoutes = new Elysia({ name: "organizations" })
   .use(authPlugin)
   .post("/api/v2/organizations", async ({ user, orgId: tokenOrgId, teamId: tokenTeamId, body, set }: ParamCtx): Promise<unknown> => {
@@ -748,63 +808,34 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null
-      ? data["attributes"] as Record<string, unknown>
-      : {};
-    const policyType = typeof data?.["type"] === "string" ? data["type"] : null;
-    const rawDeleteOlderThanNDays = attributes["delete-older-than-n-days"] ?? attributes["deleteOlderThanNDays"];
-    if (
-      policyType === "data-retention-policy-delete-olders"
-      && !(typeof rawDeleteOlderThanNDays === "number" && Number.isInteger(rawDeleteOlderThanNDays) && rawDeleteOlderThanNDays > 0)
-    ) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
-    }
-    const existing = await db.query.organizationDataRetentionPolicies.findFirst({
-      where: eq(organizationDataRetentionPolicies.organizationId, org.id),
-    });
-    const stateVersionsCount = typeof attributes["state-versions-count"] === "number"
-      ? attributes["state-versions-count"]
-      : existing?.stateVersionsCount ?? null;
-    const deleteOlderThanNDays = policyType === "data-retention-policy-dont-deletes"
-      ? null
-      : typeof rawDeleteOlderThanNDays === "number"
-        ? rawDeleteOlderThanNDays
-        : existing?.deleteOlderThanNDays ?? null;
-    const values = {
-      id: existing?.id ?? newResourceId("drp"),
-      organizationId: org.id,
-      stateVersionsCount,
-      deleteOlderThanNDays,
-      createdAt: existing?.createdAt ?? Date.now(),
-    };
-    if (existing === undefined) {
-      await db.insert(organizationDataRetentionPolicies).values(values);
-    } else {
-      await db.update(organizationDataRetentionPolicies).set(values).where(eq(organizationDataRetentionPolicies.id, existing.id));
-    }
-    const wasExisting = existing !== undefined
-    const organizationWorkspaces = await db.query.workspaces.findMany({
-      where: eq(workspaces.orgId, org.id),
-      columns: { id: true },
-    });
-    const gc: Record<string, unknown> = {};
-    for (const workspace of organizationWorkspaces) {
-      gc[workspace.id] = await applyDataRetentionGarbageCollection(workspace.id);
-    }
-    (set as { status: number }).status = wasExisting ? 200 : 201;
-    return {
-      data: {
-        id: values.id,
-        type: deleteOlderThanNDays === null ? "data-retention-policy-dont-deletes" : "data-retention-policy-delete-olders",
-        attributes: {
-          "state-versions-count": stateVersionsCount,
-          "delete-older-than-n-days": deleteOlderThanNDays,
+    try {
+      const { attributes, policyType, rawDeleteOlderThanNDays } = parseRetentionPolicyRequest(body);
+      const { existing, values } = await resolveRetentionPolicyValues(org.id, attributes, policyType, rawDeleteOlderThanNDays);
+      if (existing === undefined) {
+        await db.insert(organizationDataRetentionPolicies).values(values);
+      } else {
+        await db.update(organizationDataRetentionPolicies).set(values).where(eq(organizationDataRetentionPolicies.id, existing.id));
+      }
+      const gc = await collectRetentionGc(org.id);
+      (set as { status: number }).status = existing === undefined ? 201 : 200;
+      return {
+        data: {
+          id: values.id,
+          type: values.deleteOlderThanNDays === null ? "data-retention-policy-dont-deletes" : "data-retention-policy-delete-olders",
+          attributes: {
+            "state-versions-count": values.stateVersionsCount,
+            "delete-older-than-n-days": values.deleteOlderThanNDays,
+          },
+          meta: { gc },
         },
-        meta: { gc },
-      },
-    };
+      };
+    } catch (error: unknown) {
+      if (error instanceof OrgPatchError) {
+        (set as { status: number }).status = error.status;
+        return error.body;
+      }
+      throw error;
+    }
   })
   .delete("/api/v2/organizations/:org_name/relationships/data-retention-policy", async ({ params, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const orgName = params["org_name"] ?? "";
