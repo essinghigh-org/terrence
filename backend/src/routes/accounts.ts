@@ -354,55 +354,87 @@ export async function issueLoginSession(
   return accessTokenDocument(tokenId, tokenStr, user, accessExpiresAt);
 }
 
+type SessionFamily = {
+  active: boolean;
+  createdAt: number;
+  current: boolean;
+  expiresAt: number;
+  ipAddress: string | null;
+  lastRotatedAt: number | null;
+  userAgent: string | null;
+};
+
+function isFamilyActive(existing: SessionFamily | undefined, rotatedAt: number | null): boolean {
+  return (existing?.active ?? false) || rotatedAt === null;
+}
+
+function isCurrentFamily(
+  existing: SessionFamily | undefined,
+  session: Readonly<{ accessTokenId: string; familyId: string }>,
+  currentAccessTokenId: string | null,
+  currentFamilyId: string | null,
+): boolean {
+  return (existing?.current ?? false) || session.accessTokenId === currentAccessTokenId || session.familyId === currentFamilyId;
+}
+
+function familyLastRotatedAt(existing: SessionFamily | undefined, rotatedAt: number | null): number | null {
+  if (rotatedAt === null) return existing?.lastRotatedAt ?? null;
+  return Math.max(existing?.lastRotatedAt ?? rotatedAt, rotatedAt);
+}
+
+function mergeSessionFamily(
+  existing: SessionFamily | undefined,
+  session: Readonly<typeof refreshSessions.$inferSelect>,
+  currentAccessTokenId: string | null,
+  currentFamilyId: string | null,
+): SessionFamily {
+  return {
+    active: isFamilyActive(existing, session.rotatedAt),
+    createdAt: Math.min(existing?.createdAt ?? session.createdAt, session.createdAt),
+    current: isCurrentFamily(existing, session, currentAccessTokenId, currentFamilyId),
+    expiresAt: Math.max(existing?.expiresAt ?? session.expiresAt, session.expiresAt),
+    ipAddress: existing?.ipAddress ?? session.ipAddress ?? null,
+    lastRotatedAt: familyLastRotatedAt(existing, session.rotatedAt),
+    userAgent: existing?.userAgent ?? session.userAgent ?? null,
+  };
+}
+
+function compareSessionFamilies(left: SessionFamily, right: SessionFamily): number {
+  if (left.current !== right.current) return right.current ? 1 : -1;
+  return (right.lastRotatedAt ?? right.createdAt) - (left.lastRotatedAt ?? left.createdAt);
+}
+
+function sessionFamilyResource(familyId: string, family: SessionFamily): Record<string, unknown> {
+  return {
+    id: familyId,
+    type: "browser-sessions",
+    attributes: {
+      "created-at": new Date(family.createdAt).toISOString(),
+      "last-rotated-at": family.lastRotatedAt === null
+        ? null
+        : new Date(family.lastRotatedAt).toISOString(),
+      "expires-at": new Date(family.expiresAt).toISOString(),
+      "ip-address": family.ipAddress,
+      "user-agent": family.userAgent,
+      current: family.current,
+    },
+  };
+}
+
 function browserSessionResources(
   sessions: readonly Readonly<typeof refreshSessions.$inferSelect>[],
   currentAccessTokenId: string | null,
   currentFamilyId: string | null,
 ): Record<string, unknown>[] {
-  const families = new Map<string, {
-    active: boolean;
-    createdAt: number;
-    current: boolean;
-    expiresAt: number;
-    ipAddress: string | null;
-    lastRotatedAt: number | null;
-    userAgent: string | null;
-  }>();
+  const families = new Map<string, SessionFamily>();
   for (const session of sessions) {
-    const existing = families.get(session.familyId);
-    families.set(session.familyId, {
-      active: (existing?.active ?? false) || session.rotatedAt === null,
-      createdAt: Math.min(existing?.createdAt ?? session.createdAt, session.createdAt),
-      current: (existing?.current ?? false) || session.accessTokenId === currentAccessTokenId || session.familyId === currentFamilyId,
-      expiresAt: Math.max(existing?.expiresAt ?? session.expiresAt, session.expiresAt),
-      ipAddress: existing?.ipAddress ?? session.ipAddress ?? null,
-      lastRotatedAt: session.rotatedAt === null
-        ? existing?.lastRotatedAt ?? null
-        : Math.max(existing?.lastRotatedAt ?? session.rotatedAt, session.rotatedAt),
-      userAgent: existing?.userAgent ?? session.userAgent ?? null,
-    });
+    families.set(session.familyId, mergeSessionFamily(families.get(session.familyId), session, currentAccessTokenId, currentFamilyId));
   }
 
   return [...families.entries()]
     .filter(([, family]): boolean => family.active)
-    .sort(([, left], [, right]): number => {
-      if (left.current !== right.current) return right.current ? 1 : -1;
-      return (right.lastRotatedAt ?? right.createdAt) - (left.lastRotatedAt ?? left.createdAt);
-    })
-    .map(([familyId, family]): Record<string, unknown> => ({
-      id: familyId,
-      type: "browser-sessions",
-      attributes: {
-        "created-at": new Date(family.createdAt).toISOString(),
-        "last-rotated-at": family.lastRotatedAt === null
-          ? null
-          : new Date(family.lastRotatedAt).toISOString(),
-        "expires-at": new Date(family.expiresAt).toISOString(),
-        "ip-address": family.ipAddress,
-        "user-agent": family.userAgent,
-        current: family.current,
-      },
-    }));
+    .sort(([, left], [, right]): number => compareSessionFamilies(left, right))
+    .map(([familyId, family]): Record<string, unknown> => sessionFamilyResource(familyId, family));
 }
 
 function refreshUnauthorized(
