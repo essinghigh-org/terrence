@@ -17,7 +17,7 @@ import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, type Stats } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import * as schema from "../db/schema-sqlite";
@@ -207,9 +207,7 @@ function normalizeManifest(manifest: Omit<BackupManifest, "manifestSha256">): Ba
   return { ...manifest, manifestSha256: hashManifestBody(manifest) };
 }
 
-function parseManifest(raw: unknown): BackupManifest {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new BackupVerificationError("manifest-invalid", "Backup manifest must be a JSON object");
-  const candidate = raw as Partial<BackupManifest> & { manifestSha256?: unknown };
+function assertManifestIdentity(candidate: Partial<BackupManifest> & { manifestSha256?: unknown }): Omit<BackupManifest, "manifestSha256"> {
   if (candidate.kind !== "terrence-backup" || candidate.version !== BACKUP_MANIFEST_VERSION) {
     throw new BackupVerificationError("manifest-incompatible", "Backup manifest version is not supported");
   }
@@ -222,44 +220,68 @@ function parseManifest(raw: unknown): BackupManifest {
   if (candidate.database === undefined || candidate.storage === undefined || candidate.keys === undefined) {
     throw new BackupVerificationError("manifest-invalid", "Backup manifest is missing database, storage, or key metadata");
   }
-  const database = candidate.database;
-  const storage = candidate.storage;
-  if (database === null || typeof database !== "object" || Array.isArray(database)
-    || (database as { driver?: unknown }).driver !== "sqlite" && (database as { driver?: unknown }).driver !== "postgres"
-    || typeof (database as { schemaSha256?: unknown }).schemaSha256 !== "string"
-    || !/^[a-f0-9]{64}$/.test((database as { schemaSha256: string }).schemaSha256)
-    || storage === null || typeof storage !== "object" || Array.isArray(storage)
-    || !Array.isArray((storage as { files?: unknown }).files)) {
-    throw new BackupVerificationError("manifest-invalid", "Backup manifest has invalid database or storage metadata");
-  }
-  const files = (storage as { files: readonly unknown[] }).files;
-  if (!Number.isSafeInteger((storage as { fileCount?: unknown }).fileCount)
-    || !Number.isSafeInteger((storage as { totalBytes?: unknown }).totalBytes)
-    || files.some((file: unknown): boolean => {
-      if (file === null || typeof file !== "object" || Array.isArray(file)) return true;
-      const item = file as { path?: unknown; sizeBytes?: unknown; sha256?: unknown };
-      return typeof item.path !== "string" || !manifestPathSafe(item.path)
-        || typeof item.sizeBytes !== "number" || !Number.isSafeInteger(item.sizeBytes) || item.sizeBytes < 0
-        || typeof item.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(item.sha256);
-    })) {
+  return body as Omit<BackupManifest, "manifestSha256">;
+}
+
+function validDatabaseSection(database: unknown): boolean {
+  if (database === null || typeof database !== "object" || Array.isArray(database)) return false;
+  const section = database as { driver?: unknown; schemaSha256?: unknown };
+  return (section.driver === "sqlite" || section.driver === "postgres")
+    && typeof section.schemaSha256 === "string"
+    && /^[a-f0-9]{64}$/.test(section.schemaSha256);
+}
+
+function validStorageSection(storage: unknown): boolean {
+  if (storage === null || typeof storage !== "object" || Array.isArray(storage)) return false;
+  return Array.isArray((storage as { files?: unknown }).files);
+}
+
+function invalidManifestFileEntry(file: unknown): boolean {
+  if (file === null || typeof file !== "object" || Array.isArray(file)) return true;
+  const item = file as { path?: unknown; sizeBytes?: unknown; sha256?: unknown };
+  return typeof item.path !== "string" || !manifestPathSafe(item.path)
+    || typeof item.sizeBytes !== "number" || !Number.isSafeInteger(item.sizeBytes) || item.sizeBytes < 0
+    || typeof item.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(item.sha256);
+}
+
+function assertStorageFileMetadata(storage: { fileCount?: unknown; totalBytes?: unknown; files: readonly unknown[] }): void {
+  if (!Number.isSafeInteger(storage.fileCount)
+    || !Number.isSafeInteger(storage.totalBytes)
+    || storage.files.some(invalidManifestFileEntry)) {
     throw new BackupVerificationError("manifest-invalid", "Backup manifest has invalid storage file metadata");
   }
-  if ((storage as { fileCount: number }).fileCount !== files.length
-    || (storage as { totalBytes: number }).totalBytes !== files.reduce((sum: number, file: unknown): number => sum + (file as { sizeBytes: number }).sizeBytes, 0)) {
+  if (storage.fileCount !== storage.files.length
+    || storage.totalBytes !== storage.files.reduce((sum: number, file: unknown): number => sum + (file as { sizeBytes: number }).sizeBytes, 0)) {
     throw new BackupVerificationError("manifest-invalid", "Backup manifest storage totals do not match its file entries");
   }
+}
+
+function validKeyIdentifier(item: unknown): boolean {
+  if (item === null || typeof item !== "object" || Array.isArray(item)) return false;
+  const identifier = item as { present?: unknown; sha256?: unknown };
+  if (typeof identifier.present !== "boolean") return false;
+  return identifier.sha256 === null || typeof identifier.sha256 === "string" && /^[a-f0-9]{64}$/.test(identifier.sha256);
+}
+
+function validKeyMetadata(keys: unknown, keyNames: readonly string[]): boolean {
+  if (keys === null || typeof keys !== "object" || Array.isArray(keys)) return false;
+  if (typeof (keys as { passwordConfigured?: unknown }).passwordConfigured !== "boolean") return false;
+  return keyNames.every((name): boolean => validKeyIdentifier((keys as Record<string, unknown>)[name]));
+}
+
+function parseManifest(raw: unknown): BackupManifest {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new BackupVerificationError("manifest-invalid", "Backup manifest must be a JSON object");
+  const candidate = raw as Partial<BackupManifest> & { manifestSha256?: unknown };
+  assertManifestIdentity(candidate);
+  const database = candidate.database;
+  const storage = candidate.storage;
+  if (!validDatabaseSection(database) || !validStorageSection(storage)) {
+    throw new BackupVerificationError("manifest-invalid", "Backup manifest has invalid database or storage metadata");
+  }
+  assertStorageFileMetadata(storage as { fileCount?: unknown; totalBytes?: unknown; files: readonly unknown[] });
   const keys = candidate.keys;
   const keyNames = Object.keys(KEY_FILES) as readonly (keyof typeof KEY_FILES)[];
-  const keysValid = keys !== null && typeof keys === "object" && !Array.isArray(keys)
-    && typeof (keys as { passwordConfigured?: unknown }).passwordConfigured === "boolean"
-    && keyNames.every((name): boolean => {
-      const item = (keys as Record<string, unknown>)[name];
-      if (item === null || typeof item !== "object" || Array.isArray(item)) return false;
-      const identifier = item as { present?: unknown; sha256?: unknown };
-      return typeof identifier.present === "boolean"
-        && (identifier.sha256 === null || typeof identifier.sha256 === "string" && /^[a-f0-9]{64}$/.test(identifier.sha256));
-    });
-  if (!keysValid) throw new BackupVerificationError("manifest-invalid", "Backup manifest has invalid key metadata");
+  if (!validKeyMetadata(keys, keyNames)) throw new BackupVerificationError("manifest-invalid", "Backup manifest has invalid key metadata");
   return candidate as BackupManifest;
 }
 
@@ -630,40 +652,49 @@ async function discoverDatabase(root: string, explicit: string | undefined): Pro
   return null;
 }
 
+async function unpackArchiveSource(sourcePath: string): Promise<{ archivePath: string; temporaryRoot: string }> {
+  await assertSafeBackupArchive(sourcePath);
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "terrence-backup-source-"));
+  try {
+    await runBoundedProcess(["tar", "-xf", sourcePath, "-C", temporaryRoot], { timeoutMs: 60_000, maxStdoutBytes: MAX_REHEARSAL_OUTPUT_BYTES });
+  } catch (error) {
+    await rm(temporaryRoot, { recursive: true, force: true });
+    throw new BackupVerificationError("archive-invalid", `Unable to extract backup archive: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return { archivePath: sourcePath, temporaryRoot };
+}
+
+function explicitDatabasePath(source: BackupSourceOptions, sourcePath: string, sourceInfo: Stats): string | undefined {
+  if (source.databasePath !== undefined) return source.databasePath;
+  if (sourceInfo.isFile() && !sourceLooksLikeArchive(sourcePath) && extname(sourcePath).toLowerCase() !== ".json") return sourcePath;
+  return undefined;
+}
+
+async function resolveStoragePath(root: string, storagePath: string | undefined): Promise<string> {
+  const nestedStorage = join(root, "storage");
+  if (storagePath === undefined && await pathExists(nestedStorage)) return nestedStorage;
+  return storagePath === undefined ? root : resolve(storagePath);
+}
+
 async function prepareSource(source: BackupSourceOptions): Promise<PreparedSource> {
   const sourcePath = resolve(source.sourcePath);
   const sourceInfo = await stat(sourcePath).catch((): null => null);
   if (sourceInfo === null) throw new BackupVerificationError("source-missing", "Backup source does not exist");
+  if (!sourceInfo.isDirectory() && !sourceInfo.isFile()) {
+    throw new BackupVerificationError("source-invalid", "Backup source must be a directory, manifest, SQLite file, or tar archive");
+  }
 
   let root = sourceInfo.isDirectory() ? sourcePath : dirname(sourcePath);
   let archivePath: string | null = null;
   let temporaryRoot: string | null = null;
   if (!sourceInfo.isDirectory() && sourceInfo.isFile() && sourceLooksLikeArchive(sourcePath)) {
-    archivePath = sourcePath;
-    await assertSafeBackupArchive(sourcePath);
-    temporaryRoot = await mkdtemp(join(tmpdir(), "terrence-backup-source-"));
-    try {
-      await runBoundedProcess(["tar", "-xf", sourcePath, "-C", temporaryRoot], { timeoutMs: 60_000, maxStdoutBytes: MAX_REHEARSAL_OUTPUT_BYTES });
-    } catch (error) {
-      await rm(temporaryRoot, { recursive: true, force: true });
-      throw new BackupVerificationError("archive-invalid", `Unable to extract backup archive: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    ({ archivePath, temporaryRoot } = await unpackArchiveSource(sourcePath));
     root = temporaryRoot;
-  } else if (!sourceInfo.isDirectory() && sourceInfo.isFile() && extname(sourcePath).toLowerCase() === ".json") {
-    root = dirname(sourcePath);
-  } else if (!sourceInfo.isDirectory() && sourceInfo.isFile() && [".db", ".sqlite"].includes(extname(sourcePath).toLowerCase())) {
-    root = dirname(sourcePath);
-  } else if (!sourceInfo.isDirectory()) {
-    throw new BackupVerificationError("source-invalid", "Backup source must be a directory, manifest, SQLite file, or tar archive");
   }
 
-  const database = await discoverDatabase(
-    root,
-    source.databasePath ?? (sourceInfo.isFile() && !sourceLooksLikeArchive(sourcePath) && extname(sourcePath).toLowerCase() !== ".json" ? sourcePath : undefined),
-  );
+  const database = await discoverDatabase(root, explicitDatabasePath(source, sourcePath, sourceInfo));
   const manifest = await discoverManifest(root);
-  const nestedStorage = join(root, "storage");
-  const storage = source.storagePath === undefined && (await pathExists(nestedStorage)) ? nestedStorage : source.storagePath === undefined ? root : resolve(source.storagePath);
+  const storage = await resolveStoragePath(root, source.storagePath);
   const cleanup = async (): Promise<void> => {
     if (temporaryRoot !== null) await rm(temporaryRoot, { recursive: true, force: true });
   };
