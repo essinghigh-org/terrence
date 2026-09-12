@@ -380,6 +380,170 @@ function resolveOidcSecret(
   return { clientSecret };
 }
 
+function checkLdapScalars(
+  attrs: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { ok: true } | { error: unknown } {
+  for (const key of ["enabled", "link-by-email"] as const) {
+    if (attrs[key] !== undefined && typeof attrs[key] !== "boolean") {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a boolean` }] } };
+    }
+  }
+  for (const key of ["host", "bind-dn", "bind-password", "base-dn", "user-filter", "attr-username", "attr-email", "attr-display-name"] as const) {
+    if (attrs[key] !== undefined && attrs[key] !== null && typeof attrs[key] !== "string") {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a string or null` }] } };
+    }
+  }
+  return { ok: true };
+}
+
+function resolveLdapConnection(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { port: number; encryption: string } | { error: unknown } {
+  const port = attrs["port"] === undefined ? current["port"] : attrs["port"];
+  if (!(typeof port === "number" && Number.isInteger(port) && port > 0 && port <= 65535)) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "port must be an integer between 1 and 65535" }] } };
+  }
+  const encryption = attrs["encryption"] === undefined ? current["encryption"] : attrs["encryption"];
+  if (encryption !== "plain" && encryption !== "starttls" && encryption !== "ldaps") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "encryption must be one of plain, starttls, ldaps" }] } };
+  }
+  return { port, encryption };
+}
+
+function resolveLdapDirectory(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { enabled: boolean; host: unknown; baseDn: unknown; attrUsername: string; attrEmail: string } | { error: unknown } {
+  const enabled = typeof attrs["enabled"] === "boolean" ? attrs["enabled"] : current["enabled"] === true;
+  const host = attrs["host"] === null ? null : typeof attrs["host"] === "string" ? attrs["host"].trim() : current["host"];
+  const baseDn = attrs["base-dn"] === null ? null : typeof attrs["base-dn"] === "string" ? attrs["base-dn"].trim() : current["base-dn"];
+  // A blank or absent value falls back to the attribute's default; the
+  // helper guarantees the result is never an empty string.
+  const attrFallback = (key: "attr-username" | "attr-email", fallback: string): string => {
+    const input = attrs[key];
+    const stored = current[key];
+    return typeof input === "string"
+      ? input.trim() || fallback
+      : input === null ? fallback
+        : typeof stored === "string" && stored.trim() !== "" ? stored.trim() : fallback;
+  };
+  const attrUsername = attrFallback("attr-username", "uid");
+  const attrEmail = attrFallback("attr-email", "mail");
+  if (enabled && (typeof host !== "string" || host === "" || typeof baseDn !== "string" || baseDn === "")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "host and base-dn are required when LDAP is enabled" }] } };
+  }
+  return { enabled, host, baseDn, attrUsername, attrEmail };
+}
+
+function resolveLdapBind(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  enabled: boolean,
+  encryption: string,
+  set: ParamCtx["set"],
+): { bindDn: unknown; bindDnProvided: boolean } | { error: unknown } {
+  // A bind DN without a password performs an unauthenticated (anonymous)
+  // bind per RFC 4511 §4.2; reject the misconfiguration up front rather
+  // than silently downgrading at login time.
+  // A blank or whitespace-only bind DN means "no service account"; storing
+  // it as a string would make authenticateLdap require a bind password
+  // forever, and a padded one would be validated trimmed but persisted raw.
+  const bindDnProvided = attrs["bind-dn"] !== undefined;
+  const bindDn = typeof attrs["bind-dn"] === "string"
+    ? (attrs["bind-dn"].trim() === "" ? null : attrs["bind-dn"].trim())
+    : attrs["bind-dn"] === null ? null : current["bind-dn"];
+  const bindPassword = attrs["bind-password"] === undefined ? current["bind-password"] : attrs["bind-password"];
+  if (typeof bindDn === "string" && bindDn !== "" && (typeof bindPassword !== "string" || bindPassword === "")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "bind-password is required when bind-dn is set" }] } };
+  }
+  // The bind password travels over the wire on every bind: never allow it
+  // over an unencrypted connection. The ldap settings default ("ldaps")
+  // keeps new configurations secure by construction.
+  if (enabled && encryption === "plain" && typeof bindDn === "string" && bindDn !== ""
+    && typeof bindPassword === "string" && bindPassword !== "") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "bind credentials cannot be sent over plaintext LDAP; use starttls or ldaps" }] } };
+  }
+  return { bindDn, bindDnProvided };
+}
+
+function resolveLdapUserFilter(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { userFilter: string } | { error: unknown } {
+  const userFilter = typeof attrs["user-filter"] === "string" && attrs["user-filter"] !== ""
+    ? attrs["user-filter"]
+    : typeof current["user-filter"] === "string" && current["user-filter"] !== ""
+      ? current["user-filter"]
+      : "(uid={{username}})";
+  if (!userFilter.includes("{{username}}")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "user-filter must contain the {{username}} placeholder" }] } };
+  }
+  return { userFilter };
+}
+
+async function checkLdapLockout(
+  enabled: boolean,
+  set: ParamCtx["set"],
+): Promise<{ ok: true } | { error: unknown }> {
+  const [samlEnabledForSso, oidcEnabledForSso] = await Promise.all([
+    currentSamlSettings().then((settings): boolean => settings.enabled),
+    getSettings("oidc").then((settings): boolean => settings["enabled"] === true),
+  ]);
+  const authError = await authLockoutResponse(set, {
+    saml: samlEnabledForSso,
+    oidc: oidcEnabledForSso,
+    ldap: enabled,
+  });
+  if (authError !== null) return { error: authError };
+  return { ok: true };
+}
+
+async function persistLdapSettings(
+  attrs: Record<string, unknown>,
+  resolved: Readonly<{
+    encryption: string;
+    attrUsername: string;
+    attrEmail: string;
+    host: unknown;
+    baseDn: unknown;
+    bindDn: unknown;
+    bindDnProvided: boolean;
+    userFilter: string;
+  }>,
+): Promise<unknown> {
+  const updated = await updateSettings("ldap", {
+    ...attrs,
+    encryption: resolved.encryption,
+    "attr-username": resolved.attrUsername,
+    "attr-email": resolved.attrEmail,
+    ...(attrs["host"] === undefined ? {} : { host: resolved.host }),
+    ...(attrs["base-dn"] === undefined ? {} : { "base-dn": resolved.baseDn }),
+    // Clearing the bind DN removes the service account: drop the stored
+    // bind password with it so no orphaned secret lingers.
+    ...(resolved.bindDnProvided ? { "bind-dn": resolved.bindDn, ...(resolved.bindDn === null ? { "bind-password": null } : {}) } : {}),
+    "user-filter": resolved.userFilter,
+  });
+  const { "bind-password": updatedBindPassword, ...safeUpdated } = updated;
+  invalidatePingSsoCache();
+  return settingResource("ldap-settings", {
+    ...safeUpdated,
+    "bind-password-set": typeof updatedBindPassword === "string" && updatedBindPassword !== "",
+  });
+}
+
 export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .use(authPlugin)
   .get("/api/v2/admin/logging-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -599,106 +763,27 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const current = await getSettingsFresh("ldap", false);
-    for (const key of ["enabled", "link-by-email"] as const) {
-      if (attrs[key] !== undefined && typeof attrs[key] !== "boolean") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a boolean` }] };
-      }
-    }
-    for (const key of ["host", "bind-dn", "bind-password", "base-dn", "user-filter", "attr-username", "attr-email", "attr-display-name"] as const) {
-      if (attrs[key] !== undefined && attrs[key] !== null && typeof attrs[key] !== "string") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a string or null` }] };
-      }
-    }
-    const port = attrs["port"] === undefined ? current["port"] : attrs["port"];
-    if (!(typeof port === "number" && Number.isInteger(port) && port > 0 && port <= 65535)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "port must be an integer between 1 and 65535" }] };
-    }
-    const encryption = attrs["encryption"] === undefined ? current["encryption"] : attrs["encryption"];
-    if (encryption !== "plain" && encryption !== "starttls" && encryption !== "ldaps") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "encryption must be one of plain, starttls, ldaps" }] };
-    }
-    const enabled = typeof attrs["enabled"] === "boolean" ? attrs["enabled"] : current["enabled"] === true;
-    const host = attrs["host"] === null ? null : typeof attrs["host"] === "string" ? attrs["host"].trim() : current["host"];
-    const baseDn = attrs["base-dn"] === null ? null : typeof attrs["base-dn"] === "string" ? attrs["base-dn"].trim() : current["base-dn"];
-    // A blank or absent value falls back to the attribute's default; the
-    // helper guarantees the result is never an empty string.
-    const attrFallback = (key: "attr-username" | "attr-email", fallback: string): string => {
-      const input = attrs[key];
-      const stored = current[key];
-      return typeof input === "string"
-        ? input.trim() || fallback
-        : input === null ? fallback
-          : typeof stored === "string" && stored.trim() !== "" ? stored.trim() : fallback;
-    };
-    const attrUsername = attrFallback("attr-username", "uid");
-    const attrEmail = attrFallback("attr-email", "mail");
-    if (enabled && (typeof host !== "string" || host === "" || typeof baseDn !== "string" || baseDn === "")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "host and base-dn are required when LDAP is enabled" }] };
-    }
-    // A bind DN without a password performs an unauthenticated (anonymous)
-    // bind per RFC 4511 §4.2; reject the misconfiguration up front rather
-    // than silently downgrading at login time.
-    // A blank or whitespace-only bind DN means "no service account"; storing
-    // it as a string would make authenticateLdap require a bind password
-    // forever, and a padded one would be validated trimmed but persisted raw.
-    const bindDnProvided = attrs["bind-dn"] !== undefined;
-    const bindDn = typeof attrs["bind-dn"] === "string"
-      ? (attrs["bind-dn"].trim() === "" ? null : attrs["bind-dn"].trim())
-      : attrs["bind-dn"] === null ? null : current["bind-dn"];
-    const bindPassword = attrs["bind-password"] === undefined ? current["bind-password"] : attrs["bind-password"];
-    if (typeof bindDn === "string" && bindDn !== "" && (typeof bindPassword !== "string" || bindPassword === "")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "bind-password is required when bind-dn is set" }] };
-    }
-    // The bind password travels over the wire on every bind: never allow it
-    // over an unencrypted connection. The ldap settings default ("ldaps")
-    // keeps new configurations secure by construction.
-    if (enabled && encryption === "plain" && typeof bindDn === "string" && bindDn !== ""
-      && typeof bindPassword === "string" && bindPassword !== "") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "bind credentials cannot be sent over plaintext LDAP; use starttls or ldaps" }] };
-    }
-    const userFilter = typeof attrs["user-filter"] === "string" && attrs["user-filter"] !== ""
-      ? attrs["user-filter"]
-      : typeof current["user-filter"] === "string" && current["user-filter"] !== ""
-        ? current["user-filter"]
-        : "(uid={{username}})";
-    if (!userFilter.includes("{{username}}")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "user-filter must contain the {{username}} placeholder" }] };
-    }
-    const [samlEnabledForSso, oidcEnabledForSso] = await Promise.all([
-      currentSamlSettings().then((settings): boolean => settings.enabled),
-      getSettings("oidc").then((settings): boolean => settings["enabled"] === true),
-    ]);
-    const authError = await authLockoutResponse(set, {
-      saml: samlEnabledForSso,
-      oidc: oidcEnabledForSso,
-      ldap: enabled === true,
-    });
-    if (authError !== null) return authError;
-    const updated = await updateSettings("ldap", {
-      ...attrs,
-      encryption,
-      "attr-username": attrUsername,
-      "attr-email": attrEmail,
-      ...(attrs["host"] === undefined ? {} : { host }),
-      ...(attrs["base-dn"] === undefined ? {} : { "base-dn": baseDn }),
-      // Clearing the bind DN removes the service account: drop the stored
-      // bind password with it so no orphaned secret lingers.
-      ...(bindDnProvided ? { "bind-dn": bindDn, ...(bindDn === null ? { "bind-password": null } : {}) } : {}),
-      "user-filter": userFilter,
-    });
-    const { "bind-password": updatedBindPassword, ...safeUpdated } = updated;
-    invalidatePingSsoCache();
-    return settingResource("ldap-settings", {
-      ...safeUpdated,
-      "bind-password-set": typeof updatedBindPassword === "string" && updatedBindPassword !== "",
+    const scalars = checkLdapScalars(attrs, set);
+    if ("error" in scalars) return scalars.error;
+    const connection = resolveLdapConnection(attrs, current, set);
+    if ("error" in connection) return connection.error;
+    const directory = resolveLdapDirectory(attrs, current, set);
+    if ("error" in directory) return directory.error;
+    const bind = resolveLdapBind(attrs, current, directory.enabled, connection.encryption, set);
+    if ("error" in bind) return bind.error;
+    const filter = resolveLdapUserFilter(attrs, current, set);
+    if ("error" in filter) return filter.error;
+    const lockout = await checkLdapLockout(directory.enabled, set);
+    if ("error" in lockout) return lockout.error;
+    return persistLdapSettings(attrs, {
+      encryption: connection.encryption,
+      attrUsername: directory.attrUsername,
+      attrEmail: directory.attrEmail,
+      host: directory.host,
+      baseDn: directory.baseDn,
+      bindDn: bind.bindDn,
+      bindDnProvided: bind.bindDnProvided,
+      userFilter: filter.userFilter,
     });
     });
   });
