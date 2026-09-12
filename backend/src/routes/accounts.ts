@@ -727,6 +727,55 @@ async function mfaChallengeResponse(
   return null;
 }
 
+function parseMfaChallengeRequest(
+  body: unknown,
+  set: SetObj,
+): { challengeToken: string; code: string; browserSession: boolean } | { error: unknown } {
+  let payload: DataPayload | undefined;
+  if (typeof body === "string") {
+    try {
+      payload = JSON.parse(body) as DataPayload;
+    } catch {
+      payload = undefined;
+    }
+  } else if (body !== null && typeof body === "object") {
+    payload = body as DataPayload;
+  }
+  const attrs = payload?.data?.attributes ?? {};
+  const challengeToken = typeof attrs["challenge-token"] === "string" ? attrs["challenge-token"] : "";
+  const code = typeof attrs["code"] === "string" ? attrs["code"] : "";
+  const browserSession = attrs["browser-session"] === true;
+
+  if (challengeToken === "" || code === "") {
+    (set as { status: number }).status = 400;
+    return { error: { errors: [{ status: "400", title: "Bad Request", detail: "Missing MFA challenge token or code" }] } };
+  }
+  return { challengeToken, code, browserSession };
+}
+
+async function validateMfaChallenge(
+  challengeToken: string,
+  code: string,
+  set: SetObj,
+): Promise<{ userId: string } | { error: unknown }> {
+  const challenge = await consumeMfaChallenge(challengeToken);
+  if (challenge === null) {
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "MFA challenge has expired or is invalid" }] } };
+  }
+
+  const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, challenge.userId) });
+  if (mfa === undefined || mfa.enabled !== true) {
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] } };
+  }
+  if (!(await acceptTotpCode(challenge.userId, mfa, code))) {
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] } };
+  }
+  return { userId: challenge.userId };
+}
+
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
   .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
@@ -844,49 +893,19 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     return issueLoginSession(user, browserSession, set, request, server);
   })
   .post("/api/v2/users/login/mfa", async ({ body, request, set, server }: ReqCtx): Promise<unknown> => {
-    let payload: DataPayload | undefined;
-    if (typeof body === "string") {
-      try {
-        payload = JSON.parse(body) as DataPayload;
-      } catch {
-        payload = undefined;
-      }
-    } else if (body !== null && typeof body === "object") {
-      payload = body;
-    }
-    const attrs = payload?.data?.attributes ?? {};
-    const challengeToken = typeof attrs["challenge-token"] === "string" ? attrs["challenge-token"] : "";
-    const code = typeof attrs["code"] === "string" ? attrs["code"] : "";
-    const browserSession = attrs["browser-session"] === true;
+    const parsed = parseMfaChallengeRequest(body, set);
+    if ("error" in parsed) return parsed.error;
 
-    if (challengeToken === "" || code === "") {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Missing MFA challenge token or code" }] };
-    }
+    const validated = await validateMfaChallenge(parsed.challengeToken, parsed.code, set);
+    if ("error" in validated) return validated.error;
 
-    const challenge = await consumeMfaChallenge(challengeToken);
-    if (challenge === null) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "MFA challenge has expired or is invalid" }] };
-    }
-
-    const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, challenge.userId) });
-    if (mfa === undefined || mfa.enabled !== true) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
-    }
-    if (!(await acceptTotpCode(challenge.userId, mfa, code))) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
-    }
-
-    const user = await db.query.users.findFirst({ where: eq(users.id, challenge.userId) });
+    const user = await db.query.users.findFirst({ where: eq(users.id, validated.userId) });
     if (user === undefined || isUserLoginBlocked(user)) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Account not found" }] };
     }
 
-    return issueLoginSession(user, browserSession, set, request, server, true);
+    return issueLoginSession(user, parsed.browserSession, set, request, server, true);
   })
   .post("/api/v2/users/refresh", async ({ request, server, set }: ReqCtx): Promise<unknown> => {
     const candidates = refreshCookieCandidates(request);
