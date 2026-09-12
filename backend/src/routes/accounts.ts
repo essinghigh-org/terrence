@@ -1051,6 +1051,63 @@ async function createLocalSignupUser(
   }
 }
 
+type AccountChanges = { username?: string; email?: string | null; emailVerifiedAt?: number | null; theme?: string };
+
+function parseUsernameChange(
+  attrs: Attrs,
+  changes: AccountChanges,
+  set: SetObj,
+): unknown | null {
+  if (!Object.hasOwn(attrs, "username")) return null;
+  if (typeof attrs["username"] !== "string" || attrs["username"].trim() === "") {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username cannot be empty" }] };
+  }
+  const normalizedUsername = normalizeUsername(attrs["username"]);
+  if (normalizedUsername === null) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username contains invalid characters" }] };
+  }
+  changes.username = normalizedUsername;
+  return null;
+}
+
+function parseEmailChange(
+  attrs: Attrs,
+  currentEmail: string | null,
+  changes: AccountChanges,
+  set: SetObj,
+): unknown | null {
+  if (!Object.hasOwn(attrs, "email")) return null;
+  const emailVal = attrs["email"];
+  if (emailVal !== null && (typeof emailVal !== "string" || emailVal.trim() === "")) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Email must be a string or null" }] };
+  }
+  const normalizedEmail = emailVal === null ? null : normalizeEmail(emailVal.trim());
+  if (emailVal !== null && normalizedEmail === null) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email address is required" }] };
+  }
+  changes.email = normalizedEmail;
+  if (normalizedEmail !== currentEmail) changes.emailVerifiedAt = null;
+  return null;
+}
+
+function parseThemeChange(
+  attrs: Attrs,
+  changes: AccountChanges,
+  set: SetObj,
+): unknown | null {
+  if (!Object.hasOwn(attrs, "theme")) return null;
+  if (typeof attrs["theme"] !== "string" || attrs["theme"].length > 64 || !THEME_ID_PATTERN.test(attrs["theme"])) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Theme must be a valid theme id" }] };
+  }
+  changes.theme = attrs["theme"];
+  return null;
+}
+
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
   .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
@@ -1358,40 +1415,13 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
 
-    const changes: { username?: string; email?: string | null; emailVerifiedAt?: number | null; theme?: string } = {};
-    if (Object.hasOwn(attrs, "username")) {
-      if (typeof attrs["username"] !== "string" || attrs["username"].trim() === "") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username cannot be empty" }] };
-      }
-      const normalizedUsername = normalizeUsername(attrs["username"]);
-      if (normalizedUsername === null) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username contains invalid characters" }] };
-      }
-      changes.username = normalizedUsername;
-    }
-    if (Object.hasOwn(attrs, "email")) {
-      const emailVal = attrs["email"];
-      if (emailVal !== null && (typeof emailVal !== "string" || emailVal.trim() === "")) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Email must be a string or null" }] };
-      }
-      const normalizedEmail = emailVal === null ? null : normalizeEmail(emailVal.trim());
-      if (emailVal !== null && normalizedEmail === null) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email address is required" }] };
-      }
-      changes.email = normalizedEmail;
-      if (normalizedEmail !== user.email) changes.emailVerifiedAt = null;
-    }
-    if (Object.hasOwn(attrs, "theme")) {
-      if (typeof attrs["theme"] !== "string" || attrs["theme"].length > 64 || !THEME_ID_PATTERN.test(attrs["theme"])) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Theme must be a valid theme id" }] };
-      }
-      changes.theme = attrs["theme"];
-    }
+    const changes: AccountChanges = {};
+    const usernameError = parseUsernameChange(attrs, changes, set);
+    if (usernameError !== null) return usernameError;
+    const emailError = parseEmailChange(attrs, user.email, changes, set);
+    if (emailError !== null) return emailError;
+    const themeError = parseThemeChange(attrs, changes, set);
+    if (themeError !== null) return themeError;
     if (Object.keys(changes).length === 0) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No account fields provided" }] };
