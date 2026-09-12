@@ -188,6 +188,72 @@ async function deliverSmtpTest(
   return { sent: true };
 }
 
+type TwilioVerifyConfig = Readonly<{
+  testNumber: string;
+  accountSid: string;
+  authToken: string;
+  fromNumber: string;
+}>;
+
+function twilioVerifyTestNumber(body: unknown): string {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  return typeof attrs["test-number"] === "string" ? attrs["test-number"].trim() : "";
+}
+
+function resolveTwilioVerifyConfig(
+  body: unknown,
+  settings: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { config: TwilioVerifyConfig } | { error: unknown } {
+  const testNumber = twilioVerifyTestNumber(body);
+  const accountSid = typeof settings["account-sid"] === "string" ? settings["account-sid"] : "";
+  const authToken = typeof settings["auth-token"] === "string" ? settings["auth-token"] : "";
+  const fromNumber = typeof settings["from-number"] === "string" ? settings["from-number"] : "";
+  if (settings["enabled"] !== true || testNumber === "" || accountSid === "" || authToken === "" || fromNumber === "") {
+    (set as { status: number }).status = 400;
+    return { error: { errors: [{ status: "400", title: "Bad Request", detail: "Twilio must be enabled and fully configured, and test-number is required" }] } };
+  }
+  return { config: { testNumber, accountSid, authToken, fromNumber } };
+}
+
+async function sendTwilioVerify(
+  config: TwilioVerifyConfig,
+  set: ParamCtx["set"],
+): Promise<{ response: Response } | { error: unknown }> {
+  const form = new URLSearchParams({ Body: "Terrence verification message", To: config.testNumber, From: config.fromNumber });
+  try {
+    const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.accountSid)}/Messages.json`, {
+      method: "POST",
+      headers: { Authorization: `Basic ${btoa(`${config.accountSid}:${config.authToken}`)}`, "Content-Type": "application/x-www-form-urlencoded" },
+      body: form,
+      signal: AbortSignal.timeout(10_000),
+    });
+    return { response };
+  } catch {
+    (set as { status: number }).status = 503;
+    return { error: { errors: [{ status: "503", title: "Service Unavailable", detail: "Twilio verification could not reach the provider" }] } };
+  }
+}
+
+async function checkTwilioVerifyResult(
+  response: Response,
+  set: ParamCtx["set"],
+): Promise<{ ok: true } | { error: unknown }> {
+  const responseText = await response.text().catch((): string => "");
+  if (response.ok) return { ok: true };
+  let detail = "Twilio rejected the verification message";
+  try {
+    const parsed = JSON.parse(responseText) as { message?: unknown };
+    if (typeof parsed.message === "string" && parsed.message !== "") detail = parsed.message;
+  } catch {
+    // Keep the stable API error when Twilio does not return JSON.
+  }
+  (set as { status: number }).status = 400;
+  return { error: { errors: [{ status: "400", title: "Bad Request", detail }] } };
+}
+
 export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .use(authPlugin)
   .get("/api/v2/admin/logging-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -276,42 +342,12 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .post("/api/v2/admin/twilio-settings/verify", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
     const settings = await getSettings("twilio");
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const testNumber = typeof attrs["test-number"] === "string" ? attrs["test-number"].trim() : "";
-    const accountSid = typeof settings["account-sid"] === "string" ? settings["account-sid"] : "";
-    const authToken = typeof settings["auth-token"] === "string" ? settings["auth-token"] : "";
-    const fromNumber = typeof settings["from-number"] === "string" ? settings["from-number"] : "";
-    if (settings["enabled"] !== true || testNumber === "" || accountSid === "" || authToken === "" || fromNumber === "") {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Twilio must be enabled and fully configured, and test-number is required" }] };
-    }
-    const form = new URLSearchParams({ Body: "Terrence verification message", To: testNumber, From: fromNumber });
-    let response: Response;
-    try {
-      response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(accountSid)}/Messages.json`, {
-        method: "POST",
-        headers: { Authorization: `Basic ${btoa(`${accountSid}:${authToken}`)}`, "Content-Type": "application/x-www-form-urlencoded" },
-        body: form,
-        signal: AbortSignal.timeout(10_000),
-      });
-    } catch {
-      (set as { status: number }).status = 503;
-      return { errors: [{ status: "503", title: "Service Unavailable", detail: "Twilio verification could not reach the provider" }] };
-    }
-    const responseText = await response.text().catch((): string => "");
-    if (!response.ok) {
-      let detail = "Twilio rejected the verification message";
-      try {
-        const parsed = JSON.parse(responseText) as { message?: unknown };
-        if (typeof parsed.message === "string" && parsed.message !== "") detail = parsed.message;
-      } catch {
-        // Keep the stable API error when Twilio does not return JSON.
-      }
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail }] };
-    }
+    const resolved = resolveTwilioVerifyConfig(body, settings, set);
+    if ("error" in resolved) return resolved.error;
+    const sent = await sendTwilioVerify(resolved.config, set);
+    if ("error" in sent) return sent.error;
+    const checked = await checkTwilioVerifyResult(sent.response, set);
+    if ("error" in checked) return checked.error;
     (set as { status: number }).status = 200;
     return {};
   })
