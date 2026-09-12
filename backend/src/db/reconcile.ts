@@ -102,6 +102,44 @@ export type SparseJournalPlanEntry = {
  * migrator's job for fully-absent migrations, and for replays a plain rerun
  * matches the old behavior.
  */
+function planOneStatement(
+  sql: string,
+  // Same rule limitation as sparseJournalReconcilePlan below.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  facts: SparseJournalFacts,
+): PlannedMigrationStatement {
+  // DROP TABLE is the one destructive migration emitted for a retired
+  // table. It is safe to skip when an older repair already removed it,
+  // while an existing table must be dropped before the journal advances.
+  const dropTable = DROP_TABLE_RE.exec(sql);
+  if (dropTable?.[1] !== undefined) {
+    const present = facts.tables.has(dropTable[1]);
+    return { sql, skip: !present };
+  }
+  // ADD COLUMN: skip exactly when the live column already exists.
+  const addColumn = ADD_COLUMN_RE.exec(sql);
+  if (addColumn !== null) {
+    const table = addColumn[1];
+    const column = addColumn[2];
+    const present = table !== undefined && column !== undefined && facts.columns.has(`${table}.${column}`);
+    return { sql, skip: present };
+  }
+  // CREATE TABLE: skip when the table already exists.
+  const createTable = /CREATE TABLE (?:IF NOT EXISTS )?[`"`]?([\w-]+)[`"`]?\s*\(/.exec(sql);
+  if (createTable?.[1] !== undefined) {
+    const present = facts.tables.has(createTable[1]);
+    return { sql, skip: present };
+  }
+  // CREATE [UNIQUE] INDEX: skip when the named index already exists.
+  const createIndex = /CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?[`"`]?([\w-]+)[`"`]?\s+ON/.exec(sql);
+  if (createIndex?.[1] !== undefined) {
+    const present = facts.indexes.has(createIndex[1]);
+    return { sql, skip: present };
+  }
+  // Anything else: cannot be classified, must run as-is.
+  return { sql, skip: false };
+}
+
 export function sparseJournalReconcilePlan(
   bundledFolder: string,
   entries: readonly MigrationJournalEntry[],
@@ -136,44 +174,7 @@ export function sparseJournalReconcilePlan(
       .split("--> statement-breakpoint")
       .map((sql: string): string => sql.trim())
       .filter((sql: string): boolean => sql !== "");
-    const planned: PlannedMigrationStatement[] = [];
-
-    for (const sql of statements) {
-      // DROP TABLE is the one destructive migration emitted for a retired
-      // table. It is safe to skip when an older repair already removed it,
-      // while an existing table must be dropped before the journal advances.
-      const dropTable = DROP_TABLE_RE.exec(sql);
-      if (dropTable?.[1] !== undefined) {
-        const present = facts.tables.has(dropTable[1]);
-        planned.push({ sql, skip: !present });
-        continue;
-      }
-      // ADD COLUMN: skip exactly when the live column already exists.
-      const addColumn = ADD_COLUMN_RE.exec(sql);
-      if (addColumn !== null) {
-        const table = addColumn[1];
-        const column = addColumn[2];
-        const present = table !== undefined && column !== undefined && facts.columns.has(`${table}.${column}`);
-        planned.push({ sql, skip: present });
-        continue;
-      }
-      // CREATE TABLE: skip when the table already exists.
-      const createTable = /CREATE TABLE (?:IF NOT EXISTS )?[`"`]?([\w-]+)[`"`]?\s*\(/.exec(sql);
-      if (createTable?.[1] !== undefined) {
-        const present = facts.tables.has(createTable[1]);
-        planned.push({ sql, skip: present });
-        continue;
-      }
-      // CREATE [UNIQUE] INDEX: skip when the named index already exists.
-      const createIndex = /CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?[`"`]?([\w-]+)[`"`]?\s+ON/.exec(sql);
-      if (createIndex?.[1] !== undefined) {
-        const present = facts.indexes.has(createIndex[1]);
-        planned.push({ sql, skip: present });
-        continue;
-      }
-      // Anything else: cannot be classified, must run as-is.
-      planned.push({ sql, skip: false });
-    }
+    const planned = statements.map((sql): PlannedMigrationStatement => planOneStatement(sql, facts));
 
     // Every replayable entry is planned — including fully-absent ones, whose
     // statements run exactly as drizzle would have run them. Stamps advance
