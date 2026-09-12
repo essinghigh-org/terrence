@@ -22,6 +22,90 @@ function parseDocDetail(value: unknown): DocDetail | null {
   return { ...summary, markdown };
 }
 
+function handleDocContentClick(event: React.SyntheticEvent, navigate: (path: string) => void): void {
+  // Doc-to-doc links are relative ("runs" or "./runs"); route
+  // them through the SPA instead of a full page reload.
+  const target = event.target as HTMLElement | null;
+  const anchor = target?.closest("a");
+  const href = anchor?.getAttribute("href");
+  if (anchor === null || anchor === undefined || href === null || href === undefined) return;
+  // Only bare-relative and docs-prefixed links are doc links.
+  // Links with a scheme (https:, mailto:) and fragment links
+  // keep their default behavior.
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href) || href.startsWith("#")) return;
+  event.preventDefault();
+  const targetSlug = href.replace(/^\.\//, "").replace(/^\/app\/docs\//, "");
+  navigate(`/app/docs/${encodeURIComponent(targetSlug)}`);
+}
+
+function DocNav({ previous, next }: Readonly<{
+  previous: DocSummary | undefined;
+  next: DocSummary | undefined;
+}>): React.JSX.Element | null {
+  if (previous === undefined && next === undefined) return null;
+  return (
+    <nav
+      aria-label="Document navigation"
+      className="mt-10 grid gap-3 border-t border-border pt-6 sm:grid-cols-2"
+    >
+      {previous !== undefined ? (
+        <Link
+          to={`/app/docs/${encodeURIComponent(previous.slug)}`}
+          className="group rounded-lg border border-border p-4 outline-none transition-colors hover:border-primary/40 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <ArrowLeft aria-hidden="true" className="size-3.5" />
+            Previous
+          </div>
+          <div className="mt-1 truncate text-sm font-medium text-foreground">{previous.title}</div>
+        </Link>
+      ) : (
+        <div className="hidden sm:block" aria-hidden="true" />
+      )}
+      {next !== undefined ? (
+        <Link
+          to={`/app/docs/${encodeURIComponent(next.slug)}`}
+          className="group rounded-lg border border-border p-4 text-right outline-none transition-colors hover:border-primary/40 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <div className="flex items-center justify-end gap-1.5 text-xs font-medium text-muted-foreground">
+            Next
+            <ArrowRight aria-hidden="true" className="size-3.5" />
+          </div>
+          <div className="mt-1 truncate text-sm font-medium text-foreground">{next.title}</div>
+        </Link>
+      ) : null}
+    </nav>
+  );
+}
+
+function DocArticle({ selected, showIntro, previous, next, navigate }: Readonly<{
+  selected: DocDetail;
+  showIntro: boolean;
+  previous: DocSummary | undefined;
+  next: DocSummary | undefined;
+  navigate: (path: string) => void;
+}>): React.JSX.Element {
+  return (
+    <>
+      {showIntro && (
+        <aside className="flex items-center gap-4 rounded-lg border bg-accent/30 px-5 py-3">
+          <Terrence pose="guide" detail="small" className="w-24 shrink-0" />
+          <div><h2 className="font-heading font-semibold">A good place to start</h2><p className="mt-1 text-sm text-muted-foreground">Get to know Terrence, then connect your first workspace. Follow the guides in the sidebar at your own pace.</p></div>
+        </aside>
+      )}
+      {/* A typographic measure, not a competing page width: prose stops
+          being readable much past ~80 characters a line. */}
+      <div
+        className="max-w-[80ch]"
+        onClick={(event): void => { handleDocContentClick(event, navigate); }}
+      >
+        <MarkdownContent markdown={selected.markdown} />
+      </div>
+      <DocNav previous={previous} next={next} />
+    </>
+  );
+}
+
 export function Docs(): React.JSX.Element {
   const navigate = useNavigate();
   const { slug } = useParams<{ slug: string }>();
@@ -102,69 +186,13 @@ export function Docs(): React.JSX.Element {
       {selected === undefined ? (
         <div className="flex justify-center py-16"><Spinner className="size-6" /></div>
       ) : (
-        <>
-          {selectedSlug === index[0]?.slug && (
-            <aside className="flex items-center gap-4 rounded-lg border bg-accent/30 px-5 py-3">
-              <Terrence pose="guide" detail="small" className="w-24 shrink-0" />
-              <div><h2 className="font-heading font-semibold">A good place to start</h2><p className="mt-1 text-sm text-muted-foreground">Get to know Terrence, then connect your first workspace. Follow the guides in the sidebar at your own pace.</p></div>
-            </aside>
-          )}
-          {/* A typographic measure, not a competing page width: prose stops
-              being readable much past ~80 characters a line. */}
-          <div
-            className="max-w-[80ch]"
-            onClick={(event): void => {
-              // Doc-to-doc links are relative ("runs" or "./runs"); route
-              // them through the SPA instead of a full page reload.
-              const target = event.target as HTMLElement | null;
-              const anchor = target?.closest("a");
-              const href = anchor?.getAttribute("href");
-              if (anchor === null || anchor === undefined || href === null || href === undefined) return;
-              // Only bare-relative and docs-prefixed links are doc links.
-              // Links with a scheme (https:, mailto:) and fragment links
-              // keep their default behavior.
-              if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href) || href.startsWith("#")) return;
-              event.preventDefault();
-              const targetSlug = href.replace(/^\.\//, "").replace(/^\/app\/docs\//, "");
-              void navigate(`/app/docs/${encodeURIComponent(targetSlug)}`);
-            }}
-          >
-            <MarkdownContent markdown={selected.markdown} />
-          </div>
-          {(previous !== undefined || next !== undefined) && (
-            <nav
-              aria-label="Document navigation"
-              className="mt-10 grid gap-3 border-t border-border pt-6 sm:grid-cols-2"
-            >
-              {previous !== undefined ? (
-                <Link
-                  to={`/app/docs/${encodeURIComponent(previous.slug)}`}
-                  className="group rounded-lg border border-border p-4 outline-none transition-colors hover:border-primary/40 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                    <ArrowLeft aria-hidden="true" className="size-3.5" />
-                    Previous
-                  </div>
-                  <div className="mt-1 truncate text-sm font-medium text-foreground">{previous.title}</div>
-                </Link>
-              ) : (
-                <div className="hidden sm:block" aria-hidden="true" />
-              )}
-              {next !== undefined ? (
-                <Link
-                  to={`/app/docs/${encodeURIComponent(next.slug)}`}
-                  className="group rounded-lg border border-border p-4 text-right outline-none transition-colors hover:border-primary/40 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <div className="flex items-center justify-end gap-1.5 text-xs font-medium text-muted-foreground">
-                    Next
-                    <ArrowRight aria-hidden="true" className="size-3.5" />
-                  </div>
-                  <div className="mt-1 truncate text-sm font-medium text-foreground">{next.title}</div>
-                </Link>
-              ) : null}
-            </nav>
-          )}
-        </>
+        <DocArticle
+          selected={selected}
+          showIntro={selectedSlug === index[0]?.slug}
+          previous={previous}
+          next={next}
+          navigate={navigate}
+        />
       )}
     </PageShell>
   );

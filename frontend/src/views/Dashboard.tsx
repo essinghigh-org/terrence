@@ -36,6 +36,93 @@ type MetadataDocument = Readonly<{ version?: unknown }>;
 
 const RESERVED_ORGANIZATION_NAMES = new Set(["account", "admin", "docs"]);
 
+function WelcomeSection({ onCreate }: Readonly<{
+  onCreate: () => void;
+}>): React.JSX.Element {
+  return (
+    <section aria-labelledby="getting-started-heading" className="grid items-center gap-8 rounded-xl border bg-card p-6 sm:p-10 md:grid-cols-[1fr_auto]">
+      <div className="max-w-xl space-y-6">
+        <div>
+          <h2 id="getting-started-heading" className="text-xl font-semibold tracking-tight">Start small. Make room as you grow.</h2>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">An organization is simply a home for your workspaces. One is enough for most homelabs and small teams.</p>
+        </div>
+        <ol className="space-y-4 text-sm">
+          <li><span className="font-medium">1. Name your organization</span><p className="mt-1 text-muted-foreground">Use your lab or business name, such as homelab.</p></li>
+          <li><span className="font-medium">2. Create a workspace</span><p className="mt-1 text-muted-foreground">Keep one set of infrastructure together: your network, servers, or an application.</p></li>
+          <li><span className="font-medium">3. Review your first plan</span><p className="mt-1 text-muted-foreground">Connect your code, check the proposed changes, and choose when to apply them.</p></li>
+        </ol>
+        <Button onClick={onCreate}>Create your organization<ArrowRight data-icon="inline-end" /></Button>
+      </div>
+      <Terrence pose="guide" className="hidden w-48 md:block" />
+    </section>
+  );
+}
+
+function OrganizationTableBody({ loading, loadError, organizations, visibleOrganizations, onRetry }: Readonly<{
+  loading: boolean;
+  loadError: string;
+  organizations: Organization[];
+  visibleOrganizations: Organization[];
+  onRetry: () => void;
+}>): React.JSX.Element {
+  return (
+    <TableBody>
+      {loading ? (
+        <TableRow>
+          <TableCell colSpan={3} className="p-0">
+            <TableSkeleton rows={3} cols={3} label="Loading organizations" />
+          </TableCell>
+        </TableRow>
+      ) : loadError !== "" && organizations.length === 0 ? (
+        <TableRow>
+          <TableCell colSpan={3} className="h-28 text-center">
+            <p role="alert" className="font-medium text-destructive">Could not load organizations</p>
+            <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
+            <Button className="mt-3" size="sm" variant="outline" onClick={onRetry}>
+              Try again
+            </Button>
+          </TableCell>
+        </TableRow>
+      ) : visibleOrganizations.length === 0 ? (
+        <TableRow>
+          <TableCell colSpan={3} className="h-28 text-center text-muted-foreground">
+            {organizations.length === 0 ? <Terrence pose="empty" animated className="mx-auto mb-2 w-40" /> : <Building2 aria-hidden="true" className="mx-auto mb-2 size-5" />}
+            <p className="font-medium text-foreground">
+              {organizations.length === 0 ? "No organizations yet" : "No organizations found"}
+            </p>
+            <p className="mt-1 text-sm">
+              {organizations.length === 0 ? "Create one to get started." : "Try a different search."}
+            </p>
+          </TableCell>
+        </TableRow>
+      ) : visibleOrganizations.map((organization): React.JSX.Element => (
+        <TableRow key={organization.id}>
+          <TableCell>
+            <Link
+              to={`/app/${encodeURIComponent(organization.attributes.name)}`}
+              className="font-semibold text-primary hover:underline"
+            >
+              {organization.attributes.name}
+            </Link>
+          </TableCell>
+          <TableCell className="capitalize text-muted-foreground">
+            {organization.attributes["default-iac-binary"] === "tofu" ? "OpenTofu" : "Terraform"}
+          </TableCell>
+          <TableCell className="text-right">
+            <Link
+              to={`/app/${encodeURIComponent(organization.attributes.name)}`}
+              className={buttonVariants({ variant: "ghost", size: "sm" })}
+            >
+              Open
+              <ArrowRight data-icon="inline-end" />
+            </Link>
+          </TableCell>
+        </TableRow>
+      ))}
+    </TableBody>
+  );
+}
+
 export function Dashboard(): React.JSX.Element {
   const navigate = useNavigate();
   const location = useLocation();
@@ -173,21 +260,7 @@ export function Dashboard(): React.JSX.Element {
       />
 
       {firstRun ? (
-        <section aria-labelledby="getting-started-heading" className="grid items-center gap-8 rounded-xl border bg-card p-6 sm:p-10 md:grid-cols-[1fr_auto]">
-          <div className="max-w-xl space-y-6">
-            <div>
-              <h2 id="getting-started-heading" className="text-xl font-semibold tracking-tight">Start small. Make room as you grow.</h2>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">An organization is simply a home for your workspaces. One is enough for most homelabs and small teams.</p>
-            </div>
-            <ol className="space-y-4 text-sm">
-              <li><span className="font-medium">1. Name your organization</span><p className="mt-1 text-muted-foreground">Use your lab or business name, such as homelab.</p></li>
-              <li><span className="font-medium">2. Create a workspace</span><p className="mt-1 text-muted-foreground">Keep one set of infrastructure together: your network, servers, or an application.</p></li>
-              <li><span className="font-medium">3. Review your first plan</span><p className="mt-1 text-muted-foreground">Connect your code, check the proposed changes, and choose when to apply them.</p></li>
-            </ol>
-            <Button onClick={(): void => { setCreateError(""); setCreateOpen(true); }}>Create your organization<ArrowRight data-icon="inline-end" /></Button>
-          </div>
-          <Terrence pose="guide" className="hidden w-48 md:block" />
-        </section>
+        <WelcomeSection onCreate={(): void => { setCreateError(""); setCreateOpen(true); }} />
       ) : (
       <>
       <div className="relative max-w-md">
@@ -221,60 +294,13 @@ export function Dashboard(): React.JSX.Element {
               <TableHead className="w-28 text-right">Action</TableHead>
             </TableRow>
           </TableHeader>
-          <TableBody>
-            {loading ? (
-              <TableRow>
-                <TableCell colSpan={3} className="p-0">
-                  <TableSkeleton rows={3} cols={3} label="Loading organizations" />
-                </TableCell>
-              </TableRow>
-            ) : loadError !== "" && organizations.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={3} className="h-28 text-center">
-                  <p role="alert" className="font-medium text-destructive">Could not load organizations</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
-                  <Button className="mt-3" size="sm" variant="outline" onClick={(): void => { void loadOrganizations(); }}>
-                    Try again
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ) : visibleOrganizations.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={3} className="h-28 text-center text-muted-foreground">
-                  {organizations.length === 0 ? <Terrence pose="empty" animated className="mx-auto mb-2 w-40" /> : <Building2 aria-hidden="true" className="mx-auto mb-2 size-5" />}
-                  <p className="font-medium text-foreground">
-                    {organizations.length === 0 ? "No organizations yet" : "No organizations found"}
-                  </p>
-                  <p className="mt-1 text-sm">
-                    {organizations.length === 0 ? "Create one to get started." : "Try a different search."}
-                  </p>
-                </TableCell>
-              </TableRow>
-            ) : visibleOrganizations.map((organization): React.JSX.Element => (
-              <TableRow key={organization.id}>
-                <TableCell>
-                  <Link
-                    to={`/app/${encodeURIComponent(organization.attributes.name)}`}
-                    className="font-semibold text-primary hover:underline"
-                  >
-                    {organization.attributes.name}
-                  </Link>
-                </TableCell>
-                <TableCell className="capitalize text-muted-foreground">
-                  {organization.attributes["default-iac-binary"] === "tofu" ? "OpenTofu" : "Terraform"}
-                </TableCell>
-                <TableCell className="text-right">
-                  <Link
-                    to={`/app/${encodeURIComponent(organization.attributes.name)}`}
-                    className={buttonVariants({ variant: "ghost", size: "sm" })}
-                  >
-                    Open
-                    <ArrowRight data-icon="inline-end" />
-                  </Link>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
+          <OrganizationTableBody
+            loading={loading}
+            loadError={loadError}
+            organizations={organizations}
+            visibleOrganizations={visibleOrganizations}
+            onRetry={(): void => { void loadOrganizations(); }}
+          />
         </Table>
       </div>
 
