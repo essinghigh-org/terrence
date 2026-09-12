@@ -459,6 +459,40 @@ function buildNewTeamFields(
   return { value: { name, ...resolveNewTeamColumnFields(attributes, rawOrgAccess), organizationAccess: organizationAccess.value } };
 }
 
+async function loadTeamDetailIncludes(
+  teamOrgId: string,
+  members: Readonly<{ userId: string }>[],
+  query: Readonly<Record<string, string>> | undefined,
+  canReadMembers: boolean,
+): Promise<{ included: Record<string, unknown>[]; linkage: TeamLinkage | undefined }> {
+  const includeQuery = query !== undefined ? query["include"] : undefined;
+  const includes = typeof includeQuery === "string" ? includeQuery.split(",") : [];
+  const includeUsers = canReadMembers && includes.includes("users");
+  const includeOrgMemberships = canReadMembers && includes.includes("organization-memberships");
+  const userIds = members.map((m): string => m.userId);
+  let included: Record<string, unknown>[] = [];
+  if (includeUsers && userIds.length > 0) {
+    const uList = await db.query.users.findMany({ where: inArray(users.id, userIds) });
+    included = uList.map((u: Readonly<{ readonly id: string; readonly username: string; readonly email: string | null }>): Record<string, unknown> => ({ id: u.id, type: "users", attributes: { username: u.username, email: u.email } }));
+  }
+  if (includeOrgMemberships && userIds.length > 0) {
+    const memList = (await db.query.organizationMemberships.findMany({ where: inArray(organizationMemberships.userId, userIds) }))
+      .filter((m): boolean => m.orgId === teamOrgId);
+    const uMap = new Map((await db.query.users.findMany({ where: inArray(users.id, userIds) })).map((u): [string, typeof u] => [u.id, u]));
+    included = included.concat(await Promise.all(memList.map(async (m): Promise<Record<string, unknown>> => orgMembershipResource(m, uMap.get(m.userId) ?? null))));
+    const linkage: TeamLinkage = {
+      users: members.map((m): { id: string; type: string } => ({ id: m.userId, type: "users" })),
+      organizationMemberships: memList.map((m): { id: string; type: string } => ({ id: m.id, type: "organization-memberships" })),
+    };
+    return { included, linkage };
+  }
+  if (includeUsers) {
+    const linkage: TeamLinkage = { users: members.map((m): { id: string; type: string } => ({ id: m.userId, type: "users" })) };
+    return { included, linkage };
+  }
+  return { included, linkage: undefined };
+}
+
 export const teamRoutes = new Elysia({ name: "teams" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/team-tokens", async ({ params, request, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -578,42 +612,16 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null, "teams:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const userCount = (await db.select({ val: count() }).from(teamMemberships).where(eq(teamMemberships.teamId, team.id)))[0]?.val ?? 0;
-    const includeQuery = query !== undefined ? query["include"] : undefined;
-    const includes = typeof includeQuery === "string" ? includeQuery.split(",") : [];
-    // Membership data (usernames/emails, membership refs, and the exact team
-    // size) requires members:read.
     const [canReadMembers, canManageTeams] = await Promise.all([
       checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null, "members:read"),
       checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"),
     ]);
     const permissions: TeamPermissions = { canUpdate: canManageTeams, canDestroy: canManageTeams };
     const rosterCount = canReadMembers ? userCount : 0;
-    const includeUsers = canReadMembers && includes.includes("users");
-    const includeOrgMemberships = canReadMembers && includes.includes("organization-memberships");
-    let included: Record<string, unknown>[] = [];
     const members = await db.query.teamMemberships.findMany({ where: eq(teamMemberships.teamId, team.id) });
-    const userIds = members.map((m: Readonly<{ readonly userId: string }>): string => m.userId);
     const scim = await teamScim(team.id, (await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") }))?.enabled === true);
-    if (includeUsers && userIds.length > 0) {
-      const uList = await db.query.users.findMany({ where: inArray(users.id, userIds) });
-      included = uList.map((u: Readonly<{ readonly id: string; readonly username: string; readonly email: string | null }>): Record<string, unknown> => ({ id: u.id, type: "users", attributes: { username: u.username, email: u.email } }));
-    }
-    if (includeOrgMemberships && userIds.length > 0) {
-      const memList = (await db.query.organizationMemberships.findMany({ where: inArray(organizationMemberships.userId, userIds) }))
-        .filter((m): boolean => m.orgId === team.orgId);
-      const uMap = new Map((await db.query.users.findMany({ where: inArray(users.id, userIds) })).map((u): [string, typeof u] => [u.id, u]));
-      included = included.concat(await Promise.all(memList.map(async (m): Promise<Record<string, unknown>> => orgMembershipResource(m, uMap.get(m.userId) ?? null))));
-      const linkage: TeamLinkage = {
-        users: members.map((m): { id: string; type: string } => ({ id: m.userId, type: "users" })),
-        organizationMemberships: memList.map((m): { id: string; type: string } => ({ id: m.id, type: "organization-memberships" })),
-      };
-      return { data: await teamResource(team, rosterCount, linkage, scim, permissions), ...(included.length > 0 ? { included } : {}) };
-    }
-    if (includeUsers) {
-      const linkage: TeamLinkage = { users: members.map((m): { id: string; type: string } => ({ id: m.userId, type: "users" })) };
-      return { data: await teamResource(team, rosterCount, linkage, scim, permissions), ...(included.length > 0 ? { included } : {}) };
-    }
-    return { data: await teamResource(team, rosterCount, undefined, scim, permissions), ...(included.length > 0 ? { included } : {}) };
+    const { included, linkage } = await loadTeamDetailIncludes(team.orgId, members, query, canReadMembers);
+    return { data: await teamResource(team, rosterCount, linkage, scim, permissions), ...(included.length > 0 ? { included } : {}) };
   })
   .patch("/api/v2/teams/:team_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const teamId = params["team_id"] ?? "";
