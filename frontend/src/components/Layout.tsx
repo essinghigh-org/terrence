@@ -674,6 +674,41 @@ function WorkspaceNav({
   );
 }
 
+type AccountBootstrap = {
+  userId: string | undefined;
+  siteAdmin: boolean;
+  mustChangePassword: boolean;
+  accountName: string;
+  avatarUrl: string;
+  theme: string | undefined;
+};
+
+function parseAccountDetails(value: unknown): AccountBootstrap {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+  const accountData = (value as {
+    data?: {
+      id?: string;
+      attributes?: {
+        "is-site-admin"?: boolean;
+        "must-change-password"?: boolean;
+        username?: string;
+        "avatar-url"?: string;
+        theme?: string;
+      };
+    };
+  }).data;
+  const attributes = accountData?.attributes;
+  const userIdentifier = accountData?.id ?? attributes?.username;
+  return {
+    userId: typeof userIdentifier === "string" && userIdentifier !== "" ? userIdentifier : undefined,
+    siteAdmin: attributes?.["is-site-admin"] === true,
+    mustChangePassword: attributes?.["must-change-password"] === true,
+    accountName: attributes?.username ?? "",
+    avatarUrl: attributes?.["avatar-url"] ?? "",
+    theme: isString(attributes?.theme) ? attributes.theme : undefined,
+  };
+}
+
 function OrgSwitcher({
   hasOrg,
   currentOrgName,
@@ -1301,29 +1336,15 @@ export function Layout({
     ]).then(([accountResult, organizationsResult]): void => {
       if (controller.signal.aborted) return;
       if (accountResult.status === "fulfilled") {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-        const accountData = (accountResult.value as {
-          data?: {
-            id?: string;
-            attributes?: {
-              "is-site-admin"?: boolean;
-              "must-change-password"?: boolean;
-              username?: string;
-              "avatar-url"?: string;
-              theme?: string;
-            };
-          };
-        }).data;
-        const attributes = accountData?.attributes;
-        const userIdentifier = accountData?.id ?? attributes?.username;
-        if (typeof userIdentifier === "string" && userIdentifier !== "") {
-          setActiveUserId(userIdentifier);
+        const bootstrap = parseAccountDetails(accountResult.value);
+        if (bootstrap.userId !== undefined) {
+          setActiveUserId(bootstrap.userId);
         }
-        setSiteAdmin(attributes?.["is-site-admin"] === true);
-        setMustChangePassword(attributes?.["must-change-password"] === true);
-        setAccountName(attributes?.username ?? "");
-        setAvatarUrl(attributes?.["avatar-url"] ?? "");
-        if (isString(attributes?.theme)) applyThemeIfUnchanged(attributes.theme, themeRevision);
+        setSiteAdmin(bootstrap.siteAdmin);
+        setMustChangePassword(bootstrap.mustChangePassword);
+        setAccountName(bootstrap.accountName);
+        setAvatarUrl(bootstrap.avatarUrl);
+        if (bootstrap.theme !== undefined) applyThemeIfUnchanged(bootstrap.theme, themeRevision);
       }
       if (organizationsResult.status === "fulfilled") {
         for (const organization of organizationsResult.value) {
