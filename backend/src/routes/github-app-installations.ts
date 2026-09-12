@@ -742,6 +742,28 @@ async function discoverBitbucketRepositories(
   return [...repositories.values()];
 }
 
+function nextRepositoryPageUrl(
+  provider: RepositoryProvider,
+  base: URL,
+  page: number,
+  headers: Headers,
+  rawCount: number,
+): Readonly<{ url: URL; page: number }> | null {
+  if (provider === "github") {
+    const next = safeNextRepositoryUrl(nextLink(headers), base);
+    if (next !== null) return { url: next, page };
+  } else {
+    const nextPageText = headers.get("x-next-page")?.trim() ?? "";
+    const nextPage = /^[1-9]\d*$/.test(nextPageText) ? Number(nextPageText) : null;
+    if (nextPage !== null && Number.isSafeInteger(nextPage)) {
+      return { url: repositoryPageUrl(base, provider, nextPage), page: nextPage };
+    }
+  }
+  if (rawCount < REPOSITORY_PAGE_SIZE) return null;
+  const followingPage = page + 1;
+  return { url: repositoryPageUrl(base, provider, followingPage), page: followingPage };
+}
+
 async function discoverOAuthRepositories(
   client: Readonly<typeof oauthClients.$inferSelect>,
   token: string,
@@ -768,26 +790,10 @@ async function discoverOAuthRepositories(
       const repository = normalizedRepository(record, target.provider);
       if (repository !== null) repositories.push(repository);
     }
-
-    if (target.provider === "github") {
-      const next = safeNextRepositoryUrl(nextLink(response.headers), target.base);
-      if (next !== null) {
-        url = next;
-        continue;
-      }
-    } else {
-      const nextPageText = response.headers.get("x-next-page")?.trim() ?? "";
-      const nextPage = /^[1-9]\d*$/.test(nextPageText) ? Number(nextPageText) : null;
-      if (nextPage !== null && Number.isSafeInteger(nextPage)) {
-        page = nextPage;
-        url = repositoryPageUrl(target.base, target.provider, page);
-        continue;
-      }
-    }
-
-    if (parsed.rawCount < REPOSITORY_PAGE_SIZE) break;
-    page += 1;
-    url = repositoryPageUrl(target.base, target.provider, page);
+    const next = nextRepositoryPageUrl(target.provider, target.base, page, response.headers, parsed.rawCount);
+    if (next === null) break;
+    page = next.page;
+    url = next.url;
   }
   return repositories;
 }
