@@ -79,6 +79,29 @@ export type ArchiveOptions = Readonly<{
   signal?: Readonly<AbortSignal>;
 }>;
 
+function assertVerboseMemberType(line: string): void {
+  if (!line.startsWith("-") && !line.startsWith("d")) {
+    throw new Error("Archive contains a forbidden link or special member");
+  }
+}
+
+function assertVerboseMemberPath(line: string, seen: Set<string>): void {
+  const member = tarVerboseMemberName(line);
+  if (member === undefined || tarMemberPathUnsafe(member) || member.includes("\\") || /^[A-Za-z]:/.test(member)) {
+    throw new Error("Archive contains an unsafe path");
+  }
+  const canonical = member.split("/").filter((part): boolean => part !== "" && part !== ".").join("/");
+  if (seen.has(canonical)) throw new Error("Archive contains duplicate members");
+  seen.add(canonical);
+}
+
+function assertVerboseMemberSize(line: string, maxFileBytes: number | undefined): void {
+  const size = Number(/^\S+\s+\S+\s+(\d+)\s/.exec(line)?.[1]);
+  if (!Number.isSafeInteger(size) || size > (maxFileBytes ?? MAX_EXPANDED_ARCHIVE_BYTES)) {
+    throw new Error("Archive contains a file larger than the byte limit");
+  }
+}
+
 /** Validate every safety property before a tar archive is extracted. */
 export async function assertSafeTarArchive(path: string, options: ArchiveOptions = {}): Promise<void> {
   const signal = AbortSignal.any([AbortSignal.timeout(30_000), ...(options.signal === undefined ? [] : [options.signal])]);
@@ -95,20 +118,9 @@ export async function assertSafeTarArchive(path: string, options: ArchiveOptions
   if (verboseMembers.length === 0) throw new Error("Archive contains no files");
   const seen = new Set<string>();
   for (const line of verboseMembers) {
-    if (!line.startsWith("-") && !line.startsWith("d")) {
-      throw new Error("Archive contains a forbidden link or special member");
-    }
-    const member = tarVerboseMemberName(line);
-    if (member === undefined || tarMemberPathUnsafe(member) || member.includes("\\") || /^[A-Za-z]:/.test(member)) {
-      throw new Error("Archive contains an unsafe path");
-    }
-    const canonical = member.split("/").filter((part): boolean => part !== "" && part !== ".").join("/");
-    if (seen.has(canonical)) throw new Error("Archive contains duplicate members");
-    seen.add(canonical);
-    const size = Number(/^\S+\s+\S+\s+(\d+)\s/.exec(line)?.[1]);
-    if (!Number.isSafeInteger(size) || size > (options.maxFileBytes ?? MAX_EXPANDED_ARCHIVE_BYTES)) {
-      throw new Error("Archive contains a file larger than the byte limit");
-    }
+    assertVerboseMemberType(line);
+    assertVerboseMemberPath(line, seen);
+    assertVerboseMemberSize(line, options.maxFileBytes);
   }
   await assertArchiveLogicalSize(path, MAX_EXPANDED_ARCHIVE_BYTES, signal);
 }
