@@ -514,45 +514,63 @@ async function requireCurrentPassword(
   return null;
 }
 
+function resolveIactToken(request: RequestInfo | undefined): string | null {
+  // the reference format's installer passes the token as a query parameter.
+  // Query-token compatibility is OPT-IN (todo 142: the default is the
+  // safer header-only flow) — set IACT_QUERY_TOKEN_ENABLED=1 to restore the
+  // reference installer behavior. The header alternative keeps the secret
+  // out of proxy logs, browser history, and traces entirely.
+  const queryEnabled = envFlag("IACT_QUERY_TOKEN_ENABLED");
+  const queryToken = request === undefined || !queryEnabled ? null : new URL(request.url).searchParams.get("token");
+  const headerToken = request === undefined ? null
+    : request.headers.get("x-iact-token")
+      ?? (() => {
+        const authorization = request.headers.get("authorization") ?? "";
+        return authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : null;
+      })();
+  return queryToken ?? headerToken;
+}
+
+async function verifyIactElection(configuredToken: string | undefined, suppliedToken: string | null): Promise<boolean> {
+  const configured = Buffer.from(configuredToken ?? "");
+  const supplied = Buffer.from(suppliedToken ?? "");
+  if (
+    configuredToken === undefined
+    || configuredToken === ""
+    || suppliedToken === null
+    || configured.length !== supplied.length
+    || !timingSafeEqual(configured, supplied)
+    || (await db.select({ value: count() }).from(users))[0]?.value !== 0
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function parseInitialAdminPayload(body: unknown): { username: string; email: string; password: string } | null {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const username = typeof payload["username"] === "string" ? normalizeUsername(payload["username"]) ?? "" : "";
+  const email = typeof payload["email"] === "string" ? normalizeEmail(payload["email"]) ?? "" : "";
+  const password = typeof payload["password"] === "string" ? payload["password"] : "";
+  if (username === "" || email === "" || password === "") return null;
+  return { username, email, password };
+}
+
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
   .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
     const configuredToken = process.env["IACT_TOKEN"];
-    // the reference format's installer passes the token as a query parameter.
-    // Query-token compatibility is OPT-IN (todo 142: the default is the
-    // safer header-only flow) — set IACT_QUERY_TOKEN_ENABLED=1 to restore the
-    // reference installer behavior. The header alternative keeps the secret
-    // out of proxy logs, browser history, and traces entirely.
-    const queryEnabled = envFlag("IACT_QUERY_TOKEN_ENABLED");
-    const queryToken = request === undefined || !queryEnabled ? null : new URL(request.url).searchParams.get("token");
-    const headerToken = request === undefined ? null
-      : request.headers.get("x-iact-token")
-        ?? (() => {
-          const authorization = request.headers.get("authorization") ?? "";
-          return authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : null;
-        })();
-    const suppliedToken = queryToken ?? headerToken;
-    const configured = Buffer.from(configuredToken ?? "");
-    const supplied = Buffer.from(suppliedToken ?? "");
-    if (
-      configuredToken === undefined
-      || configuredToken === ""
-      || suppliedToken === null
-      || configured.length !== supplied.length
-      || !timingSafeEqual(configured, supplied)
-      || (await db.select({ value: count() }).from(users))[0]?.value !== 0
-    ) {
+    const suppliedToken = resolveIactToken(request);
+    if (!(await verifyIactElection(configuredToken, suppliedToken))) {
       (set as { status: number }).status = 404;
       return { status: "error", error: "Not found" };
     }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const username = typeof payload["username"] === "string" ? normalizeUsername(payload["username"]) ?? "" : "";
-    const email = typeof payload["email"] === "string" ? normalizeEmail(payload["email"]) ?? "" : "";
-    const password = typeof payload["password"] === "string" ? payload["password"] : "";
-    if (username === "" || email === "" || password === "") {
+    const parsed = parseInitialAdminPayload(body);
+    if (parsed === null) {
       (set as { status: number }).status = 422;
       return { status: "error", error: "Username, email, and password are required" };
     }
+    const { username, email, password } = parsed;
     const setupPolicy = checkPasswordPolicy(loadPasswordPolicy(), password, username);
     if (!setupPolicy.ok) {
       (set as { status: number }).status = 422;
