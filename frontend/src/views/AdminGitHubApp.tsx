@@ -133,7 +133,9 @@ export function AdminGitHubApp(): React.JSX.Element {
     setBusy("manifest");
     setError("");
     try {
-      const response = await fetchApi("/admin/github-app/manifest/setup", { headers: { Accept: "application/json" } });
+      // The manifest setup endpoint negotiates its JSON body on either JSON
+      // media type, but the JSON:API Accept gate requires vnd.api+json.
+      const response = await fetchApi("/admin/github-app/manifest/setup", { headers: { Accept: "application/vnd.api+json" } });
       window.location.assign(authorizationUrl(response));
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : "Failed to start GitHub App setup.");
