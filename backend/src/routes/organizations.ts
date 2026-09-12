@@ -586,6 +586,70 @@ function intersectOrgScope(
   return organizationIds;
 }
 
+async function resolveTagScope(
+  tagId: string,
+  userId: string | undefined,
+  orgId: string | null | undefined,
+): Promise<{ org: OrgRow; tagKey: string }> {
+  const tagBody = tagId.startsWith("tag-") ? tagId.slice(4) : "";
+  const tagParts = tagBody.split("-");
+  const candidateNames = tagParts.slice(1).map((_, index): string => tagParts.slice(0, index + 1).join("-"));
+  const candidates = candidateNames.length === 0
+    ? []
+    : await db.query.organizations.findMany({ where: inArray(organizations.name, candidateNames) });
+  const org = candidates.sort((left, right): number => right.name.length - left.name.length).find((candidate): boolean => tagId.startsWith(`tag-${candidate.name}-`));
+  const tagKey = org === undefined ? "" : tagId.slice(`tag-${org.name}-`.length);
+  if (org === undefined || tagKey === "") {
+    throw new OrgPatchError(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  if (!(await checkOrgPermission(userId, org.id, "owner", orgId))) {
+    throw new OrgPatchError(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  return { org, tagKey };
+}
+
+function parseWorkspaceTagIds(body: unknown): string[] {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"];
+  if (!Array.isArray(data)) {
+    throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data must be an array" }] });
+  }
+  const parsedIds = data.flatMap((item): string[] => {
+    if (typeof item !== "object" || item === null) return [];
+    const resource = item as Record<string, unknown>;
+    return resource["type"] === "workspaces" && typeof resource["id"] === "string" ? [resource["id"]] : [];
+  });
+  if (parsedIds.length !== data.length) {
+    throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data must contain workspaces resource identifiers" }] });
+  }
+  return [...new Set(parsedIds)];
+}
+
+async function assertTagWorkspacesAssignable(orgId: string, tagKey: string, ids: string[]): Promise<void> {
+  const organizationWorkspaceIds = (await db.query.workspaces.findMany({ where: eq(workspaces.orgId, orgId), columns: { id: true } })).map((workspace): string => workspace.id);
+  const existingTag = organizationWorkspaceIds.length === 0 ? undefined : await db.query.workspaceTags.findFirst({
+    where: and(eq(workspaceTags.key, tagKey), inArray(workspaceTags.workspaceId, organizationWorkspaceIds)),
+  });
+  if (existingTag === undefined) {
+    throw new OrgPatchError(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  const targets = ids.length === 0 ? [] : await db.query.workspaces.findMany({ where: inArray(workspaces.id, ids) });
+  if (targets.length !== ids.length || targets.some((workspace) => workspace.orgId !== orgId)) {
+    throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "workspaces must belong to the organization" }] });
+  }
+}
+
+async function attachTagWorkspaces(ids: string[], tagKey: string): Promise<void> {
+  if (ids.length > 0) {
+    await db.insert(workspaceTags).values(ids.map((workspaceId) => ({
+      id: crypto.randomUUID(),
+      workspaceId,
+      key: tagKey,
+      value: null,
+    }))).onConflictDoNothing();
+  }
+}
+
 export const organizationRoutes = new Elysia({ name: "organizations" })
   .use(authPlugin)
   .post("/api/v2/organizations", async ({ user, orgId: tokenOrgId, teamId: tokenTeamId, body, set }: ParamCtx): Promise<unknown> => {
@@ -987,61 +1051,20 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   })
   .post("/api/v2/tags/:tag_id/relationships/workspaces", async ({ params, user, body, orgId, set }: ParamCtx): Promise<unknown> => {
     const tagId = params["tag_id"] ?? "";
-    const tagBody = tagId.startsWith("tag-") ? tagId.slice(4) : "";
-    const tagParts = tagBody.split("-");
-    const candidateNames = tagParts.slice(1).map((_, index): string => tagParts.slice(0, index + 1).join("-"));
-    const candidates = candidateNames.length === 0
-      ? []
-      : await db.query.organizations.findMany({ where: inArray(organizations.name, candidateNames) });
-    const org = candidates.sort((left, right): number => right.name.length - left.name.length).find((candidate): boolean => tagId.startsWith(`tag-${candidate.name}-`));
-    const tagKey = org === undefined ? "" : tagId.slice(`tag-${org.name}-`.length);
-    if (org === undefined || tagKey === "") {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
+    try {
+      const { org, tagKey } = await resolveTagScope(tagId, user?.id, orgId);
+      const ids = parseWorkspaceTagIds(body);
+      await assertTagWorkspacesAssignable(org.id, tagKey, ids);
+      await attachTagWorkspaces(ids, tagKey);
+      (set as { status: number }).status = 204;
+      return {};
+    } catch (error: unknown) {
+      if (error instanceof OrgPatchError) {
+        (set as { status: number }).status = error.status;
+        return error.body;
+      }
+      throw error;
     }
-    if (!(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"];
-    if (!Array.isArray(data)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data must be an array" }] };
-    }
-    const parsedIds = data.flatMap((item): string[] => {
-      if (typeof item !== "object" || item === null) return [];
-      const resource = item as Record<string, unknown>;
-      return resource["type"] === "workspaces" && typeof resource["id"] === "string" ? [resource["id"]] : [];
-    });
-    if (parsedIds.length !== data.length) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data must contain workspaces resource identifiers" }] };
-    }
-    const ids = [...new Set(parsedIds)];
-    const organizationWorkspaceIds = (await db.query.workspaces.findMany({ where: eq(workspaces.orgId, org.id), columns: { id: true } })).map((workspace): string => workspace.id);
-    const existingTag = organizationWorkspaceIds.length === 0 ? undefined : await db.query.workspaceTags.findFirst({
-      where: and(eq(workspaceTags.key, tagKey), inArray(workspaceTags.workspaceId, organizationWorkspaceIds)),
-    });
-    if (existingTag === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const targets = ids.length === 0 ? [] : await db.query.workspaces.findMany({ where: inArray(workspaces.id, ids) });
-    if (targets.length !== ids.length || targets.some((workspace) => workspace.orgId !== org.id)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "workspaces must belong to the organization" }] };
-    }
-    if (ids.length > 0) {
-      await db.insert(workspaceTags).values(ids.map((workspaceId) => ({
-        id: crypto.randomUUID(),
-        workspaceId,
-        key: tagKey,
-        value: null,
-      }))).onConflictDoNothing();
-    }
-    (set as { status: number }).status = 204;
-    return {};
   })
   .get("/api/v2/organizations/:org_name/vcs-events", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
