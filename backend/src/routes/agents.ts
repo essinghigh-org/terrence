@@ -416,6 +416,31 @@ function parseStackJobCompletion(
   return { status, errorMessage, result };
 }
 
+function stackJobArchivePath(claimed: ClaimedStackAgentJob | undefined): string | null {
+  if (claimed === undefined) return null;
+  const runArchivePath = typeof (claimed.deploymentRun.payload ?? {})["archivePath"] === "string" ? (claimed.deploymentRun.payload ?? {})["archivePath"] as string : null;
+  const configurationArchivePath = typeof (claimed.configuration.payload ?? {})["archivePath"] === "string" ? (claimed.configuration.payload ?? {})["archivePath"] as string : null;
+  return runArchivePath ?? configurationArchivePath;
+}
+
+async function configurationArchiveResponse(
+  archivePath: string,
+  set: SetObj,
+): Promise<unknown> {
+  if (!isStackStoragePath(archivePath) || !(await Bun.file(archivePath).exists())) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
+  try {
+    await assertSafeTarArchive(archivePath);
+  } catch {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration archive failed safety validation" }] };
+  }
+  (set.headers as Record<string, string>) ["Content-Type"] = "application/gzip";
+  return Bun.file(archivePath);
+}
+
 function completionResourceCounts(
   attrs: Record<string, unknown>,
   status: string,
@@ -1098,21 +1123,12 @@ export const agentRoutes = new Elysia({ name: "agents" })
     }
     const fencingToken = requestedFencingToken(request);
     const claimed = await findClaimedStackAgentJob(agent.id, jobId, fencingToken);
-    const runArchivePath = typeof (claimed?.deploymentRun.payload ?? {})["archivePath"] === "string" ? (claimed?.deploymentRun.payload ?? {})["archivePath"] as string : null;
-    const configurationArchivePath = typeof (claimed?.configuration.payload ?? {})["archivePath"] === "string" ? (claimed?.configuration.payload ?? {})["archivePath"] as string : null;
-    const archivePath = runArchivePath ?? configurationArchivePath;
-    if (claimed === undefined || archivePath === null || !isStackStoragePath(archivePath) || !(await Bun.file(archivePath).exists())) {
+    const archivePath = stackJobArchivePath(claimed);
+    if (claimed === undefined || archivePath === null) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    try {
-      await assertSafeTarArchive(archivePath);
-    } catch {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration archive failed safety validation" }] };
-    }
-    (set.headers as Record<string, string>) ["Content-Type"] = "application/gzip";
-    return Bun.file(archivePath);
+    return configurationArchiveResponse(archivePath, set);
   })
   .get("/api/v2/agents/:agent_id/jobs/:job_id/configuration", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const agentId = params["agent_id"] ?? "";
