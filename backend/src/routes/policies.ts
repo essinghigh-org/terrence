@@ -2,7 +2,7 @@ import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { policySets, policySetVersions, policySetWorkspaces, policySetProjects, policySetExclusions, policySetProjectExclusions, policySetTagSelectors, policySetParameters, policies, policyChecks, projects, runs, workspaces, organizations, oauthClients, oauthTokens, githubAppInstallations, type users } from "../db/schema";
-import { eq, and, inArray, asc, isNull, like, ilike, count, exists, notExists, or } from "drizzle-orm";
+import { eq, and, inArray, asc, isNull, like, ilike, count, exists, notExists, or, type SQL } from "drizzle-orm";
 import { isPostgres } from "../db/driver";
 import { checkOrganizationPermission, checkWorkspacePermission, signedApiURL, validSignedApiURL, pageRequest, pagination, type DeepReadonly, type OrganizationPermission } from "../lib/utils";
 import { organizationName } from "../lib/response";
@@ -787,6 +787,35 @@ async function resolveParameterValueUpdate(
   return null;
 }
 
+function resolvePolicySetListQuery(request: Readonly<{ url: string }>): Readonly<{ kind: string | null; searchName: string | undefined; number: number; size: number }> {
+  const paramsUrl = new URL(request.url).searchParams;
+  const kind = paramsUrl.get("filter[kind]");
+  const searchName = paramsUrl.get("search[name]")?.trim() ?? paramsUrl.get("q")?.trim();
+  const { number, size } = pageRequest(request);
+  return { kind, searchName, number, size };
+}
+
+function policySetListWhere(orgId: string, kind: string | null, searchName: string | undefined): SQL | undefined {
+  const conditions = [eq(policySets.orgId, orgId)];
+  if (kind !== null && kind !== "") conditions.push(eq(policySets.kind, kind));
+  if (searchName !== undefined && searchName !== "") {
+    const nameFilter = isPostgres ? ilike(policySets.name, `%${searchName}%`) : like(policySets.name, `%${searchName}%`);
+    conditions.push(nameFilter);
+  }
+  return and(...conditions);
+}
+
+function groupByPolicySetId<T extends { policySetId: string | null }>(rows: readonly T[]): Map<string, T[]> {
+  const bySet = new Map<string, T[]>();
+  for (const row of rows) {
+    if (row.policySetId === null) continue;
+    const list = bySet.get(row.policySetId) ?? [];
+    list.push(row);
+    bySet.set(row.policySetId, list);
+  }
+  return bySet;
+}
+
 export const policyRoutes = new Elysia({ name: "policies" })
   .use(authPlugin)
   // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
@@ -970,17 +999,8 @@ export const policyRoutes = new Elysia({ name: "policies" })
     // for backward compatibility (matches the workspaces list endpoint).
     // Policy-set kind mirrors the kind of its child policies (mixed sets
     // expose the set-level kind column).
-    const paramsUrl = new URL(request.url).searchParams;
-    const kind = paramsUrl.get("filter[kind]");
-    const searchName = paramsUrl.get("search[name]")?.trim() ?? paramsUrl.get("q")?.trim();
-    const conditions = [eq(policySets.orgId, org.id)];
-    if (kind !== null && kind !== "") conditions.push(eq(policySets.kind, kind));
-    if (searchName !== undefined && searchName !== "") {
-      const nameFilter = isPostgres ? ilike(policySets.name, `%${searchName}%`) : like(policySets.name, `%${searchName}%`);
-      conditions.push(nameFilter);
-    }
-    const { number, size } = pageRequest(request);
-    const where = and(...conditions);
+    const { kind, searchName, number, size } = resolvePolicySetListQuery(request);
+    const where = policySetListWhere(org.id, kind, searchName);
     const [filters, countRows] = await Promise.all([
       db.query.policySets.findMany({
         where,
@@ -1000,31 +1020,10 @@ export const policyRoutes = new Elysia({ name: "policies" })
       db.query.policySetExclusions.findMany({ where: inArray(policySetExclusions.policySetId, psIds) }),
       db.query.policies.findMany({ where: inArray(policies.policySetId, psIds), columns: { id: true, policySetId: true } }),
     ]);
-    const projBySet = new Map<string, Readonly<{ projectId: string }>[]>();
-    for (const link of projRows) {
-      const list = projBySet.get(link.policySetId) ?? [];
-      list.push(link);
-      projBySet.set(link.policySetId, list);
-    }
-    const exclBySet = new Map<string, Readonly<{ workspaceId: string }>[]>();
-    for (const link of exclRows) {
-      const list = exclBySet.get(link.policySetId) ?? [];
-      list.push(link);
-      exclBySet.set(link.policySetId, list);
-    }
-    const wsBySet = new Map<string, Readonly<{ workspaceId: string }>[]>();
-    for (const link of wsRows) {
-      const list = wsBySet.get(link.policySetId) ?? [];
-      list.push(link);
-      wsBySet.set(link.policySetId, list);
-    }
-    const polBySet = new Map<string, Readonly<{ id: string }>[]>();
-    for (const pol of policyRows) {
-      if (pol.policySetId === null) continue;
-      const list = polBySet.get(pol.policySetId) ?? [];
-      list.push(pol);
-      polBySet.set(pol.policySetId, list);
-    }
+    const projBySet = groupByPolicySetId(projRows);
+    const exclBySet = groupByPolicySetId(exclRows);
+    const wsBySet = groupByPolicySetId(wsRows);
+    const polBySet = groupByPolicySetId(policyRows);
     const data = await Promise.all(filters.map(async (ps: PsItem): Promise<Record<string, unknown>> => ({
       id: ps.id,
       type: "policy-sets",
