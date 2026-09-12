@@ -56,16 +56,13 @@ function timestampValue(input: RunDisplayInput, key: string): string | null {
   return isString(value) && value !== "" ? value : null;
 }
 
-function stageForStatus(input: RunDisplayInput): RunStageId {
-  const { status } = input;
-  if (["cost_estimating", "cost_estimated", "policy_checking", "policy_override", "policy_soft_failed", "policy_checked", "policy_hard_failed", "post_plan_running", "post_plan_completed"].includes(status)) return "checks";
-  if (["confirmed", "apply_queued", "pre_apply_running", "pre_apply_completed", "applying", "post_apply_running", "post_apply_completed", "applied"].includes(status)) return "apply";
-  if (["pre_plan_running", "pre_plan_completed", "planning"].includes(status)) return "plan";
-  if (["planned", "needs_confirmation", "planned_and_saved"].includes(status)) {
-    return input["plan-only"] === true ? "plan" : "apply";
-  }
-  if (status === "planned_and_finished") return "plan";
+const STAGE_STATUS_GROUPS: readonly Readonly<{ stage: RunStageId; statuses: ReadonlySet<string> }>[] = [
+  { stage: "checks", statuses: new Set(["cost_estimating", "cost_estimated", "policy_checking", "policy_override", "policy_soft_failed", "policy_checked", "policy_hard_failed", "post_plan_running", "post_plan_completed"]) },
+  { stage: "apply", statuses: new Set(["confirmed", "apply_queued", "pre_apply_running", "pre_apply_completed", "applying", "post_apply_running", "post_apply_completed", "applied"]) },
+  { stage: "plan", statuses: new Set(["pre_plan_running", "pre_plan_completed", "planning"]) },
+];
 
+function stageForTimestamps(input: RunDisplayInput): RunStageId {
   // Terminal states do not carry a stage of their own. Timestamps preserve the
   // useful answer about where an interrupted run stopped.
   const timestamps = input["status-timestamps"] ?? {};
@@ -76,14 +73,31 @@ function stageForStatus(input: RunDisplayInput): RunStageId {
   return "queue";
 }
 
-function waitingReasonFor(input: RunDisplayInput): RunWaitingReason | null {
+function stageForStatus(input: RunDisplayInput): RunStageId {
   const { status } = input;
-  const explicit = input["waiting-reason"];
+  for (const group of STAGE_STATUS_GROUPS) {
+    if (group.statuses.has(status)) return group.stage;
+  }
+  if (["planned", "needs_confirmation", "planned_and_saved"].includes(status)) {
+    return input["plan-only"] === true ? "plan" : "apply";
+  }
+  if (status === "planned_and_finished") return "plan";
+  return stageForTimestamps(input);
+}
+
+function waitingReasonForExplicitReason(explicit: string | null | undefined): RunWaitingReason | null {
   if (explicit === "workspace" || explicit === "workspace-queue" || explicit === "serialization") return "workspace-queue";
   if (explicit === "agent" || explicit === "agent-capacity" || explicit === "agent_pool") return "agent-capacity";
   if (explicit === "scheduled" || explicit === "scheduled-start") return "scheduled-start";
   if (explicit === "approval" || explicit === "human-approval") return "human-approval";
   if (explicit === "policy" || explicit === "policy-override") return "policy-override";
+  return null;
+}
+
+function waitingReasonFor(input: RunDisplayInput): RunWaitingReason | null {
+  const { status } = input;
+  const explicit = waitingReasonForExplicitReason(input["waiting-reason"]);
+  if (explicit !== null) return explicit;
   if (POLICY_WAIT_STATUSES.has(status)) return "policy-override";
   if (HUMAN_WAIT_STATUSES.has(status) && input["plan-only"] !== true) return "human-approval";
   if (timestampValue(input, "scheduled-at") !== null && status === "confirmed") return "scheduled-start";
@@ -142,23 +156,33 @@ function waitingLabelFor(reason: RunWaitingReason | null, input: RunDisplayInput
   return null;
 }
 
+function startedAtFor(input: RunDisplayInput, stage: RunStageId): string | null {
+  if (stage === "queue") return timestampValue(input, "pending-at");
+  if (stage === "plan") return timestampValue(input, "pre-plan-running-at") ?? timestampValue(input, "planning-at");
+  if (stage === "checks") return timestampValue(input, "cost-estimating-at") ?? timestampValue(input, "policy-checking-at");
+  return timestampValue(input, "confirmed-at") ?? timestampValue(input, "applying-at");
+}
+
+function finishedAtFor(input: RunDisplayInput, outcome: RunOutcome, stage: RunStageId): string | null {
+  if (outcome === "succeeded") {
+    return stage === "apply"
+      ? timestampValue(input, "applied-at")
+      : timestampValue(input, "planned-at") ?? timestampValue(input, "planned-and-finished-at");
+  }
+  if (outcome === "failed") {
+    return timestampValue(input, "errored-at") ?? timestampValue(input, "unreachable-at");
+  }
+  if (outcome === "canceled") {
+    return timestampValue(input, "canceled-at") ?? timestampValue(input, "force-canceled-at");
+  }
+  return null;
+}
+
 /** Resolve every backend lifecycle status into stage, outcome and wait data. */
 export function resolveRunDisplay(input: RunDisplayInput): RunDisplay {
   const waitingReason = waitingReasonFor(input);
   const outcome = outcomeFor(input, waitingReason);
   const stage = stageForStatus(input);
-  const startedAt = stage === "queue"
-    ? timestampValue(input, "pending-at")
-    : stage === "plan"
-      ? timestampValue(input, "pre-plan-running-at") ?? timestampValue(input, "planning-at")
-      : stage === "checks"
-        ? timestampValue(input, "cost-estimating-at") ?? timestampValue(input, "policy-checking-at")
-        : timestampValue(input, "confirmed-at") ?? timestampValue(input, "applying-at");
-  const finishedAt = outcome === "succeeded"
-    ? stage === "apply" ? timestampValue(input, "applied-at") : timestampValue(input, "planned-at") ?? timestampValue(input, "planned-and-finished-at")
-    : outcome === "failed"
-      ? timestampValue(input, "errored-at") ?? timestampValue(input, "unreachable-at")
-      : outcome === "canceled" ? timestampValue(input, "canceled-at") ?? timestampValue(input, "force-canceled-at") : null;
   return {
     stage,
     stageLabel: STAGE_LABELS[stage],
@@ -167,8 +191,8 @@ export function resolveRunDisplay(input: RunDisplayInput): RunDisplay {
     waitingReason,
     waitingLabel: waitingLabelFor(waitingReason, input),
     responsible: responsibleFor(input, waitingReason),
-    startedAt,
-    finishedAt,
+    startedAt: startedAtFor(input, stage),
+    finishedAt: finishedAtFor(input, outcome, stage),
   };
 }
 
@@ -228,29 +252,27 @@ export function formatPhaseState(state: string): string {
   return PHASE_LABELS[state as PhaseState] ?? state.replace(/_/g, " ");
 }
 
-/** The run lifecycle takes precedence over phase snapshots fetched earlier. */
-export function resolvePhaseStatus(
+function applyPhaseStatus(
   status: string,
-  phase: "plan" | "apply",
   timestamps: Readonly<Record<string, string>>,
-  artifactStatus?: string,
+  artifactStatus: string | undefined,
+  applyStarted: boolean,
 ): string {
-  const planStarted = isString(timestamps["planning-at"]) || isString(timestamps["pre-plan-running-at"]);
-  const planFinished = artifactStatus === "finished" && phase === "plan"
-    || isString(timestamps["planned-at"])
-    || isString(timestamps["planned-and-finished-at"])
-    || isString(timestamps["planned-and-saved-at"]);
-  const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
-    .some((key: string): boolean => isString(timestamps[key]));
-  if (phase === "apply") {
-    if (["applied", "post_apply_completed"].includes(status)) return "finished";
-    if (["applying", "post_apply_running"].includes(status)) return "running";
-    if (["confirmed", "apply_queued", "pre_apply_running", "pre_apply_completed"].includes(status)) return "queued";
-    if (artifactStatus === "finished" || isString(timestamps["applied-at"])) return "finished";
-    if (["errored", "failed", "unreachable"].includes(status)) return applyStarted ? "errored" : artifactStatus ?? "pending";
-    if (["canceled", "discarded", "force_canceled"].includes(status)) return applyStarted ? "canceled" : "pending";
-    return artifactStatus ?? "pending";
-  }
+  if (["applied", "post_apply_completed"].includes(status)) return "finished";
+  if (["applying", "post_apply_running"].includes(status)) return "running";
+  if (["confirmed", "apply_queued", "pre_apply_running", "pre_apply_completed"].includes(status)) return "queued";
+  if (artifactStatus === "finished" || isString(timestamps["applied-at"])) return "finished";
+  if (["errored", "failed", "unreachable"].includes(status)) return applyStarted ? "errored" : artifactStatus ?? "pending";
+  if (["canceled", "discarded", "force_canceled"].includes(status)) return applyStarted ? "canceled" : "pending";
+  return artifactStatus ?? "pending";
+}
+
+function planPhaseStatus(
+  status: string,
+  planStarted: boolean,
+  planFinished: boolean,
+  artifactStatus: string | undefined,
+): string {
   if (status === "planning") return "running";
   if (["queuing", "plan_queued", "pre_plan_running", "pre_plan_completed"].includes(status)) return "queued";
   if ([
@@ -281,4 +303,24 @@ export function resolvePhaseStatus(
     return planFinished ? "finished" : planStarted ? "canceled" : "pending";
   }
   return artifactStatus ?? "pending";
+}
+
+/** The run lifecycle takes precedence over phase snapshots fetched earlier. */
+export function resolvePhaseStatus(
+  status: string,
+  phase: "plan" | "apply",
+  timestamps: Readonly<Record<string, string>>,
+  artifactStatus?: string,
+): string {
+  const planStarted = isString(timestamps["planning-at"]) || isString(timestamps["pre-plan-running-at"]);
+  const planFinished = artifactStatus === "finished" && phase === "plan"
+    || isString(timestamps["planned-at"])
+    || isString(timestamps["planned-and-finished-at"])
+    || isString(timestamps["planned-and-saved-at"]);
+  const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
+    .some((key: string): boolean => isString(timestamps[key]));
+  if (phase === "apply") {
+    return applyPhaseStatus(status, timestamps, artifactStatus, applyStarted);
+  }
+  return planPhaseStatus(status, planStarted, planFinished, artifactStatus);
 }
