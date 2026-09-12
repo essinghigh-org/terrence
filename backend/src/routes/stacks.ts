@@ -200,6 +200,107 @@ function recordDate(value: unknown): string | null {
   return typeof value === "number" ? new Date(value).toISOString() : null;
 }
 
+type StackRecordTimestamps = Readonly<{ "created-at": string | null; "updated-at": string | null }>;
+type StackRecordApproval = { id: string; type: string } | null;
+
+function stackConfigurationResource(record: StackRecordItem, payload: Record<string, unknown>, timestamps: StackRecordTimestamps): Record<string, unknown> {
+  return {
+    id: record.id,
+    type: record.recordType,
+    attributes: {
+      status: record.status,
+      "sequence-number": payload["sequence-number"] ?? 1,
+      ...timestamps,
+      speculative: payload["speculative"] === true,
+      components: Array.isArray(payload["components"]) ? payload["components"] : [],
+      deployments: Array.isArray(payload["deployments"]) ? payload["deployments"] : [],
+    },
+    relationships: {
+      stack: { data: { id: record.stackId, type: "stacks" } },
+      "stack-diagnostics": { links: { related: `/api/v2/stack-configurations/${record.id}/stack-diagnostics` } },
+      "stack-deployment-groups": { links: { related: `/api/v2/stack-configurations/${record.id}/stack-deployment-groups` } },
+    },
+    links: { self: `/api/v2/stack-configurations/${record.id}`, "json-schemas": `/api/v2/stack-configurations/${record.id}/json-schemas` },
+    meta: { beta: false },
+  };
+}
+
+function stackDeploymentGroupResource(record: StackRecordItem, payload: Record<string, unknown>, timestamps: StackRecordTimestamps, approval: StackRecordApproval): Record<string, unknown> {
+  return {
+    id: record.id,
+    type: record.recordType,
+    attributes: { status: record.status, ...timestamps, name: record.name, "deployment-group-config": payload["deployment-group-config"] ?? { "auto-approve-checks": [] } },
+    relationships: {
+      "stack-configuration": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-configurations" } },
+      "stack-approvals": { data: approval === null ? [] : [approval] },
+      "stack-deployment-runs": { links: { related: `/api/v2/stack-deployment-groups/${record.id}/stack-deployment-runs` } },
+    },
+    links: { self: `/api/v2/stack-deployment-groups/${record.id}`, "stack-deployment-group-summaries": record.parentId === null ? null : `/api/v2/stack-configurations/${record.parentId}/stack-deployment-group-summaries` },
+  };
+}
+
+function stackDeploymentRunResource(record: StackRecordItem, payload: Record<string, unknown>, timestamps: StackRecordTimestamps, approval: StackRecordApproval): Record<string, unknown> {
+  return {
+    id: record.id,
+    type: record.recordType,
+    attributes: { status: record.status, deployment: record.name, ...timestamps, "plan-mode": payload["plan-mode"] ?? "normal", component: payload["component"] ?? null, "component-index": payload["componentIndex"] ?? 0, cycle: payload["cycle"] ?? 0, destroy: payload["destroy"] === true, "lock-acquired": payload["lockAcquired"] === true, error: payload["error"] ?? null },
+    relationships: {
+      "stack-deployment-group": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-deployment-groups" } },
+      "stack-configuration": { data: typeof payload["configurationId"] === "string" ? { id: payload["configurationId"], type: "stack-configurations" } : null },
+      "stack-deployment-steps": { links: { related: `/api/v2/stack-deployment-runs/${record.id}/stack-deployment-steps` } },
+      "stack-approval": { data: approval },
+    },
+    links: { self: `/api/v2/stack-deployment-runs/${record.id}` },
+  };
+}
+
+function stackDeploymentStepResource(record: StackRecordItem, payload: Record<string, unknown>, timestamps: StackRecordTimestamps, approval: StackRecordApproval): Record<string, unknown> {
+  return {
+    id: record.id,
+    type: record.recordType,
+    attributes: { status: record.status, "operation-type": payload["operation-type"] ?? "plan", phase: payload["phase"] ?? null, "component-index": payload["componentIndex"] ?? 0, "requires-state-lock": payload["requires-state-lock"] === true, "has-changes": payload["has-changes"] === true || payload["hasChanges"] === true, "deferred-changes": payload["deferred-changes"] === true || payload["deferredChanges"] === true, output: payload["output"] ?? null, ...timestamps },
+    relationships: {
+      "stack-deployment-run": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-deployment-runs" } },
+      "stack-diagnostics": { links: { related: `/api/v2/stack-deployment-steps/${record.id}/stack-diagnostics` }, meta: { count: 0 } },
+      "stack-approval": { data: approval },
+    },
+    links: { self: `/api/v2/stack-deployment-steps/${record.id}`, "plan-description": `/api/v2/stack-deployment-steps/${record.id}/artifacts?name=plan-description` },
+  };
+}
+
+function stackStateResource(record: StackRecordItem, payload: Record<string, unknown>): Record<string, unknown> {
+  const isCurrent = isCurrentStackStateRecord(record);
+  const status = isCurrent ? "current" : record.status === "current" ? "superseded" : record.status;
+  return {
+    id: record.id,
+    type: record.recordType,
+    attributes: {
+      generation: payload["generation"] ?? 1,
+      status,
+      deployment: record.name,
+      components: Array.isArray(payload["components"]) ? payload["components"] : [],
+      "is-current": isCurrent,
+      "resource-instance-count": payload["resource-instance-count"] ?? 0,
+    },
+    relationships: { stack: { data: { id: record.stackId, type: "stacks" } }, "stack-deployment-run": { data: typeof payload["runId"] === "string" ? { id: payload["runId"], type: "stack-deployment-runs" } : null } },
+    links: { self: `/api/v2/stack-states/${record.id}`, description: `/api/v2/stack-states/${record.id}/description` },
+  };
+}
+
+function stackDiagnosticResource(record: StackRecordItem, payload: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: record.id,
+    type: record.recordType,
+    attributes: { severity: payload["severity"] ?? "error", summary: payload["summary"] ?? "", detail: payload["detail"] ?? "", diags: payload["diags"] ?? null, acknowledged: payload["acknowledged"] === true, "acknowledged-at": payload["acknowledged-at"] ?? null, "created-at": recordDate(record.createdAt) },
+    relationships: { "stack-configuration": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-configurations" } } },
+    links: { self: `/api/v2/stack-diagnostics/${record.id}` },
+  };
+}
+
+function stackApprovalResource(record: StackRecordItem, payload: Record<string, unknown>): Record<string, unknown> {
+  return { id: record.id, type: record.recordType, attributes: { reason: payload["reason"] ?? null, "created-at": recordDate(record.createdAt) }, relationships: { user: { data: typeof payload["userId"] === "string" ? { id: payload["userId"], type: "users" } : null } } };
+}
+
 function stackRecordResource(record: StackRecordItem): Record<string, unknown> {
   const payload = record.payload ?? {};
   const approval = typeof payload["approvalId"] === "string" ? { id: payload["approvalId"], type: "stack-approvals" } : null;
@@ -207,97 +308,13 @@ function stackRecordResource(record: StackRecordItem): Record<string, unknown> {
     "created-at": recordDate(record.createdAt),
     "updated-at": recordDate(record.updatedAt),
   };
-  if (record.recordType === "stack-configurations") {
-    return {
-      id: record.id,
-      type: record.recordType,
-      attributes: {
-        status: record.status,
-        "sequence-number": payload["sequence-number"] ?? 1,
-        ...timestamps,
-        speculative: payload["speculative"] === true,
-        components: Array.isArray(payload["components"]) ? payload["components"] : [],
-        deployments: Array.isArray(payload["deployments"]) ? payload["deployments"] : [],
-      },
-      relationships: {
-        stack: { data: { id: record.stackId, type: "stacks" } },
-        "stack-diagnostics": { links: { related: `/api/v2/stack-configurations/${record.id}/stack-diagnostics` } },
-        "stack-deployment-groups": { links: { related: `/api/v2/stack-configurations/${record.id}/stack-deployment-groups` } },
-      },
-      links: { self: `/api/v2/stack-configurations/${record.id}`, "json-schemas": `/api/v2/stack-configurations/${record.id}/json-schemas` },
-      meta: { beta: false },
-    };
-  }
-  if (record.recordType === "stack-deployment-groups") {
-    return {
-      id: record.id,
-      type: record.recordType,
-      attributes: { status: record.status, ...timestamps, name: record.name, "deployment-group-config": payload["deployment-group-config"] ?? { "auto-approve-checks": [] } },
-      relationships: {
-        "stack-configuration": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-configurations" } },
-        "stack-approvals": { data: approval === null ? [] : [approval] },
-        "stack-deployment-runs": { links: { related: `/api/v2/stack-deployment-groups/${record.id}/stack-deployment-runs` } },
-      },
-      links: { self: `/api/v2/stack-deployment-groups/${record.id}`, "stack-deployment-group-summaries": record.parentId === null ? null : `/api/v2/stack-configurations/${record.parentId}/stack-deployment-group-summaries` },
-    };
-  }
-  if (record.recordType === "stack-deployment-runs") {
-    return {
-      id: record.id,
-      type: record.recordType,
-      attributes: { status: record.status, deployment: record.name, ...timestamps, "plan-mode": payload["plan-mode"] ?? "normal", component: payload["component"] ?? null, "component-index": payload["componentIndex"] ?? 0, cycle: payload["cycle"] ?? 0, destroy: payload["destroy"] === true, "lock-acquired": payload["lockAcquired"] === true, error: payload["error"] ?? null },
-      relationships: {
-        "stack-deployment-group": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-deployment-groups" } },
-        "stack-configuration": { data: typeof payload["configurationId"] === "string" ? { id: payload["configurationId"], type: "stack-configurations" } : null },
-        "stack-deployment-steps": { links: { related: `/api/v2/stack-deployment-runs/${record.id}/stack-deployment-steps` } },
-        "stack-approval": { data: approval },
-      },
-      links: { self: `/api/v2/stack-deployment-runs/${record.id}` },
-    };
-  }
-  if (record.recordType === "stack-deployment-steps") {
-    return {
-      id: record.id,
-      type: record.recordType,
-      attributes: { status: record.status, "operation-type": payload["operation-type"] ?? "plan", phase: payload["phase"] ?? null, "component-index": payload["componentIndex"] ?? 0, "requires-state-lock": payload["requires-state-lock"] === true, "has-changes": payload["has-changes"] === true || payload["hasChanges"] === true, "deferred-changes": payload["deferred-changes"] === true || payload["deferredChanges"] === true, output: payload["output"] ?? null, ...timestamps },
-      relationships: {
-        "stack-deployment-run": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-deployment-runs" } },
-        "stack-diagnostics": { links: { related: `/api/v2/stack-deployment-steps/${record.id}/stack-diagnostics` }, meta: { count: 0 } },
-        "stack-approval": { data: approval },
-      },
-      links: { self: `/api/v2/stack-deployment-steps/${record.id}`, "plan-description": `/api/v2/stack-deployment-steps/${record.id}/artifacts?name=plan-description` },
-    };
-  }
-  if (record.recordType === "stack-states") {
-    const isCurrent = isCurrentStackStateRecord(record);
-    const status = isCurrent ? "current" : record.status === "current" ? "superseded" : record.status;
-    return {
-      id: record.id,
-      type: record.recordType,
-      attributes: {
-        generation: payload["generation"] ?? 1,
-        status,
-        deployment: record.name,
-        components: Array.isArray(payload["components"]) ? payload["components"] : [],
-        "is-current": isCurrent,
-        "resource-instance-count": payload["resource-instance-count"] ?? 0,
-      },
-      relationships: { stack: { data: { id: record.stackId, type: "stacks" } }, "stack-deployment-run": { data: typeof payload["runId"] === "string" ? { id: payload["runId"], type: "stack-deployment-runs" } : null } },
-      links: { self: `/api/v2/stack-states/${record.id}`, description: `/api/v2/stack-states/${record.id}/description` },
-    };
-  }
-  if (record.recordType === "stack-diagnostics") {
-    return {
-      id: record.id,
-      type: record.recordType,
-      attributes: { severity: payload["severity"] ?? "error", summary: payload["summary"] ?? "", detail: payload["detail"] ?? "", diags: payload["diags"] ?? null, acknowledged: payload["acknowledged"] === true, "acknowledged-at": payload["acknowledged-at"] ?? null, "created-at": recordDate(record.createdAt) },
-      relationships: { "stack-configuration": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-configurations" } } },
-      links: { self: `/api/v2/stack-diagnostics/${record.id}` },
-    };
-  }
-  if (record.recordType === "stack-approvals") {
-    return { id: record.id, type: record.recordType, attributes: { reason: payload["reason"] ?? null, "created-at": recordDate(record.createdAt) }, relationships: { user: { data: typeof payload["userId"] === "string" ? { id: payload["userId"], type: "users" } : null } } };
-  }
+  if (record.recordType === "stack-configurations") return stackConfigurationResource(record, payload, timestamps);
+  if (record.recordType === "stack-deployment-groups") return stackDeploymentGroupResource(record, payload, timestamps, approval);
+  if (record.recordType === "stack-deployment-runs") return stackDeploymentRunResource(record, payload, timestamps, approval);
+  if (record.recordType === "stack-deployment-steps") return stackDeploymentStepResource(record, payload, timestamps, approval);
+  if (record.recordType === "stack-states") return stackStateResource(record, payload);
+  if (record.recordType === "stack-diagnostics") return stackDiagnosticResource(record, payload);
+  if (record.recordType === "stack-approvals") return stackApprovalResource(record, payload);
   return { id: record.id, type: record.recordType, attributes: { ...payload, ...timestamps } };
 }
 
