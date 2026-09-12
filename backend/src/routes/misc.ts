@@ -464,28 +464,48 @@ async function confirmRunApplyForWebhook(runId: string, set: SetObj): Promise<un
   return { data: { id: runId, type: "runs", attributes: { status: outcome.status } } };
 }
 
+async function verifyGitHubWebhookSignature(
+  request: Request,
+  body: unknown,
+  set: SetObj,
+): Promise<Readonly<{ rawBody: string }> | Readonly<{ error: unknown }>> {
+  const secret = await getGitHubWebhookSecret();
+  const signature = request.headers.get("x-hub-signature-256");
+  const rawBody = typeof body === "string" ? body : await request.text().catch((): string => "");
+  if (typeof secret !== "string" || secret.length === 0) {
+    return { error: webhookUnauthorized(set, "GitHub webhook secret is not configured") };
+  }
+  if (signature === null) {
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Missing signature" }] } };
+  }
+  const expectedSignature = Buffer.from(`sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`);
+  const providedSignature = Buffer.from(signature);
+  if (providedSignature.length !== expectedSignature.length || !timingSafeEqual(providedSignature, expectedSignature)) {
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid signature" }] } };
+  }
+  return { rawBody };
+}
+
+async function claimGitHubDelivery(request: Request): Promise<{ deliveryId: string | null; duplicate: boolean }> {
+  const deliveryHeader = request.headers.get("x-github-delivery");
+  const deliveryId = deliveryHeader !== null && deliveryHeader !== "" ? deliveryHeader : null;
+  if (deliveryId === null) return { deliveryId: null, duplicate: false };
+  const claimed = await db.insert(githubWebhookDeliveries)
+    .values({ id: deliveryId, status: "queued", receivedAt: Date.now() })
+    .onConflictDoNothing()
+    .returning({ id: githubWebhookDeliveries.id });
+  return { deliveryId, duplicate: claimed.length === 0 };
+}
+
 export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
     .post("/api/webhooks/github", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
-    const secret = await getGitHubWebhookSecret();
-    const signature = request.headers.get("x-hub-signature-256");
-    const rawBody = typeof body === "string" ? body : await request.text().catch((): string => "");
-    if (typeof secret !== "string" || secret.length === 0) {
-      return webhookUnauthorized(set, "GitHub webhook secret is not configured");
-    }
-    if (signature === null) {
-        (set as { status: number }).status = 401;
-        return { errors: [{ status: "401", title: "Unauthorized", detail: "Missing signature" }] };
-      }
-
-      const expectedSignature = Buffer.from(`sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`);
-      const providedSignature = Buffer.from(signature);
-      if (providedSignature.length !== expectedSignature.length || !timingSafeEqual(providedSignature, expectedSignature)) {
-        (set as { status: number }).status = 401;
-        return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid signature" }] };
-      }
-
+    const verified = await verifyGitHubWebhookSignature(request, body, set);
+    if ("error" in verified) return verified.error;
+    const rawBody = verified.rawBody;
     const eventName = request.headers.get("x-github-event");
     if (eventName !== null) {
       let payload: Record<string, unknown> = {};
@@ -493,21 +513,13 @@ export const miscRoutes = new Elysia({ name: "misc" })
         const parsed: unknown = JSON.parse(rawBody);
         if (parsed !== null && typeof parsed === "object") payload = parsed as Record<string, unknown>;
       } catch {}
-      const deliveryHeader = request.headers.get("x-github-delivery");
-      const deliveryId = deliveryHeader !== null && deliveryHeader !== "" ? deliveryHeader : null;
-      if (deliveryId !== null) {
-        const claimed = await db.insert(githubWebhookDeliveries)
-          .values({ id: deliveryId, status: "queued", receivedAt: Date.now() })
-          .onConflictDoNothing()
-          .returning({ id: githubWebhookDeliveries.id });
-        if (claimed.length === 0) {
-          // Redelivery of a delivery we already hold: acknowledged without
-          // reprocessing (todo 184/199). A failed delivery stays failed until
-          // the admin retry endpoint re-arms it.
-          return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
-        }
+      const { deliveryId, duplicate } = await claimGitHubDelivery(request);
+      if (duplicate) {
+        // Redelivery of a delivery we already hold: acknowledged without
+        // reprocessing (todo 184/199). A failed delivery stays failed until
+        // the admin retry endpoint re-arms it.
+        return webhookAcknowledged;
       }
-
       if (eventName === "push" || eventName === "pull_request") {
         log.info(`Received GitHub ${eventName} event.`);
       }
@@ -521,7 +533,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
       });
     }
 
-    return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
+    return webhookAcknowledged;
   })
   .post("/api/webhooks/gitlab", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
     const secret = process.env["GITLAB_WEBHOOK_SECRET"];
