@@ -66,6 +66,40 @@ export function versionedJson<T>(data: T, extensions?: Readonly<Record<string, u
   };
 }
 
+function assertEnvelopeVersion(
+  record: Record<string, unknown>,
+  field: string,
+  context: Readonly<{ rowId?: string; schemaVersion?: number }>,
+): number {
+  const schemaVersion = record["schemaVersion"];
+  if (typeof schemaVersion !== "number" || !Number.isSafeInteger(schemaVersion) || schemaVersion < 1) {
+    validationError(field, "version", "schemaVersion must be a positive integer", context);
+  }
+  if (schemaVersion !== PERSISTED_JSON_SCHEMA_VERSION) {
+    validationError(field, "version", `unsupported schemaVersion ${schemaVersion}`, { ...context, schemaVersion });
+  }
+  return schemaVersion;
+}
+
+function readEnvelopeExtensions(
+  record: Record<string, unknown>,
+  field: string,
+  context: Readonly<{ rowId?: string; schemaVersion?: number }>,
+  schemaVersion: number,
+): Readonly<Record<string, unknown>> {
+  const declaredExtensions = record["extensions"];
+  if (declaredExtensions !== undefined && objectRecord(declaredExtensions) === undefined) {
+    validationError(field, "field", "extensions must be an object", { ...context, schemaVersion });
+  }
+  const envelopeExtensions = Object.fromEntries(
+    Object.entries(record).filter(([key]) => !["schemaVersion", "data", "extensions"].includes(key)),
+  );
+  return {
+    ...(declaredExtensions as Readonly<Record<string, unknown>> | undefined ?? {}),
+    ...envelopeExtensions,
+  };
+}
+
 /**
  * Read a versioned value while explicitly adapting the oldest raw form.  The
  * adapter is intentionally supplied by the domain schema; this helper never
@@ -86,29 +120,12 @@ export function readVersionedJson<T>(
 
   const record = objectRecord(raw);
   if (record !== undefined && Object.hasOwn(record, "schemaVersion")) {
-    const schemaVersion = record["schemaVersion"];
-    if (typeof schemaVersion !== "number" || !Number.isSafeInteger(schemaVersion) || schemaVersion < 1) {
-      validationError(field, "version", "schemaVersion must be a positive integer", context);
-    }
-    if (schemaVersion !== PERSISTED_JSON_SCHEMA_VERSION) {
-      validationError(field, "version", `unsupported schemaVersion ${schemaVersion}`, { ...context, schemaVersion });
-    }
+    const schemaVersion = assertEnvelopeVersion(record, field, context);
     if (!Object.hasOwn(record, "data")) validationError(field, "field", "versioned value is missing data", { ...context, schemaVersion });
-    const declaredExtensions = record["extensions"];
-    if (declaredExtensions !== undefined && objectRecord(declaredExtensions) === undefined) {
-      validationError(field, "field", "extensions must be an object", { ...context, schemaVersion });
-    }
-    const envelopeExtensions = Object.fromEntries(
-      Object.entries(record).filter(([key]) => !["schemaVersion", "data", "extensions"].includes(key)),
-    );
-    const extensions = {
-      ...(declaredExtensions as Readonly<Record<string, unknown>> | undefined ?? {}),
-      ...envelopeExtensions,
-    };
     return {
       value: adaptLegacy(record["data"], context),
       schemaVersion,
-      extensions,
+      extensions: readEnvelopeExtensions(record, field, context, schemaVersion),
     };
   }
 

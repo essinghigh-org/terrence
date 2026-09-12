@@ -127,6 +127,22 @@ function quality(parameters: Readonly<ReadonlyMap<string, Readonly<{ value: stri
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : 0;
 }
 
+function rangeSupportsJsonApi(parsed: ParsedMediaType): boolean {
+  const withoutQuality = new Map(
+    [...parsed.parameters.entries()].filter(([name]): boolean => name !== "q"),
+  );
+  if ((parsed.type === "*/*" || parsed.type === "application/*") && withoutQuality.size === 0) return true;
+  if (parsed.type !== JSON_API_MEDIA_TYPE) return false;
+  for (const [name, parameter] of withoutQuality) {
+    if (name !== "profile" && name !== "ext") return false;
+    if (!parameter.quoted || parameter.value.split(" ").some((uri): boolean => uri === "")) return false;
+    // This server has no extensions to apply. An unsupported ext instance
+    // is ignored, as required by JSON:API content negotiation.
+    if (name === "ext") return false;
+  }
+  return true;
+}
+
 /**
  * Whether an Accept header allows a JSON:API representation.
  *
@@ -143,26 +159,7 @@ export function acceptsJsonApi(value: string | null): boolean {
   for (const range of ranges) {
     const parsed = parseMediaType(range.trim());
     if (parsed === null || quality(parsed.parameters) <= 0) continue;
-    const withoutQuality = new Map(
-      [...parsed.parameters.entries()].filter(([name]): boolean => name !== "q"),
-    );
-    if ((parsed.type === "*/*" || parsed.type === "application/*") && withoutQuality.size === 0) return true;
-    if (parsed.type !== JSON_API_MEDIA_TYPE) continue;
-    let supported = true;
-    for (const [name, parameter] of withoutQuality) {
-      if (name !== "profile" && name !== "ext") {
-        supported = false;
-        break;
-      }
-      if (!parameter.quoted || parameter.value.split(" ").some((uri): boolean => uri === "")) {
-        supported = false;
-        break;
-      }
-      // This server has no extensions to apply. An unsupported ext instance
-      // is ignored, as required by JSON:API content negotiation.
-      if (name === "ext") supported = false;
-    }
-    if (supported) return true;
+    if (rangeSupportsJsonApi(parsed)) return true;
   }
   return false;
 }
