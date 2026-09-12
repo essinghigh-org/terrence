@@ -369,6 +369,102 @@ async function createStackConfigurationRecord(stack: StackItem, source: string, 
   });
 }
 
+function parseStackPatchDocument(body: unknown): { attributes: Record<string, unknown>; relationships: Record<string, unknown> } {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"];
+  const attrs = (data !== null && typeof data === "object" ? (data as Record<string, unknown>)["attributes"] : null);
+  const attributes = attrs !== null && typeof attrs === "object" ? attrs as Record<string, unknown> : {};
+  const relationships = data !== null && typeof data === "object" && (data as Record<string, unknown>)["relationships"] !== null && typeof (data as Record<string, unknown>)["relationships"] === "object"
+    ? (data as Record<string, unknown>)["relationships"] as Record<string, unknown>
+    : {};
+  return { attributes, relationships };
+}
+
+function applyStackScalarUpdates(attributes: Record<string, unknown>, updates: Partial<typeof stacks.$inferInsert>): void {
+  if (typeof attributes["name"] === "string" && attributes["name"].trim() !== "") updates.name = attributes["name"].trim();
+  if (typeof attributes["description"] === "string") updates.description = attributes["description"];
+  if (typeof attributes["speculative-enabled"] === "boolean") updates.speculativeEnabled = attributes["speculative-enabled"];
+  if (typeof attributes["working-directory"] === "string") updates.workingDirectory = attributes["working-directory"];
+  if (Array.isArray(attributes["trigger-patterns"])) updates.triggerPatterns = (attributes["trigger-patterns"] as unknown[]).filter((item): item is string => typeof item === "string");
+  if (typeof attributes["trigger-disabled"] === "boolean") updates.triggerDisabled = attributes["trigger-disabled"];
+  if (typeof attributes["debugging-mode"] === "boolean") updates.debuggingMode = attributes["debugging-mode"];
+}
+
+async function applyStackVcsUpdate(
+  attributes: Record<string, unknown>,
+  orgId: string,
+  updates: Partial<typeof stacks.$inferInsert>,
+): Promise<string | null> {
+  // vcs-repo updates replace the stored VCS attributes (empty/null clears).
+  // A present-but-malformed vcs-repo is a client error, not a silent clear.
+  if (attributes["vcs-repo"] === undefined) return null;
+  const vcs = attributes["vcs-repo"];
+  if (vcs !== null && (typeof vcs !== "object" || Array.isArray(vcs))) {
+    return "vcs-repo must be an object or null";
+  }
+  const v = stackVcsRepoAttributes(attributes);
+  const vcsError = await validStackVcs(v, orgId);
+  if (vcsError !== null) return vcsError;
+  updates.vcsIdentifier = v.vcsIdentifier;
+  updates.vcsServiceProvider = v.vcsServiceProvider;
+  updates.vcsBranch = v.vcsBranch;
+  updates.vcsTagsRegex = v.vcsTagsRegex;
+  updates.vcsDisplayIdentifier = v.vcsDisplayIdentifier;
+  updates.vcsRepositoryHttpUrl = v.vcsRepositoryHttpUrl;
+  updates.vcsSparseCheckoutPattern = v.vcsSparseCheckoutPattern;
+  updates.vcsOAuthTokenId = v.vcsOAuthTokenId;
+  updates.vcsGhaInstallationId = v.vcsGhaInstallationId;
+  updates.triggerDisabled = v.triggerDisabled;
+  return null;
+}
+
+function applyStackPoolRelationship(
+  poolData: { id?: unknown } | null | undefined,
+  updates: Partial<typeof stacks.$inferInsert>,
+): string | null {
+  if (poolData === undefined) return null;
+  if (poolData === null) {
+    updates.agentPoolId = null;
+    return null;
+  }
+  if (typeof poolData.id !== "string") return "agent-pool must reference an agent pool";
+  updates.agentPoolId = poolData.id;
+  return null;
+}
+
+async function validateStackAgentPool(nextPoolId: string | null, orgId: string): Promise<string | null> {
+  if (nextPoolId === null) return null;
+  const pool = await db.query.agentPools.findFirst({ where: and(eq(agentPools.id, nextPoolId), eq(agentPools.orgId, orgId)) });
+  if (pool === undefined) return "agent-pool must belong to the Stack organization";
+  return null;
+}
+
+async function applyStackExecutionUpdates(
+  attributes: Record<string, unknown>,
+  relationships: Record<string, unknown>,
+  stack: StackItem,
+  orgId: string,
+  updates: Partial<typeof stacks.$inferInsert>,
+): Promise<string | null> {
+  if (attributes["execution-mode"] !== undefined && attributes["execution-mode"] !== "remote" && attributes["execution-mode"] !== "agent") {
+    return "execution-mode must be remote or agent";
+  }
+  const poolData = (relationships["agent-pool"] as { data?: { id?: unknown } } | undefined)?.data;
+  const poolError = applyStackPoolRelationship(poolData, updates);
+  if (poolError !== null) return poolError;
+  const nextPoolId = updates.agentPoolId !== undefined ? updates.agentPoolId : stack.agentPoolId;
+  const nextMode = typeof attributes["execution-mode"] === "string"
+    ? attributes["execution-mode"]
+    : poolData !== undefined
+      ? nextPoolId === null ? "remote" : "agent"
+      : stack.executionMode;
+  if (nextMode === "agent" && nextPoolId === null) return "agent execution requires an agent-pool relationship";
+  const orgError = await validateStackAgentPool(nextPoolId, orgId);
+  if (orgError !== null) return orgError;
+  if (typeof attributes["execution-mode"] === "string") updates.executionMode = attributes["execution-mode"];
+  return null;
+}
+
 export const stackRoutes = new Elysia({ name: "stacks" })
   .use(authPlugin)
   .post("/api/v2/stacks", async ({ body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -778,66 +874,13 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     if (details === undefined || !(await checkOrganizationPermission(details.stack.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const raw = body;
-    const payload = raw !== null && typeof raw === "object" ? raw as Record<string, unknown> : {};
-    const data = payload["data"];
-    const attrs = (data !== null && typeof data === "object" ? (data as Record<string, unknown>)["attributes"] : null);
-    const attributes = attrs !== null && typeof attrs === "object" ? attrs as Record<string, unknown> : {};
-    const relationships = data !== null && typeof data === "object" && (data as Record<string, unknown>)["relationships"] !== null && typeof (data as Record<string, unknown>)["relationships"] === "object"
-      ? (data as Record<string, unknown>)["relationships"] as Record<string, unknown>
-      : {};
+    const { attributes, relationships } = parseStackPatchDocument(body);
     const updates: Partial<typeof stacks.$inferInsert> = { updatedAt: Date.now() };
-    if (typeof attributes["name"] === "string" && attributes["name"].trim() !== "") updates.name = attributes["name"].trim();
-    if (typeof attributes["description"] === "string") updates.description = attributes["description"];
-    if (typeof attributes["speculative-enabled"] === "boolean") updates.speculativeEnabled = attributes["speculative-enabled"];
-    if (typeof attributes["working-directory"] === "string") updates.workingDirectory = attributes["working-directory"];
-    if (Array.isArray(attributes["trigger-patterns"])) updates.triggerPatterns = (attributes["trigger-patterns"] as unknown[]).filter((item): item is string => typeof item === "string");
-    // vcs-repo updates replace the stored VCS attributes (empty/null clears).
-    // A present-but-malformed vcs-repo is a client error, not a silent clear.
-    if (attributes["vcs-repo"] !== undefined) {
-      const vcs = attributes["vcs-repo"];
-      if (vcs !== null && (typeof vcs !== "object" || Array.isArray(vcs))) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "vcs-repo must be an object or null" }] };
-      }
-      const v = stackVcsRepoAttributes(attributes);
-      const vcsError = await validStackVcs(v, details.stack.orgId);
-      if (vcsError !== null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: vcsError }] }; }
-      updates.vcsIdentifier = v.vcsIdentifier;
-      updates.vcsServiceProvider = v.vcsServiceProvider;
-      updates.vcsBranch = v.vcsBranch;
-      updates.vcsTagsRegex = v.vcsTagsRegex;
-      updates.vcsDisplayIdentifier = v.vcsDisplayIdentifier;
-      updates.vcsRepositoryHttpUrl = v.vcsRepositoryHttpUrl;
-      updates.vcsSparseCheckoutPattern = v.vcsSparseCheckoutPattern;
-      updates.vcsOAuthTokenId = v.vcsOAuthTokenId;
-      updates.vcsGhaInstallationId = v.vcsGhaInstallationId;
-      updates.triggerDisabled = v.triggerDisabled;
-    }
-    if (typeof attributes["trigger-disabled"] === "boolean") updates.triggerDisabled = attributes["trigger-disabled"];
-    if (typeof attributes["debugging-mode"] === "boolean") updates.debuggingMode = attributes["debugging-mode"];
-    if (attributes["execution-mode"] !== undefined && attributes["execution-mode"] !== "remote" && attributes["execution-mode"] !== "agent") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "execution-mode must be remote or agent" }] };
-    }
-    const poolData = (relationships["agent-pool"] as { data?: { id?: unknown } } | undefined)?.data;
-    if (poolData !== undefined) {
-      if (poolData === null) updates.agentPoolId = null;
-      else if (typeof poolData.id === "string") updates.agentPoolId = poolData.id;
-      else { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "agent-pool must reference an agent pool" }] }; }
-    }
-    const nextPoolId = updates.agentPoolId !== undefined ? updates.agentPoolId : details.stack.agentPoolId;
-    const nextMode = typeof attributes["execution-mode"] === "string"
-      ? attributes["execution-mode"]
-      : poolData !== undefined
-        ? nextPoolId === null ? "remote" : "agent"
-        : details.stack.executionMode;
-    if (nextMode === "agent" && nextPoolId === null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "agent execution requires an agent-pool relationship" }] }; }
-    if (nextPoolId !== null) {
-      const pool = await db.query.agentPools.findFirst({ where: and(eq(agentPools.id, nextPoolId), eq(agentPools.orgId, details.stack.orgId)) });
-      if (pool === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "agent-pool must belong to the Stack organization" }] }; }
-    }
-    if (typeof attributes["execution-mode"] === "string") updates.executionMode = attributes["execution-mode"];
+    applyStackScalarUpdates(attributes, updates);
+    const vcsError = await applyStackVcsUpdate(attributes, details.stack.orgId, updates);
+    if (vcsError !== null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: vcsError }] }; }
+    const executionError = await applyStackExecutionUpdates(attributes, relationships, details.stack, details.stack.orgId, updates);
+    if (executionError !== null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: executionError }] }; }
     await db.update(stacks).set(updates).where(eq(stacks.id, details.stack.id));
     const updated = await db.query.stacks.findFirst({ where: eq(stacks.id, params["stack_id"] ?? "") });
     return { data: updated === undefined ? undefined : stackResource(updated, details.projectName) };
