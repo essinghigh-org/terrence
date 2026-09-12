@@ -8,6 +8,89 @@ type ComboboxOption = Readonly<{
   hint?: string;
 }>;
 
+function ComboboxDropdown({
+  listId,
+  listRef,
+  filtered,
+  rowCount,
+  emptyText,
+  highlighted,
+  value,
+  showCustom,
+  query,
+  onHighlight,
+  onCommit,
+}: Readonly<{
+  listId: string;
+  listRef: React.RefObject<HTMLUListElement | null>;
+  filtered: readonly ComboboxOption[];
+  rowCount: number;
+  emptyText: string;
+  highlighted: number;
+  value: string;
+  showCustom: boolean;
+  query: string;
+  onHighlight: (index: number) => void;
+  onCommit: (id: string) => void;
+}>): React.JSX.Element {
+  const optionId = (index: number): string => `${listId}-option-${index}`;
+  return (
+    <ul
+      id={listId}
+      ref={listRef}
+      role="listbox"
+      aria-label="Suggestions"
+      className="absolute z-50 mt-1 max-h-64 w-full min-w-56 overflow-y-auto rounded-lg bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10"
+    >
+      {rowCount === 0 && (
+        <li className="px-2.5 py-1.5 text-xs text-muted-foreground" role="option" aria-disabled="true">
+          {emptyText}
+        </li>
+      )}
+      {filtered.map((option, index): React.JSX.Element => (
+        <li key={option.id}>
+          <button
+            type="button"
+            id={optionId(index)}
+            role="option"
+            aria-selected={index === highlighted}
+            onMouseEnter={(): void => { onHighlight(index); }}
+            onClick={(): void => { onCommit(option.id); }}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm",
+              index === highlighted ? "bg-accent text-accent-foreground" : "",
+            )}
+          >
+            <span className="min-w-0 flex-1 truncate">{option.label}</span>
+            {option.hint !== undefined && (
+              <span className="shrink-0 truncate text-xs text-muted-foreground">{option.hint}</span>
+            )}
+            {option.id === value && <Check className="size-3.5 shrink-0" aria-hidden="true" />}
+          </button>
+        </li>
+      ))}
+      {showCustom && (
+        <li>
+          <button
+            type="button"
+            id={optionId(filtered.length)}
+            role="option"
+            aria-selected={highlighted === filtered.length}
+            onMouseEnter={(): void => { onHighlight(filtered.length); }}
+            onClick={(): void => { onCommit(query.trim()); }}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm",
+              highlighted === filtered.length ? "bg-accent text-accent-foreground" : "",
+            )}
+          >
+            <span className="min-w-0 flex-1 truncate">Use "{query.trim()}"</span>
+          </button>
+        </li>
+      )}
+    </ul>
+  );
+}
+
 /**
  * Lightweight searchable combobox (base-ui-free, matches the minimal UI
  * style of this codebase). Type to filter with a subsequence fuzzy match;
@@ -165,59 +248,19 @@ export function FuzzyCombobox({
         />
       </div>
       {open && (
-        <ul
-          id={listId}
-          ref={listRef}
-          role="listbox"
-          aria-label="Suggestions"
-          className="absolute z-50 mt-1 max-h-64 w-full min-w-56 overflow-y-auto rounded-lg bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10"
-        >
-          {rowCount === 0 && (
-            <li className="px-2.5 py-1.5 text-xs text-muted-foreground" role="option" aria-disabled="true">
-              {emptyText}
-            </li>
-          )}
-          {filtered.map((option, index): React.JSX.Element => (
-            <li key={option.id}>
-              <button
-                type="button"
-                id={optionId(index)}
-                role="option"
-                aria-selected={index === highlighted}
-                onMouseEnter={(): void => { setHighlighted(index); }}
-                onClick={(): void => { commit(option.id); }}
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm",
-                  index === highlighted ? "bg-accent text-accent-foreground" : "",
-                )}
-              >
-                <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                {option.hint !== undefined && (
-                  <span className="shrink-0 truncate text-xs text-muted-foreground">{option.hint}</span>
-                )}
-                {option.id === value && <Check className="size-3.5 shrink-0" aria-hidden="true" />}
-              </button>
-            </li>
-          ))}
-          {showCustom && (
-            <li>
-              <button
-                type="button"
-                id={optionId(filtered.length)}
-                role="option"
-                aria-selected={highlighted === filtered.length}
-                onMouseEnter={(): void => { setHighlighted(filtered.length); }}
-                onClick={(): void => { commit(query.trim()); }}
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm",
-                  highlighted === filtered.length ? "bg-accent text-accent-foreground" : "",
-                )}
-              >
-                <span className="min-w-0 flex-1 truncate">Use "{query.trim()}"</span>
-              </button>
-            </li>
-          )}
-        </ul>
+        <ComboboxDropdown
+          listId={listId}
+          listRef={listRef}
+          filtered={filtered}
+          rowCount={rowCount}
+          emptyText={emptyText}
+          highlighted={highlighted}
+          value={value}
+          showCustom={showCustom}
+          query={query}
+          onHighlight={(index: number): void => { setHighlighted(index); }}
+          onCommit={commit}
+        />
       )}
     </div>
   );

@@ -28,6 +28,83 @@ export type ConfirmDialogProps = Readonly<{
   loading?: boolean;
 }>;
 
+function isConfirmReady(
+  requireText: string | undefined,
+  typedText: string,
+  requireCheckbox: string | undefined,
+  checked: boolean,
+): boolean {
+  const textConfirmed = requireText === undefined || typedText.trim() === requireText.trim();
+  const checkboxConfirmed = requireCheckbox === undefined || checked;
+  return textConfirmed && checkboxConfirmed;
+}
+
+function ConfirmTextRequirement({
+  requireText,
+  requireTextLabel,
+  typedText,
+  onTypedText,
+}: Readonly<{
+  requireText: string;
+  requireTextLabel: string | undefined;
+  typedText: string;
+  onTypedText: (value: string) => void;
+}>): React.JSX.Element {
+  return (
+    <div className="my-4 space-y-2 rounded-md border border-muted bg-muted/30 p-3">
+      <Label htmlFor="confirm-dialog-input" className="text-xs font-medium text-foreground">
+        {requireTextLabel ?? (
+          <>
+            Type <strong className="font-semibold text-foreground">{requireText}</strong> to confirm deletion
+          </>
+        )}
+      </Label>
+      <Input
+        id="confirm-dialog-input"
+        name="confirmation"
+        value={typedText}
+        onChange={(e: React.ChangeEvent<HTMLInputElement>): void => {
+          onTypedText(e.target.value);
+        }}
+        onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => {
+          onTypedText(e.currentTarget.value);
+        }}
+        placeholder={requireText}
+        className="h-9 font-mono text-sm"
+        autoFocus
+        autoComplete="off"
+      />
+    </div>
+  );
+}
+
+function ConfirmCheckboxRequirement({
+  requireCheckbox,
+  checked,
+  onChecked,
+}: Readonly<{
+  requireCheckbox: string;
+  checked: boolean;
+  onChecked: (checked: boolean) => void;
+}>): React.JSX.Element {
+  return (
+    <div className="my-4 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+      <input
+        id="confirm-dialog-checkbox"
+        type="checkbox"
+        checked={checked}
+        onChange={(e: React.ChangeEvent<HTMLInputElement>): void => {
+          onChecked(e.target.checked);
+        }}
+        className="mt-0.5 size-4 shrink-0 accent-destructive"
+      />
+      <Label htmlFor="confirm-dialog-checkbox" className="text-xs font-medium leading-relaxed text-foreground">
+        {requireCheckbox}
+      </Label>
+    </div>
+  );
+}
+
 export function ConfirmDialog({
   open,
   onOpenChange,
@@ -52,9 +129,7 @@ export function ConfirmDialog({
     }
   }, [open]);
 
-  const textConfirmed = requireText === undefined || typedText.trim() === requireText.trim();
-  const checkboxConfirmed = requireCheckbox === undefined || checked;
-  const isConfirmed = textConfirmed && checkboxConfirmed;
+  const isConfirmed = isConfirmReady(requireText, typedText, requireCheckbox, checked);
 
   const handleFormSubmit = (e: React.FormEvent): void => {
     e.preventDefault();
@@ -83,47 +158,20 @@ export function ConfirmDialog({
           </DialogHeader>
 
           {requireText !== undefined && (
-            <div className="my-4 space-y-2 rounded-md border border-muted bg-muted/30 p-3">
-              <Label htmlFor="confirm-dialog-input" className="text-xs font-medium text-foreground">
-                {requireTextLabel ?? (
-                  <>
-                    Type <strong className="font-semibold text-foreground">{requireText}</strong> to confirm deletion
-                  </>
-                )}
-              </Label>
-              <Input
-                id="confirm-dialog-input"
-                name="confirmation"
-                value={typedText}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>): void => {
-                  setTypedText(e.target.value);
-                }}
-                onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => {
-                  setTypedText(e.currentTarget.value);
-                }}
-                placeholder={requireText}
-                className="h-9 font-mono text-sm"
-                autoFocus
-                autoComplete="off"
-              />
-            </div>
+            <ConfirmTextRequirement
+              requireText={requireText}
+              requireTextLabel={requireTextLabel}
+              typedText={typedText}
+              onTypedText={(value: string): void => { setTypedText(value); }}
+            />
           )}
 
           {requireCheckbox !== undefined && (
-            <div className="my-4 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3">
-              <input
-                id="confirm-dialog-checkbox"
-                type="checkbox"
-                checked={checked}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>): void => {
-                  setChecked(e.target.checked);
-                }}
-                className="mt-0.5 size-4 shrink-0 accent-destructive"
-              />
-              <Label htmlFor="confirm-dialog-checkbox" className="text-xs font-medium leading-relaxed text-foreground">
-                {requireCheckbox}
-              </Label>
-            </div>
+            <ConfirmCheckboxRequirement
+              requireCheckbox={requireCheckbox}
+              checked={checked}
+              onChecked={(value: boolean): void => { setChecked(value); }}
+            />
           )}
 
           <DialogFooter className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
