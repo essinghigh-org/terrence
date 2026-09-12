@@ -1102,6 +1102,41 @@ async function checkSetupAuthorization(
   );
 }
 
+async function discoverInstallationRepositories(installationId: number): Promise<RepositoryResource[]> {
+  const token = await getGitHubAppAccessToken(installationId);
+  const apiBase = (await githubAppConfig())?.apiUrl;
+  if (token === null || apiBase === undefined) return [];
+  try {
+    return await discoverGithubInstallationRepositories(apiBase, token);
+  } catch {
+    // A valid installation with a temporarily unavailable API returns an
+    // empty discovery result, matching OAuth discovery semantics.
+    return [];
+  }
+}
+
+async function discoverConnectionRepositories(connectionId: string, orgId: string): Promise<RepositoryResource[] | null> {
+  // Resolve OAuth token -> OAuth client inside this organization before
+  // decrypting the token or contacting any provider API. The token ID is a
+  // client-controlled path parameter and must not be looked up globally.
+  const oauthToken = await db.query.oauthTokens.findFirst({
+    where: eq(oauthTokens.id, connectionId),
+  });
+  const oauthClient = oauthToken === undefined
+    ? undefined
+    : await db.query.oauthClients.findFirst({
+        where: and(eq(oauthClients.id, oauthToken.oauthClientId), eq(oauthClients.orgId, orgId)),
+      });
+  if (oauthToken === undefined || oauthClient === undefined) return null;
+  try {
+    return await discoverOAuthRepositories(oauthClient, await decryptSecret(oauthToken.token), oauthToken.serviceProviderUser);
+  } catch {
+    // Preserve the existing discovery behavior for provider/decryption
+    // failures: the connection is valid, but currently has no results.
+    return [];
+  }
+}
+
 export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstallations" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/vcs-connections/:connection_id/repositories", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -1115,51 +1150,20 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     if (connectionId.startsWith("github-app:")) connectionId = connectionId.slice("github-app:".length);
     if (connectionId.startsWith("oauth-token:")) connectionId = connectionId.slice("oauth-token:".length);
 
-    const repos: { id: string; type: string; attributes: { identifier: string; name: string; owner: string } }[] = [];
-
     // 1. Check if connection is GitHub App Installation
     const installation = await db.query.githubAppInstallations.findFirst({
       where: and(eq(githubAppInstallations.id, connectionId), eq(githubAppInstallations.orgId, org.id)),
     });
 
     if (installation !== undefined) {
-      const token = await getGitHubAppAccessToken(installation.installationId);
-      const apiBase = (await githubAppConfig())?.apiUrl;
-      if (token !== null && apiBase !== undefined) {
-        try {
-          repos.push(...await discoverGithubInstallationRepositories(apiBase, token));
-        } catch {
-          // A valid installation with a temporarily unavailable API returns an
-          // empty discovery result, matching OAuth discovery semantics.
-        }
-      }
-      return { data: repos };
-    } else {
-      // 2. Resolve OAuth token -> OAuth client inside this organization before
-      // decrypting the token or contacting any provider API. The token ID is a
-      // client-controlled path parameter and must not be looked up globally.
-      const oauthToken = await db.query.oauthTokens.findFirst({
-        where: eq(oauthTokens.id, connectionId),
-      });
-      const oauthClient = oauthToken === undefined
-        ? undefined
-        : await db.query.oauthClients.findFirst({
-            where: and(eq(oauthClients.id, oauthToken.oauthClientId), eq(oauthClients.orgId, org.id)),
-          });
-      if (oauthToken === undefined || oauthClient === undefined) {
-        (set as { status: number }).status = 404;
-        return { errors: [{ status: "404", title: "Not Found" }] };
-      }
-      try {
-        const tokenStr = await decryptSecret(oauthToken.token);
-        repos.push(...await discoverOAuthRepositories(oauthClient, tokenStr, oauthToken.serviceProviderUser));
-      } catch {
-        // Preserve the existing discovery behavior for provider/decryption
-        // failures: the connection is valid, but currently has no results.
-      }
+      return { data: await discoverInstallationRepositories(installation.installationId) };
     }
-
-    return { data: repos };
+    const discovered = await discoverConnectionRepositories(connectionId, org.id);
+    if (discovered === null) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return { data: discovered };
   })
   .get("/api/v2/github-app/installations", async ({ user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     // go-tfe GHAInstallations.List (global list across orgs) — used by the
