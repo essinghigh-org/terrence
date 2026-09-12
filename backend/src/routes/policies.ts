@@ -847,6 +847,17 @@ function resolveSetPolicyCreateScalars(
   };
 }
 
+// Elysia has already consumed the raw request body into `body`; coerce it
+// to text without touching request.arrayBuffer() (would throw "already used").
+function coerceUploadText(body: unknown): string | null {
+  if (typeof body === "string") return body;
+  if (body instanceof Uint8Array) return new TextDecoder().decode(body);
+  if (ArrayBuffer.isView(body)) return new TextDecoder().decode(new Uint8Array(body.buffer, body.byteOffset, body.byteLength));
+  if (body instanceof ArrayBuffer) return new TextDecoder().decode(body);
+  if (body === null || body === undefined) return "";
+  return null;
+}
+
 export const policyRoutes = new Elysia({ name: "policies" })
   .use(authPlugin)
   // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
@@ -913,31 +924,15 @@ export const policyRoutes = new Elysia({ name: "policies" })
     // go-tfe Policies.Upload PUTs the raw policy content to
     // /policies/:id/upload; store the uploaded policy source separately from an OPA query.
     const policyId = params["policy_id"] ?? "";
-    const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
-    if (pol === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const resolvedOrgId = await resolvePolicyOrgId(pol);
-    if (resolvedOrgId === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const scope = await loadPolicyPatchScope(policyId, user?.id, tokenOrgId, tokenTeamId, "manage-policies");
+    if ("notFound" in scope) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     // VCS-backed policy sets own their policy content in the repository.
-    const parentSet = pol.policySetId !== null ? await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) }) : undefined;
+    const parentSet = scope.value.ps;
     if (parentSet !== undefined && parentSet.vcsRepo !== null) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Policy content is managed by VCS" }] };
     }
-    // Elysia has already consumed the raw request body into `body`; coerce it
-    // to text without touching request.arrayBuffer() (would throw "already used").
-    const content = typeof body === "string"
-      ? body
-      : body instanceof Uint8Array
-        ? new TextDecoder().decode(body)
-        : ArrayBuffer.isView(body)
-          ? new TextDecoder().decode(new Uint8Array(body.buffer, body.byteOffset, body.byteLength))
-          : body instanceof ArrayBuffer
-            ? new TextDecoder().decode(body)
-            : body === null || body === undefined
-              ? ""
-              : null;
+    const content = coerceUploadText(body);
     if (content === null) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Policy content must be uploaded as text or binary data" }] };
