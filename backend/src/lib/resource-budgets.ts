@@ -180,12 +180,7 @@ function boundedOrganization(value: BudgetInput | undefined, fallback: Organizat
   });
 }
 
-/** Parse the JSON operator contract. An absent variable gets safe defaults. */
-export function parseResourceBudgetConfig(
-  environment: Readonly<Record<string, string | undefined>> = process.env,
-): ResourceBudgetConfig {
-  const raw = environment[RESOURCE_BUDGET_ENV];
-  if (raw === undefined || raw.trim() === "") return defaultResourceBudgetConfig();
+function parseConfigInput(raw: string): ConfigInput {
   if (Buffer.byteLength(raw, "utf8") > RESOURCE_BUDGET_CONFIG_MAX_BYTES) {
     throw new Error(`${RESOURCE_BUDGET_ENV} exceeds its size limit`);
   }
@@ -199,48 +194,80 @@ export function parseResourceBudgetConfig(
   if (Object.keys(parsed).some((key): boolean => !["global", "organization", "classes", "organizations"].includes(key))) {
     throw new Error(`Unsupported resource budget key`);
   }
-  const input = parsed as ConfigInput;
-  const globalInput = input.global === undefined ? undefined : readBudgetInput(input.global, "global", ["concurrency", "queue", "artifactBytes", "reservedCriticalSlots"]);
+  return parsed as ConfigInput;
+}
+
+function parseGlobalBudget(raw: BudgetInput | undefined): ResourceBudgetConfig["global"] {
+  const input = raw === undefined ? undefined : readBudgetInput(raw, "global", ["concurrency", "queue", "artifactBytes", "reservedCriticalSlots"]);
   const global = Object.freeze({
-    concurrency: readInteger(globalInput?.concurrency, "global.concurrency", 1, 1024) ?? DEFAULT_GLOBAL.concurrency,
-    queue: readInteger(globalInput?.queue, "global.queue", 1, 1_000_000) ?? DEFAULT_GLOBAL.queue,
-    artifactBytes: readInteger(globalInput?.artifactBytes, "global.artifactBytes", 1, 10 * 1024 * 1024 * 1024) ?? DEFAULT_GLOBAL.artifactBytes,
-    reservedCriticalSlots: readInteger(globalInput?.reservedCriticalSlots, "global.reservedCriticalSlots", 0, 1024) ?? DEFAULT_GLOBAL.reservedCriticalSlots,
+    concurrency: readInteger(input?.concurrency, "global.concurrency", 1, 1024) ?? DEFAULT_GLOBAL.concurrency,
+    queue: readInteger(input?.queue, "global.queue", 1, 1_000_000) ?? DEFAULT_GLOBAL.queue,
+    artifactBytes: readInteger(input?.artifactBytes, "global.artifactBytes", 1, 10 * 1024 * 1024 * 1024) ?? DEFAULT_GLOBAL.artifactBytes,
+    reservedCriticalSlots: readInteger(input?.reservedCriticalSlots, "global.reservedCriticalSlots", 0, 1024) ?? DEFAULT_GLOBAL.reservedCriticalSlots,
   });
   if (global.reservedCriticalSlots > global.concurrency) {
     throw new Error("global.reservedCriticalSlots cannot exceed global.concurrency");
   }
-  const organizationInput = input.organization === undefined ? undefined : readBudgetInput(input.organization, "organization", ["concurrency", "queue", "artifactBytes"]);
-  const organization = boundedOrganization(organizationInput, DEFAULT_ORGANIZATION, "organization");
+  return global;
+}
+
+function parseClassLimit(jobClass: ResourceJobClass, classes: Readonly<Record<string, BudgetInput>> | undefined): Readonly<{ concurrency: number; queue: number }> {
+  const classValue = classes?.[jobClass];
+  const classInput = classValue === undefined ? undefined : readBudgetInput(classValue, `classes.${jobClass}`, ["concurrency", "queue"]);
+  const fallback = DEFAULT_CLASS_LIMITS[jobClass];
+  return Object.freeze({
+    concurrency: readInteger(classInput?.concurrency, `classes.${jobClass}.concurrency`, 1, 1024) ?? fallback.concurrency,
+    queue: readInteger(classInput?.queue, `classes.${jobClass}.queue`, 1, 1_000_000) ?? fallback.queue,
+  });
+}
+
+function parseClassLimits(input: ConfigInput): ResourceBudgetConfig["classes"] {
   if (input.classes !== undefined && !isRecord(input.classes)) throw new Error("classes must be an object");
   const classes = {} as Record<ResourceJobClass, Readonly<{ concurrency: number; queue: number }>>;
   for (const jobClass of RESOURCE_JOB_CLASSES) {
-    const classValue = input.classes?.[jobClass];
-    const classInput = classValue === undefined ? undefined : readBudgetInput(classValue, `classes.${jobClass}`, ["concurrency", "queue"]);
-    const fallback = DEFAULT_CLASS_LIMITS[jobClass];
-    classes[jobClass] = Object.freeze({
-      concurrency: readInteger(classInput?.concurrency, `classes.${jobClass}.concurrency`, 1, 1024) ?? fallback.concurrency,
-      queue: readInteger(classInput?.queue, `classes.${jobClass}.queue`, 1, 1_000_000) ?? fallback.queue,
-    });
+    classes[jobClass] = parseClassLimit(jobClass, input.classes);
   }
   if (input.classes !== undefined && Object.keys(input.classes).some((key): boolean => !RESOURCE_JOB_CLASSES.includes(key as ResourceJobClass))) {
     throw new Error("Unsupported resource job class");
   }
-  const overrides: Record<string, Partial<OrganizationBudget>> = {};
+  return Object.freeze(classes);
+}
+
+const ORGANIZATION_BUDGET_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/;
+
+function parseOrganizationOverride(organizationId: string, value: unknown): Partial<OrganizationBudget> {
+  const override = readBudgetInput(value, `organizations.${organizationId}`, ["concurrency", "queue", "artifactBytes"]);
+  const organizationOverride: { concurrency?: number; queue?: number; artifactBytes?: number } = {};
+  const concurrency = readInteger(override.concurrency, `organizations.${organizationId}.concurrency`, 1, 1024);
+  const queue = readInteger(override.queue, `organizations.${organizationId}.queue`, 1, 1_000_000);
+  const artifactBytes = readInteger(override.artifactBytes, `organizations.${organizationId}.artifactBytes`, 1, 10 * 1024 * 1024 * 1024);
+  if (concurrency !== undefined) organizationOverride.concurrency = concurrency;
+  if (queue !== undefined) organizationOverride.queue = queue;
+  if (artifactBytes !== undefined) organizationOverride.artifactBytes = artifactBytes;
+  return Object.freeze(organizationOverride);
+}
+
+function parseOrganizationOverrides(input: ConfigInput): ResourceBudgetConfig["organizationOverrides"] {
   if (input.organizations !== undefined && !isRecord(input.organizations)) throw new Error("organizations must be an object");
+  const overrides: Record<string, Partial<OrganizationBudget>> = {};
   for (const [organizationId, value] of Object.entries(input.organizations ?? {})) {
-    if (!/^[A-Za-z0-9._:-]{1,256}$/.test(organizationId)) throw new Error("Invalid organization budget key");
-    const override = readBudgetInput(value, `organizations.${organizationId}`, ["concurrency", "queue", "artifactBytes"]);
-    const organizationOverride: { concurrency?: number; queue?: number; artifactBytes?: number } = {};
-    const concurrency = readInteger(override.concurrency, `organizations.${organizationId}.concurrency`, 1, 1024);
-    const queue = readInteger(override.queue, `organizations.${organizationId}.queue`, 1, 1_000_000);
-    const artifactBytes = readInteger(override.artifactBytes, `organizations.${organizationId}.artifactBytes`, 1, 10 * 1024 * 1024 * 1024);
-    if (concurrency !== undefined) organizationOverride.concurrency = concurrency;
-    if (queue !== undefined) organizationOverride.queue = queue;
-    if (artifactBytes !== undefined) organizationOverride.artifactBytes = artifactBytes;
-    overrides[organizationId] = Object.freeze(organizationOverride);
+    if (!ORGANIZATION_BUDGET_KEY_PATTERN.test(organizationId)) throw new Error("Invalid organization budget key");
+    overrides[organizationId] = parseOrganizationOverride(organizationId, value);
   }
-  return Object.freeze({ global, organization, classes: Object.freeze(classes), organizationOverrides: Object.freeze(overrides) });
+  return Object.freeze(overrides);
+}
+
+/** Parse the JSON operator contract. An absent variable gets safe defaults. */
+export function parseResourceBudgetConfig(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): ResourceBudgetConfig {
+  const raw = environment[RESOURCE_BUDGET_ENV];
+  if (raw === undefined || raw.trim() === "") return defaultResourceBudgetConfig();
+  const input = parseConfigInput(raw);
+  const global = parseGlobalBudget(input.global);
+  const organizationInput = input.organization === undefined ? undefined : readBudgetInput(input.organization, "organization", ["concurrency", "queue", "artifactBytes"]);
+  const organization = boundedOrganization(organizationInput, DEFAULT_ORGANIZATION, "organization");
+  return Object.freeze({ global, organization, classes: parseClassLimits(input), organizationOverrides: parseOrganizationOverrides(input) });
 }
 
 export function defaultResourceBudgetConfig(): ResourceBudgetConfig {
@@ -435,6 +462,79 @@ export function selectResourceBudgetJob(
   return candidates[0];
 }
 
+type RunningTally = Readonly<{
+  byClass: Record<ResourceJobClass, number>;
+  byOrganization: Map<string | null, number>;
+  bytesByOrganization: Map<string | null, number>;
+  bytes: number;
+  ordinaryRunning: number;
+}>;
+
+function tallyRunningJobs(state: ResourceBudgetState): RunningTally {
+  const byClass = EMPTY_COUNTS();
+  const byOrganization = new Map<string | null, number>();
+  const bytesByOrganization = new Map<string | null, number>();
+  let bytes = 0;
+  for (const job of state.running) {
+    byClass[job.jobClass] += 1;
+    byOrganization.set(job.organizationId, (byOrganization.get(job.organizationId) ?? 0) + 1);
+    bytesByOrganization.set(job.organizationId, (bytesByOrganization.get(job.organizationId) ?? 0) + job.estimatedBytes);
+    bytes += job.estimatedBytes;
+  }
+  return {
+    byClass,
+    byOrganization,
+    bytesByOrganization,
+    bytes,
+    ordinaryRunning: state.running.filter((job): boolean => !isProtected(job.jobClass)).length,
+  };
+}
+
+function explainQueuePosition(state: ResourceBudgetState, request: ResourceBudgetJob): number | null {
+  const ordered = [...state.queued].sort(compareJobs);
+  const index = ordered.findIndex((job): boolean => job.id === request.id);
+  const queuePosition = index >= 0
+    ? index + 1
+    : ordered.filter((job): boolean => compareJobs(job, request) <= 0).length + 1;
+  return Number.isSafeInteger(queuePosition) ? queuePosition : null;
+}
+
+function blockedInspection(
+  position: number | null,
+  reasonCode: ResourceBudgetInspection["reasonCode"],
+  reason: string,
+  competingJobClass: ResourceJobClass | null = null,
+): ResourceBudgetInspection {
+  return {
+    eligible: false,
+    reasonCode,
+    reason,
+    queuePosition: position,
+    positionQualified: position !== null,
+    competingJobClass,
+  };
+}
+
+function capacityBlockInspection(
+  config: ResourceBudgetConfig,
+  organization: OrganizationBudget,
+  request: ResourceBudgetJob,
+  state: ResourceBudgetState,
+  tally: RunningTally,
+  regularConcurrency: number,
+  position: number | null,
+  now: number,
+): ResourceBudgetInspection | null {
+  if (request.runAfter > now) return blockedInspection(position, "scheduled", "The job is scheduled for a later time.");
+  if (state.running.length >= config.global.concurrency) return blockedInspection(position, "global-concurrency", "Global durable-job concurrency is full.");
+  if ((tally.byOrganization.get(request.organizationId) ?? 0) >= organization.concurrency) return blockedInspection(position, "organization-concurrency", "The organization durable-job concurrency limit is full.");
+  if (tally.byClass[request.jobClass] >= config.classes[request.jobClass].concurrency) return blockedInspection(position, "class-concurrency", "The durable-job class concurrency limit is full.");
+  if (tally.bytes + request.estimatedBytes > config.global.artifactBytes) return blockedInspection(position, "global-artifact-bytes", "The global durable-job artifact-byte budget is full.");
+  if ((tally.bytesByOrganization.get(request.organizationId) ?? 0) + request.estimatedBytes > organization.artifactBytes) return blockedInspection(position, "organization-artifact-bytes", "The organization durable-job artifact-byte budget is full.");
+  if (!isProtected(request.jobClass) && tally.ordinaryRunning >= regularConcurrency) return blockedInspection(position, "reserved-capacity", "Reserved capacity is held for protected durable-job classes.");
+  return null;
+}
+
 /** Explain the same claim decision returned by selectResourceBudgetJob. */
 export function explainResourceBudgetJob(
   config: ResourceBudgetConfig,
@@ -442,46 +542,13 @@ export function explainResourceBudgetJob(
   request: ResourceBudgetJob,
   now = Date.now(),
 ): ResourceBudgetInspection {
-  const ordered = [...state.queued].sort(compareJobs);
-  const index = ordered.findIndex((job): boolean => job.id === request.id);
-  const queuePosition = index >= 0
-    ? index + 1
-    : ordered.filter((job): boolean => compareJobs(job, request) <= 0).length + 1;
-  const position = Number.isSafeInteger(queuePosition) ? queuePosition : null;
-  const runningByClass = EMPTY_COUNTS();
-  const runningByOrganization = new Map<string | null, number>();
-  const runningBytesByOrganization = new Map<string | null, number>();
-  let runningBytes = 0;
-  for (const job of state.running) {
-    runningByClass[job.jobClass] += 1;
-    runningByOrganization.set(job.organizationId, (runningByOrganization.get(job.organizationId) ?? 0) + 1);
-    runningBytesByOrganization.set(job.organizationId, (runningBytesByOrganization.get(job.organizationId) ?? 0) + job.estimatedBytes);
-    runningBytes += job.estimatedBytes;
-  }
+  const position = explainQueuePosition(state, request);
+  const tally = tallyRunningJobs(state);
   const organization = organizationBudget(config, request.organizationId);
   const regularConcurrency = Math.max(0, config.global.concurrency - config.global.reservedCriticalSlots);
-  const ordinaryRunning = state.running.filter((job): boolean => !isProtected(job.jobClass)).length;
   const selected = selectResourceBudgetJob(config, state, now);
-  const blocked = (
-    reasonCode: ResourceBudgetInspection["reasonCode"],
-    reason: string,
-    competingJobClass: ResourceJobClass | null = null,
-  ): ResourceBudgetInspection => ({
-    eligible: false,
-    reasonCode,
-    reason,
-    queuePosition: position,
-    positionQualified: position !== null,
-    competingJobClass,
-  });
-
-  if (request.runAfter > now) return blocked("scheduled", "The job is scheduled for a later time.");
-  if (state.running.length >= config.global.concurrency) return blocked("global-concurrency", "Global durable-job concurrency is full.");
-  if ((runningByOrganization.get(request.organizationId) ?? 0) >= organization.concurrency) return blocked("organization-concurrency", "The organization durable-job concurrency limit is full.");
-  if (runningByClass[request.jobClass] >= config.classes[request.jobClass].concurrency) return blocked("class-concurrency", "The durable-job class concurrency limit is full.");
-  if (runningBytes + request.estimatedBytes > config.global.artifactBytes) return blocked("global-artifact-bytes", "The global durable-job artifact-byte budget is full.");
-  if ((runningBytesByOrganization.get(request.organizationId) ?? 0) + request.estimatedBytes > organization.artifactBytes) return blocked("organization-artifact-bytes", "The organization durable-job artifact-byte budget is full.");
-  if (!isProtected(request.jobClass) && ordinaryRunning >= regularConcurrency) return blocked("reserved-capacity", "Reserved capacity is held for protected durable-job classes.");
+  const block = capacityBlockInspection(config, organization, request, state, tally, regularConcurrency, position, now);
+  if (block !== null) return block;
   if (selected?.id === request.id) {
     return {
       eligible: true,
@@ -492,8 +559,8 @@ export function explainResourceBudgetJob(
       competingJobClass: null,
     };
   }
-  if (selected !== undefined) return blocked("fairness", "Another eligible job wins the current fairness comparison; the ordering can change as jobs run or finish.", selected.jobClass);
-  return blocked("no-eligible-candidate", "No durable job is eligible under the current capacity policy.");
+  if (selected !== undefined) return blockedInspection(position, "fairness", "Another eligible job wins the current fairness comparison; the ordering can change as jobs run or finish.", selected.jobClass);
+  return blockedInspection(position, "no-eligible-candidate", "No durable job is eligible under the current capacity policy.");
 }
 
 export function resourceBudgetSnapshot(config: ResourceBudgetConfig, state: ResourceBudgetState): ResourceBudgetSnapshot {
