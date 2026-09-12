@@ -433,6 +433,36 @@ async function createBulkActionRecords(
   };
 }
 
+function parseSavedViewCreate(
+  body: unknown,
+  set: SetObj,
+): { name: string; query: ExplorerQuery } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  if (data !== undefined && data["type"] !== undefined && data["type"] !== "explorer-views") {
+    (set as { status: number }).status = 422;
+    return { error: error("422", "Unprocessable Entity", "Invalid type") };
+  }
+  const name = typeof data?.["name"] === "string" ? data["name"].trim() : "";
+  if (name.length > 255) { (set as { status: number }).status = 422; return { error: error("422", "Unprocessable Entity", "Name too long") }; }
+  const query = queryObject(data?.["query"], data?.["query_type"] ?? data?.["query-type"]);
+  if (name === "" || query === undefined) { (set as { status: number }).status = 422; return { error: error("422", "Unprocessable Entity", "name, query_type, and query are required") }; }
+  return { name, query };
+}
+
+function parseSavedViewUpdate(
+  body: unknown,
+  defaultQueryType: string,
+  set: SetObj,
+): { name: string; query: ExplorerQuery } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const name = typeof data?.["name"] === "string" ? data["name"].trim() : "";
+  const query = queryObject(data?.["query"], data?.["query_type"] ?? data?.["query-type"] ?? defaultQueryType);
+  if (name === "" || query === undefined) { (set as { status: number }).status = 422; return { error: error("422", "Unprocessable Entity", "name and query are required") }; }
+  return { name, query };
+}
+
 function sqlBoundValue(value: string, operator: string, columnType: ExplorerColumnType): string | number | boolean | undefined {
   const comparison = comparisonOperators.has(operator);
   if (columnType === "boolean" && comparison) {
@@ -1021,17 +1051,9 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))) {
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    if (data !== undefined && data["type"] !== undefined && data["type"] !== "explorer-views") {
-      (set as { status: number }).status = 422;
-      return error("422", "Unprocessable Entity", "Invalid type");
-    }
-    const name = typeof data?.["name"] === "string" ? data["name"].trim() : "";
-    if (name.length > 255) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "Name too long"); }
-    const query = queryObject(data?.["query"], data?.["query_type"] ?? data?.["query-type"]);
-    if (name === "" || query === undefined) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "name, query_type, and query are required"); }
-    const saved: typeof explorerSavedQueries.$inferInsert = { id: newResourceId("sq"), orgId: org.id, name, queryType: query.type, query: { type: query.type, filter: query.filter, fields: query.fields, sort: query.sort }, createdAt: Date.now() };
+    const parsed = parseSavedViewCreate(body, set);
+    if ("error" in parsed) return parsed.error;
+    const saved: typeof explorerSavedQueries.$inferInsert = { id: newResourceId("sq"), orgId: org.id, name: parsed.name, queryType: parsed.query.type, query: { type: parsed.query.type, filter: parsed.query.filter, fields: parsed.query.fields, sort: parsed.query.sort }, createdAt: Date.now() };
     await db.insert(explorerSavedQueries).values(saved);
     (set as { status: number }).status = 201;
     return { data: savedQueryResource(saved as typeof explorerSavedQueries.$inferSelect) };
@@ -1055,13 +1077,10 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
     if (org === undefined || view === undefined || view.orgId !== org.id || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))) {
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const name = typeof data?.["name"] === "string" ? data["name"].trim() : "";
-    const query = queryObject(data?.["query"], data?.["query_type"] ?? data?.["query-type"] ?? view.queryType);
-    if (name === "" || query === undefined) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "name and query are required"); }
-    await db.update(explorerSavedQueries).set({ name, queryType: query.type, query: { type: query.type, filter: query.filter, fields: query.fields, sort: query.sort } }).where(eq(explorerSavedQueries.id, view.id));
-    const updated = { ...view, name, queryType: query.type, query: { type: query.type, filter: query.filter, fields: query.fields, sort: query.sort } };
+    const parsed = parseSavedViewUpdate(body, view.queryType, set);
+    if ("error" in parsed) return parsed.error;
+    await db.update(explorerSavedQueries).set({ name: parsed.name, queryType: parsed.query.type, query: { type: parsed.query.type, filter: parsed.query.filter, fields: parsed.query.fields, sort: parsed.query.sort } }).where(eq(explorerSavedQueries.id, view.id));
+    const updated = { ...view, name: parsed.name, queryType: parsed.query.type, query: { type: parsed.query.type, filter: parsed.query.filter, fields: parsed.query.fields, sort: parsed.query.sort } };
     return { data: savedQueryResource(updated) };
   })
   .delete("/api/v2/organizations/:org_name/explorer/views/:view_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
