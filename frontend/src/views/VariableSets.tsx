@@ -81,6 +81,223 @@ function messageFrom(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+function VariableFormFields({
+  variableKey,
+  onKeyChange,
+  value,
+  onValueChange,
+  category,
+  onCategoryChange,
+  sensitive,
+  onSensitiveChange,
+  description,
+  onDescriptionChange,
+  editingSensitive,
+  error,
+  saving,
+  onBack,
+  onSubmit,
+}: Readonly<{
+  variableKey: string;
+  onKeyChange: (value: string) => void;
+  value: string;
+  onValueChange: (value: string) => void;
+  category: VariableCategory;
+  onCategoryChange: (category: VariableCategory) => void;
+  sensitive: boolean;
+  onSensitiveChange: (checked: boolean) => void;
+  description: string;
+  onDescriptionChange: (value: string) => void;
+  editingSensitive: boolean;
+  error: string;
+  saving: boolean;
+  onBack: () => void;
+  onSubmit: (event: React.SyntheticEvent) => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <form onSubmit={onSubmit} noValidate>
+      <FieldGroup>
+        <Field data-invalid={Boolean(error)}>
+          <FieldLabel htmlFor="variable-key">Key</FieldLabel>
+          <Input
+            id="variable-key"
+            name="variable-key"
+            autoComplete="off"
+            spellCheck={false}
+            value={variableKey}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onKeyChange(event.target.value); }}
+            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onKeyChange(event.currentTarget.value); }}
+            autoFocus
+            aria-invalid={Boolean(error)}
+          />
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="variable-value">Value</FieldLabel>
+          <Input
+            id="variable-value"
+            name="variable-value"
+            autoComplete="off"
+            spellCheck={false}
+            type={sensitive ? "password" : "text"}
+            value={value}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onValueChange(event.target.value); }}
+            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onValueChange(event.currentTarget.value); }}
+          />
+          {editingSensitive && (
+            <FieldDescription>Leave blank to keep the current sensitive value.</FieldDescription>
+          )}
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="variable-category">Category</FieldLabel>
+          {/* SAFETY: the select options are generated from the same union; the change event carries one of them. */}
+          <Select name="variable-category" value={category} onValueChange={(val: string): void => {
+// SAFETY: the change event carries one of the union values the UI renders from the same options.
+onCategoryChange(val as VariableCategory);
+}}>
+            <SelectTrigger id="variable-category" className="w-full">
+              <SelectValue placeholder="Select category" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="terraform">Terraform</SelectItem>
+              <SelectItem value="env">Environment</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="variable-description">Description</FieldLabel>
+          <Input
+            id="variable-description"
+            name="variable-description"
+            autoComplete="off"
+            spellCheck={false}
+            value={description}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onDescriptionChange(event.target.value); }}
+            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onDescriptionChange(event.currentTarget.value); }}
+          />
+        </Field>
+        <Field orientation="horizontal">
+          <Checkbox
+            id="variable-sensitive"
+            checked={sensitive}
+            onCheckedChange={onSensitiveChange}
+          />
+          <div className="flex flex-col gap-0.5">
+            <FieldLabel htmlFor="variable-sensitive">Sensitive</FieldLabel>
+            <FieldDescription>Hide this value in API responses and the UI.</FieldDescription>
+          </div>
+        </Field>
+        <FieldError>{error}</FieldError>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onBack}>
+            Back
+          </Button>
+          <Button type="submit" disabled={saving}>
+            {saving && <Spinner data-icon="inline-start" />}
+            {saving ? "Saving" : "Save variable"}
+          </Button>
+        </DialogFooter>
+      </FieldGroup>
+    </form>
+  );
+}
+
+function VariablesTable({
+  loading,
+  variables,
+  canManage,
+  error,
+  onAdd,
+  onEdit,
+  onDeleteRequest,
+}: Readonly<{
+  loading: boolean;
+  variables: readonly VariableSetVariable[];
+  canManage: boolean;
+  error: string;
+  onAdd: () => void;
+  onEdit: (variable: VariableSetVariable) => void;
+  onDeleteRequest: (variable: VariableSetVariable) => void;
+}>): React.JSX.Element {
+  return (
+    <div className="flex flex-col gap-4">
+      {canManage && <div className="flex justify-end">
+        <Button onClick={onAdd}>Add variable</Button>
+      </div>}
+      {error !== "" && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      <div className="rounded-md border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Key</TableHead>
+              <TableHead>Value</TableHead>
+              <TableHead>Category</TableHead>
+              <TableHead>Description</TableHead>
+              {canManage && <TableHead className="text-right">Actions</TableHead>}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loading && (
+              <TableRow>
+                <TableCell colSpan={canManage ? 5 : 4} className="h-20 text-center text-muted-foreground">
+                  Loading variables…
+                </TableCell>
+              </TableRow>
+            )}
+            {!loading &&
+              variables.map((variable): React.JSX.Element => (
+                <TableRow key={variable.id}>
+                  <TableCell className="font-mono font-medium">
+                    {variable.attributes.key}
+                  </TableCell>
+                  <TableCell className="max-w-48 truncate font-mono text-xs">
+                    {variable.attributes.sensitive
+                      ? "••••••••"
+                      : variable.attributes.value ?? "—"}
+                  </TableCell>
+                  <TableCell>
+                    {variable.attributes.category === "env" ? "Environment" : "Terraform"}
+                  </TableCell>
+                  <TableCell className="max-w-48 truncate text-muted-foreground">
+                    {variable.attributes.description ?? "—"}
+                  </TableCell>
+                  {canManage && <TableCell>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={(): void => { onEdit(variable); }}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={(): void => { onDeleteRequest(variable); }}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </TableCell>}
+                </TableRow>
+              ))}
+            {!loading && variables.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={canManage ? 5 : 4} className="h-20 text-center text-muted-foreground">
+                  No variables in this set.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
 function VariablesDialog({
   open,
   variableSet,
@@ -225,173 +442,40 @@ function VariablesDialog({
         </DialogHeader>
 
         {formOpen ? (
-          <form onSubmit={saveVariable} noValidate>
-            <FieldGroup>
-              <Field data-invalid={Boolean(error)}>
-                <FieldLabel htmlFor="variable-key">Key</FieldLabel>
-                <Input
-                  id="variable-key"
-                  name="variable-key"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={key}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setKey(event.target.value); }}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setKey(event.currentTarget.value); }}
-                  autoFocus
-                  aria-invalid={Boolean(error)}
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="variable-value">Value</FieldLabel>
-                <Input
-                  id="variable-value"
-                  name="variable-value"
-                  autoComplete="off"
-                  spellCheck={false}
-                  type={sensitive ? "password" : "text"}
-                  value={value}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setValue(event.target.value); }}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setValue(event.currentTarget.value); }}
-                />
-                {editing?.attributes.sensitive === true && (
-                  <FieldDescription>Leave blank to keep the current sensitive value.</FieldDescription>
-                )}
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="variable-category">Category</FieldLabel>
-                {/* SAFETY: the select options are generated from the same union; the change event carries one of them. */}
-                <Select name="variable-category" value={category} onValueChange={(val: string): void => {
-   // SAFETY: the change event carries one of the union values the UI renders from the same options.
-   setCategory(val as VariableCategory);
- }}>
-                  <SelectTrigger id="variable-category" className="w-full">
-                    <SelectValue placeholder="Select category" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="terraform">Terraform</SelectItem>
-                    <SelectItem value="env">Environment</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="variable-description">Description</FieldLabel>
-                <Input
-                  id="variable-description"
-                  name="variable-description"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={description}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDescription(event.target.value); }}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(event.currentTarget.value); }}
-                />
-              </Field>
-              <Field orientation="horizontal">
-                <Checkbox
-                  id="variable-sensitive"
-                  checked={sensitive}
-                  onCheckedChange={(checked: boolean): void => { setSensitive(checked); }}
-                />
-                <div className="flex flex-col gap-0.5">
-                  <FieldLabel htmlFor="variable-sensitive">Sensitive</FieldLabel>
-                  <FieldDescription>Hide this value in API responses and the UI.</FieldDescription>
-                </div>
-              </Field>
-              <FieldError>{error}</FieldError>
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={(): void => { setFormOpen(false); }}>
-                  Back
-                </Button>
-                <Button type="submit" disabled={saving}>
-                  {saving && <Spinner data-icon="inline-start" />}
-                  {saving ? "Saving" : "Save variable"}
-                </Button>
-              </DialogFooter>
-            </FieldGroup>
-          </form>
+          <VariableFormFields
+            variableKey={key}
+            onKeyChange={setKey}
+            value={value}
+            onValueChange={setValue}
+            category={category}
+            onCategoryChange={setCategory}
+            sensitive={sensitive}
+            onSensitiveChange={setSensitive}
+            description={description}
+            onDescriptionChange={setDescription}
+            editingSensitive={editing?.attributes.sensitive === true}
+            error={error}
+            saving={saving}
+            onBack={(): void => { setFormOpen(false); }}
+            onSubmit={saveVariable}
+          />
         ) : (
-          <div className="flex flex-col gap-4">
-            {canManage && <div className="flex justify-end">
-              <Button onClick={(): void => { openForm(); }}>Add variable</Button>
-            </div>}
-            {error !== "" && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Key</TableHead>
-                    <TableHead>Value</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead>Description</TableHead>
-                    {canManage && <TableHead className="text-right">Actions</TableHead>}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {loading && (
-                    <TableRow>
-                      <TableCell colSpan={canManage ? 5 : 4} className="h-20 text-center text-muted-foreground">
-                        Loading variables…
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {!loading &&
-                    variables.map((variable): React.JSX.Element => (
-                      <TableRow key={variable.id}>
-                        <TableCell className="font-mono font-medium">
-                          {variable.attributes.key}
-                        </TableCell>
-                        <TableCell className="max-w-48 truncate font-mono text-xs">
-                          {variable.attributes.sensitive
-                            ? "••••••••"
-                            : variable.attributes.value ?? "—"}
-                        </TableCell>
-                        <TableCell>
-                          {variable.attributes.category === "env" ? "Environment" : "Terraform"}
-                        </TableCell>
-                        <TableCell className="max-w-48 truncate text-muted-foreground">
-                          {variable.attributes.description ?? "—"}
-                        </TableCell>
-                        {canManage && <TableCell>
-                          <div className="flex justify-end gap-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={(): void => { openForm(variable); }}
-                            >
-                              Edit
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={(): void => {
-                                const isTestEnv = window.navigator.userAgent.includes("jsdom");
-                                if (isTestEnv) {
-                                  void deleteVariable(variable);
-                                } else {
-                                  setVarToDelete(variable);
-                                }
-                              }}
-                            >
-                              Delete
-                            </Button>
-                          </div>
-                        </TableCell>}
-                      </TableRow>
-                    ))}
-                  {!loading && variables.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={canManage ? 5 : 4} className="h-20 text-center text-muted-foreground">
-                        No variables in this set.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-          </div>
+          <VariablesTable
+            loading={loading}
+            variables={variables}
+            canManage={canManage}
+            error={error}
+            onAdd={openForm}
+            onEdit={openForm}
+            onDeleteRequest={(variable: VariableSetVariable): void => {
+              const isTestEnv = window.navigator.userAgent.includes("jsdom");
+              if (isTestEnv) {
+                void deleteVariable(variable);
+              } else {
+                setVarToDelete(variable);
+              }
+            }}
+          />
         )}
       </DialogContent>
     </Dialog>
@@ -410,6 +494,297 @@ function VariablesDialog({
       }}
     />
     </>
+  );
+}
+
+function VariableSetsTable({
+  loading,
+  variableSets,
+  pageError,
+  canManage,
+  onVariables,
+  onWorkspaces,
+  onEdit,
+  onDeleteRequest,
+}: Readonly<{
+  loading: boolean;
+  variableSets: readonly VariableSet[];
+  pageError: string;
+  canManage: boolean;
+  onVariables: (variableSet: VariableSet) => void;
+  onWorkspaces: (variableSet: VariableSet) => void;
+  onEdit: (variableSet: VariableSet) => void;
+  onDeleteRequest: (variableSet: VariableSet) => void;
+}>): React.JSX.Element {
+  return (
+    <Card>
+      <CardContent className="p-0">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Name</TableHead>
+            <TableHead>Description</TableHead>
+            <TableHead>Scope</TableHead>
+            <TableHead>Variables</TableHead>
+            <TableHead>Workspaces</TableHead>
+            <TableHead className="text-right">Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {loading && (
+            <TableRow>
+              <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                Loading variable sets…
+              </TableCell>
+            </TableRow>
+          )}
+          {!loading &&
+            variableSets.map((variableSet): React.JSX.Element => (
+              <TableRow key={variableSet.id}>
+                <TableCell className="font-medium">{variableSet.attributes.name}</TableCell>
+                <TableCell className="max-w-72 truncate text-muted-foreground">
+                  {variableSet.attributes.description ?? "—"}
+                </TableCell>
+                <TableCell>
+                  <Badge
+                    variant={
+                      variableSet.attributes["parent-project-id"] !== undefined && variableSet.attributes["parent-project-id"] !== null
+                        ? "outline"
+                        : variableSet.attributes.global
+                          ? "default"
+                          : "secondary"
+                    }
+                  >
+                    {variableSet.attributes["parent-project-id"] !== undefined && variableSet.attributes["parent-project-id"] !== null
+                      ? "Project"
+                      : variableSet.attributes.global
+                        ? "Global"
+                        : "Selected"}
+                  </Badge>
+                </TableCell>
+                <TableCell><Badge variant="secondary">{variableSet.attributes["var-count"]}</Badge></TableCell>
+                <TableCell>
+                  <Badge variant={variableSet.attributes.global ? "default" : "outline"}>
+                    {variableSet.attributes.global
+                      ? "All"
+                      : variableSet.attributes["workspace-count"]}
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={(): void => { onVariables(variableSet); }}
+                    >
+                      Variables
+                    </Button>
+                    {canManage && <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={(): void => { onWorkspaces(variableSet); }}
+                        disabled={variableSet.attributes.global}
+                      >
+                        Workspaces
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={(): void => { onEdit(variableSet); }}>
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={(): void => { onDeleteRequest(variableSet); }}
+                      >
+                        Delete
+                      </Button>
+                    </>}
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          {!loading && pageError === "" && variableSets.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                <EmptyState compact title="No variable sets yet." description="Share Terraform variables and environment settings across workspaces." docsHref="/app/docs/variables" />
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+function VariableSetEditorDialog({
+  open,
+  onOpenChange,
+  isNew,
+  name,
+  onNameChange,
+  description,
+  onDescriptionChange,
+  global,
+  onGlobalChange,
+  editorError,
+  savingSet,
+  onSubmit,
+  onCancel,
+}: Readonly<{
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  isNew: boolean;
+  name: string;
+  onNameChange: (value: string) => void;
+  description: string;
+  onDescriptionChange: (value: string) => void;
+  global: boolean;
+  onGlobalChange: (checked: boolean) => void;
+  editorError: string;
+  savingSet: boolean;
+  onSubmit: (event: React.SyntheticEvent) => Promise<void>;
+  onCancel: () => void;
+}>): React.JSX.Element {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{isNew ? "New variable set" : "Edit variable set"}</DialogTitle>
+          <DialogDescription>
+            {isNew
+              ? "Create a reusable group of configuration for this organization."
+              : "Update this reusable group of configuration."}
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={onSubmit} noValidate>
+          <FieldGroup>
+            <Field data-invalid={Boolean(editorError)}>
+              <FieldLabel htmlFor="variable-set-name">Name</FieldLabel>
+              <Input
+                id="variable-set-name"
+                name="variable-set-name"
+                autoComplete="off"
+                spellCheck={false}
+                value={name}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onNameChange(event.target.value); }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onNameChange(event.currentTarget.value); }}
+                autoFocus
+                aria-invalid={Boolean(editorError)}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="variable-set-description">Description</FieldLabel>
+              <Input
+                id="variable-set-description"
+                name="variable-set-description"
+                autoComplete="off"
+                spellCheck={false}
+                value={description}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onDescriptionChange(event.target.value); }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onDescriptionChange(event.currentTarget.value); }}
+              />
+            </Field>
+            <Field orientation="horizontal">
+              <Checkbox
+                id="variable-set-global"
+                checked={global}
+                onCheckedChange={onGlobalChange}
+              />
+              <div className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-1.5">
+                  <FieldLabel htmlFor="variable-set-global">Global</FieldLabel>
+                  <HelpTooltip content="Global variable sets automatically apply their variables to all current and future workspaces in this organization." />
+                </div>
+                <FieldDescription>Apply this set to every workspace.</FieldDescription>
+              </div>
+            </Field>
+            <FieldError>{editorError}</FieldError>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={onCancel}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={savingSet}>
+                {savingSet && <Spinner data-icon="inline-start" />}
+                {savingSet ? "Saving…" : "Save variable set"}
+              </Button>
+            </DialogFooter>
+          </FieldGroup>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function VariableSetWorkspacesDialog({
+  open,
+  onOpenChange,
+  setName,
+  workspaces,
+  selectedWorkspaceIds,
+  onToggle,
+  workspaceError,
+  savingWorkspaces,
+  onSubmit,
+  onCancel,
+}: Readonly<{
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  setName: string | undefined;
+  workspaces: readonly Workspace[];
+  selectedWorkspaceIds: ReadonlySet<string>;
+  onToggle: (workspaceId: string, checked: boolean) => void;
+  workspaceError: string;
+  savingWorkspaces: boolean;
+  onSubmit: (event: React.SyntheticEvent) => Promise<void>;
+  onCancel: () => void;
+}>): React.JSX.Element {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Apply to workspaces</DialogTitle>
+          <DialogDescription>
+            Choose which workspaces receive configuration from {setName}.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={onSubmit} noValidate>
+          <FieldGroup>
+            <div className="flex max-h-64 flex-col gap-2 overflow-y-auto rounded-md border p-3">
+              {workspaces.map((workspace): React.JSX.Element => (
+                <Field key={workspace.id} orientation="horizontal">
+                  <Checkbox
+                    id={`workspace-${workspace.id}`}
+                    checked={selectedWorkspaceIds.has(workspace.id)}
+                    onCheckedChange={(checked: boolean): void =>
+                      { onToggle(workspace.id, checked); }
+                    }
+                  />
+                  <FieldLabel htmlFor={`workspace-${workspace.id}`}>
+                    {workspace.attributes.name}
+                  </FieldLabel>
+                </Field>
+              ))}
+              {workspaces.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  This organization has no workspaces.
+                </p>
+              )}
+            </div>
+            <FieldError>{workspaceError}</FieldError>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={onCancel}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={savingWorkspaces}>
+                {savingWorkspaces && <Spinner data-icon="inline-start" />}
+                {savingWorkspaces ? "Saving" : "Save workspaces"}
+              </Button>
+            </DialogFooter>
+          </FieldGroup>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -696,223 +1071,52 @@ export function VariableSets(): React.JSX.Element {
         </p>
       )}
 
-      <Card>
-        <CardContent className="p-0">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Description</TableHead>
-              <TableHead>Scope</TableHead>
-              <TableHead>Variables</TableHead>
-              <TableHead>Workspaces</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {loading && (
-              <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                  Loading variable sets…
-                </TableCell>
-              </TableRow>
-            )}
-            {!loading &&
-              variableSets.map((variableSet): React.JSX.Element => (
-                <TableRow key={variableSet.id}>
-                  <TableCell className="font-medium">{variableSet.attributes.name}</TableCell>
-                  <TableCell className="max-w-72 truncate text-muted-foreground">
-                    {variableSet.attributes.description ?? "—"}
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      variant={
-                        variableSet.attributes["parent-project-id"] !== undefined && variableSet.attributes["parent-project-id"] !== null
-                          ? "outline"
-                          : variableSet.attributes.global
-                            ? "default"
-                            : "secondary"
-                      }
-                    >
-                      {variableSet.attributes["parent-project-id"] !== undefined && variableSet.attributes["parent-project-id"] !== null
-                        ? "Project"
-                        : variableSet.attributes.global
-                          ? "Global"
-                          : "Selected"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell><Badge variant="secondary">{variableSet.attributes["var-count"]}</Badge></TableCell>
-                  <TableCell>
-                    <Badge variant={variableSet.attributes.global ? "default" : "outline"}>
-                      {variableSet.attributes.global
-                        ? "All"
-                        : variableSet.attributes["workspace-count"]}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={(): void => { openVariables(variableSet); }}
-                      >
-                        Variables
-                      </Button>
-                      {canManage && <>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={(): void => { openWorkspaceEditor(variableSet); }}
-                          disabled={variableSet.attributes.global}
-                        >
-                          Workspaces
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={(): void => { openEditor(variableSet); }}>
-                          Edit
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={(): void => {
-                            const isTestEnv = window.navigator.userAgent.includes("jsdom");
-                            if (isTestEnv) {
-                              void deleteVariableSet(variableSet);
-                            } else {
-                              setVarSetToDelete(variableSet);
-                            }
-                          }}
-                        >
-                          Delete
-                        </Button>
-                      </>}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            {!loading && pageError === "" && variableSets.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                  <EmptyState compact title="No variable sets yet." description="Share Terraform variables and environment settings across workspaces." docsHref="/app/docs/variables" />
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-        </CardContent>
-      </Card>
+      <VariableSetsTable
+        loading={loading}
+        variableSets={variableSets}
+        pageError={pageError}
+        canManage={canManage}
+        onVariables={openVariables}
+        onWorkspaces={openWorkspaceEditor}
+        onEdit={openEditor}
+        onDeleteRequest={(variableSet: VariableSet): void => {
+          const isTestEnv = window.navigator.userAgent.includes("jsdom");
+          if (isTestEnv) {
+            void deleteVariableSet(variableSet);
+          } else {
+            setVarSetToDelete(variableSet);
+          }
+        }}
+      />
 
-      <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{editing != null ? "Edit variable set" : "New variable set"}</DialogTitle>
-            <DialogDescription>
-              {editing != null
-                ? "Update this reusable group of configuration."
-                : "Create a reusable group of configuration for this organization."}
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={saveVariableSet} noValidate>
-            <FieldGroup>
-              <Field data-invalid={Boolean(editorError)}>
-                <FieldLabel htmlFor="variable-set-name">Name</FieldLabel>
-                <Input
-                  id="variable-set-name"
-                  name="variable-set-name"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={name}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
-                  autoFocus
-                  aria-invalid={Boolean(editorError)}
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="variable-set-description">Description</FieldLabel>
-                <Input
-                  id="variable-set-description"
-                  name="variable-set-description"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={description}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDescription(event.target.value); }}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(event.currentTarget.value); }}
-                />
-              </Field>
-              <Field orientation="horizontal">
-                <Checkbox
-                  id="variable-set-global"
-                  checked={global}
-                  onCheckedChange={(checked: boolean): void => { setGlobal(checked); }}
-                />
-                <div className="flex flex-col gap-0.5">
-                  <div className="flex items-center gap-1.5">
-                    <FieldLabel htmlFor="variable-set-global">Global</FieldLabel>
-                    <HelpTooltip content="Global variable sets automatically apply their variables to all current and future workspaces in this organization." />
-                  </div>
-                  <FieldDescription>Apply this set to every workspace.</FieldDescription>
-                </div>
-              </Field>
-              <FieldError>{editorError}</FieldError>
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={(): void => { setEditorOpen(false); }}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={savingSet}>
-                  {savingSet && <Spinner data-icon="inline-start" />}
-                  {savingSet ? "Saving…" : "Save variable set"}
-                </Button>
-              </DialogFooter>
-            </FieldGroup>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <VariableSetEditorDialog
+        open={editorOpen}
+        onOpenChange={setEditorOpen}
+        isNew={editing === null}
+        name={name}
+        onNameChange={setName}
+        description={description}
+        onDescriptionChange={setDescription}
+        global={global}
+        onGlobalChange={setGlobal}
+        editorError={editorError}
+        savingSet={savingSet}
+        onSubmit={saveVariableSet}
+        onCancel={(): void => { setEditorOpen(false); }}
+      />
 
-      <Dialog open={workspaceOpen} onOpenChange={setWorkspaceOpen}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Apply to workspaces</DialogTitle>
-            <DialogDescription>
-              Choose which workspaces receive configuration from {workspaceSet?.attributes.name}.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={saveWorkspaceRelationships} noValidate>
-            <FieldGroup>
-              <div className="flex max-h-64 flex-col gap-2 overflow-y-auto rounded-md border p-3">
-                {workspaces.map((workspace): React.JSX.Element => (
-                  <Field key={workspace.id} orientation="horizontal">
-                    <Checkbox
-                      id={`workspace-${workspace.id}`}
-                      checked={selectedWorkspaceIds.has(workspace.id)}
-                      onCheckedChange={(checked: boolean): void =>
-                        { toggleWorkspace(workspace.id, checked); }
-                      }
-                    />
-                    <FieldLabel htmlFor={`workspace-${workspace.id}`}>
-                      {workspace.attributes.name}
-                    </FieldLabel>
-                  </Field>
-                ))}
-                {workspaces.length === 0 && (
-                  <p className="text-sm text-muted-foreground">
-                    This organization has no workspaces.
-                  </p>
-                )}
-              </div>
-              <FieldError>{workspaceError}</FieldError>
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={(): void => { setWorkspaceOpen(false); }}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={savingWorkspaces}>
-                  {savingWorkspaces && <Spinner data-icon="inline-start" />}
-                  {savingWorkspaces ? "Saving" : "Save workspaces"}
-                </Button>
-              </DialogFooter>
-            </FieldGroup>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <VariableSetWorkspacesDialog
+        open={workspaceOpen}
+        onOpenChange={setWorkspaceOpen}
+        setName={workspaceSet?.attributes.name}
+        workspaces={workspaces}
+        selectedWorkspaceIds={selectedWorkspaceIds}
+        onToggle={toggleWorkspace}
+        workspaceError={workspaceError}
+        savingWorkspaces={savingWorkspaces}
+        onSubmit={saveWorkspaceRelationships}
+        onCancel={(): void => { setWorkspaceOpen(false); }}
+      />
 
       <VariablesDialog
         open={variablesOpen}
