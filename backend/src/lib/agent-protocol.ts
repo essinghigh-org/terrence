@@ -106,6 +106,32 @@ function versionList(value: unknown): string[] | undefined {
   return stringList(value);
 }
 
+function offerVersions(body: Readonly<Record<string, unknown>>, headerVersion: string | null): string[] {
+  return versionList(body["protocol_versions"])
+    ?? versionList(body["protocol_version"])
+    ?? commaList(headerVersion)
+    ?? [];
+}
+
+function offerCapabilities(body: Readonly<Record<string, unknown>>, headerCapabilities: string | null): string[] | undefined {
+  return stringList(body["capabilities"])
+    ?? commaList(headerCapabilities);
+}
+
+function offerRequiredCapabilities(body: Readonly<Record<string, unknown>>, headerRequired: string | null): string[] {
+  return stringList(body["required_capabilities"])
+    ?? stringList(body["requiredCapabilities"])
+    ?? commaList(headerRequired)
+    ?? [];
+}
+
+function offerArtifactFormats(body: Readonly<Record<string, unknown>>, headerFormats: string | null): string[] {
+  return stringList(body["artifact_formats"])
+    ?? stringList(body["artifactFormats"])
+    ?? commaList(headerFormats)
+    ?? [];
+}
+
 /** Parse protocol metadata from the registration request. */
 export function parseAgentProtocolOffer(
   body: Readonly<Record<string, unknown>>,
@@ -115,20 +141,10 @@ export function parseAgentProtocolOffer(
   const headerCapabilities = headers.get("tfc-agent-capabilities") ?? headers.get("terrence-agent-capabilities");
   const headerRequired = headers.get("tfc-agent-required-capabilities") ?? headers.get("terrence-agent-required-capabilities");
   const headerFormats = headers.get("tfc-agent-artifact-formats") ?? headers.get("terrence-agent-artifact-formats");
-  const versions = versionList(body["protocol_versions"])
-    ?? versionList(body["protocol_version"])
-    ?? commaList(headerVersion)
-    ?? [];
-  const rawCapabilities = stringList(body["capabilities"])
-    ?? commaList(headerCapabilities);
-  const rawRequired = stringList(body["required_capabilities"])
-    ?? stringList(body["requiredCapabilities"])
-    ?? commaList(headerRequired)
-    ?? [];
-  const artifactFormats = stringList(body["artifact_formats"])
-    ?? stringList(body["artifactFormats"])
-    ?? commaList(headerFormats)
-    ?? [];
+  const versions = offerVersions(body, headerVersion);
+  const rawCapabilities = offerCapabilities(body, headerCapabilities);
+  const rawRequired = offerRequiredCapabilities(body, headerRequired);
+  const artifactFormats = offerArtifactFormats(body, headerFormats);
   return {
     // An absent offer is the pre-versioning protocol and must remain usable.
     versions,
