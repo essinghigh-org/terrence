@@ -599,6 +599,96 @@ async function resolveUserTokenExpiryOrThrow(requestedExpiry: number | null): Pr
   return policyResolution.expiresAt;
 }
 
+async function requireEditableUser(
+  userId: string,
+  user: Readonly<typeof users.$inferSelect> | null | undefined,
+): Promise<Readonly<typeof users.$inferSelect>> {
+  const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
+  if (targetUser === undefined || user?.id !== userId) {
+    throw new HttpStatusError(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  if ((targetUser as unknown as { deletedAt?: unknown }).deletedAt != null) {
+    throw new HttpStatusError(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  if (targetUser.isSuspended === true) {
+    throw new HttpStatusError(403, { errors: [{ status: "403", title: "Forbidden", detail: "Suspended accounts cannot be modified" }] });
+  }
+  return targetUser;
+}
+
+function parseUserPatchInputOrThrow(body: unknown): Readonly<Record<string, unknown>> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  if (data !== undefined && typeof data["type"] === "string" && data["type"] !== "users") {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be \"users\"" }] });
+  }
+  return typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+}
+
+function usernameUpdateOrThrow(attrs: Readonly<Record<string, unknown>>): string | undefined {
+  if (typeof attrs["username"] !== "string" || attrs["username"].trim() === "") return undefined;
+  const nu = normalizeUsername(attrs["username"]);
+  if (nu === null) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid username" }] });
+  }
+  return nu;
+}
+
+async function emailUpdateOrThrow(
+  attrs: Readonly<Record<string, unknown>>,
+  userId: string,
+  currentEmail: string | null,
+): Promise<{ email: string | null; resetVerified: boolean } | undefined> {
+  if (typeof attrs["email"] !== "string") return undefined;
+  const raw = attrs["email"].trim();
+  const ne = raw === "" ? null : normalizeEmail(attrs["email"]);
+  if (raw !== "" && ne === null) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email" }] });
+  }
+  // Reject emails already claimed by ANOTHER account up front; the users
+  // table enforces this with a UNIQUE constraint whose raw violation would
+  // otherwise surface as an opaque 500.
+  if (ne !== null) {
+    const claimant = await db.query.users.findFirst({ where: eq(users.email, ne), columns: { id: true } });
+    if (claimant !== undefined && claimant.id !== userId) {
+      throw new HttpStatusError(409, { errors: [{ status: "409", title: "Conflict", detail: "That email address is already in use" }] });
+    }
+  }
+  const email = raw === "" ? null : ne;
+  return { email, resetVerified: email !== currentEmail };
+}
+
+async function assertUsernameAvailable(
+  attrs: Readonly<Record<string, unknown>>,
+  userId: string,
+  currentUsername: string,
+): Promise<void> {
+  if (typeof attrs["username"] !== "string" || attrs["username"].trim() === "") return;
+  const nu2 = normalizeUsername(attrs["username"]);
+  if (nu2 !== null && nu2 !== currentUsername) {
+    const nameClaimant = await db.query.users.findFirst({ where: eq(users.username, nu2), columns: { id: true } });
+    if (nameClaimant !== undefined && nameClaimant.id !== userId) {
+      throw new HttpStatusError(409, { errors: [{ status: "409", title: "Conflict", detail: "That username is already in use" }] });
+    }
+  }
+}
+
+async function persistUserUpdates(
+  userId: string,
+  updates: Partial<typeof users.$inferInsert>,
+): Promise<void> {
+  if (Object.keys(updates).length > 0) {
+    try {
+      await db.update(users).set(updates).where(eq(users.id, userId));
+    } catch (e: unknown) {
+      if (isUniqueConstraintError(e)) {
+        throw new HttpStatusError(409, { errors: [{ status: "409", title: "Conflict", detail: "That identity is already in use" }] });
+      }
+      throw e;
+    }
+  }
+}
+
 export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
   .get("/api/v2/users", async ({ query, user, set }: ParamCtx): Promise<unknown> => {
@@ -665,67 +755,31 @@ export const userRoutes = new Elysia({ name: "users" })
   })
   .patch("/api/v2/users/:user_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
     const userId = params["user_id"] ?? "";
-    const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    if (targetUser === undefined || user?.id !== userId) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    if (data !== undefined && typeof data["type"] === "string" && data["type"] !== "users") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be \"users\"" }] };
-    }
-    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    if ((targetUser as unknown as { deletedAt?: unknown }).deletedAt != null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (targetUser.isSuspended === true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Suspended accounts cannot be modified" }] }; }
-    const updates: Partial<typeof users.$inferInsert> = {};
-    if (typeof attrs["username"] === "string" && attrs["username"].trim() !== "") {
-      const nu = normalizeUsername(attrs["username"]);
-      if (nu === null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid username" }] }; }
-      updates.username = nu;
-    }
-    if (typeof attrs["email"] === "string") {
-      const ne = attrs["email"].trim() === "" ? null : normalizeEmail(attrs["email"]);
-      if (attrs["email"].trim() !== "" && ne === null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email" }] }; }
-      // Reject emails already claimed by ANOTHER account up front; the users
-      // table enforces this with a UNIQUE constraint whose raw violation would
-      // otherwise surface as an opaque 500.
-      if (ne !== null) {
-        const claimant = await db.query.users.findFirst({ where: eq(users.email, ne), columns: { id: true } });
-        if (claimant !== undefined && claimant.id !== userId) {
-          (set as { status: number }).status = 409;
-          return { errors: [{ status: "409", title: "Conflict", detail: "That email address is already in use" }] };
-        }
+    try {
+      const targetUser = await requireEditableUser(userId, user);
+      const attrs = parseUserPatchInputOrThrow(body);
+      const updates: Partial<typeof users.$inferInsert> = {};
+      const nu = usernameUpdateOrThrow(attrs);
+      if (nu !== undefined) updates.username = nu;
+      const eu = await emailUpdateOrThrow(attrs, userId, targetUser.email);
+      if (eu !== undefined) {
+        updates.email = eu.email;
+        if (eu.resetVerified) updates.emailVerifiedAt = null;
       }
-      updates.email = ne ?? attrs["email"].trim();
-      if (ne === null && attrs["email"].trim() === "") updates.email = null;
-      if (updates.email !== targetUser.email) updates.emailVerifiedAt = null;
-    }
-    if (typeof attrs["username"] === "string" && attrs["username"].trim() !== "") {
-      const nu2 = normalizeUsername(attrs["username"]);
-      if (nu2 !== null && nu2 !== targetUser.username) {
-        const nameClaimant = await db.query.users.findFirst({ where: eq(users.username, nu2), columns: { id: true } });
-        if (nameClaimant !== undefined && nameClaimant.id !== userId) {
-          (set as { status: number }).status = 409;
-          return { errors: [{ status: "409", title: "Conflict", detail: "That username is already in use" }] };
-        }
+      await assertUsernameAvailable(attrs, userId, targetUser.username);
+      await persistUserUpdates(userId, updates);
+      const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
+      if (updated === undefined) {
+        throw new HttpStatusError(404, { errors: [{ status: "404", title: "Not Found" }] });
       }
-    }
-    if (Object.keys(updates).length > 0) {
-      try {
-        await db.update(users).set(updates).where(eq(users.id, userId));
-      } catch (e: unknown) {
-        if (isUniqueConstraintError(e)) {
-          (set as { status: number }).status = 409;
-          return { errors: [{ status: "409", title: "Conflict", detail: "That identity is already in use" }] };
-        }
-        throw e;
+      return { data: userResource(updated) };
+    } catch (error: unknown) {
+      if (error instanceof HttpStatusError) {
+        (set as { status: number }).status = error.status;
+        return error.body;
       }
+      throw error;
     }
-    const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: userResource(updated) };
   })
   .delete("/api/v2/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
     const userId = params["user_id"] ?? "";
