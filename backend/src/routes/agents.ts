@@ -62,6 +62,34 @@ type ScopeRelationship =
   | Readonly<{ value: Readonly<{ provided: boolean; ids: readonly string[] }> }>
   | Readonly<{ error: string }>;
 
+type AgentPoolScopeSelection = Readonly<{ provided: boolean; ids: readonly string[] }>;
+
+function parseAgentPoolScopes(
+  body: unknown,
+  set: SetObj,
+): { allowedWorkspaces: AgentPoolScopeSelection; allowedProjects: AgentPoolScopeSelection; excludedWorkspaces: AgentPoolScopeSelection } | { error: unknown } {
+  const allowedWorkspacesResult = parseScopeRelationship(body, "allowed-workspaces", "workspaces");
+  if ("error" in allowedWorkspacesResult) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: allowedWorkspacesResult.error }] } };
+  }
+  const allowedProjectsResult = parseScopeRelationship(body, "allowed-projects", "projects");
+  if ("error" in allowedProjectsResult) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: allowedProjectsResult.error }] } };
+  }
+  const excludedWorkspacesResult = parseScopeRelationship(body, "excluded-workspaces", "workspaces");
+  if ("error" in excludedWorkspacesResult) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: excludedWorkspacesResult.error }] } };
+  }
+  return {
+    allowedWorkspaces: allowedWorkspacesResult.value,
+    allowedProjects: allowedProjectsResult.value,
+    excludedWorkspaces: excludedWorkspacesResult.value,
+  };
+}
+
 function requestedFencingToken(request: Readonly<{ headers: Readonly<{ get(name: string): string | null }> }>): number | undefined {
   return parseAgentFencingToken(request.headers.get("tfc-agent-fencing-token"));
 }
@@ -306,6 +334,39 @@ function planJsonFrom(value: unknown): PlanJson | null | undefined {
     return undefined;
   }
   return value as PlanJson;
+}
+
+function providedOrExistingIds(selection: AgentPoolScopeSelection, existing: readonly string[]): readonly string[] {
+  return selection.provided ? selection.ids : existing;
+}
+
+function agentPoolScopeContainmentError(
+  organizationScoped: boolean,
+  allowedWorkspaceIds: readonly string[],
+  allowedProjectIds: readonly string[],
+  assignedWorkspaces: ReadonlyArray<Readonly<{ id: string; projectId: string | null }>>,
+  defaultProjects: ReadonlyArray<Readonly<{ id: string }>>,
+  set: SetObj,
+): unknown | null {
+  if (organizationScoped) return null;
+  const workspaceIds = new Set(allowedWorkspaceIds);
+  const projectIds = new Set(allowedProjectIds);
+  const hasDisallowedWorkspace = assignedWorkspaces.some((workspace): boolean =>
+    !workspaceIds.has(workspace.id)
+    && (workspace.projectId === null || !projectIds.has(workspace.projectId)));
+  const hasDisallowedProjectDefault = defaultProjects.some((project): boolean => !projectIds.has(project.id));
+  if (hasDisallowedWorkspace || hasDisallowedProjectDefault) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent pool scope must include its assigned workspaces and project defaults" }] };
+  }
+  return null;
+}
+
+function buildAgentPoolUpdates(attrs: Record<string, unknown>): Partial<typeof agentPools.$inferInsert> {
+  const updates: Partial<typeof agentPools.$inferInsert> = {};
+  if (typeof attrs["name"] === "string") updates.name = attrs["name"];
+  if (typeof attrs["organization-scoped"] === "boolean") updates.organizationScoped = attrs["organization-scoped"];
+  return updates;
 }
 
 function completionResourceCounts(
@@ -570,24 +631,9 @@ export const agentRoutes = new Elysia({ name: "agents" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "organization-scoped must be a boolean" }] };
     }
-    const allowedWorkspacesResult = parseScopeRelationship(body, "allowed-workspaces", "workspaces");
-    if ("error" in allowedWorkspacesResult) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: allowedWorkspacesResult.error }] };
-    }
-    const allowedWorkspaces = allowedWorkspacesResult.value;
-    const allowedProjectsResult = parseScopeRelationship(body, "allowed-projects", "projects");
-    if ("error" in allowedProjectsResult) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: allowedProjectsResult.error }] };
-    }
-    const allowedProjects = allowedProjectsResult.value;
-    const excludedWorkspacesResult = parseScopeRelationship(body, "excluded-workspaces", "workspaces");
-    if ("error" in excludedWorkspacesResult) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: excludedWorkspacesResult.error }] };
-    }
-    const excludedWorkspaces = excludedWorkspacesResult.value;
+    const scopes = parseAgentPoolScopes(body, set);
+    if ("error" in scopes) return scopes.error;
+    const { allowedWorkspaces, allowedProjects, excludedWorkspaces } = scopes;
     const [existingAllowedWorkspaces, existingAllowedProjects, assignedWorkspaces, defaultProjects] = await Promise.all([
       db.query.agentPoolAllowedWorkspaces.findMany({
         where: eq(agentPoolAllowedWorkspaces.agentPoolId, poolId),
@@ -598,12 +644,14 @@ export const agentRoutes = new Elysia({ name: "agents" })
       db.query.workspaces.findMany({ where: eq(workspaces.agentPoolId, poolId) }),
       db.query.projects.findMany({ where: eq(projects.defaultAgentPoolId, poolId) }),
     ]);
-    const allowedWorkspaceIds = allowedWorkspaces.provided
-      ? allowedWorkspaces.ids
-      : existingAllowedWorkspaces.map((relationship): string => relationship.workspaceId);
-    const allowedProjectIds = allowedProjects.provided
-      ? allowedProjects.ids
-      : existingAllowedProjects.map((relationship): string => relationship.projectId);
+    const allowedWorkspaceIds = providedOrExistingIds(
+      allowedWorkspaces,
+      existingAllowedWorkspaces.map((relationship): string => relationship.workspaceId),
+    );
+    const allowedProjectIds = providedOrExistingIds(
+      allowedProjects,
+      existingAllowedProjects.map((relationship): string => relationship.projectId),
+    );
     const scopeError = await validateScopeTargets(pool.orgId, allowedWorkspaceIds, allowedProjectIds);
     if (scopeError !== undefined) {
       (set as { status: number }).status = 422;
@@ -612,21 +660,9 @@ export const agentRoutes = new Elysia({ name: "agents" })
     const organizationScoped = typeof attrs["organization-scoped"] === "boolean"
       ? attrs["organization-scoped"]
       : pool.organizationScoped !== false;
-    if (!organizationScoped) {
-      const workspaceIds = new Set(allowedWorkspaceIds);
-      const projectIds = new Set(allowedProjectIds);
-      const hasDisallowedWorkspace = assignedWorkspaces.some((workspace): boolean =>
-        !workspaceIds.has(workspace.id)
-        && (workspace.projectId === null || !projectIds.has(workspace.projectId)));
-      const hasDisallowedProjectDefault = defaultProjects.some((project): boolean => !projectIds.has(project.id));
-      if (hasDisallowedWorkspace || hasDisallowedProjectDefault) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent pool scope must include its assigned workspaces and project defaults" }] };
-      }
-    }
-    const updates: Partial<typeof agentPools.$inferInsert> = {};
-    if (typeof attrs["name"] === "string") updates.name = attrs["name"];
-    if (typeof attrs["organization-scoped"] === "boolean") updates.organizationScoped = attrs["organization-scoped"];
+    const containmentError = agentPoolScopeContainmentError(organizationScoped, allowedWorkspaceIds, allowedProjectIds, assignedWorkspaces, defaultProjects, set);
+    if (containmentError !== null) return containmentError;
+    const updates = buildAgentPoolUpdates(attrs);
     await db.transaction(async (tx): Promise<void> => {
       if (Object.keys(updates).length > 0) await tx.update(agentPools).set(updates).where(eq(agentPools.id, poolId));
       if (allowedWorkspaces.provided) {
