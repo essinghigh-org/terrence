@@ -833,6 +833,73 @@ async function completeForwardedRequest(
   return {};
 }
 
+function acceptedWorkloadPhases(agent: Readonly<{ accept: string | null | undefined }>, headerValue: string | null): ReadonlySet<string> {
+  // The registered accept list is authoritative: the agent declared its
+  // workload set when it registered (validated against AGENT_WORKLOAD_TYPES
+  // then persisted). The tfc-agent-accept header may only narrow that set
+  // per request — never widen it — so a registration of "none" cannot be
+  // bypassed by polling with a header, and an agent cannot silently upgrade
+  // its own privileges.
+  const registered = agent.accept ?? DEFAULT_AGENT_ACCEPT;
+  const registeredSet = new Set(registered === "none" ? [] : registered.split(","));
+  if (headerValue === null) return registeredSet;
+  return new Set(headerValue.split(",").filter((value): boolean => registeredSet.has(value)));
+}
+
+async function claimAvailableJob(
+  agent: Parameters<typeof claimAgentJob>[0],
+  accepted: ReadonlySet<string>,
+  request: AgentCtx["request"],
+  set: { status?: number },
+): Promise<{ claimed: NonNullable<Awaited<ReturnType<typeof claimAgentJob>>> } | { response: unknown } | { empty: true }> {
+  const claimed = await claimAgentJob(agent, ["plan", "apply"].filter((phase): boolean => accepted.has(phase)));
+  if (claimed !== undefined) return { claimed };
+  const stackClaimed = await claimStackAgentJob(agent, ["plan", "apply"].filter((phase): boolean => accepted.has(`stack_${phase}`)));
+  if (stackClaimed === undefined) {
+    set.status = 204;
+    return { empty: true as const };
+  }
+  return { response: await stackAgentPayload(stackClaimed, agentApiBaseUrl(request)) };
+}
+
+async function buildClaimedJobPayload(
+  claimed: NonNullable<Awaited<ReturnType<typeof claimAgentJob>>>,
+  agent: Readonly<{ id: string; architecture: string | null }>,
+  request: AgentCtx["request"],
+  set: { status?: number },
+): Promise<unknown> {
+  const { job, run, workspace, configuration } = claimed;
+  try {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
+    if (org === undefined) throw new Error("organization not found");
+    const baseUrl = agentApiBaseUrl(request);
+    const version = run.terraformVersion ?? workspace.terraformVersion ?? org.defaultTerraformVersion ?? "latest";
+    const terraformInfo = await terraformReleaseInfo(version, agent.architecture ?? "amd64");
+    if (terraformInfo === null) throw new Error("Unable to resolve Terraform release");
+    const environment = await agentEnvironment(workspace.id, workspace.orgId, workspace.projectId ?? null, run.variables);
+    const runVars: Record<string, string> = {};
+    // Mint the run token only after all fallible lookups/resolution work has
+    // succeeded, so a failed payload build cannot accumulate valid tokens.
+    const runToken = await agentRunToken(run.id, workspace.id, workspace.orgId);
+    const details: AgentJobDetails = { job, run, workspace, organizationName: org.name, configuration };
+    const payload = await buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, runVars, environment);
+    return payload;
+  } catch (error: unknown) {
+    try {
+      await releaseAgentClaim(claimed);
+    } catch (releaseError: unknown) {
+      log.error("Failed to release an agent claim after payload construction failed", {
+        jobId: claimed.job.id,
+        runId: claimed.run.id,
+        error: releaseError,
+      });
+    }
+    log.error("Failed to construct an agent job payload", { jobId: claimed.job.id, runId: claimed.run.id, error });
+    set.status = 503;
+    return { errors: [{ status: "503", title: "Service Unavailable", detail: error instanceof Error ? error.message : "Unable to construct agent job" }] };
+  }
+}
+
 export const agentApiRoutes = new Elysia({ name: "agent-api" })
   .use(authPlugin)
 
@@ -1045,57 +1112,11 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     protocolHeaders(set, agent.capabilities);
-    // The registered accept list is authoritative: the agent declared its
-    // workload set when it registered (validated against AGENT_WORKLOAD_TYPES
-    // then persisted). The tfc-agent-accept header may only narrow that set
-    // per request — never widen it — so a registration of "none" cannot be
-    // bypassed by polling with a header, and an agent cannot silently upgrade
-    // its own privileges.
-    const registered = (agent.accept ?? DEFAULT_AGENT_ACCEPT);
-    const registeredSet = new Set(registered === "none" ? [] : registered.split(","));
-    const headerValue = ctx.request.headers.get("tfc-agent-accept");
-    const accepted = headerValue === null
-      ? registeredSet
-      : new Set(headerValue.split(",").filter((value): boolean => registeredSet.has(value)));
-    const claimed = await claimAgentJob(agent, ["plan", "apply"].filter((phase): boolean => accepted.has(phase)));
-    if (claimed === undefined) {
-      const stackClaimed = await claimStackAgentJob(agent, ["plan", "apply"].filter((phase): boolean => accepted.has(`stack_${phase}`)));
-      if (stackClaimed === undefined) {
-        set.status = 204;
-        return undefined;
-      }
-      return await stackAgentPayload(stackClaimed, agentApiBaseUrl(ctx.request));
-    }
-    const { job, run, workspace, configuration } = claimed;
-    try {
-      const org = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
-      if (org === undefined) throw new Error("organization not found");
-      const baseUrl = agentApiBaseUrl(ctx.request);
-      const version = run.terraformVersion ?? workspace.terraformVersion ?? org.defaultTerraformVersion ?? "latest";
-      const terraformInfo = await terraformReleaseInfo(version, agent.architecture ?? "amd64");
-      if (terraformInfo === null) throw new Error("Unable to resolve Terraform release");
-      const environment = await agentEnvironment(workspace.id, workspace.orgId, workspace.projectId ?? null, run.variables);
-      const runVars: Record<string, string> = {};
-      // Mint the run token only after all fallible lookups/resolution work has
-      // succeeded, so a failed payload build cannot accumulate valid tokens.
-      const runToken = await agentRunToken(run.id, workspace.id, workspace.orgId);
-      const details: AgentJobDetails = { job, run, workspace, organizationName: org.name, configuration };
-      const payload = await buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, runVars, environment);
-      return payload;
-    } catch (error: unknown) {
-      try {
-        await releaseAgentClaim(claimed);
-      } catch (releaseError: unknown) {
-        log.error("Failed to release an agent claim after payload construction failed", {
-          jobId: claimed.job.id,
-          runId: claimed.run.id,
-          error: releaseError,
-        });
-      }
-      log.error("Failed to construct an agent job payload", { jobId: claimed.job.id, runId: claimed.run.id, error });
-      set.status = 503;
-      return { errors: [{ status: "503", title: "Service Unavailable", detail: error instanceof Error ? error.message : "Unable to construct agent job" }] };
-    }
+    const accepted = acceptedWorkloadPhases(agent, ctx.request.headers.get("tfc-agent-accept"));
+    const claim = await claimAvailableJob(agent, accepted, ctx.request, set);
+    if ("response" in claim) return claim.response;
+    if ("empty" in claim) return undefined;
+    return buildClaimedJobPayload(claim.claimed, agent, ctx.request, set);
   })
 
   .get("/api/agent/jobs/:job_id/status", async (ctx: AgentCtx): Promise<unknown> => {
