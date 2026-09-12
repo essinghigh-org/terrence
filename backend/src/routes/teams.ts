@@ -560,6 +560,52 @@ async function removeTeamMembersByIds(teamId: string, rawIds: string[]): Promise
   if (userIds.length > 0) await db.delete(teamMemberships).where(and(eq(teamMemberships.teamId, teamId), inArray(teamMemberships.userId, userIds)));
 }
 
+function resolveTeamWorkspaceGrantInputs(
+  attributes: Record<string, unknown>,
+  currentAccess: unknown,
+  currentPermissions: unknown,
+): { accessInput: unknown; permissionsInput: unknown } {
+  const accessInput = attributes["access"] === undefined ? currentAccess : attributes["access"];
+  const permissionsInput = attributes["permissions"] === undefined
+    ? (accessInput === "custom" ? currentPermissions : null)
+    : attributes["permissions"];
+  return { accessInput, permissionsInput };
+}
+
+function buildTeamWorkspaceUpdates(
+  attributes: Record<string, unknown>,
+  grant: ParsedTeamWorkspaceGrant,
+): Record<string, unknown> {
+  const updates: Record<string, unknown> = {};
+  if (attributes["access"] !== undefined) updates["access"] = grant.access;
+  if (attributes["permissions"] !== undefined) updates["permissions"] = grant.permissions;
+  return updates;
+}
+
+async function addTeamMembersByOrgMembershipIds(teamOrgId: string, teamId: string, rawIds: string[]): Promise<void> {
+  const memberships = rawIds.length === 0
+    ? new Map<string, typeof organizationMemberships.$inferSelect>()
+    : new Map(
+        (await db.query.organizationMemberships.findMany({ where: inArray(organizationMemberships.id, rawIds) }))
+          .map((m): [string, typeof organizationMemberships.$inferSelect] => [m.id, m]),
+      );
+  const batch: (typeof teamMemberships.$inferInsert)[] = [];
+  for (const memId of rawIds) {
+    const mem = memberships.get(memId);
+    if (mem?.orgId === teamOrgId) {
+      batch.push({ id: newResourceId("tm"), teamId, userId: mem.userId, createdAt: Date.now() });
+    }
+  }
+  if (batch.length > 0) await db.insert(teamMemberships).values(batch).onConflictDoNothing();
+}
+
+async function removeTeamMembersByOrgMembershipIds(teamOrgId: string, teamId: string, rawIds: string[]): Promise<void> {
+  if (rawIds.length === 0) return;
+  const memberships = await db.query.organizationMemberships.findMany({ where: inArray(organizationMemberships.id, rawIds) });
+  const userIds = memberships.filter((m): boolean => m.orgId === teamOrgId).map((m): string => m.userId);
+  if (userIds.length > 0) await db.delete(teamMemberships).where(and(eq(teamMemberships.teamId, teamId), inArray(teamMemberships.userId, userIds)));
+}
+
 export const teamRoutes = new Elysia({ name: "teams" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/team-tokens", async ({ params, request, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -774,27 +820,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload["data"];
-    if (Array.isArray(items)) {
-      const memIds = items
-        .map((item): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string") ? (item as Record<string, unknown>)["id"] as string : "")
-        .filter((s: string): boolean => s !== "");
-      const memberships = memIds.length === 0
-        ? new Map<string, typeof organizationMemberships.$inferSelect>()
-        : new Map(
-            (await db.query.organizationMemberships.findMany({
-              where: inArray(organizationMemberships.id, memIds),
-            })).map((m): [string, typeof organizationMemberships.$inferSelect] => [m.id, m]),
-          );
-      const batch: (typeof teamMemberships.$inferInsert)[] = [];
-      for (const memId of memIds) {
-        const mem = memberships.get(memId);
-        if (mem?.orgId === team.orgId) {
-          batch.push({ id: newResourceId("tm"), teamId, userId: mem.userId, createdAt: Date.now() });
-        }
-      }
-      if (batch.length > 0) await db.insert(teamMemberships).values(batch).onConflictDoNothing();
-    }
+    await addTeamMembersByOrgMembershipIds(team.orgId, teamId, parseRelationshipIds(payload["data"]));
     (set as { status: number }).status = 204;
     return {};
   })
@@ -804,17 +830,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload["data"];
-    if (Array.isArray(items)) {
-      const memIds = items
-        .map((item): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string") ? (item as Record<string, unknown>)["id"] as string : "")
-        .filter((s: string): boolean => s !== "");
-      if (memIds.length > 0) {
-        const memberships = await db.query.organizationMemberships.findMany({ where: inArray(organizationMemberships.id, memIds) });
-        const userIds = memberships.filter((m): boolean => m.orgId === team.orgId).map((m): string => m.userId);
-        if (userIds.length > 0) await db.delete(teamMemberships).where(and(eq(teamMemberships.teamId, teamId), inArray(teamMemberships.userId, userIds)));
-      }
-    }
+    await removeTeamMembersByOrgMembershipIds(team.orgId, teamId, parseRelationshipIds(payload["data"]));
     (set as { status: number }).status = 204;
     return {};
   })
@@ -977,26 +993,22 @@ export const teamRoutes = new Elysia({ name: "teams" })
     if (tw === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, tw.workspaceId) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "admin"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const accessInput = attributes["access"] === undefined ? tw.access : attributes["access"];
-    const permissionsInput = attributes["permissions"] === undefined
-      ? (accessInput === "custom" ? tw.permissions : null)
-      : attributes["permissions"];
+    const attributes = parseTeamPatchAttributes(body);
+    const { accessInput, permissionsInput } = resolveTeamWorkspaceGrantInputs(attributes, tw.access, tw.permissions);
     const grant = parseTeamWorkspaceGrant(accessInput, permissionsInput);
     if ("error" in grant) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: grant.error }] }; }
-    if (
-      (attributes["access"] !== undefined || attributes["permissions"] !== undefined)
-      && grant.value.grantsPolicyOverrides
-      && !(await checkOrganizationPermission(ws.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policy-overrides"))
-    ) {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: "manage-policy-overrides is required to grant policy overrides" }] };
+    const grantError = await requirePolicyOverrideGrant(
+      (attributes["access"] !== undefined || attributes["permissions"] !== undefined) && grant.value.grantsPolicyOverrides,
+      ws.orgId,
+      user?.id,
+      tokenOrgId,
+      tokenTeamId ?? null,
+    );
+    if (grantError !== null) {
+      (set as { status: number }).status = grantError.status;
+      return { errors: [{ status: "403", title: "Forbidden", detail: grantError.detail }] };
     }
-    const updates: Record<string, unknown> = {};
-    if (attributes["access"] !== undefined) updates["access"] = grant.value.access;
-    if (attributes["permissions"] !== undefined) updates["permissions"] = grant.value.permissions;
+    const updates = buildTeamWorkspaceUpdates(attributes, grant.value);
     if (Object.keys(updates).length > 0) await db.update(teamWorkspaces).set(updates).where(eq(teamWorkspaces.id, id));
     const updated = await db.query.teamWorkspaces.findFirst({ where: eq(teamWorkspaces.id, id) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
