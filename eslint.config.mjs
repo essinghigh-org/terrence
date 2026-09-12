@@ -191,6 +191,8 @@ export default tseslint.config(
   },
   // ── Frontend legacy components needing targeted overrides ─────────────
   {
+    // Complexity rollout complete for these files (gate enforced); keep the
+    // non-complexity legacy overrides until the underlying code is cleaned.
     files: [
       'frontend/src/components/CommandPalette.tsx',
       'frontend/src/components/CreateWorkspaceModal.tsx',
@@ -202,9 +204,6 @@ export default tseslint.config(
       '@typescript-eslint/no-floating-promises': 'off',
       '@typescript-eslint/no-empty-function': 'off',
       '@typescript-eslint/no-unnecessary-condition': 'off',
-      // Legacy views still above the complexity gate; exempt until each is
-      // split into focused subcomponents. Tracked for the complexity rollout.
-      complexity: 'off',
     },
   },
   {
