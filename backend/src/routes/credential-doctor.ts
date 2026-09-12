@@ -138,52 +138,97 @@ function resultResource(
   };
 }
 
-async function handleCredentialDoctor({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamContext): Promise<unknown> {
+type DoctorTarget = Readonly<{
+  row: typeof oidcConfigs.$inferSelect;
+  org: typeof organizations.$inferSelect;
+  provider: NonNullable<ReturnType<typeof providerForOidcConfigType>>;
+}>;
+
+type DoctorFailure = { ok: false; response: unknown };
+
+async function resolveDoctorTarget(
+  params: Readonly<Record<string, string>>,
+  user: ParamContext["user"],
+  tokenOrgId: string | null,
+  teamId: string | null,
+  set: SetObject,
+): Promise<{ ok: true; target: DoctorTarget } | DoctorFailure> {
   const configurationId = params["oidc_id"] ?? "";
   const row = await db.query.oidcConfigs.findFirst({ where: eq(oidcConfigs.id, configurationId) });
-  if (row === undefined) return notFound(set);
+  if (row === undefined) return { ok: false, response: notFound(set) };
   const org = await db.query.organizations.findFirst({ where: eq(organizations.id, row.orgId) });
-  if (org === undefined || !(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId, teamId, "manage-providers"))) return notFound(set);
+  if (org === undefined || !(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId, teamId, "manage-providers"))) return { ok: false, response: notFound(set) };
   const requestedOrgName = params["org_name"];
-  if (requestedOrgName !== undefined && requestedOrgName !== org.name) return notFound(set);
-
+  if (requestedOrgName !== undefined && requestedOrgName !== org.name) return { ok: false, response: notFound(set) };
   const provider = providerForOidcConfigType(row.configType);
-  if (provider === undefined) return apiError(set, 422, "Unprocessable Entity", "This OIDC configuration does not have a credential doctor probe");
+  if (provider === undefined) return { ok: false, response: apiError(set, 422, "Unprocessable Entity", "This OIDC configuration does not have a credential doctor probe") };
+  return { ok: true, target: { row, org, provider } };
+}
+
+function parseDoctorInput(
+  body: unknown,
+  orgName: string,
+  set: SetObject,
+): { ok: true; input: { agentPoolId: string | null; subject: string } } | DoctorFailure {
   const attrs = dataAttributes(body);
   const agentPoolValue = attrs["agent-pool-id"];
-  if (agentPoolValue !== undefined && agentPoolValue !== null && typeof agentPoolValue !== "string") return apiError(set, 422, "Unprocessable Entity", "agent-pool-id must be a string or null");
+  if (agentPoolValue !== undefined && agentPoolValue !== null && typeof agentPoolValue !== "string") return { ok: false, response: apiError(set, 422, "Unprocessable Entity", "agent-pool-id must be a string or null") };
   const agentPoolId = typeof agentPoolValue === "string" && agentPoolValue.trim() !== "" ? agentPoolValue.trim() : null;
   const subjectValue = attrs["subject"];
-  if (subjectValue !== undefined && subjectValue !== null && safeSubject(subjectValue) === undefined) return apiError(set, 422, "Unprocessable Entity", "subject must be a printable identifier of at most 512 characters");
-  const subject = safeSubject(subjectValue) ?? `organization:${org.name}:credential-doctor`;
+  if (subjectValue !== undefined && subjectValue !== null && safeSubject(subjectValue) === undefined) return { ok: false, response: apiError(set, 422, "Unprocessable Entity", "subject must be a printable identifier of at most 512 characters") };
+  const subject = safeSubject(subjectValue) ?? `organization:${orgName}:credential-doctor`;
+  return { ok: true, input: { agentPoolId, subject } };
+}
 
-  let context: AgentContext;
-  let requester: CredentialDoctorRequester;
+async function resolveDoctorExecution(
+  orgId: string,
+  agentPoolId: string | null,
+  set: SetObject,
+): Promise<{ ok: true; execution: { context: AgentContext; requester: CredentialDoctorRequester } } | DoctorFailure> {
   if (agentPoolId === null) {
-    context = { kind: "worker", node: hostname() || "unknown", processId: String(process.pid), agentPoolId: null, agentId: null };
-    requester = localRequester();
-  } else {
-    const pool = await db.query.agentPools.findFirst({ where: and(eq(agentPools.id, agentPoolId), eq(agentPools.orgId, row.orgId)) });
-    if (pool === undefined) return notFound(set);
-    const agent = await activeAgentForPool(agentPoolId);
-    if (agent === undefined) return apiError(set, 503, "Service Unavailable", "No active request-forwarding agent is available in the selected agent pool");
-    context = { kind: "agent_pool", node: pool.id, processId: "agent", agentPoolId: pool.id, agentId: agent.id };
-    requester = agentRequester(pool.id);
+    return {
+      ok: true,
+      execution: {
+        context: { kind: "worker", node: hostname() || "unknown", processId: String(process.pid), agentPoolId: null, agentId: null },
+        requester: localRequester(),
+      },
+    };
   }
+  const pool = await db.query.agentPools.findFirst({ where: and(eq(agentPools.id, agentPoolId), eq(agentPools.orgId, orgId)) });
+  if (pool === undefined) return { ok: false, response: notFound(set) };
+  const agent = await activeAgentForPool(agentPoolId);
+  if (agent === undefined) return { ok: false, response: apiError(set, 503, "Service Unavailable", "No active request-forwarding agent is available in the selected agent pool") };
+  return {
+    ok: true,
+    execution: {
+      context: { kind: "agent_pool", node: pool.id, processId: "agent", agentPoolId: pool.id, agentId: agent.id },
+      requester: agentRequester(pool.id),
+    },
+  };
+}
 
+async function runDoctorDiagnostic(
+  target: DoctorTarget,
+  configurationId: string,
+  subject: string,
+  context: AgentContext,
+  requester: CredentialDoctorRequester,
+  userId: string | null,
+  set: SetObject,
+): Promise<unknown> {
+  const { row, provider } = target;
   // Validate the configured endpoint before minting a token. This gives an
   // operator a clear configuration error and ensures the only user-supplied
   // destination (Vault) passes the same URL policy as every probe request.
   const endpoint = credentialDoctorNetworkEndpoint(provider, row.config);
   if ("error" in endpoint) return apiError(set, 422, "Unprocessable Entity", endpoint.error);
-
   const startedAt = Date.now();
   const audience = credentialDoctorAudience(provider, row.config);
   let issued;
   try {
     issued = await issueCredentialDoctorIdentityToken({
       organizationId: row.orgId,
-      organizationName: org.name,
+      organizationName: target.org.name,
       audience,
       subject,
       ttlSeconds: 300,
@@ -195,13 +240,24 @@ async function handleCredentialDoctor({ params, body, user, orgId: tokenOrgId, t
   const result = await runCredentialDoctor({ provider, values: row.config }, { token: issued.token, claims }, requester);
   const completedAt = Date.now();
   const id = crypto.randomUUID();
-  await auditLog("credential_doctor.run", "oidc-configuration", configurationId, user?.id ?? null, row.orgId, {
+  await auditLog("credential_doctor.run", "oidc-configuration", configurationId, userId, row.orgId, {
     provider,
     status: result.status,
     executionContext: context.kind,
     agentPoolId: context.agentPoolId,
   });
   return { data: resultResource(id, configurationId, provider, startedAt, completedAt, context, claims, result) };
+}
+
+async function handleCredentialDoctor({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamContext): Promise<unknown> {
+  const target = await resolveDoctorTarget(params, user, tokenOrgId, teamId, set);
+  if (!target.ok) return target.response;
+  const input = parseDoctorInput(body, target.target.org.name, set);
+  if (!input.ok) return input.response;
+  const execution = await resolveDoctorExecution(target.target.row.orgId, input.input.agentPoolId, set);
+  if (!execution.ok) return execution.response;
+  const configurationId = params["oidc_id"] ?? "";
+  return runDoctorDiagnostic(target.target, configurationId, input.input.subject, execution.execution.context, execution.execution.requester, user?.id ?? null, set);
 }
 
 export const credentialDoctorRoutes = new Elysia({ name: "credential-doctor" })
