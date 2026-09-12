@@ -24,6 +24,8 @@ import {
   validateGitHubAppConfiguration,
   type GitHubAppConfiguration,
   type GitHubAppInstallationSummary,
+  type GitHubAppPendingConfiguration,
+  type GitHubAppRecord,
 } from "../lib/github-app-config";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -818,6 +820,113 @@ function installationResource(installation: Readonly<typeof githubAppInstallatio
   };
 }
 
+type GitHubAppHealth = Awaited<ReturnType<typeof validateGitHubAppConfiguration>>;
+
+async function checkGitHubAppHealth(
+  configuration: GitHubAppConfiguration | null,
+  record: GitHubAppRecord | null,
+): Promise<GitHubAppHealth | null> {
+  if (configuration === null) return null;
+  const health = await validateGitHubAppConfiguration(configuration);
+  if (record !== null && record.status === "active" && !health.ok && health.credentialError) {
+    await markGitHubAppInvalid(health.detail);
+  }
+  return health;
+}
+
+function resolveGitHubAppUrls(
+  safeConfiguration: GitHubAppConfiguration | null,
+): Readonly<{ registrationUrl: string; installUrl: string | null }> {
+  if (safeConfiguration === null) {
+    return { registrationUrl: `${manifestGitHubHttpUrl()}/settings/apps`, installUrl: null };
+  }
+  return {
+    registrationUrl: `${safeConfiguration.httpUrl}/settings/apps/${encodeURIComponent(safeConfiguration.slug)}`,
+    installUrl: new URL(`/apps/${encodeURIComponent(safeConfiguration.slug)}/installations/new`, safeConfiguration.httpUrl).toString(),
+  };
+}
+
+function resolveGitHubAppStatus(
+  effectiveStatus: GitHubAppRecord["status"] | undefined,
+  health: GitHubAppHealth | null,
+  hasConfiguration: boolean,
+): string {
+  if (effectiveStatus === "invalid" || (health !== null && !health.ok && health.credentialError)) return "invalid";
+  return effectiveStatus ?? (hasConfiguration ? "active" : "unconfigured");
+}
+
+function resolvePendingOwners(
+  pending: GitHubAppPendingConfiguration | null | undefined,
+): Readonly<{ installed: string[]; required: string[]; missing: string[]; hasPending: boolean }> {
+  if (pending === null || pending === undefined) return { installed: [], required: [], missing: [], hasPending: false };
+  const installedOwners = new Set(pending.installations.map((installation): string => installation.owner));
+  const required = [...pending.requiredOwners];
+  return {
+    installed: [...installedOwners].sort(),
+    required,
+    missing: required.filter((owner): boolean => !installedOwners.has(owner)),
+    hasPending: true,
+  };
+}
+
+function resolveSafeConfiguration(
+  configuration: GitHubAppConfiguration | null,
+  effectiveRecord: GitHubAppRecord | null,
+): GitHubAppConfiguration | null {
+  return configuration ?? effectiveRecord?.configuration ?? null;
+}
+
+function resolveGitHubAppSource(
+  effectiveRecord: GitHubAppRecord | null,
+  safeConfiguration: GitHubAppConfiguration | null,
+): string | null {
+  return effectiveRecord?.source ?? (safeConfiguration?.source === "legacy_environment_import" ? "environment" : null);
+}
+
+function resolveGitHubAppInvalidReason(
+  health: GitHubAppHealth | null,
+  effectiveRecord: GitHubAppRecord | null,
+): string | null {
+  if (health !== null && !health.ok) return health.detail;
+  return effectiveRecord?.invalidReason ?? null;
+}
+
+function buildGitHubAppIdentity(safeConfiguration: GitHubAppConfiguration | null): Record<string, unknown> {
+  return {
+    "app-id": safeConfiguration?.appId ?? null,
+    slug: safeConfiguration?.slug ?? null,
+    name: safeConfiguration?.name ?? null,
+    owner: safeConfiguration?.owner ?? null,
+  };
+}
+
+function buildGitHubAppAttributes(
+  effectiveRecord: GitHubAppRecord | null,
+  configuration: GitHubAppConfiguration | null,
+  health: GitHubAppHealth | null,
+  request: ParamCtx["request"],
+): Record<string, unknown> {
+  const owners = resolvePendingOwners(effectiveRecord?.pending);
+  const safeConfiguration = resolveSafeConfiguration(configuration, effectiveRecord);
+  const urls = resolveGitHubAppUrls(safeConfiguration);
+  return {
+    configured: safeConfiguration !== null,
+    status: resolveGitHubAppStatus(effectiveRecord?.status, health, safeConfiguration !== null),
+    source: resolveGitHubAppSource(effectiveRecord, safeConfiguration),
+    bootstrapConsumed: effectiveRecord?.bootstrapConsumed === true,
+    ...buildGitHubAppIdentity(safeConfiguration),
+    "registration-url": urls.registrationUrl,
+    "install-url": urls.installUrl,
+    "invalid-reason": resolveGitHubAppInvalidReason(health, effectiveRecord),
+    "pending-replacement": owners.hasPending,
+    "required-owners": owners.required,
+    "installed-owners": owners.installed,
+    "missing-owners": owners.missing,
+    modes: ["manifest", "manual", "environment"],
+    "manifest-flow": request === undefined ? null : apiURL(request, "/api/v2/admin/github-app/manifest/setup"),
+  };
+}
+
 export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstallations" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/vcs-connections/:connection_id/repositories", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -1036,47 +1145,13 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     }
     const record = await getGitHubAppRecord();
     const configuration = await getGitHubAppConfiguration();
-    let health: Awaited<ReturnType<typeof validateGitHubAppConfiguration>> | null = null;
-    if (configuration !== null) {
-      health = await validateGitHubAppConfiguration(configuration);
-      if (record !== null && record.status === "active" && !health.ok && health.credentialError) await markGitHubAppInvalid(health.detail);
-    }
+    const health = await checkGitHubAppHealth(configuration, record);
     const effectiveRecord = await getGitHubAppRecord();
-    const pending = effectiveRecord?.pending;
-    const installedOwners = new Set(pending?.installations.map((installation): string => installation.owner) ?? []);
-    const missingOwners = (pending?.requiredOwners ?? []).filter((owner): boolean => !installedOwners.has(owner));
-    const safeConfiguration = configuration ?? effectiveRecord?.configuration ?? null;
-    const registrationUrl = safeConfiguration === null
-      ? `${manifestGitHubHttpUrl()}/settings/apps`
-      : `${safeConfiguration.httpUrl}/settings/apps/${encodeURIComponent(safeConfiguration.slug)}`;
-    const installUrl = safeConfiguration === null
-      ? null
-      : new URL(`/apps/${encodeURIComponent(safeConfiguration.slug)}/installations/new`, safeConfiguration.httpUrl).toString();
     return {
       data: {
         id: "github-app",
         type: "github-app",
-        attributes: {
-          configured: safeConfiguration !== null,
-          status: effectiveRecord?.status === "invalid" || (health?.ok === false && health.credentialError)
-            ? "invalid"
-            : effectiveRecord?.status ?? (safeConfiguration === null ? "unconfigured" : "active"),
-          source: effectiveRecord?.source ?? (safeConfiguration?.source === "legacy_environment_import" ? "environment" : null),
-          bootstrapConsumed: effectiveRecord?.bootstrapConsumed === true,
-          "app-id": safeConfiguration?.appId ?? null,
-          slug: safeConfiguration?.slug ?? null,
-          name: safeConfiguration?.name ?? null,
-          owner: safeConfiguration?.owner ?? null,
-          "registration-url": registrationUrl,
-          "install-url": installUrl,
-          "invalid-reason": health?.ok === false ? health.detail : effectiveRecord?.invalidReason ?? null,
-          "pending-replacement": pending !== undefined && pending !== null,
-          "required-owners": pending?.requiredOwners ?? [],
-          "installed-owners": [...installedOwners].sort(),
-          "missing-owners": missingOwners,
-          modes: ["manifest", "manual", "environment"],
-          "manifest-flow": request === undefined ? null : apiURL(request, "/api/v2/admin/github-app/manifest/setup"),
-        },
+        attributes: buildGitHubAppAttributes(effectiveRecord, configuration, health, request),
       },
     };
   })
