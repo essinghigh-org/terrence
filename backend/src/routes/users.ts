@@ -310,6 +310,84 @@ async function rotateOrgToken(
   });
 }
 
+async function requireMemberListOrg(
+  orgName: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null | undefined,
+): Promise<CachedOrg> {
+  const org = await cachedOrgByName(orgName);
+  if (org === undefined || !(await checkOrgPermission(userId, org.id, "member", tokenOrgId, tokenTeamId ?? null, "members:read"))) {
+    throw new HttpStatusError(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  return org;
+}
+
+function parseMembershipFilters(
+  query: Readonly<Record<string, string>>,
+  url: string,
+): { q: string; filterStatus: string; filterEmail: string } {
+  const searchParams = new URL(url).searchParams;
+  const q = (query["q"] ?? searchParams.get("q") ?? "").trim().toLowerCase();
+  const filterStatus = (query["filter[status]"] ?? searchParams.get("filter[status]") ?? "").trim();
+  const filterEmail = (query["filter[email]"] ?? searchParams.get("filter[email]") ?? "").trim().toLowerCase();
+  if (filterStatus !== "" && !["active", "invited"].includes(filterStatus)) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "filter[status] must be active or invited" }] });
+  }
+  return { q, filterStatus, filterEmail };
+}
+
+function matchMembershipUser(
+  memUserMap: ReadonlyMap<string, Readonly<typeof users.$inferSelect>>,
+  q: string,
+  emailNeedles: string[],
+  uid: string,
+): boolean {
+  const u = memUserMap.get(uid);
+  if (u === undefined) return false;
+  const hay = `${u.username} ${u.email ?? ""}`.toLowerCase();
+  const emailHay = (u.email ?? "").toLowerCase();
+  if (q !== "" && !hay.includes(q)) return false;
+  if (emailNeedles.length > 0 && !emailNeedles.some((needle): boolean => emailHay === needle || emailHay.includes(needle))) return false;
+  return true;
+}
+
+async function filterOrgMemberships(
+  orgId: string,
+  q: string,
+  filterStatus: string,
+  filterEmail: string,
+): Promise<Readonly<typeof organizationMemberships.$inferSelect>[]> {
+  // Apply filters. q and filter[email] both match user username/email; they compose with AND.
+  let filteredMems: Readonly<typeof organizationMemberships.$inferSelect>[] = await db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, orgId), orderBy: [asc(organizationMemberships.id)] });
+  if (filteredMems.length > 0) {
+    const liveUserIds = new Set((await db.query.users.findMany({
+      where: and(inArray(users.id, [...new Set(filteredMems.map((m): string => m.userId))]), isNull(users.deletedAt)),
+      columns: { id: true },
+    })).map((u): string => u.id));
+    filteredMems = filteredMems.filter((m): boolean => liveUserIds.has(m.userId));
+  }
+  if (filterStatus !== "") filteredMems = filteredMems.filter((m): boolean => m.status === filterStatus);
+  if (filterEmail !== "" || q !== "") {
+    const memUserIds = [...new Set(filteredMems.map((m): string => m.userId))];
+    const memUsers = memUserIds.length > 0 ? await db.query.users.findMany({ where: inArray(users.id, memUserIds) }) : [];
+    const memUserMap = new Map(memUsers.map((u): [string, typeof u] => [u.id, u]));
+    const emailNeedles = filterEmail !== "" ? filterEmail.split(",").map((s): string => s.trim().toLowerCase()).filter(Boolean) : [];
+    filteredMems = filteredMems.filter((m): boolean => matchMembershipUser(memUserMap, q, emailNeedles, m.userId));
+  }
+  return filteredMems;
+}
+
+async function membershipStatusCounts(orgId: string): Promise<{ total: number; active: number; invited: number }> {
+  const byStatus = await db.select({ status: organizationMemberships.status, total: count() }).from(organizationMemberships).where(eq(organizationMemberships.orgId, orgId)).groupBy(organizationMemberships.status);
+  const countByStatus = new Map(byStatus.map((row): [string, number] => [row.status, row.total]));
+  return {
+    total: [...countByStatus.values()].reduce((sum, value): number => sum + value, 0),
+    active: countByStatus.get("active") ?? 0,
+    invited: countByStatus.get("invited") ?? 0,
+  };
+}
+
 export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
   .get("/api/v2/users", async ({ query, user, set }: ParamCtx): Promise<unknown> => {
@@ -664,71 +742,38 @@ export const userRoutes = new Elysia({ name: "users" })
   })
   .get("/api/v2/organizations/:org_name/organization-memberships", async ({ params, query, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null, "members:read"))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const url = new URL(request.url);
-    const q = (query["q"] ?? url.searchParams.get("q") ?? "").trim().toLowerCase();
-    const filterStatus = (query["filter[status]"] ?? url.searchParams.get("filter[status]") ?? "").trim();
-    const filterEmail = (query["filter[email]"] ?? url.searchParams.get("filter[email]") ?? "").trim().toLowerCase();
-    if (filterStatus !== "" && !["active", "invited"].includes(filterStatus)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "filter[status] must be active or invited" }] };
-    }
-    const { number, size } = pageRequest(request);
-    // Apply filters. q and filter[email] both match user username/email; they compose with AND.
-    let filteredMems: Readonly<typeof organizationMemberships.$inferSelect>[] = await db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, org.id), orderBy: [asc(organizationMemberships.id)] });
-    if (filteredMems.length > 0) {
-      const liveUserIds = new Set((await db.query.users.findMany({
-        where: and(inArray(users.id, [...new Set(filteredMems.map((m): string => m.userId))]), isNull(users.deletedAt)),
-        columns: { id: true },
-      })).map((u): string => u.id));
-      filteredMems = filteredMems.filter((m): boolean => liveUserIds.has(m.userId));
-    }
-    if (filterStatus !== "") filteredMems = filteredMems.filter((m): boolean => m.status === filterStatus);
-    if (filterEmail !== "" || q !== "") {
-      const memUserIds = [...new Set(filteredMems.map((m): string => m.userId))];
-      const memUsers = memUserIds.length > 0 ? await db.query.users.findMany({ where: inArray(users.id, memUserIds) }) : [];
-      const memUserMap = new Map(memUsers.map((u): [string, typeof u] => [u.id, u]));
-      const emailNeedles = filterEmail !== "" ? filterEmail.split(",").map((s): string => s.trim().toLowerCase()).filter(Boolean) : [];
-      const matchUser = (uid: string): boolean => {
-        const u = memUserMap.get(uid);
-        if (u === undefined) return false;
-        const hay = `${u.username} ${u.email ?? ""}`.toLowerCase();
-        const emailHay = (u.email ?? "").toLowerCase();
-        if (q !== "" && !hay.includes(q)) return false;
-        if (emailNeedles.length > 0 && !emailNeedles.some((needle): boolean => emailHay === needle || emailHay.includes(needle))) return false;
-        return true;
+    try {
+      const org = await requireMemberListOrg(orgName, user?.id, tokenOrgId, tokenTeamId);
+      const { q, filterStatus, filterEmail } = parseMembershipFilters(query, request.url);
+      const { number, size } = pageRequest(request);
+      const filteredMems = await filterOrgMemberships(org.id, q, filterStatus, filterEmail);
+      const statusCounts = await membershipStatusCounts(org.id);
+      const totalFiltered = filteredMems.length;
+      const page = filteredMems.slice((number - 1) * size, number * size);
+      const userIds = page.map((m: Readonly<{ readonly userId: string }>): string => m.userId);
+      const userList = userIds.length > 0 ? await db.query.users.findMany({ where: inArray(users.id, userIds) }) : [];
+      const userMap = new Map(userList.map((u: Readonly<typeof users.$inferSelect>): [string, typeof u] => [u.id, u]));
+      const includeQuery = query["include"];
+      const includeUsers = typeof includeQuery === "string" && includeQuery.split(",").includes("user");
+      const data = await Promise.all(page.map(async (m: Readonly<typeof organizationMemberships.$inferSelect>): Promise<Record<string, unknown>> => orgMembershipResource(m, userMap.get(m.userId) ?? null)));
+      const result: { data: Record<string, unknown>[]; included?: Record<string, unknown>[]; meta?: Record<string, unknown>; links?: Record<string, string | null> } = {
+        data,
+        ...pagination(request, number, size, totalFiltered),
       };
-      filteredMems = filteredMems.filter((m): boolean => matchUser(m.userId));
+      // Preserve pagination meta alongside status-counts (object spread of `meta`
+      // would otherwise clobber one side). Merge both.
+      result.meta = { ...(result.meta ?? {}), "status-counts": statusCounts };
+      if (includeUsers && userList.length > 0) {
+        result.included = userList.map((u: Readonly<typeof users.$inferSelect>): Record<string, unknown> => userResource(u));
+      }
+      return result;
+    } catch (error: unknown) {
+      if (error instanceof HttpStatusError) {
+        (set as { status: number }).status = error.status;
+        return error.body;
+      }
+      throw error;
     }
-    const byStatus = await db.select({ status: organizationMemberships.status, total: count() }).from(organizationMemberships).where(eq(organizationMemberships.orgId, org.id)).groupBy(organizationMemberships.status);
-    const countByStatus = new Map(byStatus.map((row): [string, number] => [row.status, row.total]));
-    const statusCounts = {
-      total: [...countByStatus.values()].reduce((sum, value): number => sum + value, 0),
-      active: countByStatus.get("active") ?? 0,
-      invited: countByStatus.get("invited") ?? 0,
-    };
-    const totalFiltered = filteredMems.length;
-    const page = filteredMems.slice((number - 1) * size, number * size);
-    const userIds = page.map((m: Readonly<{ readonly userId: string }>): string => m.userId);
-    const userList = userIds.length > 0 ? await db.query.users.findMany({ where: inArray(users.id, userIds) }) : [];
-    const userMap = new Map(userList.map((u: Readonly<typeof users.$inferSelect>): [string, typeof u] => [u.id, u]));
-    const includeQuery = query["include"];
-    const includeUsers = typeof includeQuery === "string" && includeQuery.split(",").includes("user");
-    const data = await Promise.all(page.map(async (m: Readonly<typeof organizationMemberships.$inferSelect>): Promise<Record<string, unknown>> => orgMembershipResource(m, userMap.get(m.userId) ?? null)));
-    const result: { data: Record<string, unknown>[]; included?: Record<string, unknown>[]; meta?: Record<string, unknown>; links?: Record<string, string | null> } = {
-      data,
-      ...pagination(request, number, size, totalFiltered),
-    };
-    // Preserve pagination meta alongside status-counts (object spread of `meta`
-    // would otherwise clobber one side). Merge both.
-    result.meta = { ...(result.meta ?? {}), "status-counts": statusCounts };
-    if (includeUsers && userList.length > 0) {
-      result.included = userList.map((u: Readonly<typeof users.$inferSelect>): Record<string, unknown> => userResource(u));
-    }
-    return result;
   })
   .get("/api/v2/organizations/:org_name/users", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
