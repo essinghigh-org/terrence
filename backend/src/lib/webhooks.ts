@@ -416,7 +416,7 @@ function validateGitlabMrFields(branch: string | undefined, commitSha: string | 
   return undefined;
 }
 
-function buildGitlabMrDetails(branch: string, targetBranch: string | undefined, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity, commitMessage: string, commitSha: string, commitUrl: string, pullRequestNumber: number): ParsedProviderWebhook {
+function buildPullRequestDetails(branch: string, targetBranch: string | undefined, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity, commitMessage: string, commitSha: string, commitUrl: string, pullRequestNumber: number): ParsedProviderWebhook {
   return {
     kind: "pull_request",
     details: {
@@ -448,7 +448,7 @@ function parseGitlabMergeRequestWebhook(payload: WebhookPayload, repoFullName: s
   const pullRequestNumber = attributes?.["iid"];
   if (validateGitlabMrFields(branch, commitSha, commitUrl, pullRequestNumber) !== undefined) return undefined;
   if (branch === undefined || commitSha === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
-  return buildGitlabMrDetails(branch, targetBranch, repoFullName, cloneUrl, senderUsername, sourceIdentity, commitMessage, commitSha, commitUrl, pullRequestNumber);
+  return buildPullRequestDetails(branch, targetBranch, repoFullName, cloneUrl, senderUsername, sourceIdentity, commitMessage, commitSha, commitUrl, pullRequestNumber);
 }
 
 function extractBitbucketChanges(payload: WebhookPayload): unknown[] | undefined {
@@ -553,37 +553,35 @@ function resolveBitbucketPrCommitUrl(pullRequest: Readonly<Record<string, unknow
   return requiredString(commitHtml?.["href"]);
 }
 
-function parseBitbucketPullRequestWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
+function extractBitbucketPrFields(payload: WebhookPayload): {
+  branch: string | undefined;
+  targetBranch: string | undefined;
+  commitSha: string | undefined;
+  commitMessage: string;
+  commitUrl: string | undefined;
+  pullRequestNumber: unknown;
+} {
   const pullRequest = asRecord(payload["pullrequest"]);
   const source = asRecord(pullRequest?.["source"]);
   const destination = asRecord(pullRequest?.["destination"]);
   const branchValue = asRecord(source?.["branch"]);
   const destinationBranch = asRecord(destination?.["branch"]);
   const commit = asRecord(source?.["commit"]);
-  const branch = requiredString(branchValue?.["name"]);
-  const targetBranch = requiredString(destinationBranch?.["name"]);
-  const commitSha = requiredString(commit?.["hash"]);
-  const commitMessage = requiredString(pullRequest?.["title"]) ?? "Pull request";
-  const commitUrl = resolveBitbucketPrCommitUrl(pullRequest, commit);
-  const pullRequestNumber = pullRequest?.["id"];
+  return {
+    branch: requiredString(branchValue?.["name"]),
+    targetBranch: requiredString(destinationBranch?.["name"]),
+    commitSha: requiredString(commit?.["hash"]),
+    commitMessage: requiredString(pullRequest?.["title"]) ?? "Pull request",
+    commitUrl: resolveBitbucketPrCommitUrl(pullRequest, commit),
+    pullRequestNumber: pullRequest?.["id"],
+  };
+}
+
+function parseBitbucketPullRequestWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
+  const { branch, targetBranch, commitSha, commitMessage, commitUrl, pullRequestNumber } = extractBitbucketPrFields(payload);
   if (validateBitbucketPrFields(branch, commitSha, commitUrl, pullRequestNumber) !== undefined) return undefined;
   if (branch === undefined || commitSha === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
-  return {
-    kind: "pull_request",
-    details: {
-      branch,
-      ...(targetBranch === undefined ? {} : { targetBranch }),
-      cloneUrl,
-      commitMessage,
-      commitSha,
-      commitUrl,
-      filesChanged: new Set<string>(),
-      pullRequestNumber,
-      repoFullName,
-      senderUsername,
-      sourceIdentity,
-    },
-  };
+  return buildPullRequestDetails(branch, targetBranch, repoFullName, cloneUrl, senderUsername, sourceIdentity, commitMessage, commitSha, commitUrl, pullRequestNumber);
 }
 
 function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetails | undefined {
@@ -632,7 +630,12 @@ function bitbucketCloneUrl(repository: Readonly<Record<string, unknown>>): strin
   return undefined;
 }
 
-function bitbucketWebhook(eventName: string, payload: WebhookPayload): readonly ParsedProviderWebhook[] | undefined {
+function resolveBitbucketIdentity(payload: WebhookPayload): {
+  repoFullName: string;
+  cloneUrl: string;
+  senderUsername: string;
+  sourceIdentity: VcsSourceIdentity;
+} | undefined {
   const repository = asRecord(payload["repository"]);
   const actor = asRecord(payload["actor"]);
   const repoFullName = requiredString(repository?.["full_name"]);
@@ -643,6 +646,13 @@ function bitbucketWebhook(eventName: string, payload: WebhookPayload): readonly 
   if (senderUsername === undefined) return undefined;
   const sourceIdentity = vcsSourceIdentity("bitbucket", cloneUrl);
   if (sourceIdentity === undefined) return undefined;
+  return { repoFullName, cloneUrl, senderUsername, sourceIdentity };
+}
+
+function bitbucketWebhook(eventName: string, payload: WebhookPayload): readonly ParsedProviderWebhook[] | undefined {
+  const identity = resolveBitbucketIdentity(payload);
+  if (identity === undefined) return undefined;
+  const { repoFullName, cloneUrl, senderUsername, sourceIdentity } = identity;
   if (eventName === "repo:push") return parseBitbucketPushWebhooks(payload, repoFullName, cloneUrl, senderUsername, sourceIdentity);
   if (eventName === "pullrequest:created" || eventName === "pullrequest:updated") {
     const parsed = parseBitbucketPullRequestWebhook(payload, repoFullName, cloneUrl, senderUsername, sourceIdentity);
