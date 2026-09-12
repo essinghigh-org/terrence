@@ -138,6 +138,30 @@ function manifestPayload(request: Readonly<{ url: string }>): Readonly<Record<st
   };
 }
 
+function parseManifestConfiguration(record: RepositoryRecord, apiUrl: string): GitHubAppConfiguration | null {
+  const pem = stringValue(record["pem"]);
+  const webhookSecret = stringValue(record["webhook_secret"]);
+  const clientId = stringValue(record["client_id"]);
+  const clientSecret = stringValue(record["client_secret"]);
+  const appId = positiveInteger(record["id"]);
+  const slug = stringValue(record["slug"]);
+  if (pem === null || webhookSecret === null || clientId === null || clientSecret === null || appId === null || slug === null) return null;
+  return {
+    appId,
+    appIdText: String(appId),
+    slug,
+    name: stringValue(record["name"]),
+    owner: null,
+    privateKey: pem,
+    webhookSecret,
+    clientId,
+    clientSecret,
+    apiUrl,
+    httpUrl: manifestGitHubHttpUrl(),
+    source: "manifest",
+  };
+}
+
 async function manifestConversion(code: string): Promise<Readonly<{ configuration: GitHubAppConfiguration; htmlUrl: string | null }> | null> {
   const apiUrl = manifestGitHubApiUrl();
   const controller = new AbortController();
@@ -157,27 +181,8 @@ async function manifestConversion(code: string): Promise<Readonly<{ configuratio
     if (!response.ok) return null;
     const record = recordValue(body);
     if (record === null) return null;
-    const pem = stringValue(record["pem"]);
-    const webhookSecret = stringValue(record["webhook_secret"]);
-    const clientId = stringValue(record["client_id"]);
-    const clientSecret = stringValue(record["client_secret"]);
-    const appId = positiveInteger(record["id"]);
-    const slug = stringValue(record["slug"]);
-    if (pem === null || webhookSecret === null || clientId === null || clientSecret === null || appId === null || slug === null) return null;
-    const configuration: GitHubAppConfiguration = {
-      appId,
-      appIdText: String(appId),
-      slug,
-      name: stringValue(record["name"]),
-      owner: null,
-      privateKey: pem,
-      webhookSecret,
-      clientId,
-      clientSecret,
-      apiUrl,
-      httpUrl: manifestGitHubHttpUrl(),
-      source: "manifest",
-    };
+    const configuration = parseManifestConfiguration(record, apiUrl);
+    if (configuration === null) return null;
     const validation = await validateGitHubAppConfiguration(configuration);
     if (!validation.ok) return null;
     return {
