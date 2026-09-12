@@ -63,6 +63,27 @@ function paramSafeKey(key: string): string {
 const MAX_FLATTEN_DEPTH = 5;
 const MAX_FLATTEN_PARAMS = 128;
 
+function pushScalarMetaParam(key: string, value: unknown, out: Array<readonly [string, string]>): boolean {
+  if (typeof value === "string") {
+    out.push([key, value]);
+    return true;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    out.push([key, String(value)]);
+    return true;
+  }
+  return false;
+}
+
+function pushJsonMetaParam(key: string, value: unknown, out: Array<readonly [string, string]>): void {
+  try {
+    const json = JSON.stringify(value) ?? NIL;
+    out.push([key, json]);
+  } catch {
+    out.push([key, "[unserializable]"]);
+  }
+}
+
 /** Flatten one meta value into dotted SD-PARAM entries. Objects recurse
  * (`http: {status}` -> `http.status`), arrays use numeric segments
  * (`tags: ["a"]` -> `tags.0`), scalars stringify, and null/undefined are
@@ -77,21 +98,9 @@ function flattenMetaParam(
   out: Array<readonly [string, string]>,
 ): void {
   if (out.length >= MAX_FLATTEN_PARAMS || value === null || value === undefined) return;
-  if (typeof value === "string") {
-    out.push([key, value]);
-    return;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    out.push([key, String(value)]);
-    return;
-  }
+  if (pushScalarMetaParam(key, value, out)) return;
   if (typeof value !== "object" || depth >= MAX_FLATTEN_DEPTH || ancestors.has(value)) {
-    try {
-      const json = JSON.stringify(value) ?? NIL;
-      out.push([key, json]);
-    } catch {
-      out.push([key, "[unserializable]"]);
-    }
+    pushJsonMetaParam(key, value, out);
     return;
   }
   const nested = ancestors instanceof Set ? ancestors : new Set(ancestors);
@@ -269,40 +278,32 @@ export type SyslogFormatOptions = Readonly<{
   format?: SyslogFormat;
 }>;
 
-/** Build one wire message (no framing, no trailing newline). Format "json"
- * returns the bare JSON object with no syslog envelope so collectors with
- * content-based JSON detection auto-extract every field; "rfc5424" (the
- * default) returns the full RFC 5424 line with meta as dotted SD-PARAMs. */
-export function formatSyslogMessage(
-  entry: SyslogEntryInput,
-  identity: SyslogIdentity,
-  options?: SyslogFormatOptions,
-): string {
+function syslogHeader(entry: SyslogEntryInput, identity: SyslogIdentity): string {
   const severity = severityForLevel(entry.level);
-  const header = `<${pri(1, severity)}>1 ${rfc3339Timestamp(entry.timestamp)} ${
+  return `<${pri(1, severity)}>1 ${rfc3339Timestamp(entry.timestamp)} ${
     identity.hostname || NIL
   } ${identity.appName || NIL} ${identity.procId || NIL} ${NIL}`;
-  if ((options?.format ?? "rfc5424") === "json") {
-    // Envelope keys come first so last-resort transport truncation keeps
-    // timestamp/level/message; colliding meta keys are dropped so the
-    // envelope always wins (same precedence as before, just ordered).
-    const extra: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(entry.meta ?? {})) {
-      if (!["timestamp", "level", "message", "hostname", "app"].includes(key)) extra[key] = value;
-    }
-    const body: Record<string, unknown> = {
-      timestamp: rfc3339Timestamp(entry.timestamp),
-      level: entry.level,
-      message: entry.message,
-      hostname: identity.hostname || NIL,
-      app: identity.appName || NIL,
-      ...extra,
-    };
-    const maxBytes = options?.maxBodyBytes;
-    // Bare JSON on the wire: no RFC 5424 envelope, so JSON-detecting
-    // collectors parse the datagram with no extra configuration.
-    return maxBytes === undefined ? stringifySyslogBody(body) : fitJsonBody(body, maxBytes);
+}
+
+function jsonSyslogBody(entry: SyslogEntryInput, identity: SyslogIdentity): Record<string, unknown> {
+  // Envelope keys come first so last-resort transport truncation keeps
+  // timestamp/level/message; colliding meta keys are dropped so the
+  // envelope always wins (same precedence as before, just ordered).
+  const extra: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(entry.meta ?? {})) {
+    if (!["timestamp", "level", "message", "hostname", "app"].includes(key)) extra[key] = value;
   }
+  return {
+    timestamp: rfc3339Timestamp(entry.timestamp),
+    level: entry.level,
+    message: entry.message,
+    hostname: identity.hostname || NIL,
+    app: identity.appName || NIL,
+    ...extra,
+  };
+}
+
+function rfc5424SyslogMessage(entry: SyslogEntryInput, header: string): string {
   const meta = entry.meta;
   if (meta === undefined || Object.keys(meta).length === 0) {
     return `${header} ${NIL} ${entry.message}`;
@@ -315,6 +316,26 @@ export function formatSyslogMessage(
     .map(([key, value]): string => ` ${key}="${sdEscape(value)}"`)
     .join("")}]`;
   return `${header} ${sd} ${entry.message}`;
+}
+
+/** Build one wire message (no framing, no trailing newline). Format "json"
+ * returns the bare JSON object with no syslog envelope so collectors with
+ * content-based JSON detection auto-extract every field; "rfc5424" (the
+ * default) returns the full RFC 5424 line with meta as dotted SD-PARAMs. */
+export function formatSyslogMessage(
+  entry: SyslogEntryInput,
+  identity: SyslogIdentity,
+  options?: SyslogFormatOptions,
+): string {
+  const header = syslogHeader(entry, identity);
+  if ((options?.format ?? "rfc5424") === "json") {
+    const body = jsonSyslogBody(entry, identity);
+    const maxBytes = options?.maxBodyBytes;
+    // Bare JSON on the wire: no RFC 5424 envelope, so JSON-detecting
+    // collectors parse the datagram with no extra configuration.
+    return maxBytes === undefined ? stringifySyslogBody(body) : fitJsonBody(body, maxBytes);
+  }
+  return rfc5424SyslogMessage(entry, header);
 }
 
 /** Deterministic default hostname: container id hash when /etc/hostname is
