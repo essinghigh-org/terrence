@@ -6,6 +6,7 @@ import { db } from "../db";
 import { runTriggers, auditLogs, githubWebhookDeliveries, workspaces, workspaceVariables, users, organizationMemberships, teams } from "../db/schema";
 import { eq, and, asc, count, desc, inArray, or, sql, type SQL } from "drizzle-orm";
 import { auditLog, checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace, pageRequest, pagination, workspaceIdsForPermission } from "../lib/utils";
+import type { RequestWithUrl } from "../lib/utils";
 import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
 import { workspaceVariableResource } from "../lib/response";
@@ -499,6 +500,46 @@ async function claimGitHubDelivery(request: Request): Promise<{ deliveryId: stri
   return { deliveryId, duplicate: claimed.length === 0 };
 }
 
+async function filteredWorkspaceVariables(
+  orgName: string,
+  workspaceName: string,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+  request: RequestWithUrl | undefined,
+  set: SetObj,
+): Promise<unknown> {
+  const org = await cachedOrgByName(orgName);
+  const workspace = org === undefined
+    ? undefined
+    : await db.query.workspaces.findFirst({
+        where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)),
+      });
+  const authorized = workspace === undefined
+    ? undefined
+    : await findAuthorizedWorkspace(workspace.id, userId, orgId, teamId, "variables-read");
+  if (authorized === undefined) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
+  const requestWithUrl = request ?? { url: "http://localhost/api/v2/vars" };
+  const where = eq(workspaceVariables.workspaceId, authorized.id);
+  const page = pageRequest(requestWithUrl);
+  const [variables, countRows] = await Promise.all([
+    db.select().from(workspaceVariables)
+      .where(where)
+      .orderBy(asc(workspaceVariables.id))
+      .limit(page.size)
+      .offset((page.number - 1) * page.size),
+    db.select({ total: count() }).from(workspaceVariables).where(where),
+  ]);
+  const totalCount = countRows[0]?.total ?? 0;
+  return {
+    data: variables.map(globalVariableResource),
+    ...pagination(requestWithUrl, page.number, page.size, totalCount),
+  };
+}
+
 export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
@@ -640,34 +681,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     }
 
     if (orgName !== null && workspaceName !== null) {
-      const org = await cachedOrgByName(orgName);
-      const workspace = org === undefined
-        ? undefined
-        : await db.query.workspaces.findFirst({
-          where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)),
-        });
-      const authorized = workspace === undefined
-        ? undefined
-        : await findAuthorizedWorkspace(workspace.id, user?.id, orgId, teamId, "variables-read");
-      if (authorized === undefined) {
-        (set as { status: number }).status = 404;
-        return { errors: [{ status: "404", title: "Not Found" }] };
-      }
-      const where = eq(workspaceVariables.workspaceId, authorized.id);
-      const page = pageRequest(request ?? { url: "http://localhost/api/v2/vars" });
-      const [variables, countRows] = await Promise.all([
-        db.select().from(workspaceVariables)
-          .where(where)
-          .orderBy(asc(workspaceVariables.id))
-          .limit(page.size)
-          .offset((page.number - 1) * page.size),
-        db.select({ total: count() }).from(workspaceVariables).where(where),
-      ]);
-      const totalCount = countRows[0]?.total ?? 0;
-      return {
-        data: variables.map(globalVariableResource),
-        ...pagination(request ?? { url: "http://localhost/api/v2/vars" }, page.number, page.size, totalCount),
-      };
+      return filteredWorkspaceVariables(orgName, workspaceName, user?.id, orgId, teamId, request, set);
     }
 
     const requestWithUrl = request ?? { url: "http://localhost/api/v2/vars" };
