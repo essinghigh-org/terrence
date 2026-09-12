@@ -473,6 +473,41 @@ async function serveValidatedTarArchive(
   return Bun.file(archivePath);
 }
 
+async function resolveAgentPoolTokenExpiry(
+  attrs: Record<string, unknown>,
+  orgId: string,
+  set: SetObj,
+): Promise<{ expiresAt: number | null } | { error: unknown }> {
+  const expiredAtValue = attrs["expired-at"] ?? attrs["expires-at"] ?? attrs["expiredAt"] ?? attrs["expiresAt"];
+  const parsedExpiry = tokenExpiry(expiredAtValue);
+  const requestedExpiry = parsedExpiry ?? Date.now() + AGENT_POOL_TOKEN_DEFAULT_TTL_MS;
+  const policyResolution = await resolveTokenExpiryUnderPolicy(orgId, "agent", requestedExpiry);
+  if (policyResolution.kind === "invalid") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] } };
+  }
+  if (policyResolution.kind === "forbidden") {
+    (set as { status: number }).status = 403;
+    return { error: { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] } };
+  }
+  return { expiresAt: policyResolution.expiresAt ?? Date.now() + AGENT_POOL_TOKEN_DEFAULT_TTL_MS };
+}
+
+async function auditAgentPoolTokenCreation(
+  tokenId: string,
+  userId: string | null | undefined,
+  orgId: string,
+  poolId: string,
+  description: string,
+): Promise<void> {
+  if (strictAuditEnabled()) {
+    await auditLog("create", "agent-pool-token", tokenId, userId ?? null, orgId, {
+      agentPoolId: poolId,
+      description,
+    });
+  }
+}
+
 function completionResourceCounts(
   attrs: Record<string, unknown>,
   status: string,
@@ -1226,28 +1261,13 @@ export const agentRoutes = new Elysia({ name: "agents" })
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "manage-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attrs = getAttrs(body);
     const description = typeof attrs["description"] === "string" ? attrs["description"] : `Agent token for ${pool.name}`;
-    const expiredAtValue = attrs["expired-at"] ?? attrs["expires-at"] ?? attrs["expiredAt"] ?? attrs["expiresAt"];
-    const parsedExpiry = tokenExpiry(expiredAtValue);
-    const requestedExpiry = parsedExpiry ?? Date.now() + AGENT_POOL_TOKEN_DEFAULT_TTL_MS;
-    const policyResolution = await resolveTokenExpiryUnderPolicy(pool.orgId, "agent", requestedExpiry);
-    if (policyResolution.kind === "invalid") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
-    }
-    if (policyResolution.kind === "forbidden") {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
-    }
-    const expiresAt = policyResolution.expiresAt ?? Date.now() + AGENT_POOL_TOKEN_DEFAULT_TTL_MS;
+    const resolvedExpiry = await resolveAgentPoolTokenExpiry(attrs, pool.orgId, set);
+    if ("error" in resolvedExpiry) return resolvedExpiry.error;
+    const expiresAt = resolvedExpiry.expiresAt;
     const rawToken = generateAuthenticationToken("agent");
     const tokenId = newResourceId("atok");
     await db.insert(agentPoolTokens).values({ id: tokenId, agentPoolId: poolId, token: hashAuthenticationToken(rawToken), description, createdAt: Date.now(), expiresAt, revokedAt: null });
-    if (strictAuditEnabled()) {
-      await auditLog("create", "agent-pool-token", tokenId, user?.id ?? null, pool.orgId, {
-        agentPoolId: poolId,
-        description,
-      });
-    }
+    await auditAgentPoolTokenCreation(tokenId, user?.id, pool.orgId, poolId, description);
     (set as { status: number }).status = 201;
     return { data: { id: tokenId, type: "authentication-tokens", attributes: { token: rawToken, description, "created-at": new Date().toISOString(), "expired-at": expiresAt !== null ? new Date(expiresAt).toISOString() : null } } };
   });
