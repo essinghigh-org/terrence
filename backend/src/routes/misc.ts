@@ -540,6 +540,43 @@ async function filteredWorkspaceVariables(
   };
 }
 
+function parseRunTriggerSourceIds(items: unknown): { ids: string[] } | { error: string } {
+  if (!Array.isArray(items)) {
+    return { error: "Run trigger relationships must be an array of workspace resource identifiers" };
+  }
+  const sourceIds: string[] = [];
+  for (const item of items) {
+    if (item === null || typeof item !== "object") {
+      return { error: "Run trigger source must be a workspace resource identifier" };
+    }
+    const identifier = item as Record<string, unknown>;
+    if (identifier["type"] !== "workspaces" || typeof identifier["id"] !== "string" || identifier["id"] === "") {
+      return { error: "Run trigger source must be a workspace resource identifier" };
+    }
+    sourceIds.push(identifier["id"]);
+  }
+  return { ids: sourceIds };
+}
+
+async function insertRunTriggerSources(orgId: string, workspaceId: string, sourceIds: string[]): Promise<string | null> {
+  const uniqueSourceIds = [...new Set(sourceIds)];
+  const sourceWorkspaces = uniqueSourceIds.length === 0
+    ? []
+    : await db.query.workspaces.findMany({ where: inArray(workspaces.id, uniqueSourceIds), columns: { id: true, orgId: true } });
+  const validSources = new Set(sourceWorkspaces.filter((source): boolean => source.orgId === orgId && source.id !== workspaceId).map((source): string => source.id));
+  if (validSources.size !== uniqueSourceIds.length) {
+    return "Sourceable workspace must belong to the same organization and cannot be the workspace itself";
+  }
+  if (uniqueSourceIds.length > 0) {
+    await db.insert(runTriggers).values(uniqueSourceIds.map((sourceWorkspaceId: string): typeof runTriggers.$inferInsert => ({
+      id: newResourceId("rt"),
+      workspaceId,
+      sourceWorkspaceId,
+    }))).onConflictDoNothing();
+  }
+  return null;
+}
+
 export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
@@ -905,39 +942,15 @@ export const miscRoutes = new Elysia({ name: "misc" })
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId, "admin")) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload["data"];
-    if (!Array.isArray(items)) {
+    const parsedIds = parseRunTriggerSourceIds(payload["data"]);
+    if ("error" in parsedIds) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Run trigger relationships must be an array of workspace resource identifiers" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: parsedIds.error }] };
     }
-    const sourceIds: string[] = [];
-    for (const item of items) {
-      if (item === null || typeof item !== "object") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Run trigger source must be a workspace resource identifier" }] };
-      }
-      const identifier = item as Record<string, unknown>;
-      if (identifier["type"] !== "workspaces" || typeof identifier["id"] !== "string" || identifier["id"] === "") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Run trigger source must be a workspace resource identifier" }] };
-      }
-      sourceIds.push(identifier["id"]);
-    }
-    const uniqueSourceIds = [...new Set(sourceIds)];
-    const sourceWorkspaces = uniqueSourceIds.length === 0
-      ? []
-      : await db.query.workspaces.findMany({ where: inArray(workspaces.id, uniqueSourceIds), columns: { id: true, orgId: true } });
-    const validSources = new Set(sourceWorkspaces.filter((source): boolean => source.orgId === ws.orgId && source.id !== workspaceId).map((source): string => source.id));
-    if (validSources.size !== uniqueSourceIds.length) {
+    const sourcesError = await insertRunTriggerSources(ws.orgId, workspaceId, parsedIds.ids);
+    if (sourcesError !== null) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace must belong to the same organization and cannot be the workspace itself" }] };
-    }
-    if (uniqueSourceIds.length > 0) {
-      await db.insert(runTriggers).values(uniqueSourceIds.map((sourceWorkspaceId: string): typeof runTriggers.$inferInsert => ({
-        id: newResourceId("rt"),
-        workspaceId,
-        sourceWorkspaceId,
-      }))).onConflictDoNothing();
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: sourcesError }] };
     }
     (set as { status: number }).status = 204;
     return new Response(null, { status: 204 });
