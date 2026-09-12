@@ -181,6 +181,88 @@ function visibleOrgSettingsLinks<T extends Readonly<{ label: string }>>(
     && (link.label !== "Stacks" || perms.canManageWorkspaces));
 }
 
+function AdminNav({
+  collapsed,
+  onNavigate,
+  pathname,
+}: Readonly<{
+  collapsed: boolean;
+  onNavigate: () => void;
+  pathname: string;
+}>): JSX.Element {
+  const groups = [
+    {
+      label: "Overview",
+      links: [
+        { active: pathname === "/app/admin", icon: ShieldCheck, label: "Site overview", to: "/app/admin" },
+      ],
+    },
+    {
+      label: "Identity & access",
+      links: [
+        { active: isActivePath(pathname, "/app/admin/users"), icon: Users, label: "Users", to: "/app/admin/users" },
+        { active: isActivePath(pathname, "/app/admin/auth"), icon: KeyRound, label: "Authentication", to: "/app/admin/auth" },
+        { active: isActivePath(pathname, "/app/admin/scim"), icon: UserCog, label: "SCIM", to: "/app/admin/scim" },
+      ],
+    },
+    {
+      label: "Infrastructure",
+      links: [
+        { active: isActivePath(pathname, "/app/admin/organizations"), icon: Building2, label: "Organizations", to: "/app/admin/organizations" },
+        { active: isActivePath(pathname, "/app/admin/workspaces"), icon: Box, label: "Workspaces", to: "/app/admin/workspaces" },
+        { active: isActivePath(pathname, "/app/admin/runs"), icon: PlayCircle, label: "System runs", to: "/app/admin/runs" },
+        { active: isActivePath(pathname, "/app/admin/versions"), icon: FileCode, label: "Tool versions", to: "/app/admin/versions" },
+        { active: isActivePath(pathname, "/app/admin/compatibility"), icon: ShieldCheck, label: "Provider compatibility", to: "/app/admin/compatibility" },
+      ],
+    },
+    {
+      label: "Operations",
+      links: [
+        { active: isActivePath(pathname, "/app/admin/audit"), icon: HistoryIcon, label: "Audit logs", to: "/app/admin/audit" },
+        { active: isActivePath(pathname, "/app/admin/logging"), icon: SlidersHorizontal, label: "Logging", to: "/app/admin/logging" },
+        { active: isActivePath(pathname, "/app/admin/maintenance"), icon: CalendarClock, label: "Maintenance windows", to: "/app/admin/maintenance" },
+        { active: isActivePath(pathname, "/app/admin/approval-webhook"), icon: Webhook, label: "Approval webhook", to: "/app/admin/approval-webhook" },
+        { active: isActivePath(pathname, "/app/admin/plan-explainer"), icon: Sparkles, label: "AI plan explainer", to: "/app/admin/plan-explainer" },
+        { active: isActivePath(pathname, "/app/admin/github-app"), icon: GitBranch, label: "GitHub App", to: "/app/admin/github-app" },
+        { active: isActivePath(pathname, "/app/admin/smtp"), icon: Mail, label: "SMTP settings", to: "/app/admin/smtp" },
+        { active: isActivePath(pathname, "/app/admin/database"), icon: Database, label: "Database", to: "/app/admin/database" },
+      ],
+    },
+  ] as const;
+
+  return (
+    <>
+      <SidebarNavLink
+        active={false}
+        collapsed={collapsed}
+        icon={ArrowLeft}
+        label="Organizations"
+        onNavigate={onNavigate}
+        to="/app"
+      />
+      <SidebarContextLabel collapsed={collapsed} tone="secondary">
+        Site administration
+      </SidebarContextLabel>
+      {groups.map((group): JSX.Element => (
+        <div key={group.label}>
+          <SidebarGroupLabel collapsed={collapsed}>{group.label}</SidebarGroupLabel>
+          {group.links.map((link): JSX.Element => (
+            <SidebarNavLink
+              key={link.to}
+              active={link.active}
+              collapsed={collapsed}
+              icon={link.icon}
+              label={link.label}
+              onNavigate={onNavigate}
+              to={link.to}
+            />
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
 function OrganizationSettingsNav({
   collapsed,
   onNavigate,
@@ -776,76 +858,12 @@ export function Layout({
 
   const renderNavigation = (): JSX.Element => {
     if (inSiteAdministration && siteAdmin) {
-      const groups = [
-        {
-          label: "Overview",
-          links: [
-            { active: location.pathname === "/app/admin", icon: ShieldCheck, label: "Site overview", to: "/app/admin" },
-          ],
-        },
-        {
-          label: "Identity & access",
-          links: [
-            { active: isActivePath(location.pathname, "/app/admin/users"), icon: Users, label: "Users", to: "/app/admin/users" },
-            { active: isActivePath(location.pathname, "/app/admin/auth"), icon: KeyRound, label: "Authentication", to: "/app/admin/auth" },
-            { active: isActivePath(location.pathname, "/app/admin/scim"), icon: UserCog, label: "SCIM", to: "/app/admin/scim" },
-          ],
-        },
-        {
-          label: "Infrastructure",
-          links: [
-            { active: isActivePath(location.pathname, "/app/admin/organizations"), icon: Building2, label: "Organizations", to: "/app/admin/organizations" },
-            { active: isActivePath(location.pathname, "/app/admin/workspaces"), icon: Box, label: "Workspaces", to: "/app/admin/workspaces" },
-            { active: isActivePath(location.pathname, "/app/admin/runs"), icon: PlayCircle, label: "System runs", to: "/app/admin/runs" },
-            { active: isActivePath(location.pathname, "/app/admin/versions"), icon: FileCode, label: "Tool versions", to: "/app/admin/versions" },
-            { active: isActivePath(location.pathname, "/app/admin/compatibility"), icon: ShieldCheck, label: "Provider compatibility", to: "/app/admin/compatibility" },
-          ],
-        },
-        {
-          label: "Operations",
-          links: [
-            { active: isActivePath(location.pathname, "/app/admin/audit"), icon: HistoryIcon, label: "Audit logs", to: "/app/admin/audit" },
-            { active: isActivePath(location.pathname, "/app/admin/logging"), icon: SlidersHorizontal, label: "Logging", to: "/app/admin/logging" },
-            { active: isActivePath(location.pathname, "/app/admin/maintenance"), icon: CalendarClock, label: "Maintenance windows", to: "/app/admin/maintenance" },
-            { active: isActivePath(location.pathname, "/app/admin/approval-webhook"), icon: Webhook, label: "Approval webhook", to: "/app/admin/approval-webhook" },
-            { active: isActivePath(location.pathname, "/app/admin/plan-explainer"), icon: Sparkles, label: "AI plan explainer", to: "/app/admin/plan-explainer" },
-            { active: isActivePath(location.pathname, "/app/admin/github-app"), icon: GitBranch, label: "GitHub App", to: "/app/admin/github-app" },
-            { active: isActivePath(location.pathname, "/app/admin/smtp"), icon: Mail, label: "SMTP settings", to: "/app/admin/smtp" },
-            { active: isActivePath(location.pathname, "/app/admin/database"), icon: Database, label: "Database", to: "/app/admin/database" },
-          ],
-        },
-      ] as const;
-
       return (
-        <>
-          <SidebarNavLink
-            active={false}
-            collapsed={sidebarCollapsed}
-            icon={ArrowLeft}
-            label="Organizations"
-            onNavigate={closeMobileNavigation}
-            to="/app"
-          />
-          <SidebarContextLabel collapsed={sidebarCollapsed} tone="secondary">
-            Site administration
-          </SidebarContextLabel>
-          {groups.map((group): JSX.Element => (
-            <div key={group.label}>
-              <SidebarGroupLabel collapsed={sidebarCollapsed}>{group.label}</SidebarGroupLabel>
-              {group.links.map((link): JSX.Element => (
-                <SidebarNavLink
-                  key={link.to}
-                  active={link.active}
-                  collapsed={sidebarCollapsed}
-                  icon={link.icon}
-                  label={link.label}
-                  onNavigate={closeMobileNavigation}
-                  to={link.to}
-                />
-              ))}
-            </div>
-          ))}
-        </>
+        <AdminNav
+          collapsed={sidebarCollapsed}
+          onNavigate={closeMobileNavigation}
+          pathname={location.pathname}
+        />
       );
     }
 
