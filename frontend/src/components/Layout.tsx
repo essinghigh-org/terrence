@@ -181,6 +181,244 @@ function visibleOrgSettingsLinks<T extends Readonly<{ label: string }>>(
     && (link.label !== "Stacks" || perms.canManageWorkspaces));
 }
 
+function AccountNav({
+  collapsed,
+  onNavigate,
+  mustChangePassword,
+  hash,
+}: Readonly<{
+  collapsed: boolean;
+  onNavigate: () => void;
+  mustChangePassword: boolean | null;
+  hash: string;
+}>): JSX.Element {
+  const links = mustChangePassword === true ? [
+    {
+      active: true,
+      icon: Lock,
+      label: "Password",
+      to: "/app/account#password",
+    },
+  ] as const : [
+    {
+      active: hash === "" || hash === "#profile",
+      icon: UserRound,
+      label: "Profile",
+      to: "/app/account#profile",
+    },
+    {
+      active: hash === "#appearance",
+      icon: Palette,
+      label: "Appearance",
+      to: "/app/account#appearance",
+    },
+    {
+      active: hash === "#sessions",
+      icon: MonitorSmartphone,
+      label: "Sessions",
+      to: "/app/account#sessions",
+    },
+    {
+      active: hash === "#password",
+      icon: Lock,
+      label: "Password",
+      to: "/app/account#password",
+    },
+    {
+      active: hash === "#api-tokens",
+      icon: KeyRound,
+      label: "API tokens",
+      to: "/app/account#api-tokens",
+    },
+  ] as const;
+
+  return (
+    <>
+      <SidebarNavLink
+        active={false}
+        collapsed={collapsed}
+        icon={ArrowLeft}
+        label="Organizations"
+        onNavigate={onNavigate}
+        to="/app"
+      />
+      <SidebarContextLabel collapsed={collapsed} tone="secondary">
+        Account settings
+      </SidebarContextLabel>
+      {links.map((link): JSX.Element => (
+        <SidebarNavLink
+          key={link.to}
+          active={link.active}
+          collapsed={collapsed}
+          icon={link.icon}
+          label={link.label}
+          onNavigate={onNavigate}
+          to={link.to}
+        />
+      ))}
+    </>
+  );
+}
+
+function WorkspaceSettingsNav({
+  collapsed,
+  onNavigate,
+  pathname,
+  settingsPath,
+  workspaceName,
+  workspacePath,
+}: Readonly<{
+  collapsed: boolean;
+  onNavigate: () => void;
+  pathname: string;
+  settingsPath: string;
+  workspaceName: string;
+  workspacePath: string;
+}>): JSX.Element {
+  // Grouped by what you came here to change, not by internal subsystem:
+  // the workspace object itself, what makes its runs happen, who can
+  // reach it, and where it reports to.
+  const groups = [
+    {
+      label: "Workspace",
+      links: [
+        { label: "General", to: `${settingsPath}/general`, icon: Settings },
+        { label: "Locking", to: `${settingsPath}/lock`, icon: Lock },
+        { label: "Data retention", to: `${settingsPath}/retention`, icon: HistoryIcon },
+        { label: "Destruction and deletion", to: `${settingsPath}/delete`, icon: Trash2 },
+      ],
+    },
+    {
+      label: "Runs",
+      links: [
+        { label: "Version control", to: `${settingsPath}/version-control`, icon: GitBranch },
+        { label: "Configuration versions", to: `${settingsPath}/configuration-versions`, icon: FileCode },
+        { label: "Run triggers", to: `${settingsPath}/run-triggers`, icon: GitPullRequest },
+        { label: "Run tasks", to: `${settingsPath}/tasks`, icon: ListTodo },
+        { label: "Policies", to: `${settingsPath}/policies`, icon: ShieldCheck },
+        { label: "Health assessments", to: `${settingsPath}/health`, icon: Activity },
+      ],
+    },
+    {
+      label: "Access",
+      links: [
+        { label: "Team access", to: `${settingsPath}/team-access`, icon: Users },
+        { label: "SSH key", to: `${settingsPath}/ssh`, icon: KeyRound },
+      ],
+    },
+    {
+      label: "Integrations",
+      links: [
+        { label: "Notifications", to: `${settingsPath}/notifications`, icon: Bell },
+        { label: "Webhooks", to: `${settingsPath}/webhooks`, icon: SlidersHorizontal },
+      ],
+    },
+  ] as const;
+
+  return (
+    <>
+      <SidebarNavLink
+        active={false}
+        collapsed={collapsed}
+        icon={ArrowLeft}
+        label={workspaceName}
+        onNavigate={onNavigate}
+        to={workspacePath}
+      />
+      <SidebarContextLabel collapsed={collapsed} tone="secondary">
+        Workspace settings
+      </SidebarContextLabel>
+      {groups.map((group): JSX.Element => (
+        <div key={group.label}>
+          <SidebarGroupLabel collapsed={collapsed}>{group.label}</SidebarGroupLabel>
+          {group.links.map((link): JSX.Element => (
+            <SidebarNavLink
+              key={link.to}
+              active={
+                link.label === "General"
+                  ? pathname === settingsPath ||
+                    isActivePath(pathname, link.to)
+                  : isActivePath(pathname, link.to)
+              }
+              collapsed={collapsed}
+              icon={link.icon}
+              label={link.label}
+              onNavigate={onNavigate}
+              to={link.to}
+            />
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function WorkspaceNav({
+  collapsed,
+  onNavigate,
+  orgPath,
+  pathname,
+  workspaceName,
+  workspacePath,
+  settingsPath,
+  hasCurrentWorkspacePermissions,
+  canReadStateVersions,
+  canReadVariable,
+}: Readonly<{
+  collapsed: boolean;
+  onNavigate: () => void;
+  orgPath: string;
+  pathname: string;
+  workspaceName: string;
+  workspacePath: string;
+  settingsPath: string;
+  hasCurrentWorkspacePermissions: boolean;
+  canReadStateVersions: boolean;
+  canReadVariable: boolean;
+}>): JSX.Element {
+  const links = ([
+    { label: "Overview", to: workspacePath, icon: LayoutDashboard, exact: true },
+    { label: "Runs", to: `${workspacePath}/runs`, icon: ListChecks },
+    { label: "States", to: `${workspacePath}/states`, icon: Database },
+    { label: "Variables", to: `${workspacePath}/variables`, icon: Variable },
+    { label: "Settings", to: `${settingsPath}/general`, icon: Settings, trailing: true },
+  ] as const).filter((link): boolean =>
+    (link.label !== "States" || (hasCurrentWorkspacePermissions && canReadStateVersions))
+    && (link.label !== "Variables" || (hasCurrentWorkspacePermissions && canReadVariable)));
+
+  return (
+    <>
+      <SidebarNavLink
+        active={false}
+        collapsed={collapsed}
+        icon={ArrowLeft}
+        label="Workspaces"
+        onNavigate={onNavigate}
+        to={`${orgPath}/workspaces`}
+      />
+      <SidebarContextLabel collapsed={collapsed} title={workspaceName}>
+        {workspaceName}
+      </SidebarContextLabel>
+      {links.map((link): JSX.Element => (
+        <SidebarNavLink
+          key={link.to}
+          active={isActivePath(
+            pathname,
+            link.to,
+            "exact" in link && link.exact,
+          )}
+          collapsed={collapsed}
+          icon={link.icon}
+          label={link.label}
+          onNavigate={onNavigate}
+          to={link.to}
+          trailing={"trailing" in link && link.trailing}
+        />
+      ))}
+    </>
+  );
+}
+
 function AdminNav({
   collapsed,
   onNavigate,
@@ -868,194 +1106,43 @@ export function Layout({
     }
 
     if (inAccountSettings) {
-      const links = mustChangePassword === true ? [
-        {
-          active: true,
-          icon: Lock,
-          label: "Password",
-          to: "/app/account#password",
-        },
-      ] as const : [
-        {
-          active: location.hash === "" || location.hash === "#profile",
-          icon: UserRound,
-          label: "Profile",
-          to: "/app/account#profile",
-        },
-        {
-          active: location.hash === "#appearance",
-          icon: Palette,
-          label: "Appearance",
-          to: "/app/account#appearance",
-        },
-        {
-          active: location.hash === "#sessions",
-          icon: MonitorSmartphone,
-          label: "Sessions",
-          to: "/app/account#sessions",
-        },
-        {
-          active: location.hash === "#password",
-          icon: Lock,
-          label: "Password",
-          to: "/app/account#password",
-        },
-        {
-          active: location.hash === "#api-tokens",
-          icon: KeyRound,
-          label: "API tokens",
-          to: "/app/account#api-tokens",
-        },
-      ] as const;
-
       return (
-        <>
-          <SidebarNavLink
-            active={false}
-            collapsed={sidebarCollapsed}
-            icon={ArrowLeft}
-            label="Organizations"
-            onNavigate={closeMobileNavigation}
-            to="/app"
-          />
-          <SidebarContextLabel collapsed={sidebarCollapsed} tone="secondary">
-            Account settings
-          </SidebarContextLabel>
-          {links.map((link): JSX.Element => (
-            <SidebarNavLink
-              key={link.to}
-              active={link.active}
-              collapsed={sidebarCollapsed}
-              icon={link.icon}
-              label={link.label}
-              onNavigate={closeMobileNavigation}
-              to={link.to}
-            />
-          ))}
-        </>
+        <AccountNav
+          collapsed={sidebarCollapsed}
+          onNavigate={closeMobileNavigation}
+          mustChangePassword={mustChangePassword}
+          hash={location.hash}
+        />
       );
     }
 
     if (hasWorkspace && inWorkspaceSettings) {
-      // Grouped by what you came here to change, not by internal subsystem:
-      // the workspace object itself, what makes its runs happen, who can
-      // reach it, and where it reports to.
-      const groups = [
-        {
-          label: "Workspace",
-          links: [
-            { label: "General", to: `${settingsPath}/general`, icon: Settings },
-            { label: "Locking", to: `${settingsPath}/lock`, icon: Lock },
-            { label: "Data retention", to: `${settingsPath}/retention`, icon: HistoryIcon },
-            { label: "Destruction and deletion", to: `${settingsPath}/delete`, icon: Trash2 },
-          ],
-        },
-        {
-          label: "Runs",
-          links: [
-            { label: "Version control", to: `${settingsPath}/version-control`, icon: GitBranch },
-            { label: "Configuration versions", to: `${settingsPath}/configuration-versions`, icon: FileCode },
-            { label: "Run triggers", to: `${settingsPath}/run-triggers`, icon: GitPullRequest },
-            { label: "Run tasks", to: `${settingsPath}/tasks`, icon: ListTodo },
-            { label: "Policies", to: `${settingsPath}/policies`, icon: ShieldCheck },
-            { label: "Health assessments", to: `${settingsPath}/health`, icon: Activity },
-          ],
-        },
-        {
-          label: "Access",
-          links: [
-            { label: "Team access", to: `${settingsPath}/team-access`, icon: Users },
-            { label: "SSH key", to: `${settingsPath}/ssh`, icon: KeyRound },
-          ],
-        },
-        {
-          label: "Integrations",
-          links: [
-            { label: "Notifications", to: `${settingsPath}/notifications`, icon: Bell },
-            { label: "Webhooks", to: `${settingsPath}/webhooks`, icon: SlidersHorizontal },
-          ],
-        },
-      ] as const;
-
       return (
-        <>
-          <SidebarNavLink
-            active={false}
-            collapsed={sidebarCollapsed}
-            icon={ArrowLeft}
-            label={workspaceName}
-            onNavigate={closeMobileNavigation}
-            to={workspacePath}
-          />
-          <SidebarContextLabel collapsed={sidebarCollapsed} tone="secondary">
-            Workspace settings
-          </SidebarContextLabel>
-          {groups.map((group): JSX.Element => (
-            <div key={group.label}>
-              <SidebarGroupLabel collapsed={sidebarCollapsed}>{group.label}</SidebarGroupLabel>
-              {group.links.map((link): JSX.Element => (
-                <SidebarNavLink
-                  key={link.to}
-                  active={
-                    link.label === "General"
-                      ? location.pathname === settingsPath ||
-                        isActivePath(location.pathname, link.to)
-                      : isActivePath(location.pathname, link.to)
-                  }
-                  collapsed={sidebarCollapsed}
-                  icon={link.icon}
-                  label={link.label}
-                  onNavigate={closeMobileNavigation}
-                  to={link.to}
-                />
-              ))}
-            </div>
-          ))}
-        </>
+        <WorkspaceSettingsNav
+          collapsed={sidebarCollapsed}
+          onNavigate={closeMobileNavigation}
+          pathname={location.pathname}
+          settingsPath={settingsPath}
+          workspaceName={workspaceName}
+          workspacePath={workspacePath}
+        />
       );
     }
 
     if (hasWorkspace) {
-      const links = ([
-        { label: "Overview", to: workspacePath, icon: LayoutDashboard, exact: true },
-        { label: "Runs", to: `${workspacePath}/runs`, icon: ListChecks },
-        { label: "States", to: `${workspacePath}/states`, icon: Database },
-        { label: "Variables", to: `${workspacePath}/variables`, icon: Variable },
-        { label: "Settings", to: `${settingsPath}/general`, icon: Settings, trailing: true },
-      ] as const).filter((link): boolean =>
-        (link.label !== "States" || (hasCurrentWorkspacePermissions && canReadStateVersions))
-        && (link.label !== "Variables" || (hasCurrentWorkspacePermissions && canReadVariable)));
-
       return (
-        <>
-          <SidebarNavLink
-            active={false}
-            collapsed={sidebarCollapsed}
-            icon={ArrowLeft}
-            label="Workspaces"
-            onNavigate={closeMobileNavigation}
-            to={`${orgPath}/workspaces`}
-          />
-          <SidebarContextLabel collapsed={sidebarCollapsed} title={workspaceName}>
-            {workspaceName}
-          </SidebarContextLabel>
-          {links.map((link): JSX.Element => (
-            <SidebarNavLink
-              key={link.to}
-              active={isActivePath(
-                location.pathname,
-                link.to,
-                "exact" in link && link.exact,
-              )}
-              collapsed={sidebarCollapsed}
-              icon={link.icon}
-              label={link.label}
-              onNavigate={closeMobileNavigation}
-              to={link.to}
-              trailing={"trailing" in link && link.trailing}
-            />
-          ))}
-        </>
+        <WorkspaceNav
+          collapsed={sidebarCollapsed}
+          onNavigate={closeMobileNavigation}
+          orgPath={orgPath}
+          pathname={location.pathname}
+          workspaceName={workspaceName}
+          workspacePath={workspacePath}
+          settingsPath={settingsPath}
+          hasCurrentWorkspacePermissions={hasCurrentWorkspacePermissions}
+          canReadStateVersions={canReadStateVersions}
+          canReadVariable={canReadVariable}
+        />
       );
     }
 
