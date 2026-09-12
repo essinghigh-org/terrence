@@ -254,6 +254,132 @@ async function checkTwilioVerifyResult(
   return { error: { errors: [{ status: "400", title: "Bad Request", detail }] } };
 }
 
+function checkOidcScalars(
+  attrs: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { ok: true } | { error: unknown } {
+  if (attrs["enabled"] !== undefined && typeof attrs["enabled"] !== "boolean") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enabled must be a boolean" }] } };
+  }
+  if (attrs["link-by-email"] !== undefined && typeof attrs["link-by-email"] !== "boolean") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "link-by-email must be a boolean" }] } };
+  }
+  for (const key of ["issuer", "client-id", "client-secret", "scopes", "pkce-method", "signing-alg"] as const) {
+    if (attrs[key] !== undefined && attrs[key] !== null && typeof attrs[key] !== "string") {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a string or null` }] } };
+    }
+  }
+  return { ok: true };
+}
+
+function checkOidcIdentityRequired(
+  enabled: boolean,
+  issuer: unknown,
+  clientId: unknown,
+  set: ParamCtx["set"],
+): { ok: true } | { error: unknown } {
+  if (enabled && (typeof issuer !== "string" || issuer === "" || typeof clientId !== "string" || clientId === "")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "issuer and client-id are required when OIDC is enabled" }] } };
+  }
+  return { ok: true };
+}
+
+function resolveOidcIdentity(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { enabled: boolean; issuer: unknown; clientId: unknown } | { error: unknown } {
+  const enabled = typeof attrs["enabled"] === "boolean" ? attrs["enabled"] : current["enabled"] === true;
+  const issuerValue = attrs["issuer"] === undefined
+    ? current["issuer"]
+    : typeof attrs["issuer"] === "string" ? attrs["issuer"].trim() : null;
+  const clientId = attrs["client-id"] === undefined
+    ? current["client-id"]
+    : typeof attrs["client-id"] === "string" ? attrs["client-id"].trim() : null;
+  const issuer = typeof issuerValue === "string" && issuerValue !== "" ? normalizeIssuer(issuerValue) : issuerValue;
+  const required = checkOidcIdentityRequired(enabled, issuer, clientId, set);
+  if ("error" in required) return required;
+  if (typeof issuer === "string" && issuer !== "") {
+    if (!validOidcIssuer(issuer)) {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "issuer must be a valid URL" }] } };
+    }
+  }
+  return { enabled, issuer, clientId };
+}
+
+function resolveOidcCrypto(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { pkce: unknown; signingAlg: string | null } | { error: unknown } {
+  const pkce = attrs["pkce-method"] === undefined ? current["pkce-method"] : attrs["pkce-method"];
+  if (pkce !== null && pkce !== undefined && pkce !== "" && pkce !== "S256" && pkce !== "none") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "pkce-method must be \"S256\", \"none\", or null" }] } };
+  }
+  const signingAlgInput = attrs["signing-alg"] === undefined ? current["signing-alg"] : attrs["signing-alg"];
+  const signingAlg = signingAlgInput === null || signingAlgInput === undefined
+    ? null
+    : typeof signingAlgInput === "string" && signingAlgInput.trim() !== "" ? signingAlgInput.trim() : null;
+  if (signingAlg !== null && !OIDC_SIGNING_ALGORITHMS.has(signingAlg)) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "signing-alg must be a supported ID token algorithm or null" }] } };
+  }
+  return { pkce, signingAlg };
+}
+
+async function checkOidcLockout(
+  enabled: boolean,
+  set: ParamCtx["set"],
+): Promise<{ ok: true } | { error: unknown }> {
+  const [samlEnabledForSso, ldapEnabledForSso] = await Promise.all([
+    currentSamlSettings().then((settings): boolean => settings.enabled),
+    ldapSettings().then((settings): boolean => settings.enabled),
+  ]);
+  const authError = await authLockoutResponse(set, {
+    saml: samlEnabledForSso,
+    oidc: enabled,
+    ldap: ldapEnabledForSso,
+  });
+  if (authError !== null) return { error: authError };
+  return { ok: true };
+}
+
+function resolveOidcSecret(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  enabled: boolean,
+  pkce: unknown,
+  signingAlg: string | null,
+  set: ParamCtx["set"],
+): { clientSecret: unknown } | { error: unknown } {
+  const clientSecret = attrs["client-secret"] === null
+    ? null
+    : typeof attrs["client-secret"] === "string" && attrs["client-secret"] !== ""
+      ? attrs["client-secret"]
+      : current["client-secret"];
+  if (attrs["client-secret"] === "") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "client-secret must be a non-empty string or null" }] } };
+  }
+  if (enabled && signingAlg?.startsWith("HS") === true && (typeof clientSecret !== "string" || clientSecret === "")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "a client secret is required for symmetric signing algorithms" }] } };
+  }
+  // Without PKCE, the token exchange authenticates the client with its
+  // secret; an enabled provider with no secret could be impersonated.
+  if (enabled && pkce !== "S256" && (typeof clientSecret !== "string" || clientSecret === "")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "a client secret is required when pkce-method is not S256" }] } };
+  }
+  return { clientSecret };
+}
+
 export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .use(authPlugin)
   .get("/api/v2/admin/logging-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -375,87 +501,23 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const current = await getSettingsFresh("oidc", false);
-    if (attrs["enabled"] !== undefined && typeof attrs["enabled"] !== "boolean") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enabled must be a boolean" }] };
-    }
-    if (attrs["link-by-email"] !== undefined && typeof attrs["link-by-email"] !== "boolean") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "link-by-email must be a boolean" }] };
-    }
-    for (const key of ["issuer", "client-id", "client-secret", "scopes", "pkce-method", "signing-alg"] as const) {
-      if (attrs[key] !== undefined && attrs[key] !== null && typeof attrs[key] !== "string") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a string or null` }] };
-      }
-    }
-    const enabled = typeof attrs["enabled"] === "boolean" ? attrs["enabled"] : current["enabled"] === true;
-    const issuerValue = attrs["issuer"] === undefined
-      ? current["issuer"]
-      : typeof attrs["issuer"] === "string" ? attrs["issuer"].trim() : null;
-    const clientId = attrs["client-id"] === undefined
-      ? current["client-id"]
-      : typeof attrs["client-id"] === "string" ? attrs["client-id"].trim() : null;
-    const issuer = typeof issuerValue === "string" && issuerValue !== "" ? normalizeIssuer(issuerValue) : issuerValue;
-    if (enabled && (typeof issuer !== "string" || issuer === "" || typeof clientId !== "string" || clientId === "")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "issuer and client-id are required when OIDC is enabled" }] };
-    }
-    if (typeof issuer === "string" && issuer !== "") {
-      if (!validOidcIssuer(issuer)) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "issuer must be a valid URL" }] };
-      }
-    }
-    const pkce = attrs["pkce-method"] === undefined ? current["pkce-method"] : attrs["pkce-method"];
-    if (pkce !== null && pkce !== undefined && pkce !== "" && pkce !== "S256" && pkce !== "none") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "pkce-method must be \"S256\", \"none\", or null" }] };
-    }
-    const signingAlgInput = attrs["signing-alg"] === undefined ? current["signing-alg"] : attrs["signing-alg"];
-    const signingAlg = signingAlgInput === null || signingAlgInput === undefined
-      ? null
-      : typeof signingAlgInput === "string" && signingAlgInput.trim() !== "" ? signingAlgInput.trim() : null;
-    if (signingAlg !== null && !OIDC_SIGNING_ALGORITHMS.has(signingAlg)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "signing-alg must be a supported ID token algorithm or null" }] };
-    }
-    const [samlEnabledForSso, ldapEnabledForSso] = await Promise.all([
-      currentSamlSettings().then((settings): boolean => settings.enabled),
-      ldapSettings().then((settings): boolean => settings.enabled),
-    ]);
-    const authError = await authLockoutResponse(set, {
-      saml: samlEnabledForSso,
-      oidc: enabled,
-      ldap: ldapEnabledForSso,
-    });
-    if (authError !== null) return authError;
-    const clientSecret = attrs["client-secret"] === null
-      ? null
-      : typeof attrs["client-secret"] === "string" && attrs["client-secret"] !== ""
-        ? attrs["client-secret"]
-        : current["client-secret"];
-    if (attrs["client-secret"] === "") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "client-secret must be a non-empty string or null" }] };
-    }
-    if (enabled && signingAlg?.startsWith("HS") === true && (typeof clientSecret !== "string" || clientSecret === "")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "a client secret is required for symmetric signing algorithms" }] };
-    }
-    // Without PKCE, the token exchange authenticates the client with its
-    // secret; an enabled provider with no secret could be impersonated.
-    if (enabled && pkce !== "S256" && (typeof clientSecret !== "string" || clientSecret === "")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "a client secret is required when pkce-method is not S256" }] };
-    }
+    const scalars = checkOidcScalars(attrs, set);
+    if ("error" in scalars) return scalars.error;
+    const identity = resolveOidcIdentity(attrs, current, set);
+    if ("error" in identity) return identity.error;
+    const crypto = resolveOidcCrypto(attrs, current, set);
+    if ("error" in crypto) return crypto.error;
+    const lockout = await checkOidcLockout(identity.enabled, set);
+    if ("error" in lockout) return lockout.error;
+    const secret = resolveOidcSecret(attrs, current, identity.enabled, crypto.pkce, crypto.signingAlg, set);
+    if ("error" in secret) return secret.error;
     const updated = await updateSettings("oidc", {
       ...attrs,
-      issuer,
-      "client-id": clientId,
-      "client-secret": clientSecret,
-      "pkce-method": pkce === "" || pkce === undefined ? null : pkce,
-      "signing-alg": signingAlg,
+      issuer: identity.issuer,
+      "client-id": identity.clientId,
+      "client-secret": secret.clientSecret,
+      "pkce-method": crypto.pkce === "" || crypto.pkce === undefined ? null : crypto.pkce,
+      "signing-alg": crypto.signingAlg,
     });
     invalidatePingSsoCache();
     return oidcSettingsResource(updated);
