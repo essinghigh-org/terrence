@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } fr
 import {
   Link,
   matchPath,
+  type NavigateFunction,
   Outlet,
   useLocation,
   useNavigate,
@@ -143,6 +144,80 @@ function isActivePath(pathname: string, path: string, exact = false): boolean {
   return exact
     ? pathname === path
     : pathname === path || pathname.startsWith(`${path}/`);
+}
+
+function clearPendingSequence(pendingGRef: { current: number | null }): void {
+  if (pendingGRef.current !== null) {
+    window.clearTimeout(pendingGRef.current);
+    pendingGRef.current = null;
+  }
+}
+
+function isTextFieldTarget(target: EventTarget | null): boolean {
+  // Never intercept typing inside form controls or contenteditable.
+  return target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || (target instanceof HTMLElement && target.isContentEditable);
+}
+
+function isPaletteShortcut(e: KeyboardEvent): boolean {
+  return (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k";
+}
+
+function consumeOverlayKey(
+  e: KeyboardEvent,
+  pendingGRef: { current: number | null },
+  overlayOpen: boolean,
+  inTextField: boolean,
+): boolean {
+  // Overlay-aware guard: while the palette, the shortcuts help, or the
+  // mobile drawer is open, they own the keyboard. Don't start sequences,
+  // and don't hijack Escape away from the dialog's own close handling.
+  if (!(overlayOpen || inTextField || e.metaKey || e.ctrlKey || e.altKey)) return false;
+  if (e.key === "g") clearPendingSequence(pendingGRef);
+  return true;
+}
+
+function consumeGSequenceKey(
+  e: KeyboardEvent,
+  pendingGRef: { current: number | null },
+  navigate: NavigateFunction,
+  hasOrg: boolean,
+  orgPath: string,
+): boolean {
+  if (pendingGRef.current === null || (e.key !== "h" && e.key !== "w")) return false;
+  clearPendingSequence(pendingGRef);
+  e.preventDefault();
+  if (e.key === "h") navigate("/app/account");
+  else navigate(hasOrg ? `${orgPath}/workspaces` : "/app");
+  return true;
+}
+
+function fireSingleKeyAction(
+  key: string,
+  actions: Readonly<{
+    openPalette: () => void;
+    toggleSidebar: () => void;
+    clearPending: () => void;
+  }>,
+): void {
+  switch (key.toLowerCase()) {
+    case "/":
+      actions.openPalette();
+      break;
+    case "[":
+      actions.toggleSidebar();
+      break;
+    case "escape":
+      // Overlays are already closed here (the guard above returns while
+      // any is open, and Base UI owns dialog Escape); just drop a
+      // half-typed sequence.
+      actions.clearPending();
+      break;
+    default:
+      break;
+  }
 }
 
 function isGeneralSettingsActive(pathname: string, settingsPath: string, tab: string | null): boolean {
@@ -1042,14 +1117,9 @@ export function Layout({
       // Key repeat should never retrigger navigation or toggle an overlay
       // while a key is held down. Text-entry targets are handled below.
       if (e.repeat) return;
-      // Never intercept typing inside form controls or contenteditable.
-      const target = e.target;
-      const inTextField = target instanceof HTMLInputElement
-        || target instanceof HTMLTextAreaElement
-        || target instanceof HTMLSelectElement
-        || (target instanceof HTMLElement && target.isContentEditable);
+      const inTextField = isTextFieldTarget(e.target);
 
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      if (isPaletteShortcut(e)) {
         e.preventDefault();
         setCommandPaletteOpen((prev) => !prev);
         return;
@@ -1059,26 +1129,10 @@ export function Layout({
         setShortcutsModalOpen((prev) => !prev);
         return;
       }
-      // Overlay-aware guard: while the palette, the shortcuts help, or the
-      // mobile drawer is open, they own the keyboard. Don't start sequences,
-      // and don't hijack Escape away from the dialog's own close handling.
       const overlayOpen = commandPaletteOpen || shortcutsModalOpen || mobileNavigationOpen;
-      if (overlayOpen || inTextField || e.metaKey || e.ctrlKey || e.altKey) {
-        if (e.key === "g" && pendingGRef.current !== null) {
-          window.clearTimeout(pendingGRef.current);
-          pendingGRef.current = null;
-        }
-        return;
-      }
+      if (consumeOverlayKey(e, pendingGRef, overlayOpen, inTextField)) return;
       if (!singleKeyShortcutsEnabled) return;
-      if (pendingGRef.current !== null && (e.key === "h" || e.key === "w")) {
-        window.clearTimeout(pendingGRef.current);
-        pendingGRef.current = null;
-        e.preventDefault();
-        if (e.key === "h") navigate("/app/account");
-        else navigate(hasOrg ? `${orgPath}/workspaces` : "/app");
-        return;
-      }
+      if (consumeGSequenceKey(e, pendingGRef, navigate, hasOrg, orgPath)) return;
 
       if (e.key === "g") {
         pendingGRef.current = window.setTimeout((): void => {
@@ -1088,32 +1142,18 @@ export function Layout({
       }
       if (pendingGRef.current !== null) {
         // A sequence was pending but this key doesn't complete one.
-        window.clearTimeout(pendingGRef.current);
-        pendingGRef.current = null;
+        clearPendingSequence(pendingGRef);
         return;
       }
 
-      switch (e.key.toLowerCase()) {
-        case "/":
+      fireSingleKeyAction(e.key, {
+        openPalette: (): void => {
           e.preventDefault();
           setCommandPaletteOpen(true);
-          break;
-        case "[":
-          toggleSidebar();
-          break;
-        case "escape": {
-          // Overlays are already closed here (the guard above returns while
-          // any is open, and Base UI owns dialog Escape); just drop a
-          // half-typed sequence.
-          if (pendingGRef.current !== null) {
-            window.clearTimeout(pendingGRef.current);
-            pendingGRef.current = null;
-          }
-          break;
-        }
-        default:
-          break;
-      }
+        },
+        toggleSidebar,
+        clearPending: (): void => { clearPendingSequence(pendingGRef); },
+      });
     };
 
     window.addEventListener("keydown", handleKeyDown);
