@@ -141,6 +141,44 @@ function resourceDelta(current: string | null, previous: string | null): string 
   return Number.isFinite(value) ? String(value) : null;
 }
 
+function classifyResourceAction(input: Readonly<{
+  proposed: string | null;
+  now: ResourceCost | undefined;
+  before: ResourceCost | undefined;
+  delta: string | null;
+  change: ResourceCost | undefined;
+}>): CostEstimateResourceChange["action"] {
+  if (input.proposed === null && input.now !== undefined) return "unsupported";
+  if (input.now === undefined && input.before !== undefined) return "removed";
+  if (input.before === undefined && input.now !== undefined) return "added";
+  if (input.delta !== null && Number(input.delta) !== 0) return "changed";
+  return input.change?.action === "modify" ? "changed" : "unchanged";
+}
+
+function buildResourceChange(
+  key: string,
+  current: Readonly<ReadonlyMap<string, ResourceCost>>,
+  previous: Readonly<ReadonlyMap<string, ResourceCost>>,
+  diff: Readonly<ReadonlyMap<string, ResourceCost>>,
+): CostEstimateResourceChange | null {
+  const now = current.get(key);
+  const before = previous.get(key);
+  const change = diff.get(key);
+  const proposed = now?.monthlyCost ?? null;
+  const prior = before?.monthlyCost ?? null;
+  const delta = resourceDelta(proposed, prior);
+  const resource = now ?? before ?? change;
+  if (resource === undefined) return null;
+  return {
+    address: resource.address,
+    module: resource.module,
+    action: classifyResourceAction({ proposed, now, before, delta, change }),
+    "prior-monthly-cost": prior,
+    "proposed-monthly-cost": proposed,
+    "delta-monthly-cost": delta,
+  };
+}
+
 function resourceChanges(
   current: Readonly<ReadonlyMap<string, ResourceCost>>,
   previous: Readonly<ReadonlyMap<string, ResourceCost>>,
@@ -148,33 +186,7 @@ function resourceChanges(
 ): readonly CostEstimateResourceChange[] {
   const keys = new Set([...current.keys(), ...previous.keys(), ...diff.keys()]);
   return [...keys]
-    .map((key): CostEstimateResourceChange | null => {
-      const now = current.get(key);
-      const before = previous.get(key);
-      const change = diff.get(key);
-      const proposed = now?.monthlyCost ?? null;
-      const prior = before?.monthlyCost ?? null;
-      const delta = resourceDelta(proposed, prior);
-      const action: CostEstimateResourceChange["action"] = proposed === null && now !== undefined
-        ? "unsupported"
-        : now === undefined && before !== undefined
-          ? "removed"
-          : before === undefined && now !== undefined
-            ? "added"
-            : delta !== null && Number(delta) !== 0
-              ? "changed"
-              : change?.action === "modify" ? "changed" : "unchanged";
-      const resource = now ?? before ?? change;
-      if (resource === undefined) return null;
-      return {
-        address: resource.address,
-        module: resource.module,
-        action,
-        "prior-monthly-cost": prior,
-        "proposed-monthly-cost": proposed,
-        "delta-monthly-cost": delta,
-      };
-    })
+    .map((key): CostEstimateResourceChange | null => buildResourceChange(key, current, previous, diff))
     .filter((value): value is CostEstimateResourceChange => value !== null)
     .sort((left, right): number => Math.abs(Number(right["delta-monthly-cost"] ?? 0)) - Math.abs(Number(left["delta-monthly-cost"] ?? 0)))
     .slice(0, 2_000);
@@ -237,13 +249,7 @@ export function emptyCostEstimate(
   };
 }
 
-export function parseInfracostOutput(
-  output: unknown,
-  timestamps: CostEstimateTimestamps,
-): CostEstimateAttributes {
-  const root = asObject(output);
-  if (root === undefined) throw new Error("Infracost returned invalid JSON output.");
-
+function parseCostTotals(root: JsonObject): { proposed: string; prior: string; delta: string } {
   const proposed = decimal(root["totalMonthlyCost"], "totalMonthlyCost");
   const prior = root["pastTotalMonthlyCost"] === undefined
     ? "0.0"
@@ -251,38 +257,54 @@ export function parseInfracostOutput(
   const delta = root["diffTotalMonthlyCost"] === undefined
     ? String(Number(proposed) - Number(prior))
     : decimal(root["diffTotalMonthlyCost"], "diffTotalMonthlyCost");
-  const projects = Array.isArray(root["projects"]) ? root["projects"] : [];
-  const summary = asObject(root["summary"]);
-  const currentResources = projectResources(projects, "breakdown");
-  const pastResources = projectResources(projects, "pastBreakdown");
-  const diffResources = projectResources(projects, "diff");
+  return { proposed, prior, delta };
+}
+
+function parseCostCounts(
+  summary: JsonObject | undefined,
+  currentResources: JsonObject[],
+  pastResources: JsonObject[],
+  diffResources: JsonObject[],
+): { detected: number; matched: number; unmatched: number } {
   const detected = count(summary?.["totalDetectedResources"])
     ?? Math.max(currentResources.length, pastResources.length, diffResources.length);
   const matched = count(summary?.["totalSupportedResources"])
     ?? currentResources.filter((resource: JsonObject): boolean =>
       resource["monthlyCost"] !== null && resource["monthlyCost"] !== undefined).length;
   const unmatched = count(summary?.["totalUnsupportedResources"]) ?? Math.max(detected - matched, 0);
-  const currency = boundedString(root["currency"], 16);
-  const pastCurrency = boundedString(root["pastCurrency"] ?? root["currency"], 16);
-  const timeBasis = boundedString(root["timeBasis"] ?? "monthly", 64) ?? "monthly";
-  const hasBaseline = root["pastTotalMonthlyCost"] !== undefined || pastResources.length > 0;
-  const baselineReason = !hasBaseline
-    ? "No comparable baseline was provided."
-    : currency === null
-      ? "The estimator did not report a currency."
-      : pastCurrency !== currency
-        ? "Currency differs between the estimate and its baseline."
-        : timeBasis !== "monthly"
-          ? "The estimate and baseline do not use the monthly time basis."
-          : null;
-  const warnings = [
-    unmatched > 0 ? `${unmatched} resource${unmatched === 1 ? " has" : "s have"} no supported price; totals exclude those resources.` : null,
-    currency === null ? "The estimator did not report a currency; compare totals only after confirming the pricing context." : null,
-    pastCurrency !== null && currency !== null && pastCurrency !== currency ? "The estimate and baseline use different currencies." : null,
-    timeBasis !== "monthly" ? `The estimator reported a ${timeBasis} time basis; monthly comparisons are disabled.` : null,
-    !hasBaseline ? "No baseline estimate was supplied; the prior value is shown as zero for compatibility only." : null,
+  return { detected, matched, unmatched };
+}
+
+function baselineReasonFor(input: Readonly<{
+  hasBaseline: boolean;
+  currency: string | null;
+  pastCurrency: string | null;
+  timeBasis: string;
+}>): string | null {
+  if (!input.hasBaseline) return "No comparable baseline was provided.";
+  if (input.currency === null) return "The estimator did not report a currency.";
+  if (input.pastCurrency !== input.currency) return "Currency differs between the estimate and its baseline.";
+  return input.timeBasis !== "monthly" ? "The estimate and baseline do not use the monthly time basis." : null;
+}
+
+function costWarnings(input: Readonly<{
+  unmatched: number;
+  currency: string | null;
+  pastCurrency: string | null;
+  timeBasis: string;
+  hasBaseline: boolean;
+}>): string[] {
+  return [
+    input.unmatched > 0 ? `${input.unmatched} resource${input.unmatched === 1 ? " has" : "s have"} no supported price; totals exclude those resources.` : null,
+    input.currency === null ? "The estimator did not report a currency; compare totals only after confirming the pricing context." : null,
+    input.pastCurrency !== null && input.currency !== null && input.pastCurrency !== input.currency ? "The estimate and baseline use different currencies." : null,
+    input.timeBasis !== "monthly" ? `The estimator reported a ${input.timeBasis} time basis; monthly comparisons are disabled.` : null,
+    !input.hasBaseline ? "No baseline estimate was supplied; the prior value is shown as zero for compatibility only." : null,
   ].filter((value): value is string => value !== null);
-  const provenance: CostEstimateProvenance = {
+}
+
+function costProvenance(root: JsonObject, matched: number, currency: string | null, timeBasis: string): CostEstimateProvenance {
+  return {
     tool: "infracost",
     version: boundedString(root["version"], 128),
     "pricing-date": boundedString(root["pricingDate"] ?? root["pricing-date"], 64),
@@ -291,21 +313,55 @@ export function parseInfracostOutput(
     "supported-resources": matched,
     assumptions: assumptions(root),
   };
-  const comparison: CostEstimateComparison = {
+}
+
+function costComparison(input: Readonly<{
+  hasBaseline: boolean;
+  prior: string;
+  pastCurrency: string | null;
+  baselineReason: string | null;
+  warnings: string[];
+  projects: readonly unknown[];
+}>): CostEstimateComparison {
+  return {
     baseline: {
-      source: hasBaseline ? "infracost-past-breakdown" : "none",
-      "monthly-cost": hasBaseline ? prior : null,
-      currency: pastCurrency,
-      comparable: baselineReason === null,
-      reason: baselineReason,
+      source: input.hasBaseline ? "infracost-past-breakdown" : "none",
+      "monthly-cost": input.hasBaseline ? input.prior : null,
+      currency: input.pastCurrency,
+      comparable: input.baselineReason === null,
+      reason: input.baselineReason,
     },
-    warnings,
+    warnings: input.warnings,
     "resource-changes": resourceChanges(
-      resourceCosts(projects, "breakdown"),
-      resourceCosts(projects, "pastBreakdown"),
-      resourceCosts(projects, "diff"),
+      resourceCosts(input.projects, "breakdown"),
+      resourceCosts(input.projects, "pastBreakdown"),
+      resourceCosts(input.projects, "diff"),
     ),
   };
+}
+
+export function parseInfracostOutput(
+  output: unknown,
+  timestamps: CostEstimateTimestamps,
+): CostEstimateAttributes {
+  const root = asObject(output);
+  if (root === undefined) throw new Error("Infracost returned invalid JSON output.");
+
+  const { proposed, prior, delta } = parseCostTotals(root);
+  const projects = Array.isArray(root["projects"]) ? root["projects"] : [];
+  const summary = asObject(root["summary"]);
+  const currentResources = projectResources(projects, "breakdown");
+  const pastResources = projectResources(projects, "pastBreakdown");
+  const diffResources = projectResources(projects, "diff");
+  const { detected, matched, unmatched } = parseCostCounts(summary, currentResources, pastResources, diffResources);
+  const currency = boundedString(root["currency"], 16);
+  const pastCurrency = boundedString(root["pastCurrency"] ?? root["currency"], 16);
+  const timeBasis = boundedString(root["timeBasis"] ?? "monthly", 64) ?? "monthly";
+  const hasBaseline = root["pastTotalMonthlyCost"] !== undefined || pastResources.length > 0;
+  const baselineReason = baselineReasonFor({ hasBaseline, currency, pastCurrency, timeBasis });
+  const warnings = costWarnings({ unmatched, currency, pastCurrency, timeBasis, hasBaseline });
+  const provenance = costProvenance(root, matched, currency, timeBasis);
+  const comparison = costComparison({ hasBaseline, prior, pastCurrency, baselineReason, warnings, projects });
 
   return {
     status: "finished",
