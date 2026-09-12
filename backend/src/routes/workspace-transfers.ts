@@ -113,6 +113,104 @@ async function transferResource(t: WorkspaceTransferItem): Promise<Record<string
   };
 }
 
+function relationshipId(rels: Record<string, unknown>, name: string): string | null {
+  const rel = rels[name] as Record<string, unknown> | undefined;
+  return typeof (rel?.["data"] as Record<string, unknown>)?.["id"] === "string" ? ((rel?.["data"] as Record<string, unknown>)["id"] as string) : null;
+}
+
+function parseTransferRequest(
+  body: unknown,
+  set: SetObj,
+): { attributes: Record<string, unknown>; sourceWorkspaceId: string; destinationOrgId: string; destinationProjectId: string | null } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
+  const rels = (data?.["relationships"] as Record<string, unknown>) ?? {};
+  const sourceWorkspaceId = relationshipId(rels, "source-workspace");
+  const destinationOrgId = relationshipId(rels, "destination-organization");
+  const destinationProjectId = relationshipId(rels, "destination-project");
+  if (sourceWorkspaceId === null || destinationOrgId === null) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A source workspace and a destination organization are required" }] } };
+  }
+  return { attributes, sourceWorkspaceId, destinationOrgId, destinationProjectId };
+}
+
+async function authorizeTransferCreation(
+  user: NonNullable<ParamCtx["user"]>,
+  sourceWorkspaceId: string,
+  destinationOrgId: string,
+  destinationProjectId: string | null,
+  set: SetObj,
+): Promise<{ sourceWorkspace: NonNullable<Awaited<ReturnType<typeof findAuthorizedWorkspace>>> } | { error: unknown }> {
+  // Authorization: creating *** transfer requires admin over the SOURCE
+  // workspace and org-owner of the DESTINATION organization (or site
+  // admin). Without this any authenticated user could stage a transfer
+  // moving an arbitrary workspace into an arbitrary organization.
+  // Authorization is bypassed for site admins; VALIDATION IS NOT —
+  // referenced entities must exist and be consistent for everyone.
+  const isSiteAdmin = user.isSiteAdmin === true;
+  const sourceWorkspace = await findAuthorizedWorkspace(sourceWorkspaceId, user.id, null, null);
+  if (sourceWorkspace === undefined) {
+    (set as { status: number }).status = 404;
+    return { error: { errors: [{ status: "404", title: "Not Found", detail: "Source workspace not found or not accessible" }] } };
+  }
+  if (!isSiteAdmin && !(await checkWorkspacePermission(sourceWorkspace, user.id, null, null, "admin"))) {
+    (set as { status: number }).status = 404;
+    return { error: { errors: [{ status: "404", title: "Not Found", detail: "Source workspace not found or not accessible" }] } };
+  }
+  const destinationOrg = await db.query.organizations.findFirst({ where: eq(organizations.id, destinationOrgId), columns: { id: true } });
+  if (destinationOrg === undefined) {
+    (set as { status: number }).status = 404;
+    return { error: { errors: [{ status: "404", title: "Not Found", detail: "Destination organization not found" }] } };
+  }
+  if (destinationOrg.id === sourceWorkspace.orgId) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The destination organization must differ from the workspace's current organization" }] } };
+  }
+  if (!isSiteAdmin && !(await checkOrgPermission(user.id, destinationOrgId, "owner"))) {
+    // Mirror the collection's not-found convention for cross-org probes:
+    // do not reveal whether the destination organization exists.
+    (set as { status: number }).status = 404;
+    return { error: { errors: [{ status: "404", title: "Not Found", detail: "Destination organization not found" }] } };
+  }
+  if (destinationProjectId !== null) {
+    // The project must belong to the destination organization.
+    const project = await db.query.projects.findFirst({ where: eq(projects.id, destinationProjectId), columns: { orgId: true } });
+    if (project === undefined || project.orgId !== destinationOrgId) {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The destination project must belong to the destination organization" }] } };
+    }
+  }
+  return { sourceWorkspace };
+}
+
+function buildTransferRecord(
+  user: NonNullable<ParamCtx["user"]>,
+  ids: Readonly<{ sourceWorkspaceId: string; destinationOrgId: string; destinationProjectId: string | null }>,
+  attributes: Record<string, unknown>,
+): WorkspaceTransferItem {
+  const id = newResourceId("wt");
+  return {
+    id,
+    sourceWorkspaceId: ids.sourceWorkspaceId,
+    destinationOrgId: ids.destinationOrgId,
+    destinationProjectId: ids.destinationProjectId,
+    approvalMode: typeof attributes["approval-mode"] === "string" ? attributes["approval-mode"] : "auto",
+    cleanupOnFailure: typeof attributes["cleanup-on-failure"] === "boolean" ? attributes["cleanup-on-failure"] : true,
+    historyCutoff: typeof attributes["history-cutoff"] === "string" ? attributes["history-cutoff"] : null,
+    policySetMode: typeof attributes["policy-set-mode"] === "string" ? attributes["policy-set-mode"] : "move",
+    variableMode: typeof attributes["variable-mode"] === "string" ? attributes["variable-mode"] : "move",
+    workspacePrefix: typeof attributes["workspace-prefix"] === "string" ? attributes["workspace-prefix"] : null,
+    workspaceSuffix: typeof attributes["workspace-suffix"] === "string" ? attributes["workspace-suffix"] : null,
+    status: "pending",
+    pauseReason: null,
+    createdBy: user.id,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
 export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" })
   .use(authPlugin)
   // Authorization helpers. Workspace transfers move configuration, state,
@@ -129,83 +227,11 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
-    const rels = (data?.["relationships"] as Record<string, unknown>) ?? {};
-
-    const srcWsRel = rels["source-workspace"] as Record<string, unknown> | undefined;
-    const destOrgRel = rels["destination-organization"] as Record<string, unknown> | undefined;
-    const destProjRel = rels["destination-project"] as Record<string, unknown> | undefined;
-
-    const sourceWorkspaceId = typeof (srcWsRel?.["data"] as Record<string, unknown>)?.["id"] === "string" ? ((srcWsRel?.["data"] as Record<string, unknown>)["id"] as string) : null;
-    const destinationOrgId = typeof (destOrgRel?.["data"] as Record<string, unknown>)?.["id"] === "string" ? ((destOrgRel?.["data"] as Record<string, unknown>)["id"] as string) : null;
-    const destinationProjectId = typeof (destProjRel?.["data"] as Record<string, unknown>)?.["id"] === "string" ? ((destProjRel?.["data"] as Record<string, unknown>)["id"] as string) : null;
-
-    if (sourceWorkspaceId === null || destinationOrgId === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A source workspace and a destination organization are required" }] };
-    }
-
-    // Authorization: creating a transfer requires admin over the SOURCE
-    // workspace and org-owner of the DESTINATION organization (or site
-    // admin). Without this any authenticated user could stage a transfer
-    // moving an arbitrary workspace into an arbitrary organization.
-    // Authorization is bypassed for site admins; VALIDATION IS NOT —
-    // referenced entities must exist and be consistent for everyone.
-    const isSiteAdmin = user.isSiteAdmin === true;
-    const sourceWorkspace = await findAuthorizedWorkspace(sourceWorkspaceId, user.id, null, null);
-    if (sourceWorkspace === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found", detail: "Source workspace not found or not accessible" }] };
-    }
-    if (!isSiteAdmin && !(await checkWorkspacePermission(sourceWorkspace, user.id, null, null, "admin"))) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found", detail: "Source workspace not found or not accessible" }] };
-    }
-    const destinationOrg = await db.query.organizations.findFirst({ where: eq(organizations.id, destinationOrgId), columns: { id: true } });
-    if (destinationOrg === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found", detail: "Destination organization not found" }] };
-    }
-    if (destinationOrg.id === sourceWorkspace.orgId) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The destination organization must differ from the workspace's current organization" }] };
-    }
-    if (!isSiteAdmin && !(await checkOrgPermission(user.id, destinationOrgId, "owner"))) {
-      // Mirror the collection's not-found convention for cross-org probes:
-      // do not reveal whether the destination organization exists.
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found", detail: "Destination organization not found" }] };
-    }
-    if (destinationProjectId !== null) {
-      // The project must belong to the destination organization.
-      const project = await db.query.projects.findFirst({ where: eq(projects.id, destinationProjectId), columns: { orgId: true } });
-      if (project === undefined || project.orgId !== destinationOrgId) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The destination project must belong to the destination organization" }] };
-      }
-    }
-
-    const id = newResourceId("wt");
-    const transfer: WorkspaceTransferItem = {
-      id,
-      sourceWorkspaceId,
-      destinationOrgId,
-      destinationProjectId,
-      approvalMode: typeof attributes["approval-mode"] === "string" ? attributes["approval-mode"] : "auto",
-      cleanupOnFailure: typeof attributes["cleanup-on-failure"] === "boolean" ? attributes["cleanup-on-failure"] : true,
-      historyCutoff: typeof attributes["history-cutoff"] === "string" ? attributes["history-cutoff"] : null,
-      policySetMode: typeof attributes["policy-set-mode"] === "string" ? attributes["policy-set-mode"] : "move",
-      variableMode: typeof attributes["variable-mode"] === "string" ? attributes["variable-mode"] : "move",
-      workspacePrefix: typeof attributes["workspace-prefix"] === "string" ? attributes["workspace-prefix"] : null,
-      workspaceSuffix: typeof attributes["workspace-suffix"] === "string" ? attributes["workspace-suffix"] : null,
-      status: "pending",
-      pauseReason: null,
-      createdBy: user.id,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
+    const parsed = parseTransferRequest(body, set);
+    if ("error" in parsed) return parsed.error;
+    const authorized = await authorizeTransferCreation(user, parsed.sourceWorkspaceId, parsed.destinationOrgId, parsed.destinationProjectId, set);
+    if ("error" in authorized) return authorized.error;
+    const transfer = buildTransferRecord(user, parsed, parsed.attributes);
 
     await db.insert(workspaceTransfers).values(transfer);
     (set as { status: number }).status = 201;
