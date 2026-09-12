@@ -357,113 +357,165 @@ async function applyOrganizationPatch(org: OrgRow, fields: ValidatedOrgPatchFiel
   return updated;
 }
 
+function createNullableEmail(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed === "" ? null : trimmed;
+  }
+  return null;
+}
+
+function parseCreateExecutionMode(value: unknown): string | undefined {
+  if (value === undefined) return "remote";
+  return typeof value === "string" && ["remote", "local", "agent"].includes(value) ? value : undefined;
+}
+
+function createSessionTimeout(value: unknown): number | null | undefined {
+  if (value === undefined || value === null) return null;
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
+}
+
+function createSessionRemember(value: unknown): boolean | null | undefined {
+  if (value === undefined || value === null) return null;
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function parseCreateAttributes(body: unknown): Record<string, unknown> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data: Record<string, unknown> | undefined = typeof payload["data"] === "object" && payload["data"] !== null
+    ? payload["data"] as Record<string, unknown>
+    : undefined;
+  if (data?.["type"] !== "organizations") {
+    throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be organizations" }] });
+  }
+  return typeof data?.["attributes"] === "object" && data["attributes"] !== null ? data["attributes"] as Record<string, unknown> : {};
+}
+
+function parseCreateOrganizationFields(attributes: Record<string, unknown>) {
+  return {
+    name: typeof attributes["name"] === "string" ? attributes["name"].trim() : "",
+    defaultIacBinary: typeof attributes["default-iac-binary"] === "string" ? attributes["default-iac-binary"] : "terraform",
+    defaultTerraformVersion: typeof attributes["default-terraform-version"] === "string" ? attributes["default-terraform-version"].trim() : "latest",
+    assessmentsEnforced: attributes["assessments-enforced"] === true,
+    email: createNullableEmail(attributes["email"]),
+    allowForceDeleteWorkspaces: attributes["allow-force-delete-workspaces"] !== false,
+    stacksEnabled: attributes["stacks-enabled"] === true,
+    showPreReleases: attributes["show-pre-releases"] === true,
+    defaultExecutionMode: parseCreateExecutionMode(attributes["default-execution-mode"]),
+    costEstimationEnabled: attributes["cost-estimation-enabled"] === true,
+    sessionTimeout: createSessionTimeout(attributes["session-timeout"]),
+    sessionRemember: createSessionRemember(attributes["session-remember"]),
+    collaboratorAuthPolicy: attributes["collaborator-auth-policy"] === undefined ? "password" : attributes["collaborator-auth-policy"],
+    userTokensEnabled: attributes["user-tokens-enabled"] === undefined ? true : attributes["user-tokens-enabled"] === true,
+  };
+}
+
+type CreateOrgFields = ReturnType<typeof parseCreateOrganizationFields>;
+
+type ValidatedCreateOrgFields = CreateOrgFields & {
+  defaultExecutionMode: string;
+  sessionTimeout: number | null;
+  sessionRemember: boolean | null;
+};
+function assertCreateName(fields: CreateOrgFields): void {
+  if (fields.name === "") {
+    throw new OrgPatchError(400, { errors: [{ status: "400", title: "Bad Request", detail: "Missing name" }] });
+  }
+  const nameError = organizationNameError(fields.name);
+  if (nameError !== null) {
+    throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: nameError }] });
+  }
+}
+
+function requireOrganizationCreator(user: ParamCtx["user"]): Exclude<ParamCtx["user"], null | undefined> {
+  if (user === null || user === undefined) {
+    throw new OrgPatchError(403, { errors: [{ status: "403", title: "Forbidden" }] });
+  }
+  return user;
+}
+
+function assertCreateSettings(fields: CreateOrgFields): asserts fields is ValidatedCreateOrgFields {
+  if (!["tofu", "terraform"].includes(fields.defaultIacBinary) || fields.defaultTerraformVersion === "" || fields.sessionTimeout === undefined || fields.sessionRemember === undefined || !["password", "sso"].includes(String(fields.collaboratorAuthPolicy)) || fields.defaultExecutionMode === undefined) {
+    throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity" }] });
+  }
+}
+
+async function insertOrganization(args: {
+  fields: ValidatedCreateOrgFields;
+  creator: Exclude<ParamCtx["user"], null | undefined>;
+  tokenOrgId: string | null | undefined;
+  tokenTeamId: string | null | undefined;
+}) {
+  const id = newResourceId("org");
+  if ((args.creator as unknown as Record<string, unknown>)["isProvisional"] === true) {
+    throw new OrgPatchError(403, { errors: [{ status: "403", title: "Forbidden", detail: "Provisional accounts cannot create organizations" }] });
+  }
+  const saml = await db.query.samlSettings.findFirst({ where: eq(samlSettings.id, "saml") });
+  const org = {
+    id,
+    name: args.fields.name,
+    email: args.fields.email,
+    defaultIacBinary: args.fields.defaultIacBinary,
+    defaultTerraformVersion: args.fields.defaultTerraformVersion,
+    costEstimationEnabled: args.fields.costEstimationEnabled,
+    sessionTimeout: args.fields.sessionTimeout,
+    sessionRemember: args.fields.sessionRemember,
+    collaboratorAuthPolicy: String(args.fields.collaboratorAuthPolicy),
+    userTokensEnabled: args.fields.userTokensEnabled,
+    defaultAgentPoolId: null,
+    assessmentsEnforced: args.fields.assessmentsEnforced,
+    globalModuleSharing: false,
+    globalProviderSharing: false,
+    accessBetaTools: false,
+    workspaceLimit: null,
+    samlEnabled: saml?.enabled ?? false,
+    ownersTeamSamlRoleId: null,
+    allowForceDeleteWorkspaces: args.fields.allowForceDeleteWorkspaces,
+    stacksEnabled: args.fields.stacksEnabled,
+    showPreReleases: args.fields.showPreReleases,
+    defaultExecutionMode: args.fields.defaultExecutionMode,
+    aggregatedCommitStatusEnabled: true,
+    sendPassingStatusesForUntriggeredSpeculativePlans: false,
+    moduleTestTokenTtl: moduleTestTokenTtlBounds.default,
+    requireHardIsolation: false,
+  };
+  try {
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      const t = tx as typeof db;
+      await t.insert(organizations).values(org);
+      await t.insert(organizationMemberships).values({
+        id: newResourceId("orgmem"), userId: args.creator.id, orgId: id, role: "owner",
+      });
+      await t.insert(projects).values(defaultProjectValues(id));
+    });
+  } catch (error: unknown) {
+    if (isUniqueConstraintError(error)) {
+      throw new OrgPatchError(409, { errors: [{ status: "409", title: "Conflict" }] });
+    }
+    throw error;
+  }
+  await auditLog("create", "organizations", id, args.creator.id, id, { name: args.fields.name });
+  return { id, org };
+}
+
 export const organizationRoutes = new Elysia({ name: "organizations" })
   .use(authPlugin)
   .post("/api/v2/organizations", async ({ user, orgId: tokenOrgId, teamId: tokenTeamId, body, set }: ParamCtx): Promise<unknown> => {
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    if (data?.["type"] !== "organizations") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be organizations" }] };
-    }
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
-    const defaultIacBinary = typeof attributes["default-iac-binary"] === "string" ? attributes["default-iac-binary"] : "terraform";
-    const defaultTerraformVersion = typeof attributes["default-terraform-version"] === "string" ? attributes["default-terraform-version"].trim() : "latest";
-    const assessmentsEnforced = attributes["assessments-enforced"] === true;
-    const email = attributes["email"] === undefined
-      ? null
-      : typeof attributes["email"] === "string"
-        ? attributes["email"].trim() === "" ? null : attributes["email"].trim()
-        : null;
-    const allowForceDeleteWorkspaces = attributes["allow-force-delete-workspaces"] !== false;
-    const stacksEnabled = attributes["stacks-enabled"] === true;
-    const showPreReleases = attributes["show-pre-releases"] === true;
-    const rawExecutionMode = attributes["default-execution-mode"];
-    const defaultExecutionMode = rawExecutionMode === undefined
-      ? "remote"
-      : typeof rawExecutionMode !== "string" || !["remote", "local", "agent"].includes(rawExecutionMode)
-        ? undefined
-        : rawExecutionMode;
-    const costEstimationEnabled = attributes["cost-estimation-enabled"] === true;
-    const sessionTimeout = attributes["session-timeout"] === undefined
-      ? null
-      : attributes["session-timeout"] === null ? null
-        : Number.isSafeInteger(attributes["session-timeout"]) && Number(attributes["session-timeout"]) >= 0 ? Number(attributes["session-timeout"]) : undefined;
-    const sessionRemember = attributes["session-remember"] === undefined || attributes["session-remember"] === null
-      ? null
-      : typeof attributes["session-remember"] === "boolean" ? attributes["session-remember"] : undefined;
-    const collaboratorAuthPolicy = attributes["collaborator-auth-policy"] === undefined
-      ? "password"
-      : attributes["collaborator-auth-policy"];
-    const userTokensEnabled = attributes["user-tokens-enabled"] === undefined ? true : attributes["user-tokens-enabled"] === true;
-    if (name === "") {
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Missing name" }] };
-    }
-    const nameError = organizationNameError(name);
-    if (nameError !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: nameError }] };
-    }
-    if (user === null || user === undefined) {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden" }] };
-    }
-    if (!["tofu", "terraform"].includes(defaultIacBinary) || defaultTerraformVersion === "" || sessionTimeout === undefined || sessionRemember === undefined || !["password", "sso"].includes(String(collaboratorAuthPolicy)) || defaultExecutionMode === undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
-    }
     try {
-      const id = newResourceId("org");
-      if ((user as unknown as Record<string, unknown>)["isProvisional"] === true) {
-        (set as { status: number }).status = 403;
-        return { errors: [{ status: "403", title: "Forbidden", detail: "Provisional accounts cannot create organizations" }] };
-      }
-      const saml = await db.query.samlSettings.findFirst({ where: eq(samlSettings.id, "saml") });
-      const org = {
-        id,
-        name,
-        email,
-        defaultIacBinary,
-        defaultTerraformVersion,
-        costEstimationEnabled,
-        sessionTimeout,
-        sessionRemember,
-        collaboratorAuthPolicy: String(collaboratorAuthPolicy),
-        userTokensEnabled,
-        defaultAgentPoolId: null,
-        assessmentsEnforced,
-        globalModuleSharing: false,
-        globalProviderSharing: false,
-        accessBetaTools: false,
-        workspaceLimit: null,
-        samlEnabled: saml?.enabled ?? false,
-        ownersTeamSamlRoleId: null,
-        allowForceDeleteWorkspaces,
-        stacksEnabled,
-        showPreReleases,
-        defaultExecutionMode,
-        aggregatedCommitStatusEnabled: true,
-        sendPassingStatusesForUntriggeredSpeculativePlans: false,
-        moduleTestTokenTtl: moduleTestTokenTtlBounds.default,
-        requireHardIsolation: false,
-      };
-      await db.transaction(async (tx: unknown): Promise<void> => {
-        const t = tx as typeof db;
-        await t.insert(organizations).values(org);
-        await t.insert(organizationMemberships).values({
-          id: newResourceId("orgmem"), userId: user.id, orgId: id, role: "owner",
-        });
-        await t.insert(projects).values(defaultProjectValues(id));
-      });
-      await auditLog("create", "organizations", id, user.id, id, { name });
+      const attributes = parseCreateAttributes(body);
+      const fields = parseCreateOrganizationFields(attributes);
+      assertCreateName(fields);
+      const creator = requireOrganizationCreator(user);
+      assertCreateSettings(fields);
+      const { org } = await insertOrganization({ fields, creator, tokenOrgId, tokenTeamId });
       (set as { status: number }).status = 201;
-      return { data: await organizationResourceForPrincipal(org, user.id, tokenOrgId, tokenTeamId) };
-    } catch (e: unknown) {
-      if (isUniqueConstraintError(e)) {
-        (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict" }] };
+      return { data: await organizationResourceForPrincipal(org, creator.id, tokenOrgId, tokenTeamId) };
+    } catch (error: unknown) {
+      if (error instanceof OrgPatchError) {
+        (set as { status: number }).status = error.status;
+        return error.body;
       }
-      throw e;
+      throw error;
     }
   })
   .get("/api/v2/organizations", async ({ user, orgId, request, set }: ParamCtx): Promise<unknown> => {
