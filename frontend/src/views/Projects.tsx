@@ -36,6 +36,184 @@ type Workspace = Readonly<{
   relationships?: Readonly<{ project?: Readonly<{ data: Readonly<{ id: string }> | null }> }>;
 }>;
 
+function ProjectTableBody({
+  canManageProjects,
+  orgPath,
+  projects,
+  loadError,
+  workspaceCount,
+  onCreate,
+  onEdit,
+  onDeleteRequest,
+}: Readonly<{
+  canManageProjects: boolean;
+  orgPath: string;
+  projects: Project[];
+  loadError: string;
+  workspaceCount: (projectId: string) => number;
+  onCreate: () => void;
+  onEdit: (project: Project) => void;
+  onDeleteRequest: (project: Project) => void;
+}>): React.JSX.Element {
+  return (
+    <TableBody>
+      {projects.map((project): React.JSX.Element => (
+        <TableRow key={project.id}>
+          <TableCell className="font-medium">
+            <Link
+              to={`${orgPath}/projects/${encodeURIComponent(project.id)}`}
+              className="text-primary hover:underline"
+            >
+              {project.attributes.name}
+            </Link>
+          </TableCell>
+          <TableCell className="text-muted-foreground">{project.attributes.description ?? "—"}</TableCell>
+          <TableCell><Badge variant="secondary">{workspaceCount(project.id)}</Badge></TableCell>
+          {canManageProjects && <TableCell>
+            <div className="flex justify-end gap-1">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Edit ${project.attributes.name}`}
+                onClick={(): void => { onEdit(project); }}
+              >
+                <Pencil />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Delete ${project.attributes.name}`}
+                onClick={(): void => { onDeleteRequest(project); }}
+              >
+                <Trash2 />
+              </Button>
+            </div>
+          </TableCell>}
+        </TableRow>
+      ))}
+      {projects.length === 0 && (
+        <TableRow>
+          <TableCell colSpan={canManageProjects ? 4 : 3} className="py-10 text-center text-muted-foreground">
+            <EmptyState compact illustration={loadError === "" ? "empty" : undefined}
+              title={loadError === "" ? "No projects yet" : "Projects unavailable"}
+              description={loadError === ""
+                ? "Projects group related workspaces so they can share settings and access. Most homelabs never need one — workspaces work fine on their own."
+                : "Use Try again above to reload projects."}
+              {...(loadError === "" && canManageProjects
+                ? {
+                    actionLabel: "Create a project",
+                    onAction: onCreate,
+                  }
+                : {})}
+              docsHref="/app/docs/projects"
+            />
+          </TableCell>
+        </TableRow>
+      )}
+    </TableBody>
+  );
+}
+
+function AssignmentsDialog({
+  open,
+  onOpenChange,
+  orgPath,
+  workspaces,
+  projects,
+  assigningWorkspaceId,
+  onAssign,
+}: Readonly<{
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  orgPath: string;
+  workspaces: Workspace[];
+  projects: Project[];
+  assigningWorkspaceId: string | null;
+  onAssign: (workspace: Workspace, projectId: string) => void;
+}>): React.JSX.Element {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Workspace assignments</DialogTitle>
+          <DialogDescription>Move each workspace to an organization project.</DialogDescription>
+        </DialogHeader>
+        <Table>
+          <TableHeader>
+            <TableRow><TableHead>Workspace</TableHead><TableHead>Project</TableHead></TableRow>
+          </TableHeader>
+          <TableBody>
+            {workspaces.map((workspace): React.JSX.Element => (
+              <TableRow key={workspace.id}>
+                <TableCell className="font-medium">{workspace.attributes.name}</TableCell>
+                <TableCell>
+                  <Select
+                    aria-label={`Project for ${workspace.attributes.name}`}
+                    value={workspace.relationships?.project?.data?.id ?? ""}
+                    disabled={assigningWorkspaceId === workspace.id}
+                    onValueChange={(projectId): void => { onAssign(workspace, projectId); }}
+                  >
+                    {projects.map((project): React.JSX.Element => (
+                      <option key={project.id} value={project.id}>{project.attributes.name}</option>
+                    ))}
+                  </Select>
+                </TableCell>
+              </TableRow>
+            ))}
+            {workspaces.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={2}>
+                  {/* Reached when the organization has no workspaces at all,
+                      so there is nothing to assign; the way out is to make
+                      one, not to keep looking at this dialog. */}
+                  <EmptyState
+                    compact
+                    headingLevel="h3"
+                    title="No workspaces to assign"
+                    description="Assignments move existing workspaces between projects. Create a workspace first."
+                    actionLabel="Go to workspaces"
+                    actionHref={`${orgPath}/workspaces`}
+                  />
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteProjectConfirm({
+  project,
+  deleting,
+  onClose,
+  onConfirm,
+}: Readonly<{
+  project: Project | null;
+  deleting: boolean;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <ConfirmDialog
+      open={project !== null}
+      onOpenChange={(open): void => { if (!open) onClose(); }}
+      title="Delete Project"
+      description={
+        <>
+          Are you sure you want to delete the project <strong className="text-foreground">{project?.attributes.name}</strong>? Workspaces under this project will be unassigned.
+        </>
+      }
+      confirmText="Delete Project"
+      confirmVariant="destructive"
+      requireText={project?.attributes.name}
+      loading={deleting}
+      onConfirm={onConfirm}
+    />
+  );
+}
+
 export function Projects(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
@@ -251,68 +429,23 @@ export function Projects(): React.JSX.Element {
                   {canManageProjects && <TableHead className="text-right">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
-              <TableBody>
-                {projects.map((project): React.JSX.Element => (
-                  <TableRow key={project.id}>
-                    <TableCell className="font-medium">
-                      <Link
-                        to={`/app/${encodeURIComponent(orgName)}/projects/${encodeURIComponent(project.id)}`}
-                        className="text-primary hover:underline"
-                      >
-                        {project.attributes.name}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{project.attributes.description ?? "—"}</TableCell>
-                    <TableCell><Badge variant="secondary">{workspaceCount(project.id)}</Badge></TableCell>
-                    {canManageProjects && <TableCell>
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`Edit ${project.attributes.name}`}
-                          onClick={(): void => { openProjectDialog(project); }}
-                        >
-                          <Pencil />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`Delete ${project.attributes.name}`}
-                          onClick={(): void => {
-                            const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
-                            if (isTestEnv) {
-                              void deleteProject(project);
-                            } else {
-                              setProjectToDelete(project);
-                            }
-                          }}
-                        >
-                          <Trash2 />
-                        </Button>
-                      </div>
-                    </TableCell>}
-                  </TableRow>
-                ))}
-                {projects.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={canManageProjects ? 4 : 3} className="py-10 text-center text-muted-foreground">
-                      <EmptyState compact illustration={loadError === "" ? "empty" : undefined}
-                        title={loadError === "" ? "No projects yet" : "Projects unavailable"}
-                        description={loadError === ""
-                          ? "Projects group related workspaces so they can share settings and access. Most homelabs never need one — workspaces work fine on their own."
-                          : "Use Try again above to reload projects."}
-                        {...(loadError === "" && canManageProjects
-                          ? {
-                              actionLabel: "Create a project",
-                              onAction: (): void => { openProjectDialog(null); },
-                            }
-                          : {})}
-                        docsHref="/app/docs/projects"
-                      />
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
+              <ProjectTableBody
+                canManageProjects={canManageProjects}
+                orgPath={orgPath}
+                projects={projects}
+                loadError={loadError}
+                workspaceCount={workspaceCount}
+                onCreate={(): void => { openProjectDialog(null); }}
+                onEdit={(project: Project): void => { openProjectDialog(project); }}
+                onDeleteRequest={(project: Project): void => {
+                  const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                  if (isTestEnv) {
+                    void deleteProject(project);
+                  } else {
+                    setProjectToDelete(project);
+                  }
+                }}
+              />
             </Table>
           )}
         </CardContent>
@@ -362,69 +495,20 @@ export function Projects(): React.JSX.Element {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={assignmentsOpen} onOpenChange={setAssignmentsOpen}>
-        <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Workspace assignments</DialogTitle>
-            <DialogDescription>Move each workspace to an organization project.</DialogDescription>
-          </DialogHeader>
-          <Table>
-            <TableHeader>
-              <TableRow><TableHead>Workspace</TableHead><TableHead>Project</TableHead></TableRow>
-            </TableHeader>
-            <TableBody>
-              {workspaces.map((workspace): React.JSX.Element => (
-                <TableRow key={workspace.id}>
-                  <TableCell className="font-medium">{workspace.attributes.name}</TableCell>
-                  <TableCell>
-                    <Select
-                      aria-label={`Project for ${workspace.attributes.name}`}
-                      value={workspace.relationships?.project?.data?.id ?? ""}
-                      disabled={assigningWorkspaceId === workspace.id}
-                      onValueChange={(projectId): void => { void assignWorkspace(workspace, projectId); }}
-                    >
-                      {projects.map((project): React.JSX.Element => (
-                        <option key={project.id} value={project.id}>{project.attributes.name}</option>
-                      ))}
-                    </Select>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {workspaces.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={2}>
-                    {/* Reached when the organization has no workspaces at all,
-                        so there is nothing to assign; the way out is to make
-                        one, not to keep looking at this dialog. */}
-                    <EmptyState
-                      compact
-                      headingLevel="h3"
-                      title="No workspaces to assign"
-                      description="Assignments move existing workspaces between projects. Create a workspace first."
-                      actionLabel="Go to workspaces"
-                      actionHref={`${orgPath}/workspaces`}
-                    />
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </DialogContent>
-      </Dialog>
+      <AssignmentsDialog
+        open={assignmentsOpen}
+        onOpenChange={setAssignmentsOpen}
+        orgPath={orgPath}
+        workspaces={workspaces}
+        projects={projects}
+        assigningWorkspaceId={assigningWorkspaceId}
+        onAssign={(workspace: Workspace, projectId: string): void => { void assignWorkspace(workspace, projectId); }}
+      />
 
-      <ConfirmDialog
-        open={projectToDelete !== null}
-        onOpenChange={(open): void => { if (!open) setProjectToDelete(null); }}
-        title="Delete Project"
-        description={
-          <>
-            Are you sure you want to delete the project <strong className="text-foreground">{projectToDelete?.attributes.name}</strong>? Workspaces under this project will be unassigned.
-          </>
-        }
-        confirmText="Delete Project"
-        confirmVariant="destructive"
-        requireText={projectToDelete?.attributes.name}
-        loading={deletingProject}
+      <DeleteProjectConfirm
+        project={projectToDelete}
+        deleting={deletingProject}
+        onClose={(): void => { setProjectToDelete(null); }}
         onConfirm={async (): Promise<void> => {
           if (projectToDelete !== null) {
             await deleteProject(projectToDelete);
