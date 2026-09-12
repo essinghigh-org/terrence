@@ -145,6 +145,214 @@ function isActivePath(pathname: string, path: string, exact = false): boolean {
     : pathname === path || pathname.startsWith(`${path}/`);
 }
 
+function isGeneralSettingsActive(pathname: string, settingsPath: string, tab: string | null): boolean {
+  return pathname === settingsPath
+    && tab !== "teams"
+    && tab !== "roles"
+    && tab !== "cidr"
+    && tab !== "tags"
+    && tab !== "users"
+    && tab !== "ssh-keys";
+}
+
+function isPolicySetsActive(pathname: string, settingsPath: string): boolean {
+  // Active on the list and detail pages, but NOT on the tag-selector
+  // sibling (`.../policy-sets/tags`), which has its own nav item.
+  return isActivePath(pathname, `${settingsPath}/policy-sets`)
+    && !pathname.startsWith(`${settingsPath}/policy-sets/tags`);
+}
+
+function visibleOrgSettingsLinks<T extends Readonly<{ label: string }>>(
+  links: readonly T[],
+  perms: Readonly<{
+    canManageWorkspaces: boolean;
+    canManageVcsSettings: boolean;
+    canManageAgentPools: boolean;
+    canManagePolicies: boolean;
+  }>,
+): T[] {
+  return links.filter((link): boolean =>
+    (link.label !== "Variable sets" || perms.canManageWorkspaces)
+    && (link.label !== "VCS providers" || perms.canManageVcsSettings)
+    && (link.label !== "Agent pools" || perms.canManageAgentPools)
+    && (link.label !== "Policy sets" || perms.canManagePolicies)
+    && (link.label !== "Tag policy sets" || perms.canManagePolicies)
+    && (link.label !== "OIDC" || perms.canManagePolicies)
+    && (link.label !== "Stacks" || perms.canManageWorkspaces));
+}
+
+function OrganizationSettingsNav({
+  collapsed,
+  onNavigate,
+  currentOrgName,
+  orgPath,
+  pathname,
+  organizationSettingsPath,
+  organizationSettingsTab,
+  canManageWorkspaces,
+  canManageVcsSettings,
+  canManageAgentPools,
+  canManagePolicies,
+}: Readonly<{
+  collapsed: boolean;
+  onNavigate: () => void;
+  currentOrgName: string;
+  orgPath: string;
+  pathname: string;
+  organizationSettingsPath: string;
+  organizationSettingsTab: string | null;
+  canManageWorkspaces: boolean;
+  canManageVcsSettings: boolean;
+  canManageAgentPools: boolean;
+  canManagePolicies: boolean;
+}>): JSX.Element {
+  const links = visibleOrgSettingsLinks(([
+    {
+      active: isGeneralSettingsActive(pathname, organizationSettingsPath, organizationSettingsTab),
+      icon: Settings,
+      label: "General",
+      to: organizationSettingsPath,
+    },
+    {
+      active: pathname === organizationSettingsPath
+        && organizationSettingsTab === "teams",
+      icon: Users,
+      label: "Teams",
+      to: `${organizationSettingsPath}?tab=teams`,
+    },
+    {
+      active: pathname === organizationSettingsPath
+        && organizationSettingsTab === "roles",
+      icon: Users,
+      label: "Roles",
+      to: `${organizationSettingsPath}?tab=roles`,
+    },
+    {
+      active: pathname === organizationSettingsPath
+        && organizationSettingsTab === "tags",
+      icon: Tag,
+      label: "Tags",
+      to: `${organizationSettingsPath}?tab=tags`,
+    },
+    {
+      active: pathname === organizationSettingsPath
+        && organizationSettingsTab === "users",
+      icon: Users,
+      label: "Users",
+      to: `${organizationSettingsPath}?tab=users`,
+    },
+    {
+      active: pathname === organizationSettingsPath
+        && organizationSettingsTab === "cidr",
+      icon: ShieldCheck,
+      label: "IP allowlists",
+      to: `${organizationSettingsPath}?tab=cidr`,
+    },
+    {
+      active: pathname === organizationSettingsPath
+        && organizationSettingsTab === "ssh-keys",
+      icon: KeyRound,
+      label: "SSH keys",
+      to: `${organizationSettingsPath}?tab=ssh-keys`,
+    },
+    {
+      active: pathname === `${orgPath}/variable-sets`,
+      icon: Variable,
+      label: "Variable sets",
+      to: `${orgPath}/variable-sets`,
+    },
+    {
+      active: pathname === `${organizationSettingsPath}/vcs`,
+      icon: GitBranch,
+      label: "VCS providers",
+      to: `${organizationSettingsPath}/vcs`,
+    },
+    {
+      active: pathname === `${organizationSettingsPath}/agents`,
+      icon: Activity,
+      label: "Agent pools",
+      to: `${organizationSettingsPath}/agents`,
+    },
+    {
+      active: isPolicySetsActive(pathname, organizationSettingsPath),
+      icon: ShieldCheck,
+      label: "Policy sets",
+      to: `${organizationSettingsPath}/policy-sets`,
+    },
+    {
+      active: isActivePath(pathname, `${organizationSettingsPath}/policy-sets/tags`),
+      icon: Tags,
+      label: "Tag policy sets",
+      to: `${organizationSettingsPath}/policy-sets/tags`,
+    },
+    {
+      active: isActivePath(pathname, `${organizationSettingsPath}/oidc`),
+      icon: Fingerprint,
+      label: "OIDC",
+      to: `${organizationSettingsPath}/oidc`,
+    },
+    {
+      active: isActivePath(pathname, `${organizationSettingsPath}/stacks-workspaces`),
+      icon: Layers,
+      label: "Stacks",
+      to: `${organizationSettingsPath}/stacks-workspaces`,
+    },
+  ] as const), {
+    canManageWorkspaces,
+    canManageVcsSettings,
+    canManageAgentPools,
+    canManagePolicies,
+  });
+
+  // Fourteen flat links is a wall. Group them the same way workspace and
+  // site-admin settings are grouped, and drop groups the viewer can't use.
+  const groups = ([
+    { label: "Organization", members: ["General", "Tags"] },
+    { label: "People", members: ["Users", "Teams", "Roles"] },
+    { label: "Infrastructure", members: ["Variable sets", "VCS providers", "Agent pools", "Stacks"] },
+    { label: "Policies", members: ["Policy sets", "Tag policy sets"] },
+    { label: "Security", members: ["IP allowlists", "SSH keys", "OIDC"] },
+  ] as const)
+    .map((group): { label: string; links: typeof links } => ({
+      label: group.label,
+      links: group.members.flatMap((member): typeof links =>
+        links.filter((link): boolean => link.label === member)),
+    }))
+    .filter((group): boolean => group.links.length > 0);
+
+  return (
+    <>
+      <SidebarNavLink
+        active={false}
+        collapsed={collapsed}
+        icon={ArrowLeft}
+        label={currentOrgName}
+        onNavigate={onNavigate}
+        to={`${orgPath}/workspaces`}
+      />
+      <SidebarContextLabel collapsed={collapsed} tone="secondary">
+        Organization settings
+      </SidebarContextLabel>
+      {groups.map((group): JSX.Element => (
+        <div key={group.label}>
+          <SidebarGroupLabel collapsed={collapsed}>{group.label}</SidebarGroupLabel>
+          {group.links.map((link): JSX.Element => (
+            <SidebarNavLink
+              key={link.to}
+              active={link.active}
+              collapsed={collapsed}
+              icon={link.icon}
+              label={link.label}
+              onNavigate={onNavigate}
+              to={link.to}
+            />
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
 export function Layout({
   children,
 }: Readonly<{ readonly children?: ReactNode }>): JSX.Element {
@@ -912,161 +1120,20 @@ export function Layout({
     }
 
     if (inOrganizationSettings) {
-      const links = ([
-        {
-          active: location.pathname === organizationSettingsPath
-            && organizationSettingsTab !== "teams"
-            && organizationSettingsTab !== "roles"
-            && organizationSettingsTab !== "cidr"
-            && organizationSettingsTab !== "tags"
-            && organizationSettingsTab !== "users"
-            && organizationSettingsTab !== "ssh-keys",
-          icon: Settings,
-          label: "General",
-          to: organizationSettingsPath,
-        },
-        {
-          active: location.pathname === organizationSettingsPath
-            && organizationSettingsTab === "teams",
-          icon: Users,
-          label: "Teams",
-          to: `${organizationSettingsPath}?tab=teams`,
-        },
-        {
-          active: location.pathname === organizationSettingsPath
-            && organizationSettingsTab === "roles",
-          icon: Users,
-          label: "Roles",
-          to: `${organizationSettingsPath}?tab=roles`,
-        },
-        {
-          active: location.pathname === organizationSettingsPath
-            && organizationSettingsTab === "tags",
-          icon: Tag,
-          label: "Tags",
-          to: `${organizationSettingsPath}?tab=tags`,
-        },
-        {
-          active: location.pathname === organizationSettingsPath
-            && organizationSettingsTab === "users",
-          icon: Users,
-          label: "Users",
-          to: `${organizationSettingsPath}?tab=users`,
-        },
-        {
-          active: location.pathname === organizationSettingsPath
-            && organizationSettingsTab === "cidr",
-          icon: ShieldCheck,
-          label: "IP allowlists",
-          to: `${organizationSettingsPath}?tab=cidr`,
-        },
-        {
-          active: location.pathname === organizationSettingsPath
-            && organizationSettingsTab === "ssh-keys",
-          icon: KeyRound,
-          label: "SSH keys",
-          to: `${organizationSettingsPath}?tab=ssh-keys`,
-        },
-        {
-          active: location.pathname === `${orgPath}/variable-sets`,
-          icon: Variable,
-          label: "Variable sets",
-          to: `${orgPath}/variable-sets`,
-        },
-        {
-          active: location.pathname === `${organizationSettingsPath}/vcs`,
-          icon: GitBranch,
-          label: "VCS providers",
-          to: `${organizationSettingsPath}/vcs`,
-        },
-        {
-          active: location.pathname === `${organizationSettingsPath}/agents`,
-          icon: Activity,
-          label: "Agent pools",
-          to: `${organizationSettingsPath}/agents`,
-        },
-        {
-          // Active on the list and detail pages, but NOT on the tag-selector
-          // sibling (`.../policy-sets/tags`), which has its own nav item.
-          active: isActivePath(location.pathname, `${organizationSettingsPath}/policy-sets`)
-            && !location.pathname.startsWith(`${organizationSettingsPath}/policy-sets/tags`),
-          icon: ShieldCheck,
-          label: "Policy sets",
-          to: `${organizationSettingsPath}/policy-sets`,
-        },
-        {
-          active: isActivePath(location.pathname, `${organizationSettingsPath}/policy-sets/tags`),
-          icon: Tags,
-          label: "Tag policy sets",
-          to: `${organizationSettingsPath}/policy-sets/tags`,
-        },
-        {
-          active: isActivePath(location.pathname, `${organizationSettingsPath}/oidc`),
-          icon: Fingerprint,
-          label: "OIDC",
-          to: `${organizationSettingsPath}/oidc`,
-        },
-        {
-          active: isActivePath(location.pathname, `${organizationSettingsPath}/stacks-workspaces`),
-          icon: Layers,
-          label: "Stacks",
-          to: `${organizationSettingsPath}/stacks-workspaces`,
-        },
-      ] as const).filter((link): boolean =>
-        (link.label !== "Variable sets" || canManageWorkspaces)
-        && (link.label !== "VCS providers" || canManageVcsSettings)
-        && (link.label !== "Agent pools" || canManageAgentPools)
-        && (link.label !== "Policy sets" || canManagePolicies)
-        && (link.label !== "Tag policy sets" || canManagePolicies)
-        && (link.label !== "OIDC" || canManagePolicies)
-        && (link.label !== "Stacks" || canManageWorkspaces));
-
-      // Fourteen flat links is a wall. Group them the same way workspace and
-      // site-admin settings are grouped, and drop groups the viewer can't use.
-      const groups = ([
-        { label: "Organization", members: ["General", "Tags"] },
-        { label: "People", members: ["Users", "Teams", "Roles"] },
-        { label: "Infrastructure", members: ["Variable sets", "VCS providers", "Agent pools", "Stacks"] },
-        { label: "Policies", members: ["Policy sets", "Tag policy sets"] },
-        { label: "Security", members: ["IP allowlists", "SSH keys", "OIDC"] },
-      ] as const)
-        .map((group): { label: string; links: typeof links } => ({
-          label: group.label,
-          links: group.members.flatMap((member): typeof links =>
-            links.filter((link): boolean => link.label === member)),
-        }))
-        .filter((group): boolean => group.links.length > 0);
-
       return (
-        <>
-          <SidebarNavLink
-            active={false}
-            collapsed={sidebarCollapsed}
-            icon={ArrowLeft}
-            label={currentOrgName}
-            onNavigate={closeMobileNavigation}
-            to={`${orgPath}/workspaces`}
-          />
-          <SidebarContextLabel collapsed={sidebarCollapsed} tone="secondary">
-            Organization settings
-          </SidebarContextLabel>
-          {groups.map((group): JSX.Element => (
-            <div key={group.label}>
-              <SidebarGroupLabel collapsed={sidebarCollapsed}>{group.label}</SidebarGroupLabel>
-              {group.links.map((link): JSX.Element => (
-                <SidebarNavLink
-                  key={link.to}
-                  active={link.active}
-                  collapsed={sidebarCollapsed}
-                  icon={link.icon}
-                  label={link.label}
-                  onNavigate={closeMobileNavigation}
-                  to={link.to}
-                />
-              ))}
-            </div>
-          ))}
-        </>
+        <OrganizationSettingsNav
+          collapsed={sidebarCollapsed}
+          onNavigate={closeMobileNavigation}
+          currentOrgName={currentOrgName}
+          orgPath={orgPath}
+          pathname={location.pathname}
+          organizationSettingsPath={organizationSettingsPath}
+          organizationSettingsTab={organizationSettingsTab}
+          canManageWorkspaces={canManageWorkspaces}
+          canManageVcsSettings={canManageVcsSettings}
+          canManageAgentPools={canManageAgentPools}
+          canManagePolicies={canManagePolicies}
+        />
       );
     }
 
