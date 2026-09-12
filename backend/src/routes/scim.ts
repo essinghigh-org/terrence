@@ -146,6 +146,186 @@ function parseScimActive(payload: ScimPayload): boolean | undefined | null {
   return null;
 }
 
+type ScimPatchFailure = { status: number; detail: string };
+
+function scimPatchOp(operation: ScimPayload): { op: string; rawPath: string; path: string } {
+  const op = typeof operation["op"] === "string" ? operation["op"].toLowerCase() : "";
+  const rawPath = typeof operation["path"] === "string" ? operation["path"] : "";
+  return { op, rawPath, path: rawPath.toLowerCase() };
+}
+
+function applyUserPatchOperation(updates: ScimPayload, rawOperation: unknown): ScimPatchFailure | null {
+  if (rawOperation === null || typeof rawOperation !== "object") return { status: 400, detail: "Invalid PATCH operation" };
+  const operation = rawOperation as ScimPayload;
+  const { op, path } = scimPatchOp(operation);
+  if (!["add", "replace", "remove"].includes(op)) return { status: 400, detail: "Unsupported PATCH operation" };
+  if (op === "remove") {
+    if (path !== "externalid") return { status: 400, detail: "Only externalId can be removed" };
+    updates["externalId"] = null;
+    return null;
+  }
+  if (path === "") {
+    if (operation["value"] === null || typeof operation["value"] !== "object") return { status: 400, detail: "PATCH value must be an object" };
+    Object.assign(updates, operation["value"] as ScimPayload);
+  } else if (["active", "username", "externalid", "emails"].includes(path)) {
+    updates[path === "username" ? "userName" : path === "externalid" ? "externalId" : path] = operation["value"];
+  } else return { status: 400, detail: "Unsupported PATCH path" };
+  return null;
+}
+
+function parseUserPatchOperations(payload: ScimPayload): { updates: ScimPayload } | { failure: ScimPatchFailure } {
+  const operations = Array.isArray(payload["Operations"]) ? payload["Operations"] : [];
+  if (operations.length > 100) return { failure: { status: 400, detail: "Too many operations" } };
+  const updates: ScimPayload = {};
+  for (const rawOperation of operations) {
+    const failure = applyUserPatchOperation(updates, rawOperation);
+    if (failure !== null) return { failure };
+  }
+  return { updates };
+}
+
+function resolveUserPatchFields(
+  updates: ScimPayload,
+  currentUser: typeof users.$inferSelect,
+): { userName: string; email: string | null } | { failure: ScimPatchFailure } {
+  const userName = typeof updates["userName"] === "string" && updates["userName"].trim() !== "" ? updates["userName"].trim() : currentUser.username;
+  const email = updates["emails"] === undefined ? currentUser.email : scimEmail({ emails: updates["emails"] });
+  if (updates["emails"] !== undefined && email === null) return { failure: { status: 400, detail: "emails cannot be cleared" } };
+  return { userName, email };
+}
+
+async function persistUserPatch(
+  identity: typeof scimUserIdentities.$inferSelect,
+  currentUser: typeof users.$inferSelect,
+  userName: string,
+  email: string | null,
+  active: boolean | undefined,
+  externalId: unknown,
+  updatedAt: number,
+): Promise<{ ok: true } | { failure: ScimPatchFailure }> {
+  try {
+    await db.transaction(async (tx): Promise<void> => {
+      await tx.update(users).set({
+        username: userName,
+        email,
+        ...(email !== currentUser.email ? { emailVerifiedAt: null } : {}),
+        ...(active !== undefined ? { isSuspended: !active } : {}),
+      }).where(eq(users.id, currentUser.id));
+      if (active === false) {
+        await tx.delete(apiTokens).where(eq(apiTokens.userId, currentUser.id));
+        await tx.update(refreshSessions).set({ revokedAt: Date.now() }).where(and(eq(refreshSessions.userId, currentUser.id), isNull(refreshSessions.revokedAt)));
+      }
+      await tx.update(scimUserIdentities).set({ username: userName, ...(externalId !== undefined ? { externalId: typeof externalId === "string" ? externalId : null } : {}), updatedAt }).where(eq(scimUserIdentities.id, identity.id));
+      await tx.update(identityLinks).set({ emailAtLinkTime: email }).where(and(
+        eq(identityLinks.userId, currentUser.id),
+        eq(identityLinks.provider, "scim"),
+        eq(identityLinks.externalId, identity.id),
+      ));
+      await reconcileScimSiteAdmins(tx);
+    });
+  } catch (error: unknown) {
+    if (!isUniqueConstraintError(error)) throw error;
+    return { failure: { status: 409, detail: "userName or email is already in use" } };
+  }
+  return { ok: true };
+}
+
+type GroupPatchState = {
+  name: string;
+  externalId: string | null | undefined;
+  memberIds: string[];
+  membersChanged: boolean;
+};
+
+function applyGroupWholeValue(state: GroupPatchState, value: ScimPayload): ScimPatchFailure | null {
+  if (typeof value["displayName"] === "string" && value["displayName"].trim() !== "") state.name = value["displayName"].trim();
+  if (value["externalId"] !== undefined) state.externalId = typeof value["externalId"] === "string" ? value["externalId"] : null;
+  if (value["members"] === undefined) return null;
+  const ids = scimMemberIds(value["members"]);
+  if (ids === null) return { status: 400, detail: "members must be an array of SCIM user identifiers" };
+  state.memberIds = ids;
+  state.membersChanged = true;
+  return null;
+}
+
+function applyGroupMembersPath(state: GroupPatchState, op: string, value: unknown): ScimPatchFailure | null {
+  const ids = scimMemberIds(value);
+  if (ids === null) return { status: 400, detail: "members must be an array of SCIM user identifiers" };
+  state.memberIds = op === "add" ? [...new Set([...state.memberIds, ...ids])] : op === "remove" ? state.memberIds.filter((id) => !new Set(ids).has(id)) : ids;
+  state.membersChanged = true;
+  return null;
+}
+
+function applyGroupMemberFilter(state: GroupPatchState, rawPath: string): ScimPatchFailure | null {
+  const match = /value\s+eq\s+['"]([^'"]+)['"]/i.exec(rawPath);
+  if (match === null) return { status: 400, detail: "Invalid member filter" };
+  state.memberIds = state.memberIds.filter((id): boolean => id !== match[1]);
+  state.membersChanged = true;
+  return null;
+}
+
+function applyGroupDisplayName(state: GroupPatchState, op: string, value: unknown): ScimPatchFailure | null {
+  if (op === "remove" || typeof value !== "string" || value.trim() === "") return { status: 400, detail: "displayName is required" };
+  state.name = value.trim();
+  return null;
+}
+
+function applyGroupPatchOperation(state: GroupPatchState, rawOperation: unknown): ScimPatchFailure | null {
+  if (rawOperation === null || typeof rawOperation !== "object") return { status: 400, detail: "Invalid PATCH operation" };
+  const operation = rawOperation as ScimPayload;
+  const { op, rawPath, path } = scimPatchOp(operation);
+  if (!["add", "replace", "remove"].includes(op)) return { status: 400, detail: "Unsupported PATCH operation" };
+  if (path === "" && operation["value"] !== null && typeof operation["value"] === "object") {
+    return applyGroupWholeValue(state, operation["value"] as ScimPayload);
+  }
+  if (path === "displayname") {
+    return applyGroupDisplayName(state, op, operation["value"]);
+  } else if (path === "externalid") {
+    state.externalId = op === "remove" ? null : typeof operation["value"] === "string" ? operation["value"] : null;
+  } else if (path === "members") {
+    return applyGroupMembersPath(state, op, operation["value"]);
+  } else if (op === "remove" && path.startsWith("members[")) {
+    return applyGroupMemberFilter(state, rawPath);
+  } else return { status: 400, detail: "Unsupported PATCH path" };
+  return null;
+}
+
+async function parseGroupPatchOperations(
+  group: typeof scimGroups.$inferSelect,
+  payload: ScimPayload,
+): Promise<GroupPatchState | { failure: ScimPatchFailure }> {
+  const operations = Array.isArray(payload["Operations"]) ? payload["Operations"] : [];
+  if (operations.length > 100) return { failure: { status: 400, detail: "Too many operations" } };
+  const state: GroupPatchState = {
+    name: group.name,
+    externalId: undefined,
+    memberIds: (await db.query.scimGroupMemberships.findMany({ where: eq(scimGroupMemberships.groupId, group.id) })).map((membership): string => membership.scimUserId),
+    membersChanged: false,
+  };
+  for (const rawOperation of operations) {
+    const failure = applyGroupPatchOperation(state, rawOperation);
+    if (failure !== null) return { failure };
+  }
+  return state;
+}
+
+async function persistGroupPatch(
+  group: typeof scimGroups.$inferSelect,
+  state: GroupPatchState,
+): Promise<{ missingMember: boolean }> {
+  let missingMember = false;
+  await db.transaction(async (tx): Promise<void> => {
+    if (state.membersChanged && !(await replaceScimGroupMembers(group.id, state.memberIds, tx))) {
+      missingMember = true;
+      return;
+    }
+    if (state.membersChanged) await reconcileMappedTeams(group.id, tx);
+    await reconcileScimSiteAdmins(tx);
+    await tx.update(scimGroups).set({ name: state.name, ...(state.externalId === undefined ? {} : { externalId: state.externalId }), updatedAt: Date.now() }).where(eq(scimGroups.id, group.id));
+  });
+  return { missingMember };
+}
+
 function scimUserResource(identity: typeof scimUserIdentities.$inferSelect, user: typeof users.$inferSelect | undefined): Record<string, unknown> {
   const created = new Date(identity.createdAt ?? identity.updatedAt).toISOString();
   const lastModified = new Date(identity.updatedAt).toISOString();
@@ -506,62 +686,19 @@ export const scimRoutes = new Elysia({ name: "scim" })
     const identity = await db.query.scimUserIdentities.findFirst({ where: eq(scimUserIdentities.id, params["id"] ?? "") });
     if (identity === undefined) return scimError(set, 404, "User not found");
     const payload = body !== null && typeof body === "object" ? body as ScimPayload : {};
-    const operations = Array.isArray(payload["Operations"]) ? payload["Operations"] : [];
-    if (operations.length > 100) return scimError(set, 400, "Too many operations");
-    const updates: ScimPayload = {};
-    for (const rawOperation of operations) {
-      if (rawOperation === null || typeof rawOperation !== "object") return scimError(set, 400, "Invalid PATCH operation");
-      const operation = rawOperation as ScimPayload;
-      const op = typeof operation["op"] === "string" ? operation["op"].toLowerCase() : "";
-      const rawPath = typeof operation["path"] === "string" ? operation["path"] : "";
-      const path = rawPath.toLowerCase();
-      if (!["add", "replace", "remove"].includes(op)) return scimError(set, 400, "Unsupported PATCH operation");
-      if (op === "remove") {
-        if (path !== "externalid") return scimError(set, 400, "Only externalId can be removed");
-        updates["externalId"] = null;
-        continue;
-      }
-      if (path === "") {
-        if (operation["value"] === null || typeof operation["value"] !== "object") return scimError(set, 400, "PATCH value must be an object");
-        Object.assign(updates, operation["value"] as ScimPayload);
-      } else if (["active", "username", "externalid", "emails"].includes(path)) {
-        updates[path === "username" ? "userName" : path === "externalid" ? "externalId" : path] = operation["value"];
-      } else return scimError(set, 400, "Unsupported PATCH path");
-    }
+    const parsed = parseUserPatchOperations(payload);
+    if ("failure" in parsed) return scimError(set, parsed.failure.status, parsed.failure.detail);
+    const updates = parsed.updates;
     const currentUser = await db.query.users.findFirst({ where: eq(users.id, identity.userId) });
     if (currentUser === undefined) return scimError(set, 404, "User not found");
-    const userName = typeof updates["userName"] === "string" && updates["userName"].trim() !== "" ? updates["userName"].trim() : currentUser.username;
-    const email = updates["emails"] === undefined ? currentUser.email : scimEmail({ emails: updates["emails"] });
-    if (updates["emails"] !== undefined && email === null) return scimError(set, 400, "emails cannot be cleared");
+    const fields = resolveUserPatchFields(updates, currentUser);
+    if ("failure" in fields) return scimError(set, fields.failure.status, fields.failure.detail);
     const active = parseScimActive(updates);
     if (active === null) return scimError(set, 400, "active must be a boolean");
-    const updatedAt = Date.now();
-    try {
-      await db.transaction(async (tx): Promise<void> => {
-        await tx.update(users).set({
-          username: userName,
-          email,
-          ...(email !== currentUser.email ? { emailVerifiedAt: null } : {}),
-          ...(active !== undefined ? { isSuspended: !active } : {}),
-        }).where(eq(users.id, currentUser.id));
-        if (active === false) {
-          await tx.delete(apiTokens).where(eq(apiTokens.userId, currentUser.id));
-          await tx.update(refreshSessions).set({ revokedAt: Date.now() }).where(and(eq(refreshSessions.userId, currentUser.id), isNull(refreshSessions.revokedAt)));
-        }
-        await tx.update(scimUserIdentities).set({ username: userName, ...(updates["externalId"] !== undefined ? { externalId: typeof updates["externalId"] === "string" ? updates["externalId"] : null } : {}), updatedAt }).where(eq(scimUserIdentities.id, identity.id));
-        await tx.update(identityLinks).set({ emailAtLinkTime: email }).where(and(
-          eq(identityLinks.userId, currentUser.id),
-          eq(identityLinks.provider, "scim"),
-          eq(identityLinks.externalId, identity.id),
-        ));
-        await reconcileScimSiteAdmins(tx);
-      });
-    } catch (error: unknown) {
-      if (!isUniqueConstraintError(error)) throw error;
-      return scimError(set, 409, "userName or email is already in use");
-    }
+    const persisted = await persistUserPatch(identity, currentUser, fields.userName, fields.email, active, updates["externalId"], Date.now());
+    if ("failure" in persisted) return scimError(set, persisted.failure.status, persisted.failure.detail);
     const updatedIdentity = await db.query.scimUserIdentities.findFirst({ where: eq(scimUserIdentities.id, identity.id) });
-    const updatedUser = await db.query.users.findFirst({ where: eq(users.id, currentUser.id) });
+    const updatedUser = await db.query.users.findFirst({ where: eq(users.id, identity.userId) });
     return updatedIdentity === undefined ? scimError(set, 500, "User identity was not updated") : scimUserResource(updatedIdentity, updatedUser);
   })
 
@@ -664,61 +801,10 @@ export const scimRoutes = new Elysia({ name: "scim" })
     const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, params["id"] ?? "") });
     if (group === undefined) return scimError(set, 404, "Group not found");
     const payload = body !== null && typeof body === "object" ? body as ScimPayload : {};
-    const operations = Array.isArray(payload["Operations"]) ? payload["Operations"] : [];
-    if (operations.length > 100) return scimError(set, 400, "Too many operations");
-    let name = group.name;
-    let externalId: string | null | undefined = undefined;
-    let memberIds = (await db.query.scimGroupMemberships.findMany({ where: eq(scimGroupMemberships.groupId, group.id) })).map((membership): string => membership.scimUserId);
-    let membersChanged = false;
-    for (const rawOperation of operations) {
-      if (rawOperation === null || typeof rawOperation !== "object") return scimError(set, 400, "Invalid PATCH operation");
-      const operation = rawOperation as ScimPayload;
-      const op = typeof operation["op"] === "string" ? operation["op"].toLowerCase() : "";
-      const rawPath = typeof operation["path"] === "string" ? operation["path"] : "";
-      const path = rawPath.toLowerCase();
-      if (!["add", "replace", "remove"].includes(op)) return scimError(set, 400, "Unsupported PATCH operation");
-      if (path === "" && operation["value"] !== null && typeof operation["value"] === "object") {
-        const value = operation["value"] as ScimPayload;
-        if (typeof value["displayName"] === "string" && value["displayName"].trim() !== "") name = value["displayName"].trim();
-        if (value["externalId"] !== undefined) externalId = typeof value["externalId"] === "string" ? value["externalId"] : null;
-        if (value["members"] !== undefined) {
-          const ids = scimMemberIds(value["members"]);
-          if (ids === null) return scimError(set, 400, "members must be an array of SCIM user identifiers");
-          memberIds = ids;
-          membersChanged = true;
-        }
-        continue;
-      }
-      if (path === "displayname") {
-        if (op === "remove" || typeof operation["value"] !== "string" || operation["value"].trim() === "") return scimError(set, 400, "displayName is required");
-        name = operation["value"].trim();
-      } else if (path === "externalid") {
-        externalId = op === "remove" ? null : typeof operation["value"] === "string" ? operation["value"] : null;
-      } else if (path === "members") {
-        const ids = scimMemberIds(operation["value"]);
-        if (ids === null) return scimError(set, 400, "members must be an array of SCIM user identifiers");
-        memberIds = op === "add" ? [...new Set([...memberIds, ...ids])] : op === "remove" ? memberIds.filter((id) => !new Set(ids).has(id)) : ids;
-        membersChanged = true;
-      } else if (op === "remove" && path.startsWith("members[")) {
-        const match = /value\s+eq\s+['\"]([^'\"]+)['\"]/i.exec(rawPath);
-        if (match !== null) {
-          memberIds = memberIds.filter((id): boolean => id !== match[1]);
-          membersChanged = true;
-        }
-        else return scimError(set, 400, "Invalid member filter");
-      } else return scimError(set, 400, "Unsupported PATCH path");
-    }
-    let missingMember = false;
-    await db.transaction(async (tx): Promise<void> => {
-      if (membersChanged && !(await replaceScimGroupMembers(group.id, memberIds, tx))) {
-        missingMember = true;
-        return;
-      }
-      if (membersChanged) await reconcileMappedTeams(group.id, tx);
-      await reconcileScimSiteAdmins(tx);
-      await tx.update(scimGroups).set({ name, ...(externalId === undefined ? {} : { externalId }), updatedAt: Date.now() }).where(eq(scimGroups.id, group.id));
-    });
-    if (missingMember) return scimError(set, 404, "Referenced SCIM user not found");
+    const parsed = await parseGroupPatchOperations(group, payload);
+    if ("failure" in parsed) return scimError(set, parsed.failure.status, parsed.failure.detail);
+    const persisted = await persistGroupPatch(group, parsed);
+    if (persisted.missingMember) return scimError(set, 404, "Referenced SCIM user not found");
     const updated = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, group.id) });
     return updated === undefined ? scimError(set, 500, "Group was not updated") : scimGroupResource(updated);
   });
