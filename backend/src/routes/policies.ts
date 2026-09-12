@@ -899,6 +899,18 @@ function resolveParameterCreateFields(
   };
 }
 
+function policyListWhere(orgId: string, kind: string | null, searchName: string | undefined): SQL | undefined {
+  const conditions = [eq(policies.orgId, orgId)];
+  if (kind === "sentinel" || kind === "opa") conditions.push(eq(policies.kind, kind));
+  if (searchName !== undefined && searchName !== "") {
+    // SQLite LIKE is ASCII case-insensitive; Postgres LIKE is not — use
+    // ILIKE there so the contract holds on both drivers.
+    const nameFilter = isPostgres ? ilike(policies.name, `%${searchName}%`) : like(policies.name, `%${searchName}%`);
+    conditions.push(nameFilter);
+  }
+  return and(...conditions);
+}
+
 export const policyRoutes = new Elysia({ name: "policies" })
   .use(authPlugin)
   // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
@@ -909,19 +921,8 @@ export const policyRoutes = new Elysia({ name: "policies" })
     // the reference format list filters (policies.mdx): filter[kind]=sentinel|opa, and a
     // name search. the reference format documents search[name]; the legacy q alias is kept
     // for backward compatibility (matches the workspaces list endpoint).
-    const conditions = [eq(policies.orgId, org.id)];
-    const paramsUrl = new URL(request.url).searchParams;
-    const kind = paramsUrl.get("filter[kind]");
-    if (kind === "sentinel" || kind === "opa") conditions.push(eq(policies.kind, kind));
-    const searchName = paramsUrl.get("search[name]")?.trim() ?? paramsUrl.get("q")?.trim();
-    if (searchName !== undefined && searchName !== "") {
-      // SQLite LIKE is ASCII case-insensitive; Postgres LIKE is not — use
-      // ILIKE there so the contract holds on both drivers.
-      const nameFilter = isPostgres ? ilike(policies.name, `%${searchName}%`) : like(policies.name, `%${searchName}%`);
-      conditions.push(nameFilter);
-    }
-    const { number, size } = pageRequest(request);
-    const where = and(...conditions);
+    const { kind, searchName, number, size } = resolvePolicySetListQuery(request);
+    const where = policyListWhere(org.id, kind, searchName);
     const [polList, countRows] = await Promise.all([
       db.query.policies.findMany({
         where,
