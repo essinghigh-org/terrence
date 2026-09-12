@@ -361,6 +361,39 @@ async function buildVariablePatchUpdates(
   };
 }
 
+function parseVariableWorkspaceId(data: Record<string, unknown>): { workspaceId: string; workspaceData: Record<string, unknown> } {
+  const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
+  const workspaceRelationship = relationships["workspace"] !== null && typeof relationships["workspace"] === "object"
+    ? relationships["workspace"] as Record<string, unknown>
+    : {};
+  const workspaceData = workspaceRelationship["data"] !== null && typeof workspaceRelationship["data"] === "object"
+    ? workspaceRelationship["data"] as Record<string, unknown>
+    : {};
+  return { workspaceId: typeof workspaceData["id"] === "string" ? workspaceData["id"] : "", workspaceData };
+}
+
+async function buildNewVariableInsert(
+  workspaceId: string,
+  normalizedAttributes: Record<string, unknown> & { value: string },
+): Promise<typeof workspaceVariables.$inferInsert> {
+  const categoryValue: unknown = normalizedAttributes["category"];
+  const descriptionValue: unknown = normalizedAttributes["description"];
+  const sensitiveValue = normalizedAttributes["sensitive"] === true;
+  // Sensitive values are encrypted at rest (todo 167/168).
+  const stored = await variableValueForWrite(sensitiveValue, normalizedAttributes.value);
+  return {
+    id: newResourceId("var"),
+    workspaceId,
+    key: normalizedAttributes["key"] as string,
+    value: stored.value,
+    valueEncrypted: stored.valueEncrypted,
+    category: categoryValue === "env" ? "env" : "terraform",
+    sensitive: sensitiveValue,
+    hcl: normalizedAttributes["hcl"] === true,
+    description: typeof descriptionValue === "string" ? descriptionValue : null,
+  };
+}
+
 export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
@@ -613,17 +646,8 @@ export const miscRoutes = new Elysia({ name: "misc" })
     };
   })
   .post("/api/v2/vars", async ({ body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
-    const workspaceRelationship = relationships["workspace"] !== null && typeof relationships["workspace"] === "object"
-      ? relationships["workspace"] as Record<string, unknown>
-      : {};
-    const workspaceData = workspaceRelationship["data"] !== null && typeof workspaceRelationship["data"] === "object"
-      ? workspaceRelationship["data"] as Record<string, unknown>
-      : {};
-    const workspaceId = typeof workspaceData["id"] === "string" ? workspaceData["id"] : "";
+    const { data, attributes } = parseVariableAttributes(body);
+    const { workspaceId, workspaceData } = parseVariableWorkspaceId(data);
     const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "variables-write");
     const normalizedAttributes: Record<string, unknown> & { value: string } = {
       ...attributes,
@@ -638,22 +662,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
       (set as { status: number }).status = workspace === undefined ? 404 : 422;
       return { errors: [{ status: String(workspace === undefined ? 404 : 422), title: workspace === undefined ? "Not Found" : "Unprocessable Entity" }] };
     }
-    const categoryValue: unknown = normalizedAttributes["category"];
-    const descriptionValue: unknown = normalizedAttributes["description"];
-    const sensitiveValue = normalizedAttributes["sensitive"] === true;
-    // Sensitive values are encrypted at rest (todo 167/168).
-    const stored = await variableValueForWrite(sensitiveValue, normalizedAttributes.value);
-    const variable: typeof workspaceVariables.$inferInsert = {
-      id: newResourceId("var"),
-      workspaceId,
-      key: normalizedAttributes["key"] as string,
-      value: stored.value,
-      valueEncrypted: stored.valueEncrypted,
-      category: categoryValue === "env" ? "env" : "terraform",
-      sensitive: sensitiveValue,
-      hcl: normalizedAttributes["hcl"] === true,
-      description: typeof descriptionValue === "string" ? descriptionValue : null,
-    };
+    const variable = await buildNewVariableInsert(workspaceId, normalizedAttributes);
     await db.insert(workspaceVariables).values(variable);
     (set as { status: number }).status = 201;
     return { data: globalVariableResource(variable as WorkspaceVariable) };
