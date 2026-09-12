@@ -218,20 +218,31 @@ function summarizeTokenExpiry(value: unknown): string {
   return Number.isNaN(parsed.getTime()) ? "expiry: unknown" : `expires: ${parsed.toISOString()}`;
 }
 
+function arrayCount(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function countLabel(count: number, singular: string, plural: string, emptyLabel: string): string {
+  if (count <= 0) return emptyLabel;
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function grantedPermissionKeys(permissions: unknown): string[] {
+  if (!isRecord(permissions)) return [];
+  return Object.entries(permissions)
+    .filter(([, granted]): boolean => isBoolean(granted) && granted)
+    .map(([key]): string => key)
+    .sort();
+}
+
 /** Render a scope payload using the same stored values sent to the API. */
 export function summarizeTokenScopes(value: unknown, expiresAt?: unknown): string {
   const expiryLabel = summarizeTokenExpiry(expiresAt);
   if (!isRecord(value)) return `Legacy token · full access to all organizations and resources · ${expiryLabel}`;
-  const orgs = value["orgs"];
-  const projects = value["projects"];
-  const workspaces = value["workspaces"];
-  const permissions = value["permissions"];
-  const orgLabel = Array.isArray(orgs) && orgs.length > 0 ? `${orgs.length} organization${orgs.length === 1 ? "" : "s"}` : "no organizations";
-  const projectLabel = Array.isArray(projects) && projects.length > 0 ? `${projects.length} selected project${projects.length === 1 ? "" : "s"}` : "all projects";
-  const workspaceLabel = Array.isArray(workspaces) && workspaces.length > 0 ? `${workspaces.length} selected workspace${workspaces.length === 1 ? "" : "s"}` : "all workspaces";
-  const grants = isRecord(permissions)
-    ? Object.entries(permissions).filter(([, granted]): boolean => isBoolean(granted) && granted).map(([key]): string => key).sort()
-    : [];
+  const orgLabel = countLabel(arrayCount(value["orgs"]), "organization", "organizations", "no organizations");
+  const projectLabel = countLabel(arrayCount(value["projects"]), "selected project", "selected projects", "all projects");
+  const workspaceLabel = countLabel(arrayCount(value["workspaces"]), "selected workspace", "selected workspaces", "all workspaces");
+  const grants = grantedPermissionKeys(value["permissions"]);
   const grantLabel = grants.length === 0 ? "none" : grants.join(", ");
   const tags = value["tags"];
   const tagLabel = isRecord(tags) && Array.isArray(tags["rules"]) && tags["rules"].length > 0 ? "tag filters included" : "no tag filters";
@@ -315,6 +326,118 @@ function resourceOptions(
     const rawName = attributes[nameKey];
     return { id: item.id, name: isString(rawName) ? rawName : item.id };
   });
+}
+
+type ScopeResource = Readonly<{ id: string; name: string }>;
+
+function ResourceScopePicker({
+  title,
+  icon,
+  items,
+  filteredItems,
+  selected,
+  search,
+  onSearchChange,
+  onToggle,
+  onSelectAll,
+  onClear,
+  selectAllAriaLabel,
+  clearAriaLabel,
+  filterPlaceholder,
+  emptyLabel,
+  noMatchLabel,
+  noneSelectedHint,
+  scopedHint,
+}: Readonly<{
+  title: string;
+  icon: React.JSX.Element;
+  items: readonly ScopeResource[];
+  filteredItems: readonly ScopeResource[];
+  selected: ReadonlySet<string>;
+  search: string;
+  onSearchChange: (value: string) => void;
+  onToggle: (id: string) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+  selectAllAriaLabel: string;
+  clearAriaLabel: string;
+  filterPlaceholder: string;
+  emptyLabel: string;
+  noMatchLabel: string;
+  noneSelectedHint: string;
+  scopedHint: string;
+}>): React.JSX.Element {
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-card p-3">
+      <div className="flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+          {icon}
+          {title}
+          <Badge variant="secondary" className="px-1.5 py-0 text-2xs">
+            {selected.size === 0 ? "All" : `${selected.size}/${items.length}`}
+          </Badge>
+        </span>
+        {items.length > 0 && (
+          <div className="flex items-center gap-1 text-2xs">
+            <button
+              type="button"
+              aria-label={selectAllAriaLabel}
+              onClick={onSelectAll}
+              className="text-primary hover:underline"
+            >
+              All
+            </button>
+            <span className="text-muted-foreground">·</span>
+            <button
+              type="button"
+              aria-label={clearAriaLabel}
+              onClick={onClear}
+              className="text-muted-foreground hover:underline"
+            >
+              Clear
+            </button>
+          </div>
+        )}
+      </div>
+
+      {items.length > 5 && (
+        <div className="relative">
+          <Search className="absolute left-2 top-2 size-3 text-muted-foreground" />
+          <Input
+            placeholder={filterPlaceholder}
+            value={search}
+            onChange={(e): void => { onSearchChange(e.target.value); }}
+            onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { onSearchChange(e.currentTarget.value); }}
+            className="h-7 pl-7 text-xs"
+          />
+        </div>
+      )}
+
+      {items.length === 0 ? (
+        <p className="py-3 text-center text-xs text-muted-foreground">{emptyLabel}</p>
+      ) : filteredItems.length === 0 ? (
+        <p className="py-3 text-center text-xs text-muted-foreground">{noMatchLabel}</p>
+      ) : (
+        <div className="max-h-36 space-y-1 overflow-y-auto rounded border border-border/50 bg-background/50 p-1.5">
+          {filteredItems.map((item): React.JSX.Element => (
+            <label
+              key={item.id}
+              className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted select-none"
+            >
+              <Checkbox
+                checked={selected.has(item.id)}
+                onCheckedChange={(): void => { onToggle(item.id); }}
+              />
+              <span className="truncate">{item.name}</span>
+            </label>
+          ))}
+        </div>
+      )}
+      <p className="text-2xs text-muted-foreground">
+        {selected.size === 0 ? noneSelectedHint : scopedHint}
+      </p>
+    </div>
+  );
 }
 
 export function TokenScopeDialog({
@@ -860,147 +983,45 @@ export function TokenScopeDialog({
 
               {/* Projects & Workspaces Grid */}
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                {/* Projects */}
-                <div className="space-y-2 rounded-md border border-border bg-card p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                      <Folder className="size-3.5 text-muted-foreground" />
-                      Projects
-                      <Badge variant="secondary" className="px-1.5 py-0 text-2xs">
-                        {selectedProjects.size === 0 ? "All" : `${selectedProjects.size}/${projects.length}`}
-                      </Badge>
-                    </span>
-                    {projects.length > 0 && (
-                      <div className="flex items-center gap-1 text-2xs">
-                        <button
-                          type="button"
-                          aria-label="Select all projects"
-                          onClick={(): void => { setSelectedProjects(new Set(projects.map((p): string => p.id))); }}
-                          className="text-primary hover:underline"
-                        >
-                          All
-                        </button>
-                        <span className="text-muted-foreground">·</span>
-                        <button
-                          type="button"
-                          aria-label="Clear selected projects"
-                          onClick={(): void => { setSelectedProjects(new Set()); }}
-                          className="text-muted-foreground hover:underline"
-                        >
-                          Clear
-                        </button>
-                      </div>
-                    )}
-                  </div>
+                <ResourceScopePicker
+                  title="Projects"
+                  icon={<Folder className="size-3.5 text-muted-foreground" />}
+                  items={projects}
+                  filteredItems={filteredProjects}
+                  selected={selectedProjects}
+                  search={projectSearch}
+                  onSearchChange={(value: string): void => { setProjectSearch(value); }}
+                  onToggle={toggleProject}
+                  onSelectAll={(): void => { setSelectedProjects(new Set(projects.map((p): string => p.id))); }}
+                  onClear={(): void => { setSelectedProjects(new Set()); }}
+                  selectAllAriaLabel="Select all projects"
+                  clearAriaLabel="Clear selected projects"
+                  filterPlaceholder="Filter projects…"
+                  emptyLabel="No projects in this organization."
+                  noMatchLabel="No matching projects."
+                  noneSelectedHint="No project selected: all projects in org are included."
+                  scopedHint="Scoped to selected projects."
+                />
 
-                  {projects.length > 5 && (
-                    <div className="relative">
-                      <Search className="absolute left-2 top-2 size-3 text-muted-foreground" />
-                      <Input
-                        placeholder="Filter projects…"
-                        value={projectSearch}
-                        onChange={(e): void => { setProjectSearch(e.target.value); }}
-                        onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setProjectSearch(e.currentTarget.value); }}
-                        className="h-7 pl-7 text-xs"
-                      />
-                    </div>
-                  )}
-
-                  {projects.length === 0 ? (
-                    <p className="py-3 text-center text-xs text-muted-foreground">No projects in this organization.</p>
-                  ) : filteredProjects.length === 0 ? (
-                    <p className="py-3 text-center text-xs text-muted-foreground">No matching projects.</p>
-                  ) : (
-                    <div className="max-h-36 space-y-1 overflow-y-auto rounded border border-border/50 bg-background/50 p-1.5">
-                      {filteredProjects.map((project): React.JSX.Element => (
-                        <label
-                          key={project.id}
-                          className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted select-none"
-                        >
-                          <Checkbox
-                            checked={selectedProjects.has(project.id)}
-                            onCheckedChange={(): void => { toggleProject(project.id); }}
-                          />
-                          <span className="truncate">{project.name}</span>
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                  <p className="text-2xs text-muted-foreground">
-                    {selectedProjects.size === 0 ? "No project selected: all projects in org are included." : "Scoped to selected projects."}
-                  </p>
-                </div>
-
-                {/* Workspaces */}
-                <div className="space-y-2 rounded-md border border-border bg-card p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                      <Boxes className="size-3.5 text-muted-foreground" />
-                      Workspaces
-                      <Badge variant="secondary" className="px-1.5 py-0 text-2xs">
-                        {selectedWorkspaces.size === 0 ? "All" : `${selectedWorkspaces.size}/${workspaces.length}`}
-                      </Badge>
-                    </span>
-                    {workspaces.length > 0 && (
-                      <div className="flex items-center gap-1 text-2xs">
-                        <button
-                          type="button"
-                          aria-label="Select all workspaces"
-                          onClick={(): void => { setSelectedWorkspaces(new Set(workspaces.map((w): string => w.id))); }}
-                          className="text-primary hover:underline"
-                        >
-                          All
-                        </button>
-                        <span className="text-muted-foreground">·</span>
-                        <button
-                          type="button"
-                          aria-label="Clear selected workspaces"
-                          onClick={(): void => { setSelectedWorkspaces(new Set()); }}
-                          className="text-muted-foreground hover:underline"
-                        >
-                          Clear
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {workspaces.length > 5 && (
-                    <div className="relative">
-                      <Search className="absolute left-2 top-2 size-3 text-muted-foreground" />
-                      <Input
-                        placeholder="Filter workspaces…"
-                        value={workspaceSearch}
-                        onChange={(e): void => { setWorkspaceSearch(e.target.value); }}
-                        onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setWorkspaceSearch(e.currentTarget.value); }}
-                        className="h-7 pl-7 text-xs"
-                      />
-                    </div>
-                  )}
-
-                  {workspaces.length === 0 ? (
-                    <p className="py-3 text-center text-xs text-muted-foreground">No workspaces in this organization.</p>
-                  ) : filteredWorkspaces.length === 0 ? (
-                    <p className="py-3 text-center text-xs text-muted-foreground">No matching workspaces.</p>
-                  ) : (
-                    <div className="max-h-36 space-y-1 overflow-y-auto rounded border border-border/50 bg-background/50 p-1.5">
-                      {filteredWorkspaces.map((workspace): React.JSX.Element => (
-                        <label
-                          key={workspace.id}
-                          className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted select-none"
-                        >
-                          <Checkbox
-                            checked={selectedWorkspaces.has(workspace.id)}
-                            onCheckedChange={(): void => { toggleWorkspace(workspace.id); }}
-                          />
-                          <span className="truncate">{workspace.name}</span>
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                  <p className="text-2xs text-muted-foreground">
-                    {selectedWorkspaces.size === 0 ? "No workspace selected: all workspaces in projects are included." : "Scoped to selected workspaces."}
-                  </p>
-                </div>
+                <ResourceScopePicker
+                  title="Workspaces"
+                  icon={<Boxes className="size-3.5 text-muted-foreground" />}
+                  items={workspaces}
+                  filteredItems={filteredWorkspaces}
+                  selected={selectedWorkspaces}
+                  search={workspaceSearch}
+                  onSearchChange={(value: string): void => { setWorkspaceSearch(value); }}
+                  onToggle={toggleWorkspace}
+                  onSelectAll={(): void => { setSelectedWorkspaces(new Set(workspaces.map((w): string => w.id))); }}
+                  onClear={(): void => { setSelectedWorkspaces(new Set()); }}
+                  selectAllAriaLabel="Select all workspaces"
+                  clearAriaLabel="Clear selected workspaces"
+                  filterPlaceholder="Filter workspaces…"
+                  emptyLabel="No workspaces in this organization."
+                  noMatchLabel="No matching workspaces."
+                  noneSelectedHint="No workspace selected: all workspaces in projects are included."
+                  scopedHint="Scoped to selected workspaces."
+                />
               </div>
 
               {/* Tag Rule Policy Builder */}

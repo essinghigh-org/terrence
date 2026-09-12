@@ -87,6 +87,74 @@ function relId(relationship: unknown): { id: string; type: string } | null {
   return typeof d.id === "string" ? { id: d.id, type: typeof d.type === "string" ? d.type : "" } : null;
 }
 
+type HyokCreate = {
+  name: string;
+  kekId: string;
+  kms: Record<string, string> | null;
+  agentPoolRef: { id: string; type: string } | null;
+  oidcRef: { id: string; type: string };
+};
+
+function parseKmsOptions(attributes: Record<string, unknown> | undefined): Record<string, string> | null {
+  return attributes?.["kms-options"] !== null && typeof attributes?.["kms-options"] === "object"
+    ? attributes["kms-options"] as Record<string, string>
+    : null;
+}
+
+function parseHyokCreate(body: unknown, set: ParamCtx["set"]): HyokCreate | { error: unknown } {
+  const { attributes, relationships } = bodyData(body);
+  const name = typeof attributes?.["name"] === "string" ? attributes["name"] : "";
+  const kekId = typeof attributes?.["kek-id"] === "string" ? attributes["kek-id"] : "";
+  const agentPoolRef = relId(relationships?.["agent-pool"] ?? null);
+  const oidcRef = relId(relationships?.["oidc-configuration"] ?? null);
+  if (name === "" || kekId === "" || oidcRef === null || oidcRef.id === "") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "HYOK configuration requires name, kek-id and an oidc-configuration relationship" }] } };
+  }
+  return { name, kekId, kms: parseKmsOptions(attributes), agentPoolRef, oidcRef };
+}
+
+async function insertHyokConfig(
+  orgId: string,
+  orgName: string,
+  create: HyokCreate,
+): Promise<Record<string, unknown>> {
+  const id = newResourceId("hyok");
+  const now = Date.now();
+  const row: HyokRow = {
+    id, orgId, name: create.name, kekId: create.kekId, kmsOptions: create.kms,
+    agentPoolId: create.agentPoolRef?.id ?? null,
+    oidcConfigId: create.oidcRef.id, oidcConfigType: create.oidcRef.type,
+    isPrimary: false, status: "ok", error: null,
+    createdAt: now, updatedAt: now,
+  };
+  await db.insert(hyokConfigurations).values(row);
+  // the reference format auto-generates a customer key version (and encrypted data key) when a
+  // HYOK configuration is created — the KMS key pair. Mirror that so the
+  // hyok key-version data sources have something to read.
+  const keyVersionId = newResourceId("hyokcv");
+  await db.insert(hyokCustomerKeyVersions).values({
+    id: keyVersionId,
+    hyokConfigId: id,
+    keyVersion: "1",
+    encryptedDek: "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    customerKeyName: create.kekId,
+    status: "active",
+    workspacesSecured: 0,
+    error: null,
+    createdAt: now,
+  });
+  return hyokResource(row, orgName);
+}
+
+function buildHyokUpdates(attributes: Record<string, unknown> | undefined): Partial<typeof hyokConfigurations.$inferInsert> {
+  const updates: Partial<typeof hyokConfigurations.$inferInsert> = {};
+  if (typeof attributes?.["name"] === "string") updates.name = attributes["name"];
+  if (typeof attributes?.["kek-id"] === "string") updates.kekId = attributes["kek-id"];
+  if (attributes?.["kms-options"] !== undefined) updates.kmsOptions = attributes["kms-options"] !== null && typeof attributes["kms-options"] === "object" ? attributes["kms-options"] as Record<string, string> : null;
+  return updates;
+}
+
 export const hyokRoutes = new Elysia({ name: "hyok" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/hyok-configurations", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -114,43 +182,10 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
-    const { attributes, relationships } = bodyData(body);
-    const name = typeof attributes?.["name"] === "string" ? attributes["name"] : "";
-    const kekId = typeof attributes?.["kek-id"] === "string" ? attributes["kek-id"] : "";
-    const agentPoolRef = relId(relationships?.["agent-pool"] ?? null);
-    const oidcRef = relId(relationships?.["oidc-configuration"] ?? null);
-    if (name === "" || kekId === "" || oidcRef === null || oidcRef.id === "") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "HYOK configuration requires name, kek-id and an oidc-configuration relationship" }] };
-    }
-    const kms = attributes?.["kms-options"] !== null && typeof attributes?.["kms-options"] === "object"
-      ? attributes["kms-options"] as Record<string, string>
-      : null;
-    const id = newResourceId("hyok");
-    const now = Date.now();
-    const row: HyokRow = {
-      id, orgId: org.id, name, kekId, kmsOptions: kms, agentPoolId: agentPoolRef?.id ?? null,
-      oidcConfigId: oidcRef.id, oidcConfigType: oidcRef.type, isPrimary: false, status: "ok", error: null,
-      createdAt: now, updatedAt: now,
-    };
-    await db.insert(hyokConfigurations).values(row);
-    // the reference format auto-generates a customer key version (and encrypted data key) when a
-    // HYOK configuration is created — the KMS key pair. Mirror that so the
-    // hyok key-version data sources have something to read.
-    const keyVersionId = newResourceId("hyokcv");
-    await db.insert(hyokCustomerKeyVersions).values({
-      id: keyVersionId,
-      hyokConfigId: id,
-      keyVersion: "1",
-      encryptedDek: "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-      customerKeyName: kekId,
-      status: "active",
-      workspacesSecured: 0,
-      error: null,
-      createdAt: now,
-    });
+    const parsed = parseHyokCreate(body, set);
+    if ("error" in parsed) return parsed.error;
     (set as { status: number }).status = 201;
-    return { data: await hyokResource(row, org.name) };
+    return { data: await insertHyokConfig(org.id, org.name, parsed) };
   })
   .get("/api/v2/hyok-configurations/:id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const id = params["id"] ?? "";
@@ -167,10 +202,7 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, row.orgId) });
     if (org === undefined || !(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
     const { attributes } = bodyData(body);
-    const updates: Partial<typeof hyokConfigurations.$inferInsert> = {};
-    if (typeof attributes?.["name"] === "string") updates.name = attributes["name"];
-    if (typeof attributes?.["kek-id"] === "string") updates.kekId = attributes["kek-id"];
-    if (attributes?.["kms-options"] !== undefined) updates.kmsOptions = attributes["kms-options"] !== null && typeof attributes["kms-options"] === "object" ? attributes["kms-options"] as Record<string, string> : null;
+    const updates = buildHyokUpdates(attributes);
     if (Object.keys(updates).length > 0) await db.update(hyokConfigurations).set({ ...updates, updatedAt: Date.now() }).where(eq(hyokConfigurations.id, id));
     const updated = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
     if (updated === undefined) return notFound(set);

@@ -62,6 +62,34 @@ type ScopeRelationship =
   | Readonly<{ value: Readonly<{ provided: boolean; ids: readonly string[] }> }>
   | Readonly<{ error: string }>;
 
+type AgentPoolScopeSelection = Readonly<{ provided: boolean; ids: readonly string[] }>;
+
+function parseAgentPoolScopes(
+  body: unknown,
+  set: SetObj,
+): { allowedWorkspaces: AgentPoolScopeSelection; allowedProjects: AgentPoolScopeSelection; excludedWorkspaces: AgentPoolScopeSelection } | { error: unknown } {
+  const allowedWorkspacesResult = parseScopeRelationship(body, "allowed-workspaces", "workspaces");
+  if ("error" in allowedWorkspacesResult) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: allowedWorkspacesResult.error }] } };
+  }
+  const allowedProjectsResult = parseScopeRelationship(body, "allowed-projects", "projects");
+  if ("error" in allowedProjectsResult) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: allowedProjectsResult.error }] } };
+  }
+  const excludedWorkspacesResult = parseScopeRelationship(body, "excluded-workspaces", "workspaces");
+  if ("error" in excludedWorkspacesResult) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: excludedWorkspacesResult.error }] } };
+  }
+  return {
+    allowedWorkspaces: allowedWorkspacesResult.value,
+    allowedProjects: allowedProjectsResult.value,
+    excludedWorkspaces: excludedWorkspacesResult.value,
+  };
+}
+
 function requestedFencingToken(request: Readonly<{ headers: Readonly<{ get(name: string): string | null }> }>): number | undefined {
   return parseAgentFencingToken(request.headers.get("tfc-agent-fencing-token"));
 }
@@ -308,10 +336,182 @@ function planJsonFrom(value: unknown): PlanJson | null | undefined {
   return value as PlanJson;
 }
 
-function completionFromBody(body: unknown): AgentJobCompletion | undefined {
-  const attrs = getAttrs(body);
+function providedOrExistingIds(selection: AgentPoolScopeSelection, existing: readonly string[]): readonly string[] {
+  return selection.provided ? selection.ids : existing;
+}
+
+function agentPoolScopeContainmentError(
+  organizationScoped: boolean,
+  allowedWorkspaceIds: readonly string[],
+  allowedProjectIds: readonly string[],
+  assignedWorkspaces: readonly Readonly<{ id: string; projectId: string | null }>[],
+  defaultProjects: readonly Readonly<{ id: string }>[],
+  set: SetObj,
+): unknown | null {
+  if (organizationScoped) return null;
+  const workspaceIds = new Set(allowedWorkspaceIds);
+  const projectIds = new Set(allowedProjectIds);
+  const hasDisallowedWorkspace = assignedWorkspaces.some((workspace): boolean =>
+    !workspaceIds.has(workspace.id)
+    && (workspace.projectId === null || !projectIds.has(workspace.projectId)));
+  const hasDisallowedProjectDefault = defaultProjects.some((project): boolean => !projectIds.has(project.id));
+  if (hasDisallowedWorkspace || hasDisallowedProjectDefault) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent pool scope must include its assigned workspaces and project defaults" }] };
+  }
+  return null;
+}
+
+function buildAgentPoolUpdates(attrs: Record<string, unknown>): Partial<typeof agentPools.$inferInsert> {
+  const updates: Partial<typeof agentPools.$inferInsert> = {};
+  if (typeof attrs["name"] === "string") updates.name = attrs["name"];
+  if (typeof attrs["organization-scoped"] === "boolean") updates.organizationScoped = attrs["organization-scoped"];
+  return updates;
+}
+
+// tfc-agent never sends iac-binaries; a tofu-capable agent (terrence-agent)
+// declares it so the claim path only hands it matching jobs. Absent means
+// terraform-only, preserving the pre-capability contract.
+function parseAgentIacBinaries(
+  attrs: Record<string, unknown>,
+  set: SetObj,
+): { iacBinaries: string[] } | { error: unknown } {
+  const rawIacBinaries = attrs["iac-binaries"];
+  if (rawIacBinaries === undefined) return { iacBinaries: ["terraform"] };
+  if (
+    !Array.isArray(rawIacBinaries)
+    || rawIacBinaries.length === 0
+    || rawIacBinaries.some((binary: unknown): boolean =>
+      typeof binary !== "string" || (binary !== "tofu" && binary !== "terraform"))
+  ) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binaries must be a non-empty array of 'tofu' or 'terraform'" }] } };
+  }
+  return { iacBinaries: [...new Set(rawIacBinaries as string[])] };
+}
+
+function parseStackJobCompletion(
+  attrs: Record<string, unknown>,
+  set: SetObj,
+): { status: "completed" | "errored"; errorMessage: string | null; result: Record<string, unknown> } | { error: unknown } {
   const status = attrs["status"];
-  if (status !== "completed" && status !== "errored") return undefined;
+  if (status !== "completed" && status !== "errored") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be completed or errored" }] } };
+  }
+  const rawResult = attrs["result"];
+  if (rawResult !== null && typeof rawResult === "object" && !Array.isArray(rawResult) && !isAgentResultValid(rawResult)) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: `result exceeds ${MAX_AGENT_RESULT_BYTES} bytes or structural limits` }] } };
+  }
+  const result = rawResult !== null && typeof rawResult === "object" && !Array.isArray(rawResult) ? rawResult as Record<string, unknown> : {
+    hasChanges: attrs["has-changes"] === true,
+    deferredChanges: attrs["deferred-changes"] === true,
+  };
+  const errorMessage = attrs["error-message"] === null || attrs["error-message"] === undefined ? null : typeof attrs["error-message"] === "string" ? attrs["error-message"] : undefined;
+  if (errorMessage === undefined) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "error-message must be a string or null" }] } };
+  }
+  return { status, errorMessage, result };
+}
+
+function stackJobArchivePath(claimed: ClaimedStackAgentJob | undefined): string | null {
+  if (claimed === undefined) return null;
+  const runArchivePath = typeof (claimed.deploymentRun.payload ?? {})["archivePath"] === "string" ? (claimed.deploymentRun.payload ?? {})["archivePath"] as string : null;
+  const configurationArchivePath = typeof (claimed.configuration.payload ?? {})["archivePath"] === "string" ? (claimed.configuration.payload ?? {})["archivePath"] as string : null;
+  return runArchivePath ?? configurationArchivePath;
+}
+
+async function configurationArchiveResponse(
+  archivePath: string,
+  set: SetObj,
+): Promise<unknown> {
+  if (!isStackStoragePath(archivePath) || !(await Bun.file(archivePath).exists())) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
+  try {
+    await assertSafeTarArchive(archivePath);
+  } catch {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration archive failed safety validation" }] };
+  }
+  (set.headers as Record<string, string>) ["Content-Type"] = "application/gzip";
+  return Bun.file(archivePath);
+}
+
+async function isConfigurationArchiveAvailable(
+  configuration: Readonly<{ archivePath: string | null; status: string }>,
+): Promise<boolean> {
+  if (configuration.archivePath === null) return false;
+  if (["backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(configuration.status)) return false;
+  return Bun.file(configuration.archivePath).exists();
+}
+
+async function refetchConfigurationArchive(
+  configuration: typeof configurationVersions.$inferSelect,
+): Promise<typeof configurationVersions.$inferSelect | undefined> {
+  if (await isConfigurationArchiveAvailable(configuration)) return configuration;
+  if (!(await refetchConfigurationVersion(configuration.id))) return undefined;
+  return db.query.configurationVersions.findFirst({
+    where: eq(configurationVersions.id, configuration.id),
+  });
+}
+
+async function serveValidatedTarArchive(
+  archivePath: string,
+  set: SetObj,
+): Promise<unknown> {
+  try {
+    await assertSafeTarArchive(archivePath);
+  } catch {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration archive failed safety validation" }] };
+  }
+  (set.headers as Record<string, string>)["Content-Type"] = "application/gzip";
+  return Bun.file(archivePath);
+}
+
+async function resolveAgentPoolTokenExpiry(
+  attrs: Record<string, unknown>,
+  orgId: string,
+  set: SetObj,
+): Promise<{ expiresAt: number | null } | { error: unknown }> {
+  const expiredAtValue = attrs["expired-at"] ?? attrs["expires-at"] ?? attrs["expiredAt"] ?? attrs["expiresAt"];
+  const parsedExpiry = tokenExpiry(expiredAtValue);
+  const requestedExpiry = parsedExpiry ?? Date.now() + AGENT_POOL_TOKEN_DEFAULT_TTL_MS;
+  const policyResolution = await resolveTokenExpiryUnderPolicy(orgId, "agent", requestedExpiry);
+  if (policyResolution.kind === "invalid") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] } };
+  }
+  if (policyResolution.kind === "forbidden") {
+    (set as { status: number }).status = 403;
+    return { error: { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] } };
+  }
+  return { expiresAt: policyResolution.expiresAt ?? Date.now() + AGENT_POOL_TOKEN_DEFAULT_TTL_MS };
+}
+
+async function auditAgentPoolTokenCreation(
+  tokenId: string,
+  userId: string | null | undefined,
+  orgId: string,
+  poolId: string,
+  description: string,
+): Promise<void> {
+  if (strictAuditEnabled()) {
+    await auditLog("create", "agent-pool-token", tokenId, userId ?? null, orgId, {
+      agentPoolId: poolId,
+      description,
+    });
+  }
+}
+
+function completionResourceCounts(
+  attrs: Record<string, unknown>,
+  status: string,
+): { resourceAdditions: number | null; resourceChanges: number | null; resourceDestructions: number | null; resourceImports: number | null; planJson: PlanJson | null } | undefined {
   const resourceAdditions = nonNegativeInteger(attrs["resource-additions"]);
   const resourceChanges = nonNegativeInteger(attrs["resource-changes"]);
   const resourceDestructions = nonNegativeInteger(attrs["resource-destructions"]);
@@ -325,55 +525,66 @@ function completionFromBody(body: unknown): AgentJobCompletion | undefined {
     || planJson === undefined
     || (planJson !== null && status !== "completed")
   ) return undefined;
-  const errorMessage = attrs["error-message"] === undefined || attrs["error-message"] === null
-    ? null
-    : typeof attrs["error-message"] === "string" && attrs["error-message"].length <= 16_384
-      ? attrs["error-message"]
-      : undefined;
-  const statePayload = attrs["state"] === undefined || attrs["state"] === null
-    ? null
-    : typeof attrs["state"] === "string"
-      ? attrs["state"]
-      : undefined;
-  const jsonState = attrs["json-state"] === undefined || attrs["json-state"] === null
-    ? null
-    : typeof attrs["json-state"] === "string"
-      ? attrs["json-state"]
-      : undefined;
-  const jsonStateOutputs = attrs["json-state-outputs"] === undefined || attrs["json-state-outputs"] === null
-    ? null
-    : typeof attrs["json-state-outputs"] === "string"
-      ? attrs["json-state-outputs"]
-      : undefined;
+  return { resourceAdditions, resourceChanges, resourceDestructions, resourceImports, planJson };
+}
+
+function nullableStringField(value: unknown, maxLength?: number): string | null | undefined {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") return undefined;
+  if (maxLength !== undefined && value.length > maxLength) return undefined;
+  return value;
+}
+
+function allJsonParseable(values: readonly (string | null)[]): boolean {
+  for (const json of values) {
+    if (json === null) continue;
+    try {
+      JSON.parse(json);
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function completionResult(attrs: Record<string, unknown>): Record<string, unknown> | undefined {
+  const rawResult = attrs["result"];
+  if (rawResult !== undefined && rawResult !== null && typeof rawResult === "object") {
+    if (!isAgentResultValid(rawResult)) return undefined;
+  }
+  if (typeof attrs["result"] === "object" && attrs["result"] !== null && !Array.isArray(attrs["result"])) {
+    return attrs["result"] as Record<string, unknown>;
+  }
+  return {};
+}
+
+function completionFromBody(body: unknown): AgentJobCompletion | undefined {
+  const attrs = getAttrs(body);
+  const status = attrs["status"];
+  if (status !== "completed" && status !== "errored") return undefined;
+  const counts = completionResourceCounts(attrs, status);
+  if (counts === undefined) return undefined;
+  const errorMessage = nullableStringField(attrs["error-message"], 16_384);
+  const statePayload = nullableStringField(attrs["state"]);
+  const jsonState = nullableStringField(attrs["json-state"]);
+  const jsonStateOutputs = nullableStringField(attrs["json-state-outputs"]);
   if (
     errorMessage === undefined
     || statePayload === undefined
     || jsonState === undefined
     || jsonStateOutputs === undefined
   ) return undefined;
-  for (const json of [statePayload, jsonState, jsonStateOutputs]) {
-    if (json === null) continue;
-    try {
-      JSON.parse(json);
-    } catch {
-      return undefined;
-    }
-  }
-  const rawResult = attrs["result"];
-  if (rawResult !== undefined && rawResult !== null && typeof rawResult === "object") {
-    if (!isAgentResultValid(rawResult)) return undefined;
-  }
-  const result = typeof attrs["result"] === "object" && attrs["result"] !== null && !Array.isArray(attrs["result"])
-    ? attrs["result"] as Record<string, unknown>
-    : {};
+  if (!allJsonParseable([statePayload, jsonState, jsonStateOutputs])) return undefined;
+  const result = completionResult(attrs);
+  if (result === undefined) return undefined;
   return {
     status,
     errorMessage,
-    resourceAdditions,
-    resourceChanges,
-    resourceDestructions,
-    resourceImports,
-    planJson,
+    resourceAdditions: counts.resourceAdditions,
+    resourceChanges: counts.resourceChanges,
+    resourceDestructions: counts.resourceDestructions,
+    resourceImports: counts.resourceImports,
+    planJson: counts.planJson,
     statePayload,
     jsonState,
     jsonStateOutputs,
@@ -559,24 +770,9 @@ export const agentRoutes = new Elysia({ name: "agents" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "organization-scoped must be a boolean" }] };
     }
-    const allowedWorkspacesResult = parseScopeRelationship(body, "allowed-workspaces", "workspaces");
-    if ("error" in allowedWorkspacesResult) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: allowedWorkspacesResult.error }] };
-    }
-    const allowedWorkspaces = allowedWorkspacesResult.value;
-    const allowedProjectsResult = parseScopeRelationship(body, "allowed-projects", "projects");
-    if ("error" in allowedProjectsResult) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: allowedProjectsResult.error }] };
-    }
-    const allowedProjects = allowedProjectsResult.value;
-    const excludedWorkspacesResult = parseScopeRelationship(body, "excluded-workspaces", "workspaces");
-    if ("error" in excludedWorkspacesResult) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: excludedWorkspacesResult.error }] };
-    }
-    const excludedWorkspaces = excludedWorkspacesResult.value;
+    const scopes = parseAgentPoolScopes(body, set);
+    if ("error" in scopes) return scopes.error;
+    const { allowedWorkspaces, allowedProjects, excludedWorkspaces } = scopes;
     const [existingAllowedWorkspaces, existingAllowedProjects, assignedWorkspaces, defaultProjects] = await Promise.all([
       db.query.agentPoolAllowedWorkspaces.findMany({
         where: eq(agentPoolAllowedWorkspaces.agentPoolId, poolId),
@@ -587,12 +783,14 @@ export const agentRoutes = new Elysia({ name: "agents" })
       db.query.workspaces.findMany({ where: eq(workspaces.agentPoolId, poolId) }),
       db.query.projects.findMany({ where: eq(projects.defaultAgentPoolId, poolId) }),
     ]);
-    const allowedWorkspaceIds = allowedWorkspaces.provided
-      ? allowedWorkspaces.ids
-      : existingAllowedWorkspaces.map((relationship): string => relationship.workspaceId);
-    const allowedProjectIds = allowedProjects.provided
-      ? allowedProjects.ids
-      : existingAllowedProjects.map((relationship): string => relationship.projectId);
+    const allowedWorkspaceIds = providedOrExistingIds(
+      allowedWorkspaces,
+      existingAllowedWorkspaces.map((relationship): string => relationship.workspaceId),
+    );
+    const allowedProjectIds = providedOrExistingIds(
+      allowedProjects,
+      existingAllowedProjects.map((relationship): string => relationship.projectId),
+    );
     const scopeError = await validateScopeTargets(pool.orgId, allowedWorkspaceIds, allowedProjectIds);
     if (scopeError !== undefined) {
       (set as { status: number }).status = 422;
@@ -601,21 +799,9 @@ export const agentRoutes = new Elysia({ name: "agents" })
     const organizationScoped = typeof attrs["organization-scoped"] === "boolean"
       ? attrs["organization-scoped"]
       : pool.organizationScoped !== false;
-    if (!organizationScoped) {
-      const workspaceIds = new Set(allowedWorkspaceIds);
-      const projectIds = new Set(allowedProjectIds);
-      const hasDisallowedWorkspace = assignedWorkspaces.some((workspace): boolean =>
-        !workspaceIds.has(workspace.id)
-        && (workspace.projectId === null || !projectIds.has(workspace.projectId)));
-      const hasDisallowedProjectDefault = defaultProjects.some((project): boolean => !projectIds.has(project.id));
-      if (hasDisallowedWorkspace || hasDisallowedProjectDefault) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent pool scope must include its assigned workspaces and project defaults" }] };
-      }
-    }
-    const updates: Partial<typeof agentPools.$inferInsert> = {};
-    if (typeof attrs["name"] === "string") updates.name = attrs["name"];
-    if (typeof attrs["organization-scoped"] === "boolean") updates.organizationScoped = attrs["organization-scoped"];
+    const containmentError = agentPoolScopeContainmentError(organizationScoped, allowedWorkspaceIds, allowedProjectIds, assignedWorkspaces, defaultProjects, set);
+    if (containmentError !== null) return containmentError;
+    const updates = buildAgentPoolUpdates(attrs);
     await db.transaction(async (tx): Promise<void> => {
       if (Object.keys(updates).length > 0) await tx.update(agentPools).set(updates).where(eq(agentPools.id, poolId));
       if (allowedWorkspaces.provided) {
@@ -794,23 +980,9 @@ export const agentRoutes = new Elysia({ name: "agents" })
     const ipAddress = typeof attrs["ip-address"] === "string" ? attrs["ip-address"] : null;
     const version = typeof attrs["version"] === "string" ? attrs["version"] : null;
     const architecture = typeof attrs["architecture"] === "string" ? attrs["architecture"] : null;
-    // tfc-agent never sends iac-binaries; a tofu-capable agent (terrence-agent)
-    // declares it so the claim path only hands it matching jobs. Absent means
-    // terraform-only, preserving the pre-capability contract.
-    const rawIacBinaries = attrs["iac-binaries"];
-    let iacBinaries: string[] = ["terraform"];
-    if (rawIacBinaries !== undefined) {
-      if (
-        !Array.isArray(rawIacBinaries)
-        || rawIacBinaries.length === 0
-        || rawIacBinaries.some((binary: unknown): boolean =>
-          typeof binary !== "string" || (binary !== "tofu" && binary !== "terraform"))
-      ) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binaries must be a non-empty array of 'tofu' or 'terraform'" }] };
-      }
-      iacBinaries = [...new Set(rawIacBinaries as string[])];
-    }
+    const parsedBinaries = parseAgentIacBinaries(attrs, set);
+    if ("error" in parsedBinaries) return parsedBinaries.error;
+    const iacBinaries = parsedBinaries.iacBinaries;
     await db.insert(agents).values({ id: agentId, agentPoolId: pool.id, name, status, ipAddress, version, protocolVersion: AGENT_PROTOCOL_VERSION, capabilities: [...AGENT_PROTOCOL_CAPABILITIES], artifactFormats: ["tar.gz", "json", "text"], architecture, iacBinaries, lastPingAt: now, createdAt: now });
     (set as { status: number }).status = 201;
     return { data: { id: agentId, type: "agents", attributes: { name, status, "ip-address": ipAddress, version, "protocol-version": AGENT_PROTOCOL_VERSION, capabilities: [...AGENT_PROTOCOL_CAPABILITIES], "artifact-formats": ["tar.gz", "json", "text"], architecture, "iac-binaries": iacBinaries, "last-ping-at": new Date(now).toISOString() }, relationships: { "agent-pool": { data: { id: pool.id, type: "agent-pools" } } } } };
@@ -985,26 +1157,9 @@ export const agentRoutes = new Elysia({ name: "agents" })
     }
     const fencingToken = requestedFencingToken(request);
     const attrs = getAttrs(body);
-    const status = attrs["status"];
-    if (status !== "completed" && status !== "errored") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be completed or errored" }] };
-    }
-    const rawResult = attrs["result"];
-    if (rawResult !== null && typeof rawResult === "object" && !Array.isArray(rawResult) && !isAgentResultValid(rawResult)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `result exceeds ${MAX_AGENT_RESULT_BYTES} bytes or structural limits` }] };
-    }
-    const result = rawResult !== null && typeof rawResult === "object" && !Array.isArray(rawResult) ? rawResult as Record<string, unknown> : {
-      hasChanges: attrs["has-changes"] === true,
-      deferredChanges: attrs["deferred-changes"] === true,
-    };
-    const errorMessage = attrs["error-message"] === null || attrs["error-message"] === undefined ? null : typeof attrs["error-message"] === "string" ? attrs["error-message"] : undefined;
-    if (errorMessage === undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "error-message must be a string or null" }] };
-    }
-    const completed = await completeStackAgentJob(agent.id, jobId, { status, errorMessage, result }, fencingToken);
+    const parsed = parseStackJobCompletion(attrs, set);
+    if ("error" in parsed) return parsed.error;
+    const completed = await completeStackAgentJob(agent.id, jobId, { status: parsed.status, errorMessage: parsed.errorMessage, result: parsed.result }, fencingToken);
     if (completed === undefined) {
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Stack agent job is not claimed by this agent" }] };
@@ -1035,21 +1190,12 @@ export const agentRoutes = new Elysia({ name: "agents" })
     }
     const fencingToken = requestedFencingToken(request);
     const claimed = await findClaimedStackAgentJob(agent.id, jobId, fencingToken);
-    const runArchivePath = typeof (claimed?.deploymentRun.payload ?? {})["archivePath"] === "string" ? (claimed?.deploymentRun.payload ?? {})["archivePath"] as string : null;
-    const configurationArchivePath = typeof (claimed?.configuration.payload ?? {})["archivePath"] === "string" ? (claimed?.configuration.payload ?? {})["archivePath"] as string : null;
-    const archivePath = runArchivePath ?? configurationArchivePath;
-    if (claimed === undefined || archivePath === null || !isStackStoragePath(archivePath) || !(await Bun.file(archivePath).exists())) {
+    const archivePath = stackJobArchivePath(claimed);
+    if (claimed === undefined || archivePath === null) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    try {
-      await assertSafeTarArchive(archivePath);
-    } catch {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration archive failed safety validation" }] };
-    }
-    (set.headers as Record<string, string>) ["Content-Type"] = "application/gzip";
-    return Bun.file(archivePath);
+    return configurationArchiveResponse(archivePath, set);
   })
   .get("/api/v2/agents/:agent_id/jobs/:job_id/configuration", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const agentId = params["agent_id"] ?? "";
@@ -1067,41 +1213,21 @@ export const agentRoutes = new Elysia({ name: "agents" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     let configuration = job.configuration;
-    if (
-      configuration.archivePath === null
-      || ["backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(configuration.status)
-      || !(await Bun.file(configuration.archivePath).exists())
-    ) {
-      if (!(await refetchConfigurationVersion(configuration.id))) {
-        (set as { status: number }).status = 404;
-        return { errors: [{ status: "404", title: "Not Found" }] };
-      }
-      const refreshed = await db.query.configurationVersions.findFirst({
-        where: eq(configurationVersions.id, configuration.id),
-      });
-      if (refreshed === undefined) {
-        (set as { status: number }).status = 404;
-        return { errors: [{ status: "404", title: "Not Found" }] };
-      }
-      configuration = refreshed;
+    const refreshed = await refetchConfigurationArchive(configuration);
+    if (refreshed === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    configuration = refreshed;
     const archivePath = configuration.archivePath;
     if (
       archivePath === null
-      || ["backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(configuration.status)
-      || !(await Bun.file(archivePath).exists())
+      || !(await isConfigurationArchiveAvailable(configuration))
     ) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    try {
-      await assertSafeTarArchive(archivePath);
-    } catch {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration archive failed safety validation" }] };
-    }
-    (set.headers as Record<string, string>)["Content-Type"] = "application/gzip";
-    return Bun.file(archivePath);
+    return serveValidatedTarArchive(archivePath, set);
   })
   .get("/api/v2/agents/:agent_id/jobs/:job_id/state", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const agentId = params["agent_id"] ?? "";
@@ -1135,28 +1261,13 @@ export const agentRoutes = new Elysia({ name: "agents" })
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "manage-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attrs = getAttrs(body);
     const description = typeof attrs["description"] === "string" ? attrs["description"] : `Agent token for ${pool.name}`;
-    const expiredAtValue = attrs["expired-at"] ?? attrs["expires-at"] ?? attrs["expiredAt"] ?? attrs["expiresAt"];
-    const parsedExpiry = tokenExpiry(expiredAtValue);
-    const requestedExpiry = parsedExpiry ?? Date.now() + AGENT_POOL_TOKEN_DEFAULT_TTL_MS;
-    const policyResolution = await resolveTokenExpiryUnderPolicy(pool.orgId, "agent", requestedExpiry);
-    if (policyResolution.kind === "invalid") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
-    }
-    if (policyResolution.kind === "forbidden") {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
-    }
-    const expiresAt = policyResolution.expiresAt ?? Date.now() + AGENT_POOL_TOKEN_DEFAULT_TTL_MS;
+    const resolvedExpiry = await resolveAgentPoolTokenExpiry(attrs, pool.orgId, set);
+    if ("error" in resolvedExpiry) return resolvedExpiry.error;
+    const expiresAt = resolvedExpiry.expiresAt;
     const rawToken = generateAuthenticationToken("agent");
     const tokenId = newResourceId("atok");
     await db.insert(agentPoolTokens).values({ id: tokenId, agentPoolId: poolId, token: hashAuthenticationToken(rawToken), description, createdAt: Date.now(), expiresAt, revokedAt: null });
-    if (strictAuditEnabled()) {
-      await auditLog("create", "agent-pool-token", tokenId, user?.id ?? null, pool.orgId, {
-        agentPoolId: poolId,
-        description,
-      });
-    }
+    await auditAgentPoolTokenCreation(tokenId, user?.id, pool.orgId, poolId, description);
     (set as { status: number }).status = 201;
     return { data: { id: tokenId, type: "authentication-tokens", attributes: { token: rawToken, description, "created-at": new Date().toISOString(), "expired-at": expiresAt !== null ? new Date(expiresAt).toISOString() : null } } };
   });

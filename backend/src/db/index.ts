@@ -70,7 +70,7 @@ function patchNestedSqliteTransaction(tx: TerrenceSQLiteTransaction): TerrenceSQ
       "sync",
       transaction.dialect,
       transaction.session,
-      transaction.schema as never,
+      transaction.schema,
       transaction.nestedIndex + 1,
     ));
     transaction.session.run(sql.raw(`savepoint ${savepointName}`));
@@ -120,7 +120,7 @@ function gateSqlitePreparedQuery<T extends object>(query: T): T {
         return completion.then(execute);
       };
     },
-  }) as T;
+  });
 }
 
 if (!isPostgres) {
@@ -377,7 +377,7 @@ if (!isPostgres) {
       try {
         client.run(`BEGIN${behavior}`);
         began = true;
-        const result = await sqliteTransactionContext.run(Symbol("sqlite-transaction"), () => fn(tx));
+        const result = await sqliteTransactionContext.run(Symbol("sqlite-transaction"), async () => fn(tx));
         client.run('COMMIT');
         return result;
       } catch (err) {
@@ -598,6 +598,58 @@ export function checkpointWal(): void {
   }
 }
 
+async function postgresDatabaseMetrics(): Promise<Readonly<{
+  sizeBytes: number;
+  walSizeBytes: number | null;
+  journalMode: string;
+  pageSize: number;
+  pageCount: number;
+  path: string;
+  cacheSizeBytes: number | null;
+  freelistBytes: number | null;
+}>> {
+  const client = pgClient!;
+  const rows = await client.unsafe(
+    "SELECT pg_database_size(current_database()) AS size, current_setting('block_size')::int AS \"blockSize\"",
+  ) as unknown as readonly { size: number | bigint; blockSize: number }[];
+  const sizeBytes = Number(rows[0]?.size ?? 0);
+  const pageSize = Number(rows[0]?.blockSize ?? 8192);
+  // The URL may embed credentials; surface only host + database name.
+  let path = "postgres";
+  try {
+    const parsed = new URL(databaseUrl);
+    path = `postgres://${parsed.hostname}${parsed.pathname}`;
+  } catch {
+    // Unparseable URL: keep the bare label.
+  }
+  return {
+    sizeBytes,
+    walSizeBytes: null,
+    // Postgres always journals via WAL; there is no mode switch.
+    journalMode: "wal",
+    pageSize,
+    pageCount: pageSize > 0 ? Math.floor(sizeBytes / pageSize) : 0,
+    path,
+    cacheSizeBytes: null,
+    freelistBytes: null,
+  };
+}
+
+function sqliteFileSizes(dbPath: string): { sizeBytes: number; walSizeBytes: number | null } {
+  if (dbPath === ":memory:") return { sizeBytes: 0, walSizeBytes: null };
+  let sizeBytes = 0;
+  try {
+    sizeBytes = statSync(dbPath).size;
+  } catch {
+    sizeBytes = 0;
+  }
+  try {
+    return { sizeBytes, walSizeBytes: statSync(`${dbPath}-wal`).size };
+  } catch {
+    return { sizeBytes, walSizeBytes: 0 };
+  }
+}
+
 /**
  * Live disk-pressure numbers for the admin dashboard: on-disk DB size, WAL
  * sidecar size, journal mode, and page geometry (kanban 4.18). Postgres
@@ -622,52 +674,13 @@ export async function databaseMetrics(): Promise<Readonly<{
    */
   freelistBytes: number | null;
 }>> {
-  if (isPostgres) {
-    const client = pgClient!;
-    const rows = await client.unsafe(
-      "SELECT pg_database_size(current_database()) AS size, current_setting('block_size')::int AS \"blockSize\"",
-    ) as unknown as readonly { size: number | bigint; blockSize: number }[];
-    const sizeBytes = Number(rows[0]?.size ?? 0);
-    const pageSize = Number(rows[0]?.blockSize ?? 8192);
-    // The URL may embed credentials; surface only host + database name.
-    let path = "postgres";
-    try {
-      const parsed = new URL(databaseUrl);
-      path = `postgres://${parsed.hostname}${parsed.pathname}`;
-    } catch {
-      // Unparseable URL: keep the bare label.
-    }
-    return {
-      sizeBytes,
-      walSizeBytes: null,
-      // Postgres always journals via WAL; there is no mode switch.
-      journalMode: "wal",
-      pageSize,
-      pageCount: pageSize > 0 ? Math.floor(sizeBytes / pageSize) : 0,
-      path,
-      cacheSizeBytes: null,
-      freelistBytes: null,
-    };
-  }
+  if (isPostgres) return postgresDatabaseMetrics();
   const client = sqliteClient!;
   const dbPath = databaseUrl === ':memory:' ? ':memory:' : databaseUrl.replace(/^file:/, '');
   const pageSize = (client.query("PRAGMA page_size").get() as { page_size: number } | null)?.page_size ?? 4096;
   const pageCount = (client.query("PRAGMA page_count").get() as { page_count: number } | null)?.page_count ?? 0;
   const journalMode = (client.query("PRAGMA journal_mode").get() as { journal_mode: string } | null)?.journal_mode ?? "unknown";
-  let sizeBytes = 0;
-  let walSizeBytes: number | null = null;
-  if (dbPath !== ":memory:") {
-    try {
-      sizeBytes = statSync(dbPath).size;
-    } catch {
-      sizeBytes = 0;
-    }
-    try {
-      walSizeBytes = statSync(`${dbPath}-wal`).size;
-    } catch {
-      walSizeBytes = 0;
-    }
-  }
+  const { sizeBytes, walSizeBytes } = sqliteFileSizes(dbPath);
   return { sizeBytes, walSizeBytes, journalMode, pageSize, pageCount, path: dbPath, cacheSizeBytes: sqliteCacheSizeBytes(client, pageSize), freelistBytes: sqliteFreelistBytes(client, pageSize) };
 }
 

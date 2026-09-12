@@ -38,23 +38,22 @@ async function storedClientSecret(value: string): Promise<string> {
   return isEncryptedSecret(value) ? decryptSecret(value) : value;
 }
 
+function normalizeOAuthRequestBody(rawBody: unknown): { body: string | undefined } | { error: string } {
+  if (rawBody === undefined || rawBody === null) return { body: undefined };
+  if (typeof rawBody === "string") return { body: rawBody };
+  if (rawBody instanceof URLSearchParams) return { body: rawBody.toString() };
+  return { error: "Unsupported request body" };
+}
+
 async function oauthFetch(oc: OcItem, url: string, init?: RequestInit): Promise<Response> {
   if (!oauthUrlProtocolAllowed(url)) return new Response("OAuth endpoints must use HTTPS", { status: 422 });
   if (oc.agentPoolId !== null) return forwardFetch(oc.agentPoolId, url, init);
   const destination = await resolveExternalUrl(url, envFlag("TERRENCE_ALLOW_PRIVATE_VCS_URLS"));
   if ("error" in destination) return new Response(destination.error, { status: 422 });
   const headers = Object.fromEntries(new Headers(init?.headers).entries());
-  const rawBody = init?.body;
-  if (rawBody !== undefined && rawBody !== null
-    && typeof rawBody !== "string"
-    && !(rawBody instanceof URLSearchParams)) {
-    return new Response("Unsupported request body", { status: 422 });
-  }
-  const body = rawBody === undefined || rawBody === null
-    ? undefined
-    : typeof rawBody === "string"
-      ? rawBody
-      : rawBody.toString();
+  const normalized = normalizeOAuthRequestBody(init?.body);
+  if ("error" in normalized) return new Response(normalized.error, { status: 422 });
+  const body = normalized.body;
   const requestInit: { method: string; headers: Record<string, string>; timeoutMs: number; maxResponseBytes: number; body?: string } = {
     method: init?.method ?? "GET",
     headers,
@@ -113,6 +112,8 @@ type OAuthHandshakeState = OAuthHandshakeStateBase & (
   | Readonly<{ flow: "oauth2" }>
   | Readonly<{ flow: "oauth1"; requestToken: string; requestTokenSecret: string }>
 );
+
+type OAuth1HandshakeState = OAuthHandshakeStateBase & Readonly<{ flow: "oauth1"; requestToken: string; requestTokenSecret: string }>;
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 // ponytail (resolved): handshake state is now persisted in the database
@@ -199,43 +200,47 @@ function configuredUrlOriginChanged(previous: unknown, next: unknown): boolean {
   return configuredUrlOrigin(previous) !== configuredUrlOrigin(next);
 }
 
+function validatedOAuth2Endpoints(
+  authorization: URL | null,
+  token: URL | null,
+  user: URL | null,
+  extra: Readonly<{ scope: string }> | Readonly<{ basicTokenAuth: boolean }>,
+): OAuth2Endpoints | null {
+  if (authorization === null || token === null || user === null) return null;
+  if (!oauthUrlProtocolAllowed(authorization) || !oauthUrlProtocolAllowed(token) || !oauthUrlProtocolAllowed(user)) return null;
+  return { authorization, token, user, ...extra };
+}
+
+function providerDefaultUrls(serviceProvider: string): { httpUrl: string; apiUrl: string } {
+  if (serviceProvider === "github") return { httpUrl: "https://github.com", apiUrl: "https://api.github.com" };
+  if (serviceProvider === "gitlab") return { httpUrl: "https://gitlab.com", apiUrl: "https://gitlab.com/api/v4" };
+  return { httpUrl: "", apiUrl: "" };
+}
+
 function oauth2Endpoints(oc: OcItem): OAuth2Endpoints | null {
   if (oc.serviceProvider === "github" || oc.serviceProvider === "github_enterprise") {
-    const httpUrl = oc.httpUrl ?? (oc.serviceProvider === "github" ? "https://github.com" : "");
-    const apiUrl = oc.apiUrl ?? (oc.serviceProvider === "github" ? "https://api.github.com" : "");
+    const defaults = providerDefaultUrls(oc.serviceProvider);
+    const httpUrl = oc.httpUrl ?? defaults.httpUrl;
+    const apiUrl = oc.apiUrl ?? defaults.apiUrl;
     const authorization = endpoint(httpUrl, "/login/oauth/authorize");
     const token = endpoint(httpUrl, "/login/oauth/access_token");
     const user = endpoint(apiUrl, "/user");
-    return authorization !== null && token !== null && user !== null
-      && oauthUrlProtocolAllowed(authorization)
-      && oauthUrlProtocolAllowed(token)
-      && oauthUrlProtocolAllowed(user)
-      ? { authorization, token, user, scope: "repo user:email" }
-      : null;
+    return validatedOAuth2Endpoints(authorization, token, user, { scope: "repo user:email" });
   }
   if (["gitlab", "gitlab_ce", "gitlab_ee"].includes(oc.serviceProvider)) {
-    const httpUrl = oc.httpUrl ?? (oc.serviceProvider === "gitlab" ? "https://gitlab.com" : "");
-    const apiUrl = oc.apiUrl ?? (oc.serviceProvider === "gitlab" ? "https://gitlab.com/api/v4" : "");
+    const defaults = providerDefaultUrls(oc.serviceProvider);
+    const httpUrl = oc.httpUrl ?? defaults.httpUrl;
+    const apiUrl = oc.apiUrl ?? defaults.apiUrl;
     const authorization = endpoint(httpUrl, "/oauth/authorize");
     const token = endpoint(httpUrl, "/oauth/token");
     const user = endpoint(apiUrl, "/user");
-    return authorization !== null && token !== null && user !== null
-      && oauthUrlProtocolAllowed(authorization)
-      && oauthUrlProtocolAllowed(token)
-      && oauthUrlProtocolAllowed(user)
-      ? { authorization, token, user, scope: "api" }
-      : null;
+    return validatedOAuth2Endpoints(authorization, token, user, { scope: "api" });
   }
   if (oc.serviceProvider === "bitbucket") {
     const authorization = endpoint(oc.httpUrl ?? "https://bitbucket.org", "/site/oauth2/authorize");
     const token = endpoint(oc.httpUrl ?? "https://bitbucket.org", "/site/oauth2/access_token");
     const user = endpoint(oc.apiUrl ?? "https://api.bitbucket.org/2.0", "/user");
-    return authorization !== null && token !== null && user !== null
-      && oauthUrlProtocolAllowed(authorization)
-      && oauthUrlProtocolAllowed(token)
-      && oauthUrlProtocolAllowed(user)
-      ? { authorization, token, user, basicTokenAuth: true }
-      : null;
+    return validatedOAuth2Endpoints(authorization, token, user, { basicTokenAuth: true });
   }
   return null;
 }
@@ -626,6 +631,364 @@ async function completeOAuthHandshake(
   return redirect(destination.toString(), 303);
 }
 
+function oauthClientPatchDocument(body: unknown): { data: Record<string, unknown> | undefined; attributes: Record<string, unknown> } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  return { data, attributes };
+}
+
+function applyOAuthClientFieldUpdates(
+  attributes: Record<string, unknown>,
+  updates: Partial<typeof oauthClients.$inferInsert>,
+  set: SetObj,
+): unknown | null {
+  if (attributes["organization-scoped"] !== undefined) {
+    if (typeof attributes["organization-scoped"] !== "boolean") return unprocessable(set, "organization-scoped must be a boolean");
+    updates.organizationScoped = attributes["organization-scoped"];
+  }
+  if (typeof attributes["name"] === "string") updates.name = attributes["name"];
+  if (attributes["service-provider"] !== undefined) {
+    if (typeof attributes["service-provider"] !== "string" || !SERVICE_PROVIDERS.has(attributes["service-provider"])) return unprocessable(set, "Unsupported service provider");
+    updates.serviceProvider = attributes["service-provider"];
+  }
+  return null;
+}
+
+type OAuthConnectContext = {
+  projectId: string | null;
+  tokenOrgId: string | null;
+  tokenTeamId: string | null;
+  userId: string | null;
+}
+
+async function resolveOAuthClientScope(
+  data: Record<string, unknown> | undefined,
+  orgId: string,
+  updates: Partial<typeof oauthClients.$inferInsert>,
+  set: SetObj,
+): Promise<{ projectIds: string[] | undefined } | { error: unknown }> {
+  const projectIds = relationshipProjectIds(data);
+  if (projectIds === null) return { error: unprocessable(set, "Projects must be valid project resource identifiers") };
+  if (projectIds !== undefined && !(await validProjectScope(projectIds, orgId))) return { error: unprocessable(set, "One or more projects do not belong to the organization") };
+  const agentPoolId = relationshipAgentPoolId(data);
+  if (agentPoolId === false) return { error: unprocessable(set, "Agent pool must be a valid agent-pools resource identifier") };
+  if (typeof agentPoolId === "string" && !(await validAgentPool(agentPoolId, orgId))) {
+    return { error: unprocessable(set, "Agent pool does not belong to the organization") };
+  }
+  if (agentPoolId !== undefined) updates.agentPoolId = agentPoolId;
+  return { projectIds };
+}
+
+function setNullableString(
+  updates: Partial<typeof oauthClients.$inferInsert>,
+  column: "apiUrl" | "httpUrl" | "key" | "rsaPublicKey",
+  present: boolean,
+  value: unknown,
+): void {
+  if (present) updates[column] = typeof value === "string" ? value : null;
+}
+
+async function applyOAuthClientCredentialUpdates(
+  attributes: Record<string, unknown>,
+  oc: typeof oauthClients.$inferSelect,
+  updates: Partial<typeof oauthClients.$inferInsert>,
+  set: SetObj,
+): Promise<{ credentialsInvalidated: boolean } | { error: unknown }> {
+  const requestedApiUrl = attributes["api-url"] !== undefined ? normalizedConfiguredUrl(attributes["api-url"]) : oc.apiUrl;
+  const requestedHttpUrl = attributes["http-url"] !== undefined ? normalizedConfiguredUrl(attributes["http-url"]) : oc.httpUrl;
+  const urlError = configuredVcsUrlError(
+    attributes["api-url"] !== undefined ? requestedApiUrl : null,
+    attributes["http-url"] !== undefined ? requestedHttpUrl : null,
+  );
+  if (urlError !== undefined) return { error: unprocessable(set, urlError) };
+  setNullableString(updates, "apiUrl", attributes["api-url"] !== undefined, requestedApiUrl);
+  setNullableString(updates, "httpUrl", attributes["http-url"] !== undefined, requestedHttpUrl);
+  setNullableString(updates, "key", attributes["key"] !== undefined, attributes["key"]);
+  if (attributes["secret"] !== undefined) updates.secret = typeof attributes["secret"] === "string" ? await encryptSecret(attributes["secret"]) : null;
+  setNullableString(updates, "rsaPublicKey", attributes["rsa-public-key"] !== undefined, attributes["rsa-public-key"]);
+  const serviceProviderChanged = updates.serviceProvider !== undefined && updates.serviceProvider !== oc.serviceProvider;
+  const endpointOriginChanged = configuredUrlOriginChanged(oc.apiUrl, requestedApiUrl)
+    || configuredUrlOriginChanged(oc.httpUrl, requestedHttpUrl);
+  const credentialsInvalidated = serviceProviderChanged || endpointOriginChanged;
+  if (credentialsInvalidated && attributes["secret"] === undefined) updates.secret = null;
+  return { credentialsInvalidated };
+}
+
+function validateOAuthClientCreate(
+  attributes: Record<string, unknown>,
+  set: SetObj,
+): { name: string; serviceProvider: string } | { error: unknown } {
+  const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
+  if (name === "") return { error: unprocessable(set, "Name is required") };
+  const rawServiceProvider = attributes["service-provider"];
+  if (rawServiceProvider !== undefined && typeof rawServiceProvider !== "string") return { error: unprocessable(set, "Unsupported service provider") };
+  const serviceProvider = rawServiceProvider ?? "github";
+  if (!SERVICE_PROVIDERS.has(serviceProvider)) return { error: unprocessable(set, "Unsupported service provider") };
+  const urlError = configuredVcsUrlError(normalizedConfiguredUrl(attributes["api-url"]) ?? null, normalizedConfiguredUrl(attributes["http-url"]) ?? null);
+  if (urlError !== undefined) return { error: unprocessable(set, urlError) };
+  if (attributes["organization-scoped"] !== undefined && typeof attributes["organization-scoped"] !== "boolean") {
+    return { error: unprocessable(set, "organization-scoped must be a boolean") };
+  }
+  return { name, serviceProvider };
+}
+
+function resolveOAuthClientSecretFields(attributes: Record<string, unknown>): {
+  apiUrl: string | null; httpUrl: string | null; key: string | null; secret: string | null; rsaPublicKey: string | null; organizationScoped: boolean;
+} {
+  const apiUrlValue = normalizedConfiguredUrl(attributes["api-url"]);
+  const httpUrlValue = normalizedConfiguredUrl(attributes["http-url"]);
+  return {
+    apiUrl: typeof apiUrlValue === "string" ? apiUrlValue : null,
+    httpUrl: typeof httpUrlValue === "string" ? httpUrlValue : null,
+    key: typeof attributes["key"] === "string" ? attributes["key"] : null,
+    secret: typeof attributes["secret"] === "string" ? attributes["secret"] : null,
+    rsaPublicKey: typeof attributes["rsa-public-key"] === "string" ? attributes["rsa-public-key"] : null,
+    organizationScoped: attributes["organization-scoped"] === true,
+  };
+}
+
+function oauthClientCredentialsError(
+  oc: Readonly<{ key: string | null; secret: string | null }>,
+  set: SetObj,
+): unknown | null {
+  if (oc.key === null || oc.key === "" || oc.secret === null || oc.secret === "") {
+    return unprocessable(set, "OAuth client key and secret are required");
+  }
+  return null;
+}
+
+async function connectOAuth1Flow(
+  oc: typeof oauthClients.$inferSelect,
+  oauth1: OAuth1Endpoints,
+  redirectUri: string,
+  state: string,
+  ctx: OAuthConnectContext,
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<unknown> {
+  const callback = new URL(redirectUri);
+  callback.searchParams.set("state", state);
+  let requestToken: { token: string; tokenSecret: string; callbackConfirmed: boolean } | null;
+  try {
+    requestToken = await oauth1TokenRequest(oc, oauth1.requestToken.toString(), {
+      oauth_callback: callback.toString(),
+    });
+  } catch {
+    requestToken = null;
+  }
+  if (requestToken?.callbackConfirmed !== true) {
+    return oauthFlowError(set, 502, "VCS Provider Error", "Bitbucket Data Center did not return a usable request token");
+  }
+  await putOAuthHandshakeState(state, Date.now() + OAUTH_STATE_TTL_MS, {
+    clientId: oc.id,
+    flow: "oauth1",
+    projectId: ctx.projectId,
+    redirectUri: callback.toString(),
+    requestToken: requestToken.token,
+    requestTokenSecret: requestToken.tokenSecret,
+    tokenOrgId: ctx.tokenOrgId,
+    tokenTeamId: ctx.tokenTeamId,
+    userId: ctx.userId,
+  });
+  oauth1.authorization.searchParams.set("oauth_token", requestToken.token);
+  return authorizationResponse(request, state, oauth1.authorization.toString());
+}
+
+async function connectOAuth2Flow(
+  clientId: string,
+  clientKey: string,
+  oauth2: OAuth2Endpoints,
+  redirectUri: string,
+  state: string,
+  ctx: OAuthConnectContext,
+  request: ParamCtx["request"],
+): Promise<unknown> {
+  await putOAuthHandshakeState(state, Date.now() + OAUTH_STATE_TTL_MS, {
+    clientId,
+    flow: "oauth2",
+    projectId: ctx.projectId,
+    redirectUri,
+    tokenOrgId: ctx.tokenOrgId,
+    tokenTeamId: ctx.tokenTeamId,
+    userId: ctx.userId,
+  });
+  oauth2.authorization.searchParams.set("client_id", clientKey);
+  oauth2.authorization.searchParams.set("redirect_uri", redirectUri);
+  oauth2.authorization.searchParams.set("response_type", "code");
+  oauth2.authorization.searchParams.set("state", state);
+  if (oauth2.scope !== undefined) oauth2.authorization.searchParams.set("scope", oauth2.scope);
+  return authorizationResponse(request, state, oauth2.authorization.toString());
+}
+
+async function resolveConnectClient(
+  params: ParamCtx["params"],
+  user: ParamCtx["user"],
+  tokenOrgId: string | null | undefined,
+  tokenTeamId: string | null | undefined,
+  set: SetObj,
+): Promise<{ oc: typeof oauthClients.$inferSelect } | { error: unknown }> {
+  const ocId = params["oc_id"] ?? "";
+  const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
+  if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) {
+    (set as { status: number }).status = 404;
+    return { error: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { oc };
+}
+
+async function resolveHandshakeProject(
+  oc: typeof oauthClients.$inferSelect,
+  query: ParamCtx["query"],
+  set: SetObj,
+): Promise<{ projectId: string | null } | { error: unknown }> {
+  const rawProjectId = stringQuery(query, "project_id");
+  const projectId = rawProjectId === "" ? null : rawProjectId;
+  if (!(await validHandshakeProjectScope(oc, projectId))) {
+    return { error: oauthFlowError(set, 403, "Forbidden", "The OAuth client is not available to that project") };
+  }
+  return { projectId };
+}
+
+async function resolveCallbackHandshake(
+  params: ParamCtx["params"],
+  query: ParamCtx["query"],
+  set: SetObj,
+): Promise<{ state: OAuthHandshakeState; oc: typeof oauthClients.$inferSelect } | { error: unknown }> {
+  await pruneOAuthStates();
+  const stateId = stringQuery(query, "state");
+  const state = await takeOAuthHandshakeState<OAuthHandshakeState>(stateId);
+  if (state?.clientId !== (params["oc_id"] ?? "")) {
+    return { error: oauthFlowError(set, 400, "Invalid OAuth Callback", "OAuth state is missing, expired, or invalid") };
+  }
+  if (stringQuery(query, "error") !== "") {
+    return { error: oauthFlowError(set, 400, "OAuth Authorization Failed", "The VCS provider did not authorize the connection") };
+  }
+  const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, state.clientId) });
+  const stillAuthorized = await checkOrganizationPermission(
+    oc?.orgId ?? "",
+    state.userId ?? undefined,
+    state.tokenOrgId,
+    state.tokenTeamId,
+    "manage-vcs-settings",
+  );
+  if (
+    oc === undefined
+    || !stillAuthorized
+    || !(await validHandshakeProjectScope(oc, state.projectId))
+  ) {
+    return { error: oauthFlowError(set, 403, "Forbidden", "OAuth client authorization is no longer valid") };
+  }
+  return { state, oc };
+}
+
+async function completeOAuth1Callback(
+  oc: typeof oauthClients.$inferSelect,
+  state: OAuth1HandshakeState,
+  query: ParamCtx["query"],
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<unknown> {
+  const callbackToken = stringQuery(query, "oauth_token");
+  const verifier = stringQuery(query, "oauth_verifier");
+  if (callbackToken !== state.requestToken || verifier === "") {
+    return oauthFlowError(set, 400, "Invalid OAuth Callback", "OAuth request token or verifier is invalid");
+  }
+  const endpoints = oauth1Endpoints(oc);
+  if (endpoints === null) return unprocessable(set, "This VCS provider does not support the OAuth 1.0 flow");
+
+  let exchanged: { token: string; tokenSecret: string } | null;
+  try {
+    exchanged = await oauth1TokenRequest(
+      oc,
+      endpoints.accessToken.toString(),
+      { oauth_verifier: verifier },
+      state.requestToken,
+      state.requestTokenSecret,
+    );
+  } catch {
+    exchanged = null;
+  }
+  if (exchanged === null) {
+    return oauthFlowError(set, 502, "VCS Provider Error", "Bitbucket Data Center did not return a usable access token");
+  }
+  let serviceProviderUser: string | null = null;
+  try {
+    serviceProviderUser = await oauth1ProviderUser(
+      oc,
+      endpoints.user.toString(),
+      exchanged.token,
+      exchanged.tokenSecret,
+    );
+  } catch {
+    // The token is still usable when Bitbucket's optional identity endpoint is unavailable.
+  }
+  return completeOAuthHandshake(
+    oc,
+    JSON.stringify({
+      oauth_token: exchanged.token,
+      oauth_token_secret: exchanged.tokenSecret,
+    }),
+    serviceProviderUser,
+    request,
+  );
+}
+
+async function completeOAuth2Callback(
+  oc: typeof oauthClients.$inferSelect,
+  state: OAuthHandshakeState,
+  query: ParamCtx["query"],
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<unknown> {
+  const code = stringQuery(query, "code");
+  if (code === "") return oauthFlowError(set, 400, "Invalid OAuth Callback", "Authorization code is required");
+  const endpoints = oauth2Endpoints(oc);
+  if (endpoints === null) return unprocessable(set, "This VCS provider does not support the OAuth2 authorization-code flow");
+
+  let exchanged: { accessToken: string; serviceProviderUser: string | null } | null;
+  try {
+    exchanged = await exchangeAuthorizationCode(
+      oc,
+      endpoints.token.toString(),
+      endpoints.user.toString(),
+      endpoints.basicTokenAuth === true,
+      code,
+      state.redirectUri,
+    );
+  } catch {
+    exchanged = null;
+  }
+  if (exchanged === null) {
+    return oauthFlowError(set, 502, "VCS Provider Error", "The VCS provider did not return a usable access token");
+  }
+  return completeOAuthHandshake(oc, exchanged.accessToken, exchanged.serviceProviderUser, request);
+}
+
+function parseOAuthTokenSshKey(
+  attributes: Record<string, unknown>,
+  set: SetObj,
+): { sshKey: string | undefined } | { error: unknown } {
+  if (attributes["ssh-key"] !== undefined && typeof attributes["ssh-key"] !== "string") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "ssh-key must be a string" }] } };
+  }
+  const sshKey = typeof attributes["ssh-key"] === "string" ? attributes["ssh-key"].trim() : undefined;
+  return { sshKey };
+}
+
+async function applyOAuthTokenSshKey(
+  ot: typeof oauthTokens.$inferSelect,
+  sshKey: string | undefined,
+  otId: string,
+): Promise<typeof oauthTokens.$inferSelect | undefined> {
+  if (sshKey === undefined) return ot;
+  return (await db.update(oauthTokens).set({
+    sshKey: sshKey === "" ? null : await encryptSecret(sshKey),
+    hasSshKey: sshKey !== "",
+  }).where(eq(oauthTokens.id, otId)).returning())[0];
+}
+
 export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/oauth-clients", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -639,45 +1002,26 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
-    if (name === "") return unprocessable(set, "Name is required");
+    const { data, attributes } = oauthClientPatchDocument(body);
+    const validated = validateOAuthClientCreate(attributes, set);
+    if ("error" in validated) return validated.error;
+    const { name, serviceProvider } = validated;
     const id = newResourceId("oc");
-    const rawServiceProvider = attributes["service-provider"];
-    if (rawServiceProvider !== undefined && typeof rawServiceProvider !== "string") return unprocessable(set, "Unsupported service provider");
-    const serviceProvider = rawServiceProvider ?? "github";
-    if (!SERVICE_PROVIDERS.has(serviceProvider)) return unprocessable(set, "Unsupported service provider");
-    const projectIds = relationshipProjectIds(data);
-    if (projectIds === null) return unprocessable(set, "Projects must be valid project resource identifiers");
-    if (projectIds !== undefined && !(await validProjectScope(projectIds, org.id))) return unprocessable(set, "One or more projects do not belong to the organization");
-    const agentPoolId = relationshipAgentPoolId(data);
-    if (agentPoolId === false) return unprocessable(set, "Agent pool must be a valid agent-pools resource identifier");
-    if (typeof agentPoolId === "string" && !(await validAgentPool(agentPoolId, org.id))) {
-      return unprocessable(set, "Agent pool does not belong to the organization");
-    }
-    const rawApiUrl = attributes["api-url"];
-    const rawHttpUrl = attributes["http-url"];
-    const apiUrlValue = normalizedConfiguredUrl(rawApiUrl);
-    const httpUrlValue = normalizedConfiguredUrl(rawHttpUrl);
-    const urlError = configuredVcsUrlError(apiUrlValue ?? null, httpUrlValue ?? null);
-    if (urlError !== undefined) return unprocessable(set, urlError);
-    const apiUrl = typeof apiUrlValue === "string" ? apiUrlValue : null;
-    const httpUrl = typeof httpUrlValue === "string" ? httpUrlValue : null;
-    const key = typeof attributes["key"] === "string" ? attributes["key"] : null;
-    const secret = typeof attributes["secret"] === "string" ? attributes["secret"] : null;
-    const rsaPublicKey = typeof attributes["rsa-public-key"] === "string" ? attributes["rsa-public-key"] : null;
-    if (attributes["organization-scoped"] !== undefined && typeof attributes["organization-scoped"] !== "boolean") return unprocessable(set, "organization-scoped must be a boolean");
+    const scopeUpdates: Partial<typeof oauthClients.$inferInsert> = {};
+    const scope = await resolveOAuthClientScope(data, org.id, scopeUpdates, set);
+    if ("error" in scope) return scope.error;
+    const { projectIds } = scope;
+    const agentPoolId = scopeUpdates.agentPoolId ?? null;
+    const { apiUrl, httpUrl, key, secret, rsaPublicKey, organizationScoped } = resolveOAuthClientSecretFields(attributes);
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
       await t.insert(oauthClients).values({
         id,
         orgId: org.id,
-        agentPoolId: agentPoolId ?? null,
+        agentPoolId,
         name,
         serviceProvider,
-        organizationScoped: typeof attributes["organization-scoped"] === "boolean" ? attributes["organization-scoped"] : false,
+        organizationScoped,
         apiUrl,
         httpUrl,
         key,
@@ -708,45 +1052,16 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     const ocId = params["oc_id"] ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const { data, attributes } = oauthClientPatchDocument(body);
     const updates: Partial<typeof oauthClients.$inferInsert> = {};
-    if (attributes["organization-scoped"] !== undefined) {
-      if (typeof attributes["organization-scoped"] !== "boolean") return unprocessable(set, "organization-scoped must be a boolean");
-      updates.organizationScoped = attributes["organization-scoped"];
-    }
-    if (typeof attributes["name"] === "string") updates.name = attributes["name"];
-    if (attributes["service-provider"] !== undefined) {
-      if (typeof attributes["service-provider"] !== "string" || !SERVICE_PROVIDERS.has(attributes["service-provider"])) return unprocessable(set, "Unsupported service provider");
-      updates.serviceProvider = attributes["service-provider"];
-    }
-    const projectIds = relationshipProjectIds(data);
-    if (projectIds === null) return unprocessable(set, "Projects must be valid project resource identifiers");
-    if (projectIds !== undefined && !(await validProjectScope(projectIds, oc.orgId))) return unprocessable(set, "One or more projects do not belong to the organization");
-    const agentPoolId = relationshipAgentPoolId(data);
-    if (agentPoolId === false) return unprocessable(set, "Agent pool must be a valid agent-pools resource identifier");
-    if (typeof agentPoolId === "string" && !(await validAgentPool(agentPoolId, oc.orgId))) {
-      return unprocessable(set, "Agent pool does not belong to the organization");
-    }
-    if (agentPoolId !== undefined) updates.agentPoolId = agentPoolId;
-    const requestedApiUrl = attributes["api-url"] !== undefined ? normalizedConfiguredUrl(attributes["api-url"]) : oc.apiUrl;
-    const requestedHttpUrl = attributes["http-url"] !== undefined ? normalizedConfiguredUrl(attributes["http-url"]) : oc.httpUrl;
-    const urlError = configuredVcsUrlError(
-      attributes["api-url"] !== undefined ? requestedApiUrl : null,
-      attributes["http-url"] !== undefined ? requestedHttpUrl : null,
-    );
-    if (urlError !== undefined) return unprocessable(set, urlError);
-    if (attributes["api-url"] !== undefined) updates.apiUrl = typeof requestedApiUrl === "string" ? requestedApiUrl : null;
-    if (attributes["http-url"] !== undefined) updates.httpUrl = typeof requestedHttpUrl === "string" ? requestedHttpUrl : null;
-    if (attributes["key"] !== undefined) updates.key = typeof attributes["key"] === "string" ? attributes["key"] : null;
-    if (attributes["secret"] !== undefined) updates.secret = typeof attributes["secret"] === "string" ? await encryptSecret(attributes["secret"]) : null;
-    if (attributes["rsa-public-key"] !== undefined) updates.rsaPublicKey = typeof attributes["rsa-public-key"] === "string" ? attributes["rsa-public-key"] : null;
-    const serviceProviderChanged = updates.serviceProvider !== undefined && updates.serviceProvider !== oc.serviceProvider;
-    const endpointOriginChanged = configuredUrlOriginChanged(oc.apiUrl, requestedApiUrl)
-      || configuredUrlOriginChanged(oc.httpUrl, requestedHttpUrl);
-    const credentialsInvalidated = serviceProviderChanged || endpointOriginChanged;
-    if (credentialsInvalidated && attributes["secret"] === undefined) updates.secret = null;
+    const fieldError = applyOAuthClientFieldUpdates(attributes, updates, set);
+    if (fieldError !== null) return fieldError;
+    const scope = await resolveOAuthClientScope(data, oc.orgId, updates, set);
+    if ("error" in scope) return scope.error;
+    const credentials = await applyOAuthClientCredentialUpdates(attributes, oc, updates, set);
+    if ("error" in credentials) return credentials.error;
+    const { projectIds } = scope;
+    const { credentialsInvalidated } = credentials;
     if (credentialsInvalidated || Object.keys(updates).length > 0) {
       await db.transaction(async (tx): Promise<void> => {
         if (credentialsInvalidated) await tx.delete(oauthTokens).where(eq(oauthTokens.oauthClientId, ocId));
@@ -826,167 +1141,42 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return {};
   })
   .get("/api/v2/oauth-clients/:oc_id/connect", async ({ params, query, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params["oc_id"] ?? "";
-    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
-    if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const rawProjectId = stringQuery(query, "project_id");
-    const projectId = rawProjectId === "" ? null : rawProjectId;
-    if (!(await validHandshakeProjectScope(oc, projectId))) {
-      return oauthFlowError(set, 403, "Forbidden", "The OAuth client is not available to that project");
-    }
+    const resolved = await resolveConnectClient(params, user, tokenOrgId, tokenTeamId, set);
+    if ("error" in resolved) return resolved.error;
+    const { oc } = resolved;
+    const scoped = await resolveHandshakeProject(oc, query, set);
+    if ("error" in scoped) return scoped.error;
+    const ctx: OAuthConnectContext = {
+      projectId: scoped.projectId,
+      tokenOrgId: tokenOrgId ?? null,
+      tokenTeamId: tokenTeamId ?? null,
+      userId: user?.id ?? null,
+    };
     const oauth2 = oauth2Endpoints(oc);
     const oauth1 = oauth1Endpoints(oc);
     if (oauth2 === null && oauth1 === null) return unprocessable(set, "This VCS provider does not support an OAuth handshake");
-    if (oc.key === null || oc.key === "" || oc.secret === null || oc.secret === "") {
-      return unprocessable(set, "OAuth client key and secret are required");
-    }
+    const credentialsError = oauthClientCredentialsError(oc, set);
+    if (credentialsError !== null) return credentialsError;
 
     await pruneOAuthStates();
     const state = crypto.randomUUID();
     const redirectUri = apiURL(request, `/api/v2/oauth-clients/${oc.id}/callback`);
     if (oauth1 !== null) {
-      const callback = new URL(redirectUri);
-      callback.searchParams.set("state", state);
-      let requestToken: { token: string; tokenSecret: string; callbackConfirmed: boolean } | null;
-      try {
-        requestToken = await oauth1TokenRequest(oc, oauth1.requestToken.toString(), {
-          oauth_callback: callback.toString(),
-        });
-      } catch {
-        requestToken = null;
-      }
-      if (requestToken?.callbackConfirmed !== true) {
-        return oauthFlowError(set, 502, "VCS Provider Error", "Bitbucket Data Center did not return a usable request token");
-      }
-      await putOAuthHandshakeState(state, Date.now() + OAUTH_STATE_TTL_MS, {
-        clientId: oc.id,
-        flow: "oauth1",
-        projectId,
-        redirectUri: callback.toString(),
-        requestToken: requestToken.token,
-        requestTokenSecret: requestToken.tokenSecret,
-        tokenOrgId: tokenOrgId ?? null,
-        tokenTeamId: tokenTeamId ?? null,
-        userId: user?.id ?? null,
-      });
-      oauth1.authorization.searchParams.set("oauth_token", requestToken.token);
-      return authorizationResponse(request, state, oauth1.authorization.toString());
+      return connectOAuth1Flow(oc, oauth1, redirectUri, state, ctx, request, set);
     }
     if (oauth2 === null) return unprocessable(set, "This VCS provider does not support the OAuth2 authorization-code flow");
 
-    await putOAuthHandshakeState(state, Date.now() + OAUTH_STATE_TTL_MS, {
-      clientId: oc.id,
-      flow: "oauth2",
-      projectId,
-      redirectUri,
-      tokenOrgId: tokenOrgId ?? null,
-      tokenTeamId: tokenTeamId ?? null,
-      userId: user?.id ?? null,
-    });
-    oauth2.authorization.searchParams.set("client_id", oc.key);
-    oauth2.authorization.searchParams.set("redirect_uri", redirectUri);
-    oauth2.authorization.searchParams.set("response_type", "code");
-    oauth2.authorization.searchParams.set("state", state);
-    if (oauth2.scope !== undefined) oauth2.authorization.searchParams.set("scope", oauth2.scope);
-    return authorizationResponse(request, state, oauth2.authorization.toString());
+    return connectOAuth2Flow(oc.id, oc.key ?? "", oauth2, redirectUri, state, ctx, request);
   })
   .get("/api/v2/oauth-clients/:oc_id/callback", async ({ params, query, request, set }: ParamCtx): Promise<unknown> => {
-    await pruneOAuthStates();
-    const stateId = stringQuery(query, "state");
-    const state = await takeOAuthHandshakeState<OAuthHandshakeState>(stateId);
-    if (state?.clientId !== (params["oc_id"] ?? "")) {
-      return oauthFlowError(set, 400, "Invalid OAuth Callback", "OAuth state is missing, expired, or invalid");
-    }
-    if (stringQuery(query, "error") !== "") {
-      return oauthFlowError(set, 400, "OAuth Authorization Failed", "The VCS provider did not authorize the connection");
-    }
-
-    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, state.clientId) });
-    const stillAuthorized = await checkOrganizationPermission(
-      oc?.orgId ?? "",
-      state.userId ?? undefined,
-      state.tokenOrgId,
-      state.tokenTeamId,
-      "manage-vcs-settings",
-    );
-    if (
-      oc === undefined
-      || !stillAuthorized
-      || !(await validHandshakeProjectScope(oc, state.projectId))
-    ) {
-      return oauthFlowError(set, 403, "Forbidden", "OAuth client authorization is no longer valid");
-    }
+    const resolved = await resolveCallbackHandshake(params, query, set);
+    if ("error" in resolved) return resolved.error;
+    const { state, oc } = resolved;
     if (state.flow === "oauth1") {
-      const callbackToken = stringQuery(query, "oauth_token");
-      const verifier = stringQuery(query, "oauth_verifier");
-      if (callbackToken !== state.requestToken || verifier === "") {
-        return oauthFlowError(set, 400, "Invalid OAuth Callback", "OAuth request token or verifier is invalid");
-      }
-      const endpoints = oauth1Endpoints(oc);
-      if (endpoints === null) return unprocessable(set, "This VCS provider does not support the OAuth 1.0 flow");
-
-      let exchanged: { token: string; tokenSecret: string } | null;
-      try {
-        exchanged = await oauth1TokenRequest(
-          oc,
-          endpoints.accessToken.toString(),
-          { oauth_verifier: verifier },
-          state.requestToken,
-          state.requestTokenSecret,
-        );
-      } catch {
-        exchanged = null;
-      }
-      if (exchanged === null) {
-        return oauthFlowError(set, 502, "VCS Provider Error", "Bitbucket Data Center did not return a usable access token");
-      }
-      let serviceProviderUser: string | null = null;
-      try {
-        serviceProviderUser = await oauth1ProviderUser(
-          oc,
-          endpoints.user.toString(),
-          exchanged.token,
-          exchanged.tokenSecret,
-        );
-      } catch {
-        // The token is still usable when Bitbucket's optional identity endpoint is unavailable.
-      }
-      return completeOAuthHandshake(
-        oc,
-        JSON.stringify({
-          oauth_token: exchanged.token,
-          oauth_token_secret: exchanged.tokenSecret,
-        }),
-        serviceProviderUser,
-        request,
-      );
+      return completeOAuth1Callback(oc, state, query, request, set);
     }
 
-    const code = stringQuery(query, "code");
-    if (code === "") return oauthFlowError(set, 400, "Invalid OAuth Callback", "Authorization code is required");
-    const endpoints = oauth2Endpoints(oc);
-    if (endpoints === null) return unprocessable(set, "This VCS provider does not support the OAuth2 authorization-code flow");
-
-    let exchanged: { accessToken: string; serviceProviderUser: string | null } | null;
-    try {
-      exchanged = await exchangeAuthorizationCode(
-        oc,
-        endpoints.token.toString(),
-        endpoints.user.toString(),
-        endpoints.basicTokenAuth === true,
-        code,
-        state.redirectUri,
-      );
-    } catch {
-      exchanged = null;
-    }
-    if (exchanged === null) {
-      return oauthFlowError(set, 502, "VCS Provider Error", "The VCS provider did not return a usable access token");
-    }
-    return completeOAuthHandshake(oc, exchanged.accessToken, exchanged.serviceProviderUser, request);
+    return completeOAuth2Callback(oc, state, query, request, set);
   })
   .get("/api/v2/oauth-clients/:oc_id/oauth-tokens", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const ocId = params["oc_id"] ?? "";
@@ -1019,20 +1209,10 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     if (ot === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    if (attributes["ssh-key"] !== undefined && typeof attributes["ssh-key"] !== "string") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "ssh-key must be a string" }] };
-    }
-    const sshKey = typeof attributes["ssh-key"] === "string" ? attributes["ssh-key"].trim() : undefined;
-    const updated = sshKey === undefined
-      ? ot
-      : (await db.update(oauthTokens).set({
-          sshKey: sshKey === "" ? null : await encryptSecret(sshKey),
-          hasSshKey: sshKey !== "",
-        }).where(eq(oauthTokens.id, otId)).returning())[0];
+    const { attributes } = oauthClientPatchDocument(body);
+    const parsed = parseOAuthTokenSshKey(attributes, set);
+    if ("error" in parsed) return parsed.error;
+    const updated = await applyOAuthTokenSshKey(ot, parsed.sshKey, otId);
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: oauthTokenResource(updated) };
   })

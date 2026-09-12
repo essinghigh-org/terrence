@@ -89,6 +89,778 @@ type Project = { id: string; attributes: { name: string } };
 
 type Tab = "overview" | "tags" | "policies" | "attachments" | "parameters" | "vcs";
 
+async function fetchPolicySetBundle(requestedO: string, requestedS: string, signal: AbortSignal): Promise<{
+  canManage: boolean;
+  policySet: PolicySet;
+}> {
+  const orgResponse = await fetchApi(`/organizations/${encodeURIComponent(requestedO)}`, { signal });
+  const setResponse = await fetchApi(`/api/v2/policy-sets/${encodeURIComponent(requestedS)}`, { signal });
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+  const permissions = (orgResponse as {
+    data?: { attributes?: { permissions?: { "can-manage-policies"?: boolean } } };
+  }).data?.attributes?.permissions;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+  return {
+    canManage: permissions?.["can-manage-policies"] === true,
+    policySet: (setResponse as { data: PolicySet }).data,
+  };
+}
+
+function policySetDerived(policySet: PolicySet): Readonly<{
+  policyKind: "opa" | "sentinel";
+  isVcsBacked: boolean;
+  isGlobal: boolean;
+  attachedWorkspaceIds: string[];
+  attachedProjectIds: string[];
+  attachedExclusionIds: string[];
+  vcsRepoBranch: string | null | undefined;
+  updatePatternsText: string;
+  tagSelectors: TagSelector[];
+}> {
+  const attrs = policySet.attributes;
+  const relationship = policySet.relationships ?? {};
+  return {
+    policyKind: attrs.kind === "opa" ? "opa" : "sentinel",
+    isVcsBacked: attrs["vcs-repo"] !== null && attrs["vcs-repo"] !== undefined,
+    isGlobal: attrs.global === true,
+    attachedWorkspaceIds: (relationship.workspaces?.data ?? []).map((r): string => r.id),
+    attachedProjectIds: (relationship.projects?.data ?? []).map((r): string => r.id),
+    attachedExclusionIds: (relationship["workspace-exclusions"]?.data ?? []).map((r): string => r.id),
+    vcsRepoBranch: attrs["vcs-repo"]?.branch,
+    updatePatternsText: (attrs["policy-update-patterns"] ?? []).join(", "),
+    tagSelectors: policySet.attributes["tag-selectors"] ?? [],
+  };
+}
+
+function PolicySetHeader({ policySet, orgPath, isGlobal, isVcsBacked }: Readonly<{
+  policySet: PolicySet;
+  orgPath: string;
+  isGlobal: boolean;
+  isVcsBacked: boolean;
+}>): React.JSX.Element {
+  const attrs = policySet.attributes;
+  const crumbs: readonly BreadcrumbItem[] = [
+    { label: "Policy sets", to: `${orgPath}/settings/policy-sets` },
+    { label: attrs.name },
+  ];
+  return (
+    <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-6">
+      <div className="min-w-0">
+        <Breadcrumbs items={crumbs} />
+        <div className="flex items-center gap-2">
+          <h1 className="text-balance text-3xl font-bold tracking-tight text-foreground">{attrs.name}</h1>
+          <Badge variant="outline">{(attrs.kind ?? "sentinel").toUpperCase()}</Badge>
+          {isGlobal && <Badge>Global</Badge>}
+          {isVcsBacked && <Badge variant="secondary"><GitBranch className="size-3 mr-1" />VCS</Badge>}
+        </div>
+        <p className="mt-1 max-w-3xl text-pretty text-sm text-muted-foreground">
+          {attrs.description ?? "No description provided."}
+        </p>
+      </div>
+    </header>
+  );
+}
+
+function PolicySetTabs({ tabs, activeTab, onSelect }: Readonly<{
+  tabs: readonly { id: Tab; label: string }[];
+  activeTab: Tab;
+  onSelect: (tab: Tab) => void;
+}>): React.JSX.Element {
+  return (
+    <div className="flex flex-wrap gap-x-6 gap-y-2 border-b">
+      {tabs.map((tab): React.JSX.Element => (
+        <button
+          type="button"
+          key={tab.id}
+          onClick={(): void => { onSelect(tab.id); }}
+          aria-current={activeTab === tab.id ? "page" : undefined}
+          className={cn(
+            "rounded-sm border-b-2 pb-3 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            activeTab === tab.id ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function OverviewTab({ overName, onOverNameInput, overDescription, onOverDescriptionInput, overGlobal, onOverGlobalChange, overOverridable, onOverOverridableChange, canManage, overviewDirty, savingOverview, onSave, onCancel }: Readonly<{
+  overName: string;
+  onOverNameInput: (value: string) => void;
+  overDescription: string;
+  onOverDescriptionInput: (value: string) => void;
+  overGlobal: boolean;
+  onOverGlobalChange: (checked: boolean) => void;
+  overOverridable: boolean;
+  onOverOverridableChange: (checked: boolean) => void;
+  canManage: boolean;
+  overviewDirty: boolean;
+  savingOverview: boolean;
+  onSave: () => void;
+  onCancel: () => void;
+}>): React.JSX.Element {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>General</CardTitle>
+        <CardDescription>Configure the policy set name, description, and default behavior.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <label htmlFor="ps-name" className="text-sm font-medium">Name</label>
+          <Input id="ps-name" name="policy-set-name" autoComplete="off" spellCheck={false} value={overName} disabled={!canManage}
+            onInput={(e): void => { onOverNameInput(e.currentTarget.value); }} />
+        </div>
+        <div className="space-y-2">
+          <label htmlFor="ps-desc" className="text-sm font-medium">Description</label>
+          <Textarea id="ps-desc" name="policy-set-description" autoComplete="off" spellCheck={false} rows={3} disabled={!canManage} value={overDescription}
+            onInput={(e): void => { onOverDescriptionInput(e.currentTarget.value); }} />
+        </div>
+        <div className="flex flex-col gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox checked={overGlobal} disabled={!canManage} onCheckedChange={(c: boolean | "indeterminate"): void => { onOverGlobalChange(c === true); }} />
+            Apply to all workspaces (global policy set)
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox checked={overOverridable} disabled={!canManage} onCheckedChange={(c: boolean | "indeterminate"): void => { onOverOverridableChange(c === true); }} />
+            Allow policy overrides
+          </label>
+        </div>
+        {canManage && (
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" disabled={!overviewDirty || savingOverview} onClick={onCancel}>Cancel</Button>
+            <Button disabled={!overviewDirty || savingOverview || overName.trim() === ""}
+              onClick={onSave}>
+              {savingOverview && <Spinner data-icon="inline-start" className="size-4" />}
+              {savingOverview ? "Saving changes…" : "Save changes"}
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TagsTab({ tagSelectors, isVcsBacked, canManage, savingSelector, selectorKey, onSelectorKeyInput, selectorValue, onSelectorValueInput, selectorExclude, onSelectorExcludeChange, selectorError, onAddSubmit, onRemoveSelector }: Readonly<{
+  tagSelectors: readonly TagSelector[];
+  isVcsBacked: boolean;
+  canManage: boolean;
+  savingSelector: boolean;
+  selectorKey: string;
+  onSelectorKeyInput: (value: string) => void;
+  selectorValue: string;
+  onSelectorValueInput: (value: string) => void;
+  selectorExclude: boolean;
+  onSelectorExcludeChange: (checked: boolean) => void;
+  selectorError: string;
+  onAddSubmit: (event: React.SyntheticEvent) => Promise<void>;
+  onRemoveSelector: (selector: TagSelector) => void;
+}>): React.JSX.Element {
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Tag selectors</CardTitle>
+          <CardDescription>
+            Apply this policy set to workspaces and projects that match these tags. Include rules match all
+            specified tags; exclude rules remove matching resources regardless of include rules.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Tag key</TableHead>
+                <TableHead>Tag value</TableHead>
+                <TableHead>Behavior</TableHead>
+                {canManage && <TableHead className="w-16 text-right">Actions</TableHead>}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {tagSelectors.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={canManage ? 4 : 3} className="h-24 text-center text-muted-foreground">
+                    <div className="flex flex-col items-center gap-2">
+                      <Tags className="size-8 text-muted-foreground/60" />
+                      {isVcsBacked
+                        ? "Tag selectors are managed from the connected version control repository."
+                        : "No tag selectors yet. Add one to target specific workspaces."}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : tagSelectors.map((selector, index): React.JSX.Element => (
+                <TableRow key={`${selector["tag-key"]}-${selector["tag-value"] ?? "*"}-${selector["is-exclude"]}-${index}`}>
+                  <TableCell className="font-medium">{selector["tag-key"]}</TableCell>
+                  <TableCell className="text-muted-foreground">{selector["tag-value"] ?? <em>any</em>}</TableCell>
+                  <TableCell>
+                    <Badge variant={selector["is-exclude"] ? "destructive" : "secondary"}>
+                      {selector["is-exclude"] ? "Exclude" : "Include"}
+                    </Badge>
+                  </TableCell>
+                  {canManage && (
+                    <TableCell className="text-right">
+                      <div className="flex justify-end">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive hover:text-destructive"
+                          disabled={savingSelector}
+                          onClick={(): void => { onRemoveSelector(selector); }}
+                        >
+                          <Trash2 className="size-3.5 mr-1" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  )}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {canManage && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Add tag selector</CardTitle>
+            <CardDescription>Target resources by their workspace or project tags.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={(e): void => { void onAddSubmit(e); }} className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div className="space-y-2">
+                  <label htmlFor="selector-key" className="text-sm font-medium">
+                    Tag key <span className="text-destructive">*</span>
+                  </label>
+                  <Input
+                    id="selector-key"
+                    name="tag-selector-key"
+                    autoComplete="off"
+                    spellCheck={false}
+                    required
+                    value={selectorKey}
+                    onInput={(e): void => { onSelectorKeyInput(e.currentTarget.value); }}
+                    placeholder="environment"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="selector-value" className="text-sm font-medium">
+                    Tag value
+                  </label>
+                  <Input
+                    id="selector-value"
+                    name="tag-selector-value"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={selectorValue}
+                    onInput={(e): void => { onSelectorValueInput(e.currentTarget.value); }}
+                    placeholder="production"
+                  />
+                  <p className="text-xs text-muted-foreground">Leave empty to match any value for the key.</p>
+                </div>
+                <div className="space-y-2">
+                  <span className="text-sm font-medium">Behavior</span>
+                  <label className="flex h-9 items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={selectorExclude}
+                      onCheckedChange={(c: boolean | "indeterminate"): void => { onSelectorExcludeChange(c === true); }}
+                    />
+                    Exclude matching resources
+                  </label>
+                </div>
+              </div>
+              {selectorError !== "" && <div role="alert" className="text-sm text-destructive">{selectorError}</div>}
+              <div className="flex justify-end">
+                <Button type="submit" disabled={savingSelector || selectorKey.trim() === ""}>
+                  {savingSelector && <Spinner data-icon="inline-start" className="size-4" />}
+                  {!savingSelector && <Plus className="size-4 mr-1.5" />}
+                  {savingSelector ? "Adding selector…" : "Add selector"}
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function PoliciesTab({ policies, policyKind, isVcsBacked, canManage, onAddPolicy, onEditPolicy, onDeleteRequest }: Readonly<{
+  policies: readonly Policy[];
+  policyKind: "opa" | "sentinel";
+  isVcsBacked: boolean;
+  canManage: boolean;
+  onAddPolicy: () => void;
+  onEditPolicy: (policy: Policy) => void;
+  onDeleteRequest: (policy: Policy) => void;
+}>): React.JSX.Element {
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle>Policies</CardTitle>
+          <CardDescription>
+            {isVcsBacked
+              ? "Policies in this set are managed from the connected version control repository."
+              : `${policyKind === "opa" ? "OPA" : "Sentinel"} policies checked against every workspace plan and apply.`}
+          </CardDescription>
+        </div>
+        {canManage && !isVcsBacked && (
+          <Button onClick={onAddPolicy}><Plus className="mr-1.5 size-4" /> Add policy</Button>
+        )}
+      </CardHeader>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Name</TableHead>
+              <TableHead>Description</TableHead>
+              <TableHead>Enforcement</TableHead>
+              {canManage && !isVcsBacked && <TableHead className="text-right">Actions</TableHead>}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {policies.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                  <div className="flex flex-col items-center gap-2">
+                    <FileText className="size-8 text-muted-foreground/60" />
+                    No policies yet.
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : policies.map((policy): React.JSX.Element => (
+              <TableRow key={policy.id}>
+                <TableCell className="font-medium">{policy.attributes.name}</TableCell>
+                <TableCell className="max-w-[320px] text-sm text-muted-foreground">{policy.attributes.description ?? ""}</TableCell>
+                <TableCell>
+                  <Badge variant={policy.attributes["enforcement-level"] === "hard-mandatory" ? "destructive" : "secondary"}>
+                    {(policy.attributes["enforcement-level"] ?? "soft-mandatory").replace("-", " ")}
+                  </Badge>
+                </TableCell>
+                {canManage && !isVcsBacked && (
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-2">
+                      <Button size="sm" variant="outline" onClick={(): void => { onEditPolicy(policy); }}>Edit</Button>
+                      <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive"
+                        onClick={(): void => { onDeleteRequest(policy); }}>
+                        <Trash2 className="size-3.5 mr-1" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                )}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+function AttachmentsTab({ isGlobal, attachedWorkspaceIds, attachedExclusionIds, attachedProjectIds, workspaces, projects, canManage, onManageWorkspaces, onManageProjects }: Readonly<{
+  isGlobal: boolean;
+  attachedWorkspaceIds: readonly string[];
+  attachedExclusionIds: readonly string[];
+  attachedProjectIds: readonly string[];
+  workspaces: readonly Workspace[];
+  projects: readonly Project[];
+  canManage: boolean;
+  onManageWorkspaces: () => void;
+  onManageProjects: () => void;
+}>): React.JSX.Element {
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle>Workspaces {isGlobal && "and exclusions"}</CardTitle>
+            <CardDescription>
+              {isGlobal
+                ? "Exclude specific workspaces from this global policy set."
+                : "Apply this policy set to specific workspaces directly."}
+            </CardDescription>
+          </div>
+          {canManage && (
+            <Button variant="outline" onClick={onManageWorkspaces}>
+              {isGlobal ? "Edit exclusions" : "Manage workspaces"}
+            </Button>
+          )}
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow><TableHead>Workspace</TableHead><TableHead>Mode</TableHead></TableRow>
+            </TableHeader>
+            <TableBody>
+              {isGlobal ? (attachedExclusionIds.length === 0 ? (
+                <TableRow><TableCell colSpan={2} className="h-16 text-center text-muted-foreground">This global policy set applies to every workspace.</TableCell></TableRow>
+              ) : attachedExclusionIds.map((id): React.JSX.Element => (
+                <TableRow key={id}>
+                  <TableCell>{workspaces.find((w): boolean => w.id === id)?.attributes.name ?? id}</TableCell>
+                  <TableCell><Badge variant="secondary">Excluded</Badge></TableCell>
+                </TableRow>
+              ))) : (attachedWorkspaceIds.length === 0 ? (
+                <TableRow><TableCell colSpan={2} className="h-16 text-center text-muted-foreground">No workspaces attached.</TableCell></TableRow>
+              ) : attachedWorkspaceIds.map((id): React.JSX.Element => (
+                <TableRow key={id}>
+                  <TableCell>{workspaces.find((w): boolean => w.id === id)?.attributes.name ?? id}</TableCell>
+                  <TableCell><Badge variant="secondary">Attached</Badge></TableCell>
+                </TableRow>
+              )))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle>Projects</CardTitle>
+            <CardDescription>Apply this policy set to all workspaces in a project.</CardDescription>
+          </div>
+          {canManage && (
+            <Button variant="outline" onClick={onManageProjects}>Manage projects</Button>
+          )}
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow><TableHead>Project</TableHead><TableHead>Mode</TableHead></TableRow>
+            </TableHeader>
+            <TableBody>
+              {attachedProjectIds.length === 0 ? (
+                <TableRow><TableCell colSpan={2} className="h-16 text-center text-muted-foreground">No projects attached.</TableCell></TableRow>
+              ) : attachedProjectIds.map((id): React.JSX.Element => (
+                <TableRow key={id}>
+                  <TableCell>{projects.find((p): boolean => p.id === id)?.attributes.name ?? id}</TableCell>
+                  <TableCell><Badge variant="secondary">Attached</Badge></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ParametersTab({ params, canManage, onAddParam, onEditParam, onDeleteRequest }: Readonly<{
+  params: readonly Param[];
+  canManage: boolean;
+  onAddParam: () => void;
+  onEditParam: (param: Param) => void;
+  onDeleteRequest: (param: Param) => void;
+}>): React.JSX.Element {
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle>Parameters</CardTitle>
+          <CardDescription>Variables exposed to the Sentinel policies in this set at evaluation time.</CardDescription>
+        </div>
+        {canManage && (
+          <Button variant="outline" onClick={onAddParam}><Plus className="mr-1.5 size-4" /> Add parameter</Button>
+        )}
+      </CardHeader>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow><TableHead>Key</TableHead><TableHead>Value</TableHead><TableHead>Type</TableHead><TableHead className="text-right">Actions</TableHead></TableRow>
+          </TableHeader>
+          <TableBody>
+            {params.length === 0 ? (
+              <TableRow><TableCell colSpan={4} className="h-24 text-center text-muted-foreground">No parameters defined.</TableCell></TableRow>
+            ) : params.map((p): React.JSX.Element => (
+              <TableRow key={p.id}>
+                <TableCell className="font-mono text-sm font-medium">{p.attributes.key}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">{p.attributes.sensitive === true ? "Messages-redacted" : (p.attributes.value ?? "")}</TableCell>
+                <TableCell><Badge variant="outline">{p.attributes.hcl === true ? "HCL" : "Plain"}</Badge></TableCell>
+                <TableCell className="text-right">
+                  {canManage && (
+                    <div className="flex justify-end gap-2">
+                      <Button size="sm" variant="outline" onClick={(): void => { onEditParam(p); }}>Edit</Button>
+                      <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={(): void => { onDeleteRequest(p); }}>
+                        <Trash2 className="size-3.5 mr-1" />
+                      </Button>
+                    </div>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+function VcsTab({ orgPath, policySet, isVcsBacked, vcsRepoBranch, updatePatternsText }: Readonly<{
+  orgPath: string;
+  policySet: PolicySet;
+  isVcsBacked: boolean;
+  vcsRepoBranch: string | null | undefined;
+  updatePatternsText: string;
+}>): React.JSX.Element {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Version control</CardTitle>
+        <CardDescription>
+          {isVcsBacked
+            ? "This policy set is synced from a version control repository."
+            : "This policy set is managed in the UI; policies live in Terrence."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        {isVcsBacked ? (
+          <>
+            <div className="flex items-center gap-2"><GitBranch className="size-4 text-primary" /><code>{policySet.attributes["vcs-repo"]?.identifier}</code></div>
+            {vcsRepoBranch != null && <p className="text-muted-foreground">Branch: <code>{vcsRepoBranch}</code></p>}
+            {policySet.attributes["policies-path"] != null && <p className="text-muted-foreground">Policies path: <code>{policySet.attributes["policies-path"]}</code></p>}
+            <p className="text-muted-foreground">Update patterns: <code className="break-all">{updatePatternsText === "" ? "All" : updatePatternsText}</code></p>
+            <p className="text-xs text-muted-foreground">Policy source and versions are managed in the repository. Direct edits are not supported here.</p>
+          </>
+        ) : (
+          <p className="text-muted-foreground">
+            Policies are authored directly in Terrence. To manage this set from a version control
+            repository, create it with a VCS connection from the{" "}
+            <Link to={`${orgPath}/settings/vcs`} className="text-primary hover:underline">VCS providers</Link> page.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PolicyDialog({ open, onClose, savingPolicy, editingNull, policyKind, enforcementOptions, policyName, onPolicyNameInput, policyDescription, onPolicyDescriptionInput, policyEnforcement, onPolicyEnforcementChange, policySource, onPolicySourceInput, policyQuery, onPolicyQueryInput, policyFormError, onSubmit }: Readonly<{
+  open: boolean;
+  onClose: () => void;
+  savingPolicy: boolean;
+  editingNull: boolean;
+  policyKind: "opa" | "sentinel";
+  enforcementOptions: readonly { readonly value: string; readonly label: string }[];
+  policyName: string;
+  onPolicyNameInput: (value: string) => void;
+  policyDescription: string;
+  onPolicyDescriptionInput: (value: string) => void;
+  policyEnforcement: string;
+  onPolicyEnforcementChange: (value: string) => void;
+  policySource: string;
+  onPolicySourceInput: (value: string) => void;
+  policyQuery: string;
+  onPolicyQueryInput: (value: string) => void;
+  policyFormError: string;
+  onSubmit: (event: React.SyntheticEvent) => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <Dialog open={open} onOpenChange={(dialogOpen: boolean): void => { if (!dialogOpen && !savingPolicy) onClose(); }}>
+      <DialogContent className="sm:max-w-[720px]">
+        <form onSubmit={onSubmit} noValidate>
+          <DialogHeader>
+            <DialogTitle>{editingNull ? "Add policy" : "Edit policy"}</DialogTitle>
+            <DialogDescription>Write an {policyKind === "opa" ? "OPA/Rego" : "Sentinel"} policy and choose its enforcement level.</DialogDescription>
+          </DialogHeader>
+          {policyFormError !== "" && (
+            <div role="alert" className="rounded bg-destructive/15 p-3 text-xs font-medium text-destructive">{policyFormError}</div>
+          )}
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="policy-name">Name</label>
+              <Input id="policy-name" name="name" value={policyName} onInput={(e): void => { onPolicyNameInput(e.currentTarget.value); }} placeholder="runtime_version" required />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="policy-description">Description</label>
+              <Input id="policy-description" name="description" value={policyDescription} onInput={(e): void => { onPolicyDescriptionInput(e.currentTarget.value); }} placeholder="Optional description" />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="policy-enforcement">Enforcement level</label>
+              <Select id="policy-enforcement" name="enforcement" value={policyEnforcement} onValueChange={onPolicyEnforcementChange}>
+                {enforcementOptions.map((lvl): React.JSX.Element => <SelectItem key={lvl.value} value={lvl.value}>{lvl.label}</SelectItem>)}
+              </Select>
+            </div>
+            {policyKind === "opa" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium" htmlFor="policy-query">OPA query</label>
+                <Input id="policy-query" name="query" value={policyQuery} onInput={(e): void => { onPolicyQueryInput(e.currentTarget.value); }} placeholder="data" required />
+              </div>
+            )}
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="policy-code">Policy code <span className="font-normal text-muted-foreground">({policyKind === "opa" ? "Rego" : "Sentinel"})</span></label>
+              <Textarea
+                id="policy-code"
+                name="policy-code"
+                rows={14}
+                spellCheck={false}
+                value={policySource}
+                onInput={(e): void => { onPolicySourceInput(e.currentTarget.value); }}
+                placeholder={policyKind === "opa" ? "package terraform\n\ndefault allow := false" : "main = rule { true }"}
+                className="bg-code-background font-mono text-xs leading-5 text-code-foreground"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={savingPolicy} onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={savingPolicy || policyName.trim() === ""}>
+              {savingPolicy && <Spinner data-icon="inline-start" className="size-4" />}
+              {savingPolicy ? "Saving policy…" : editingNull ? "Create policy" : "Save changes"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ParamDialog({ open, onClose, savingParam, editingNull, paramKey, onParamKeyInput, paramValue, onParamValueInput, paramHcl, onParamHclChange, paramSensitive, onParamSensitiveChange, paramFormError, onSubmit }: Readonly<{
+  open: boolean;
+  onClose: () => void;
+  savingParam: boolean;
+  editingNull: boolean;
+  paramKey: string;
+  onParamKeyInput: (value: string) => void;
+  paramValue: string;
+  onParamValueInput: (value: string) => void;
+  paramHcl: boolean;
+  onParamHclChange: (checked: boolean) => void;
+  paramSensitive: boolean;
+  onParamSensitiveChange: (checked: boolean) => void;
+  paramFormError: string;
+  onSubmit: (event: React.SyntheticEvent) => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <Dialog open={open} onOpenChange={(dialogOpen: boolean): void => { if (!dialogOpen && !savingParam) onClose(); }}>
+      <DialogContent className="sm:max-w-[520px]">
+        <form onSubmit={onSubmit} noValidate>
+          <DialogHeader>
+            <DialogTitle>{editingNull ? "Add parameter" : "Edit parameter"}</DialogTitle>
+            <DialogDescription>Expose a variable to the Sentinel policies in this set.</DialogDescription>
+          </DialogHeader>
+          {paramFormError !== "" && (
+            <div role="alert" className="rounded bg-destructive/15 p-3 text-xs font-medium text-destructive">{paramFormError}</div>
+          )}
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="policy-param-key">Key</label>
+              <Input id="policy-param-key" name="key" value={paramKey} onInput={(e): void => { onParamKeyInput(e.currentTarget.value); }} placeholder="allowed_cidrs" required />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="policy-param-value">Value</label>
+              <Textarea id="policy-param-value" name="value" autoComplete="off" spellCheck={false} rows={3} value={paramValue} onInput={(e): void => { onParamValueInput(e.currentTarget.value); }}
+                className="font-mono text-sm" />
+            </div>
+            <div className="flex flex-col gap-3">
+              <label className="flex items-center gap-2 text-sm"><Checkbox checked={paramHcl} onCheckedChange={(c: boolean | "indeterminate"): void => { onParamHclChange(c === true); }} /> Parse value as HCL</label>
+              <label className="flex items-center gap-2 text-sm"><Checkbox checked={paramSensitive} onCheckedChange={(c: boolean | "indeterminate"): void => { onParamSensitiveChange(c === true); }} /> Sensitive value</label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={savingParam} onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={savingParam || paramKey.trim() === ""}>
+              {savingParam && <Spinner data-icon="inline-start" className="size-4" />}
+              {savingParam ? "Saving parameter…" : editingNull ? "Add parameter" : "Save changes"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AttachDialog({ workspaceOpen, projectOpen, onClose, savingAttach, attachKind, isGlobal, workspaces, projects, selectedWorkspaces, selectedProjects, onToggle, onSave }: Readonly<{
+  workspaceOpen: boolean;
+  projectOpen: boolean;
+  onClose: () => void;
+  savingAttach: boolean;
+  attachKind: "workspaces" | "projects";
+  isGlobal: boolean;
+  workspaces: readonly Workspace[];
+  projects: readonly Project[];
+  selectedWorkspaces: ReadonlySet<string>;
+  selectedProjects: ReadonlySet<string>;
+  onToggle: (kind: "workspaces" | "projects", id: string, checked: boolean) => void;
+  onSave: () => void;
+}>): React.JSX.Element {
+  const items = attachKind === "workspaces" ? workspaces : projects;
+  return (
+    <Dialog open={workspaceOpen || projectOpen} onOpenChange={(dialogOpen: boolean): void => { if (!dialogOpen && !savingAttach) onClose(); }}>
+      <DialogContent className="sm:max-w-[560px]">
+        <DialogHeader>
+          <DialogTitle>{attachKind === "projects" ? "Manage projects" : isGlobal ? "Edit workspace exclusions" : "Manage workspaces"}</DialogTitle>
+          <DialogDescription>
+            {attachKind === "projects"
+              ? "Select the projects this policy set applies to."
+              : isGlobal
+                ? "Exclude workspaces from this global policy set."
+                : "Select the workspaces this policy set applies to directly."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[420px] space-y-1 overflow-y-auto py-3">
+          {items.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No {attachKind} in this organization.</p>
+          ) : items.map((item): React.JSX.Element => {
+            const id = item.id;
+            const selected = attachKind === "workspaces" ? selectedWorkspaces.has(id) : selectedProjects.has(id);
+            return (
+              <label key={id} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted">
+                <Checkbox
+                  checked={selected}
+                  onCheckedChange={(checked: boolean | "indeterminate"): void => {
+                    onToggle(attachKind, id, checked === true);
+                  }}
+                />
+                <span className="truncate">{item.attributes.name}</span>
+              </label>
+            );
+          })}
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" disabled={savingAttach} onClick={onClose}>Cancel</Button>
+          <Button type="button" disabled={savingAttach} onClick={onSave}>
+            {savingAttach && <Spinner data-icon="inline-start" className="size-4" />}
+            {savingAttach ? "Saving…" : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PolicySetConfirms({ policyToDelete, onClearPolicy, onConfirmPolicy, paramToDelete, onClearParam, onConfirmParam }: Readonly<{
+  policyToDelete: Policy | null;
+  onClearPolicy: () => void;
+  onConfirmPolicy: (policy: Policy) => Promise<void>;
+  paramToDelete: Param | null;
+  onClearParam: () => void;
+  onConfirmParam: (param: Param) => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <>
+      <ConfirmDialog
+        open={policyToDelete !== null}
+        onOpenChange={(dialogOpen: boolean): void => { if (!dialogOpen) onClearPolicy(); }}
+        title="Delete policy"
+        description={`Are you sure you want to delete policy "${policyToDelete?.attributes.name ?? ""}"?`}
+        confirmText="Delete policy"
+        confirmVariant="destructive"
+        onConfirm={async (): Promise<void> => { if (policyToDelete !== null) await onConfirmPolicy(policyToDelete); }}
+      />
+
+      <ConfirmDialog
+        open={paramToDelete !== null}
+        onOpenChange={(dialogOpen: boolean): void => { if (!dialogOpen) onClearParam(); }}
+        title="Delete parameter"
+        description={`Are you sure you want to delete parameter "${paramToDelete?.attributes.key ?? ""}"?`}
+        confirmText="Delete parameter"
+        confirmVariant="destructive"
+        onConfirm={async (): Promise<void> => { if (paramToDelete !== null) await onConfirmParam(paramToDelete); }}
+      />
+    </>
+  );
+}
+
 export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: Tab }>): React.JSX.Element {
   const { orgName: rawOrgName, policySetId } = useParams<{ orgName: string; policySetId: string }>();
   const orgName = rawOrgName ?? "";
@@ -165,16 +937,10 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
     setCanManage(false);
     const load = async (): Promise<void> => {
       try {
-        const orgResponse = await fetchApi(`/organizations/${encodeURIComponent(requestedO)}`, { signal: controller.signal });
-        const setResponse = await fetchApi(`/api/v2/policy-sets/${encodeURIComponent(requestedS)}`, { signal: controller.signal });
+        const bundle = await fetchPolicySetBundle(requestedO, requestedS, controller.signal);
         if (controller.signal.aborted || requestedOrg.current !== requestedO || requestedSet.current !== requestedS) return;
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-        const permissions = (orgResponse as {
-          data?: { attributes?: { permissions?: { "can-manage-policies"?: boolean } } };
-        }).data?.attributes?.permissions;
-        setCanManage(permissions?.["can-manage-policies"] === true);
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const data = (setResponse as { data: PolicySet }).data;
+        setCanManage(bundle.canManage);
+        const data = bundle.policySet;
         setPolicySet(data);
         setOverName(data.attributes.name);
         setOverDescription(data.attributes.description ?? "");
@@ -261,17 +1027,31 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
     );
   }
 
-  const attrs = policySet.attributes;
-  const policyKind = attrs.kind === "opa" ? "opa" : "sentinel";
+  const derived = policySetDerived(policySet);
+  const policyKind = derived.policyKind;
   const enforcementOptions = policyKind === "opa" ? OPA_ENFORCEMENTS : SENTINEL_ENFORCEMENTS;
-  const relationship = policySet.relationships ?? {};
-  const attachedWorkspaceIds = (relationship.workspaces?.data ?? []).map((r): string => r.id);
-  const attachedProjectIds = (relationship.projects?.data ?? []).map((r): string => r.id);
-  const attachedExclusionIds = (relationship["workspace-exclusions"]?.data ?? []).map((r): string => r.id);
-  const isVcsBacked = attrs["vcs-repo"] !== null && attrs["vcs-repo"] !== undefined;
-  const isGlobal = attrs.global === true;
-  const vcsRepoBranch = isVcsBacked ? attrs["vcs-repo"]?.branch : undefined;
-  const updatePatternsText = (attrs["policy-update-patterns"] ?? []).join(", ");
+  const attachedWorkspaceIds = derived.attachedWorkspaceIds;
+  const attachedProjectIds = derived.attachedProjectIds;
+  const attachedExclusionIds = derived.attachedExclusionIds;
+  const isVcsBacked = derived.isVcsBacked;
+  const isGlobal = derived.isGlobal;
+  const vcsRepoBranch = derived.vcsRepoBranch;
+  const updatePatternsText = derived.updatePatternsText;
+  const tagSelectors = derived.tagSelectors;
+
+  const handleAttachToggle = (kind: "workspaces" | "projects", id: string, checked: boolean): void => {
+    const apply = (prev: Set<string>): Set<string> => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    };
+    if (kind === "workspaces") setSelectedWorkspaces(apply); else setSelectedProjects(apply);
+  };
+
+  const handleCloseAttach = (): void => {
+    setAttachWorkspaceOpen(false);
+    setAttachProjectOpen(false);
+  };
 
   async function saveRelationTargets(): Promise<void> {
     if (!canManage || policySet === null) return;
@@ -304,8 +1084,6 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
       setSavingAttach(false);
     }
   }
-
-  const tagSelectors = policySet.attributes["tag-selectors"] ?? [];
 
   const addTagSelector = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
@@ -379,44 +1157,11 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
     { id: "vcs", label: "VCS" },
   ];
 
-  const crumbs: readonly BreadcrumbItem[] = [
-    { label: "Policy sets", to: `${orgPath}/settings/policy-sets` },
-    { label: attrs.name },
-  ];
-
   return (
     <PageShell variant="standard">
-      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-6">
-        <div className="min-w-0">
-          <Breadcrumbs items={crumbs} />
-          <div className="flex items-center gap-2">
-            <h1 className="text-balance text-3xl font-bold tracking-tight text-foreground">{attrs.name}</h1>
-            <Badge variant="outline">{(attrs.kind ?? "sentinel").toUpperCase()}</Badge>
-            {isGlobal && <Badge>Global</Badge>}
-            {isVcsBacked && <Badge variant="secondary"><GitBranch className="size-3 mr-1" />VCS</Badge>}
-          </div>
-          <p className="mt-1 max-w-3xl text-pretty text-sm text-muted-foreground">
-            {attrs.description ?? "No description provided."}
-          </p>
-        </div>
-      </header>
+      <PolicySetHeader policySet={policySet} orgPath={orgPath} isGlobal={isGlobal} isVcsBacked={isVcsBacked} />
 
-      <div className="flex flex-wrap gap-x-6 gap-y-2 border-b">
-        {tabs.map((tab): React.JSX.Element => (
-          <button
-            type="button"
-            key={tab.id}
-            onClick={(): void => { setActiveTab(tab.id); }}
-            aria-current={activeTab === tab.id ? "page" : undefined}
-            className={cn(
-              "rounded-sm border-b-2 pb-3 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              activeTab === tab.id ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <PolicySetTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} />
 
       {error !== "" && (
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
@@ -426,540 +1171,147 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
       )}
 
       {activeTab === "overview" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>General</CardTitle>
-            <CardDescription>Configure the policy set name, description, and default behavior.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <label htmlFor="ps-name" className="text-sm font-medium">Name</label>
-              <Input id="ps-name" name="policy-set-name" autoComplete="off" spellCheck={false} value={overName} disabled={!canManage}
-                onInput={(e): void => { setOverName(e.currentTarget.value); setOverviewDirty(true); }} />
-            </div>
-            <div className="space-y-2">
-              <label htmlFor="ps-desc" className="text-sm font-medium">Description</label>
-              <Textarea id="ps-desc" name="policy-set-description" autoComplete="off" spellCheck={false} rows={3} disabled={!canManage} value={overDescription}
-                onInput={(e): void => { setOverDescription(e.currentTarget.value); setOverviewDirty(true); }} />
-            </div>
-            <div className="flex flex-col gap-3">
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox checked={overGlobal} disabled={!canManage} onCheckedChange={(c: boolean | "indeterminate"): void => { setOverGlobal(c === true); setOverviewDirty(true); }} />
-                Apply to all workspaces (global policy set)
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox checked={overOverridable} disabled={!canManage} onCheckedChange={(c: boolean | "indeterminate"): void => { setOverOverridable(c === true); setOverviewDirty(true); }} />
-                Allow policy overrides
-              </label>
-            </div>
-            {canManage && (
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" disabled={!overviewDirty || savingOverview} onClick={reload}>Cancel</Button>
-                <Button disabled={!overviewDirty || savingOverview || overName.trim() === ""}
-                  onClick={(): void => { void updateOverview(); }}>
-                  {savingOverview && <Spinner data-icon="inline-start" className="size-4" />}
-                  {savingOverview ? "Saving changes…" : "Save changes"}
-                </Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <OverviewTab
+          overName={overName}
+          onOverNameInput={(value: string): void => { setOverName(value); setOverviewDirty(true); }}
+          overDescription={overDescription}
+          onOverDescriptionInput={(value: string): void => { setOverDescription(value); setOverviewDirty(true); }}
+          overGlobal={overGlobal}
+          onOverGlobalChange={(checked: boolean): void => { setOverGlobal(checked); setOverviewDirty(true); }}
+          overOverridable={overOverridable}
+          onOverOverridableChange={(checked: boolean): void => { setOverOverridable(checked); setOverviewDirty(true); }}
+          canManage={canManage}
+          overviewDirty={overviewDirty}
+          savingOverview={savingOverview}
+          onSave={(): void => { void updateOverview(); }}
+          onCancel={reload}
+        />
       )}
 
       {activeTab === "tags" && (
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Tag selectors</CardTitle>
-              <CardDescription>
-                Apply this policy set to workspaces and projects that match these tags. Include rules match all
-                specified tags; exclude rules remove matching resources regardless of include rules.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Tag key</TableHead>
-                    <TableHead>Tag value</TableHead>
-                    <TableHead>Behavior</TableHead>
-                    {canManage && <TableHead className="w-16 text-right">Actions</TableHead>}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {tagSelectors.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={canManage ? 4 : 3} className="h-24 text-center text-muted-foreground">
-                        <div className="flex flex-col items-center gap-2">
-                          <Tags className="size-8 text-muted-foreground/60" />
-                          {isVcsBacked
-                            ? "Tag selectors are managed from the connected version control repository."
-                            : "No tag selectors yet. Add one to target specific workspaces."}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ) : tagSelectors.map((selector, index): React.JSX.Element => (
-                    <TableRow key={`${selector["tag-key"]}-${selector["tag-value"] ?? "*"}-${selector["is-exclude"]}-${index}`}>
-                      <TableCell className="font-medium">{selector["tag-key"]}</TableCell>
-                      <TableCell className="text-muted-foreground">{selector["tag-value"] ?? <em>any</em>}</TableCell>
-                      <TableCell>
-                        <Badge variant={selector["is-exclude"] ? "destructive" : "secondary"}>
-                          {selector["is-exclude"] ? "Exclude" : "Include"}
-                        </Badge>
-                      </TableCell>
-                      {canManage && (
-                        <TableCell className="text-right">
-                          <div className="flex justify-end">
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="text-destructive hover:text-destructive"
-                              disabled={savingSelector}
-                              onClick={(): void => { void removeTagSelector(selector); }}
-                            >
-                              <Trash2 className="size-3.5 mr-1" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      )}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
-          {canManage && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Add tag selector</CardTitle>
-                <CardDescription>Target resources by their workspace or project tags.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form onSubmit={(e): void => { void addTagSelector(e); }} className="space-y-4">
-                  <div className="grid gap-4 sm:grid-cols-3">
-                    <div className="space-y-2">
-                      <label htmlFor="selector-key" className="text-sm font-medium">
-                        Tag key <span className="text-destructive">*</span>
-                      </label>
-                      <Input
-                        id="selector-key"
-                        name="tag-selector-key"
-                        autoComplete="off"
-                        spellCheck={false}
-                        required
-                        value={selectorKey}
-                        onInput={(e): void => { setSelectorKey(e.currentTarget.value); }}
-                        placeholder="environment"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label htmlFor="selector-value" className="text-sm font-medium">
-                        Tag value
-                      </label>
-                      <Input
-                        id="selector-value"
-                        name="tag-selector-value"
-                        autoComplete="off"
-                        spellCheck={false}
-                        value={selectorValue}
-                        onInput={(e): void => { setSelectorValue(e.currentTarget.value); }}
-                        placeholder="production"
-                      />
-                      <p className="text-xs text-muted-foreground">Leave empty to match any value for the key.</p>
-                    </div>
-                    <div className="space-y-2">
-                      <span className="text-sm font-medium">Behavior</span>
-                      <label className="flex h-9 items-center gap-2 text-sm">
-                        <Checkbox
-                          checked={selectorExclude}
-                          onCheckedChange={(c: boolean | "indeterminate"): void => { setSelectorExclude(c === true); }}
-                        />
-                        Exclude matching resources
-                      </label>
-                    </div>
-                  </div>
-                  {selectorError !== "" && <div role="alert" className="text-sm text-destructive">{selectorError}</div>}
-                  <div className="flex justify-end">
-                    <Button type="submit" disabled={savingSelector || selectorKey.trim() === ""}>
-                      {savingSelector && <Spinner data-icon="inline-start" className="size-4" />}
-                      {!savingSelector && <Plus className="size-4 mr-1.5" />}
-                      {savingSelector ? "Adding selector…" : "Add selector"}
-                    </Button>
-                  </div>
-                </form>
-              </CardContent>
-            </Card>
-          )}
-        </div>
+        <TagsTab
+          tagSelectors={tagSelectors}
+          isVcsBacked={isVcsBacked}
+          canManage={canManage}
+          savingSelector={savingSelector}
+          selectorKey={selectorKey}
+          onSelectorKeyInput={setSelectorKey}
+          selectorValue={selectorValue}
+          onSelectorValueInput={setSelectorValue}
+          selectorExclude={selectorExclude}
+          onSelectorExcludeChange={setSelectorExclude}
+          selectorError={selectorError}
+          onAddSubmit={addTagSelector}
+          onRemoveSelector={(selector: TagSelector): void => { void removeTagSelector(selector); }}
+        />
       )}
 
       {activeTab === "policies" && (
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle>Policies</CardTitle>
-              <CardDescription>
-                {isVcsBacked
-                  ? "Policies in this set are managed from the connected version control repository."
-                  : `${policyKind === "opa" ? "OPA" : "Sentinel"} policies checked against every workspace plan and apply.`}
-              </CardDescription>
-            </div>
-            {canManage && !isVcsBacked && (
-              <Button onClick={openCreatePolicy}><Plus className="mr-1.5 size-4" /> Add policy</Button>
-            )}
-          </CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Enforcement</TableHead>
-                  {canManage && !isVcsBacked && <TableHead className="text-right">Actions</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {policies.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
-                      <div className="flex flex-col items-center gap-2">
-                        <FileText className="size-8 text-muted-foreground/60" />
-                        No policies yet.
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ) : policies.map((policy): React.JSX.Element => (
-                  <TableRow key={policy.id}>
-                    <TableCell className="font-medium">{policy.attributes.name}</TableCell>
-                    <TableCell className="max-w-[320px] text-sm text-muted-foreground">{policy.attributes.description ?? ""}</TableCell>
-                    <TableCell>
-                      <Badge variant={policy.attributes["enforcement-level"] === "hard-mandatory" ? "destructive" : "secondary"}>
-                        {(policy.attributes["enforcement-level"] ?? "soft-mandatory").replace("-", " ")}
-                      </Badge>
-                    </TableCell>
-                    {canManage && !isVcsBacked && (
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          <Button size="sm" variant="outline" onClick={(): void => { openEditPolicy(policy); }}>Edit</Button>
-                          <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive"
-                            onClick={(): void => { setPolicyToDelete(policy); }}>
-                            <Trash2 className="size-3.5 mr-1" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <PoliciesTab
+          policies={policies}
+          policyKind={policyKind}
+          isVcsBacked={isVcsBacked}
+          canManage={canManage}
+          onAddPolicy={openCreatePolicy}
+          onEditPolicy={openEditPolicy}
+          onDeleteRequest={setPolicyToDelete}
+        />
       )}
 
       {activeTab === "attachments" && (
-        <div className="space-y-6">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle>Workspaces {isGlobal && "and exclusions"}</CardTitle>
-                <CardDescription>
-                  {isGlobal
-                    ? "Exclude specific workspaces from this global policy set."
-                    : "Apply this policy set to specific workspaces directly."}
-                </CardDescription>
-              </div>
-              {canManage && (
-                <Button variant="outline" onClick={openWorkspacePicker}>
-                  {isGlobal ? "Edit exclusions" : "Manage workspaces"}
-                </Button>
-              )}
-            </CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow><TableHead>Workspace</TableHead><TableHead>Mode</TableHead></TableRow>
-                </TableHeader>
-                <TableBody>
-                  {isGlobal ? (attachedExclusionIds.length === 0 ? (
-                    <TableRow><TableCell colSpan={2} className="h-16 text-center text-muted-foreground">This global policy set applies to every workspace.</TableCell></TableRow>
-                  ) : attachedExclusionIds.map((id): React.JSX.Element => (
-                    <TableRow key={id}>
-                      <TableCell>{workspaces.find((w): boolean => w.id === id)?.attributes.name ?? id}</TableCell>
-                      <TableCell><Badge variant="secondary">Excluded</Badge></TableCell>
-                    </TableRow>
-                  ))) : (attachedWorkspaceIds.length === 0 ? (
-                    <TableRow><TableCell colSpan={2} className="h-16 text-center text-muted-foreground">No workspaces attached.</TableCell></TableRow>
-                  ) : attachedWorkspaceIds.map((id): React.JSX.Element => (
-                    <TableRow key={id}>
-                      <TableCell>{workspaces.find((w): boolean => w.id === id)?.attributes.name ?? id}</TableCell>
-                      <TableCell><Badge variant="secondary">Attached</Badge></TableCell>
-                    </TableRow>
-                  )))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle>Projects</CardTitle>
-                <CardDescription>Apply this policy set to all workspaces in a project.</CardDescription>
-              </div>
-              {canManage && (
-                <Button variant="outline" onClick={openProjectPicker}>Manage projects</Button>
-              )}
-            </CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow><TableHead>Project</TableHead><TableHead>Mode</TableHead></TableRow>
-                </TableHeader>
-                <TableBody>
-                  {attachedProjectIds.length === 0 ? (
-                    <TableRow><TableCell colSpan={2} className="h-16 text-center text-muted-foreground">No projects attached.</TableCell></TableRow>
-                  ) : attachedProjectIds.map((id): React.JSX.Element => (
-                    <TableRow key={id}>
-                      <TableCell>{projects.find((p): boolean => p.id === id)?.attributes.name ?? id}</TableCell>
-                      <TableCell><Badge variant="secondary">Attached</Badge></TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        </div>
+        <AttachmentsTab
+          isGlobal={isGlobal}
+          attachedWorkspaceIds={attachedWorkspaceIds}
+          attachedExclusionIds={attachedExclusionIds}
+          attachedProjectIds={attachedProjectIds}
+          workspaces={workspaces}
+          projects={projects}
+          canManage={canManage}
+          onManageWorkspaces={openWorkspacePicker}
+          onManageProjects={openProjectPicker}
+        />
       )}
 
       {activeTab === "parameters" && (
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle>Parameters</CardTitle>
-              <CardDescription>Variables exposed to the Sentinel policies in this set at evaluation time.</CardDescription>
-            </div>
-            {canManage && (
-              <Button variant="outline" onClick={openCreateParam}><Plus className="mr-1.5 size-4" /> Add parameter</Button>
-            )}
-          </CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow><TableHead>Key</TableHead><TableHead>Value</TableHead><TableHead>Type</TableHead><TableHead className="text-right">Actions</TableHead></TableRow>
-              </TableHeader>
-              <TableBody>
-                {params.length === 0 ? (
-                  <TableRow><TableCell colSpan={4} className="h-24 text-center text-muted-foreground">No parameters defined.</TableCell></TableRow>
-                ) : params.map((p): React.JSX.Element => (
-                  <TableRow key={p.id}>
-                    <TableCell className="font-mono text-sm font-medium">{p.attributes.key}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{p.attributes.sensitive === true ? "Messages-redacted" : (p.attributes.value ?? "")}</TableCell>
-                    <TableCell><Badge variant="outline">{p.attributes.hcl === true ? "HCL" : "Plain"}</Badge></TableCell>
-                    <TableCell className="text-right">
-                      {canManage && (
-                        <div className="flex justify-end gap-2">
-                          <Button size="sm" variant="outline" onClick={(): void => { openEditParam(p); }}>Edit</Button>
-                          <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={(): void => { setParamToDelete(p); }}>
-                            <Trash2 className="size-3.5 mr-1" />
-                          </Button>
-                        </div>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <ParametersTab
+          params={params}
+          canManage={canManage}
+          onAddParam={openCreateParam}
+          onEditParam={openEditParam}
+          onDeleteRequest={setParamToDelete}
+        />
       )}
 
       {activeTab === "vcs" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Version control</CardTitle>
-            <CardDescription>
-              {isVcsBacked
-                ? "This policy set is synced from a version control repository."
-                : "This policy set is managed in the UI; policies live in Terrence."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            {isVcsBacked ? (
-              <>
-                <div className="flex items-center gap-2"><GitBranch className="size-4 text-primary" /><code>{attrs["vcs-repo"]?.identifier}</code></div>
-                {vcsRepoBranch != null && <p className="text-muted-foreground">Branch: <code>{vcsRepoBranch}</code></p>}
-                {attrs["policies-path"] != null && <p className="text-muted-foreground">Policies path: <code>{attrs["policies-path"]}</code></p>}
-                <p className="text-muted-foreground">Update patterns: <code className="break-all">{updatePatternsText === "" ? "All" : updatePatternsText}</code></p>
-                <p className="text-xs text-muted-foreground">Policy source and versions are managed in the repository. Direct edits are not supported here.</p>
-              </>
-            ) : (
-              <p className="text-muted-foreground">
-                Policies are authored directly in Terrence. To manage this set from a version control
-                repository, create it with a VCS connection from the{" "}
-                <Link to={`${orgPath}/settings/vcs`} className="text-primary hover:underline">VCS providers</Link> page.
-              </p>
-            )}
-          </CardContent>
-        </Card>
+        <VcsTab
+          orgPath={orgPath}
+          policySet={policySet}
+          isVcsBacked={isVcsBacked}
+          vcsRepoBranch={vcsRepoBranch}
+          updatePatternsText={updatePatternsText}
+        />
       )}
 
-      <Dialog open={policyDialogOpen} onOpenChange={(open: boolean): void => { if (!open && !savingPolicy) setPolicyDialogOpen(false); }}>
-        <DialogContent className="sm:max-w-[720px]">
-          <form onSubmit={submitPolicy} noValidate>
-            <DialogHeader>
-              <DialogTitle>{editingPolicy === null ? "Add policy" : "Edit policy"}</DialogTitle>
-              <DialogDescription>Write an {policyKind === "opa" ? "OPA/Rego" : "Sentinel"} policy and choose its enforcement level.</DialogDescription>
-            </DialogHeader>
-            {policyFormError !== "" && (
-              <div role="alert" className="rounded bg-destructive/15 p-3 text-xs font-medium text-destructive">{policyFormError}</div>
-            )}
-            <div className="space-y-4 py-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="policy-name">Name</label>
-                <Input id="policy-name" name="name" value={policyName} onInput={(e): void => { setPolicyName(e.currentTarget.value); }} placeholder="runtime_version" required />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="policy-description">Description</label>
-                <Input id="policy-description" name="description" value={policyDescription} onInput={(e): void => { setPolicyDescription(e.currentTarget.value); }} placeholder="Optional description" />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="policy-enforcement">Enforcement level</label>
-                <Select id="policy-enforcement" name="enforcement" value={policyEnforcement} onValueChange={setPolicyEnforcement}>
-                  {enforcementOptions.map((lvl): React.JSX.Element => <SelectItem key={lvl.value} value={lvl.value}>{lvl.label}</SelectItem>)}
-                </Select>
-              </div>
-              {policyKind === "opa" && (
-                <div className="space-y-2">
-                  <label className="text-sm font-medium" htmlFor="policy-query">OPA query</label>
-                  <Input id="policy-query" name="query" value={policyQuery} onInput={(e): void => { setPolicyQuery(e.currentTarget.value); }} placeholder="data" required />
-                </div>
-              )}
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="policy-code">Policy code <span className="font-normal text-muted-foreground">({policyKind === "opa" ? "Rego" : "Sentinel"})</span></label>
-                <Textarea
-                  id="policy-code"
-                  name="policy-code"
-                  rows={14}
-                  spellCheck={false}
-                  value={policySource}
-                  onInput={(e): void => { setPolicySource(e.currentTarget.value); }}
-                  placeholder={policyKind === "opa" ? "package terraform\n\ndefault allow := false" : "main = rule { true }"}
-                  className="bg-code-background font-mono text-xs leading-5 text-code-foreground"
-                />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" disabled={savingPolicy} onClick={(): void => { setPolicyDialogOpen(false); }}>Cancel</Button>
-              <Button type="submit" disabled={savingPolicy || policyName.trim() === ""}>
-                {savingPolicy && <Spinner data-icon="inline-start" className="size-4" />}
-                {savingPolicy ? "Saving policy…" : editingPolicy === null ? "Create policy" : "Save changes"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={paramDialogOpen} onOpenChange={(open: boolean): void => { if (!open && !savingParam) setParamDialogOpen(false); }}>
-        <DialogContent className="sm:max-w-[520px]">
-          <form onSubmit={submitParam} noValidate>
-            <DialogHeader>
-              <DialogTitle>{editingParam === null ? "Add parameter" : "Edit parameter"}</DialogTitle>
-              <DialogDescription>Expose a variable to the Sentinel policies in this set.</DialogDescription>
-            </DialogHeader>
-            {paramFormError !== "" && (
-              <div role="alert" className="rounded bg-destructive/15 p-3 text-xs font-medium text-destructive">{paramFormError}</div>
-            )}
-            <div className="space-y-4 py-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="policy-param-key">Key</label>
-                <Input id="policy-param-key" name="key" value={paramKey} onInput={(e): void => { setParamKey(e.currentTarget.value); }} placeholder="allowed_cidrs" required />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="policy-param-value">Value</label>
-                <Textarea id="policy-param-value" name="value" autoComplete="off" spellCheck={false} rows={3} value={paramValue} onInput={(e): void => { setParamValue(e.currentTarget.value); }}
-                  className="font-mono text-sm" />
-              </div>
-              <div className="flex flex-col gap-3">
-                <label className="flex items-center gap-2 text-sm"><Checkbox checked={paramHcl} onCheckedChange={(c: boolean | "indeterminate"): void => { setParamHcl(c === true); }} /> Parse value as HCL</label>
-                <label className="flex items-center gap-2 text-sm"><Checkbox checked={paramSensitive} onCheckedChange={(c: boolean | "indeterminate"): void => { setParamSensitive(c === true); }} /> Sensitive value</label>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" disabled={savingParam} onClick={(): void => { setParamDialogOpen(false); }}>Cancel</Button>
-              <Button type="submit" disabled={savingParam || paramKey.trim() === ""}>
-                {savingParam && <Spinner data-icon="inline-start" className="size-4" />}
-                {savingParam ? "Saving parameter…" : editingParam === null ? "Add parameter" : "Save changes"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={attachWorkspaceOpen || attachProjectOpen} onOpenChange={(open: boolean): void => { if (!open && !savingAttach) { setAttachWorkspaceOpen(false); setAttachProjectOpen(false); } }}>
-        <DialogContent className="sm:max-w-[560px]">
-          <DialogHeader>
-            <DialogTitle>{attachKind === "projects" ? "Manage projects" : isGlobal ? "Edit workspace exclusions" : "Manage workspaces"}</DialogTitle>
-            <DialogDescription>
-              {attachKind === "projects"
-                ? "Select the projects this policy set applies to."
-                : isGlobal
-                  ? "Exclude workspaces from this global policy set."
-                  : "Select the workspaces this policy set applies to directly."}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[420px] space-y-1 overflow-y-auto py-3">
-            {(attachKind === "workspaces" ? workspaces : projects).length === 0 ? (
-              <p className="text-sm text-muted-foreground">No {attachKind} in this organization.</p>
-            ) : (attachKind === "workspaces" ? workspaces : projects).map((item): React.JSX.Element => {
-              const id = item.id;
-              const selected = attachKind === "workspaces" ? selectedWorkspaces.has(id) : selectedProjects.has(id);
-              return (
-                <label key={id} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted">
-                  <Checkbox
-                    checked={selected}
-                    onCheckedChange={(checked: boolean | "indeterminate"): void => {
-                      const apply = (prev: Set<string>): Set<string> => {
-                        const next = new Set(prev);
-                        if (checked === true) next.add(id); else next.delete(id);
-                        return next;
-                      };
-                      if (attachKind === "workspaces") setSelectedWorkspaces(apply); else setSelectedProjects(apply);
-                    }}
-                  />
-                  <span className="truncate">{item.attributes.name}</span>
-                </label>
-              );
-            })}
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" disabled={savingAttach} onClick={(): void => { setAttachWorkspaceOpen(false); setAttachProjectOpen(false); }}>Cancel</Button>
-            <Button type="button" disabled={savingAttach} onClick={(): void => { void saveRelationTargets(); }}>
-              {savingAttach && <Spinner data-icon="inline-start" className="size-4" />}
-              {savingAttach ? "Saving…" : "Save"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <ConfirmDialog
-        open={policyToDelete !== null}
-        onOpenChange={(open: boolean): void => { if (!open) setPolicyToDelete(null); }}
-        title="Delete policy"
-        description={`Are you sure you want to delete policy "${policyToDelete?.attributes.name ?? ""}"?`}
-        confirmText="Delete policy"
-        confirmVariant="destructive"
-        onConfirm={async (): Promise<void> => { if (policyToDelete !== null) await deletePolicy(policyToDelete); }}
+      <PolicyDialog
+        open={policyDialogOpen}
+        onClose={(): void => { setPolicyDialogOpen(false); }}
+        savingPolicy={savingPolicy}
+        editingNull={editingPolicy === null}
+        policyKind={policyKind}
+        enforcementOptions={enforcementOptions}
+        policyName={policyName}
+        onPolicyNameInput={setPolicyName}
+        policyDescription={policyDescription}
+        onPolicyDescriptionInput={setPolicyDescription}
+        policyEnforcement={policyEnforcement}
+        onPolicyEnforcementChange={setPolicyEnforcement}
+        policySource={policySource}
+        onPolicySourceInput={setPolicySource}
+        policyQuery={policyQuery}
+        onPolicyQueryInput={setPolicyQuery}
+        policyFormError={policyFormError}
+        onSubmit={submitPolicy}
       />
 
-      <ConfirmDialog
-        open={paramToDelete !== null}
-        onOpenChange={(open: boolean): void => { if (!open) setParamToDelete(null); }}
-        title="Delete parameter"
-        description={`Are you sure you want to delete parameter "${paramToDelete?.attributes.key ?? ""}"?`}
-        confirmText="Delete parameter"
-        confirmVariant="destructive"
-        onConfirm={async (): Promise<void> => { if (paramToDelete !== null) await deleteParam(paramToDelete); }}
+      <ParamDialog
+        open={paramDialogOpen}
+        onClose={(): void => { setParamDialogOpen(false); }}
+        savingParam={savingParam}
+        editingNull={editingParam === null}
+        paramKey={paramKey}
+        onParamKeyInput={setParamKey}
+        paramValue={paramValue}
+        onParamValueInput={setParamValue}
+        paramHcl={paramHcl}
+        onParamHclChange={setParamHcl}
+        paramSensitive={paramSensitive}
+        onParamSensitiveChange={setParamSensitive}
+        paramFormError={paramFormError}
+        onSubmit={submitParam}
+      />
+
+      <AttachDialog
+        workspaceOpen={attachWorkspaceOpen}
+        projectOpen={attachProjectOpen}
+        onClose={handleCloseAttach}
+        savingAttach={savingAttach}
+        attachKind={attachKind}
+        isGlobal={isGlobal}
+        workspaces={workspaces}
+        projects={projects}
+        selectedWorkspaces={selectedWorkspaces}
+        selectedProjects={selectedProjects}
+        onToggle={handleAttachToggle}
+        onSave={(): void => { void saveRelationTargets(); }}
+      />
+
+      <PolicySetConfirms
+        policyToDelete={policyToDelete}
+        onClearPolicy={(): void => { setPolicyToDelete(null); }}
+        onConfirmPolicy={deletePolicy}
+        paramToDelete={paramToDelete}
+        onClearParam={(): void => { setParamToDelete(null); }}
+        onConfirmParam={deleteParam}
       />
     </PageShell>
   );

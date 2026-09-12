@@ -2,12 +2,13 @@ import { Elysia } from "elysia";
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { db } from "../db";
+import type {
+  organizations} from "../db/schema";
 import {
   assessmentCheckResults,
   assessmentResults,
   configurationVersions,
   durableJobs,
-  organizations,
   runs,
   stateVersions,
   type users,
@@ -69,7 +70,7 @@ function attributesFrom(body: unknown): Record<string, unknown> {
 
 function stringAttribute(attrs: Record<string, unknown>, ...keys: string[]): string | null {
   for (const key of keys) {
-    if (typeof attrs[key] === "string" && attrs[key].trim() !== "") return (attrs[key] as string).trim();
+    if (typeof attrs[key] === "string" && attrs[key].trim() !== "") return (attrs[key]).trim();
   }
   return null;
 }
@@ -166,13 +167,24 @@ async function createStateComparison(context: ParamContext, workspaceId: string,
   return { data: artifactResource(artifact, "state-comparisons") };
 }
 
+async function authorizedPlanBefore(
+  beforeId: string,
+  currentWorkspaceId: string,
+  context: ParamContext,
+): Promise<{ before: Exclude<Awaited<ReturnType<typeof findAuthorizedRun>>, undefined> } | { error: unknown }> {
+  const before = await findAuthorizedRun(beforeId, context.user?.id, context.orgId ?? null, context.teamId ?? null, "run-read");
+  if (before === undefined || before.workspace.id !== currentWorkspaceId) return { error: notFound(context.set) };
+  return { before };
+}
+
 async function createPlanComparison(context: ParamContext, runId: string, attrs: Record<string, unknown>): Promise<unknown> {
   const current = await findAuthorizedRun(runId, context.user?.id, context.orgId ?? null, context.teamId ?? null, "run-read");
   if (current === undefined) return notFound(context.set);
   const beforeId = stringAttribute(attrs, "before-run-id", "beforeRunId");
   if (beforeId === null || beforeId === runId) return errorDocument(context.set, 422, "before-run-id must identify a different run");
-  const before = await findAuthorizedRun(beforeId, context.user?.id, context.orgId ?? null, context.teamId ?? null, "run-read");
-  if (before === undefined || before.workspace.id !== current.workspace.id) return notFound(context.set);
+  const authorized = await authorizedPlanBefore(beforeId, current.workspace.id, context);
+  if ("error" in authorized) return authorized.error;
+  const before = authorized.before;
   const [beforePlan, afterPlan] = await Promise.all([readPlanJsonArtifact(beforeId), readPlanJsonArtifact(runId)]);
   if (beforePlan === undefined || afterPlan === undefined) return errorDocument(context.set, 409, "Both runs need a retained public plan artifact before they can be compared", "Plan Artifact Unavailable");
   const comparison = comparePlanJson(beforePlan, afterPlan);
@@ -257,6 +269,171 @@ function fleetResource(row: PlatformArtifact): Record<string, unknown> {
   return artifactResource(row, "fleet-operations");
 }
 
+function instanceStateId(instance: unknown): string | null {
+  if (instance === null || typeof instance !== "object" || Array.isArray(instance)) return null;
+  const instanceAttrs = (instance as Record<string, unknown>)["attributes"];
+  if (instanceAttrs === null || typeof instanceAttrs !== "object" || Array.isArray(instanceAttrs)) return null;
+  const id = (instanceAttrs as Record<string, unknown>)["id"];
+  return typeof id === "string" ? id : null;
+}
+
+function resourceStateIds(resource: unknown, into: Set<string>): void {
+  if (resource === null || typeof resource !== "object" || Array.isArray(resource)) return;
+  const instances = (resource as Record<string, unknown>)["instances"];
+  if (!Array.isArray(instances)) return;
+  for (const instance of instances) {
+    const id = instanceStateId(instance);
+    if (id !== null) into.add(id);
+  }
+}
+
+function collectExistingStateIds(latest: typeof stateVersions.$inferSelect | undefined): Set<string> {
+  const existingIds = new Set<string>();
+  const existingState = latest === undefined ? null : parseTerraformStatePayload(latest.statePayload);
+  if (existingState === null || !Array.isArray(existingState["resources"])) return existingIds;
+  for (const resource of existingState["resources"]) resourceStateIds(resource, existingIds);
+  return existingIds;
+}
+
+async function driftCheckFingerprint(
+  workspaceId: string,
+  assessment: typeof assessmentResults.$inferSelect,
+): Promise<string> {
+  const checks = await db.query.assessmentCheckResults.findMany({ where: eq(assessmentCheckResults.assessmentResultId, assessment.id), columns: { address: true, kind: true, status: true } });
+  return driftFingerprint({
+    workspaceId,
+    assessmentId: assessment.id,
+    drifted: assessment.drifted,
+    checks: checks.map((check): Record<string, unknown> => ({ address: check.address, kind: check.kind, status: check.status })),
+  });
+}
+
+function driftIncidentPayload(
+  existing: PlatformArtifact | undefined,
+  assessment: typeof assessmentResults.$inferSelect,
+  fingerprint: string,
+  now: number,
+  assignee: string | null,
+): Record<string, unknown> {
+  const historyEntry = { assessmentId: assessment.id, fingerprint, observedAt: new Date(now).toISOString(), drifted: assessment.drifted };
+  return existing === undefined
+    ? {
+        fingerprint,
+        "first-assessment-id": assessment.id,
+        "latest-assessment-id": assessment.id,
+        "observed-at": new Date(now).toISOString(),
+        assignee,
+        comments: [],
+        history: [historyEntry],
+        "snooze-until": null,
+        "resolution-classification": null,
+        "remediation-run-id": null,
+        "assessment-age-ms": 0,
+      }
+    : {
+        ...artifactPayload(existing),
+        "latest-assessment-id": assessment.id,
+        "assessment-age-ms": Math.max(0, now - assessment.createdAt),
+        history: [...(Array.isArray(existing.payload["history"]) ? existing.payload["history"] : []), historyEntry].slice(-100),
+      };
+}
+
+async function persistDriftIncident(
+  existing: PlatformArtifact | undefined,
+  workspace: WorkspaceRow,
+  fingerprint: string,
+  payload: Record<string, unknown>,
+  actorId: string | null,
+  now: number,
+): Promise<PlatformArtifact | undefined> {
+  return existing === undefined
+    ? createPlatformArtifact({ kind: "drift-incident", organizationId: workspace.orgId, workspaceId: workspace.id, actorId, dedupeKey: `drift:${workspace.id}:${fingerprint}`, payload, status: "open" })
+    : updatePlatformArtifact(existing.id, "drift-incident", workspace.orgId, { status: existing.status === "snoozed" && typeof existing.payload["snooze-until"] === "number" && existing.payload["snooze-until"] > now ? "snoozed" : "open", payload });
+}
+
+function incidentResolutionError(attrs: Record<string, unknown>, status: string): { detail: string } | null {
+  if (status !== "resolved") return null;
+  if (stringAttribute(attrs, "resolution-classification", "resolutionClassification") === null) {
+    return { detail: "resolved incidents require an explicit resolution classification" };
+  }
+  if (stringAttribute(attrs, "evidence-assessment-id", "evidenceAssessmentId") === null && attrs["acknowledged-exception"] !== true) {
+    return { detail: "resolved incidents require a subsequent assessment or acknowledged exception" };
+  }
+  return null;
+}
+
+function parseIncidentSnooze(attrs: Record<string, unknown>, status: string): { snoozeUntil: number | null } | { error: { detail: string } } {
+  const until = attrs["snooze-until"] ?? attrs["snoozeUntil"];
+  const snoozeUntil = status === "snoozed" ? typeof until === "string" ? Date.parse(until) : typeof until === "number" ? until : Number.NaN : null;
+  if (status === "snoozed" && (!Number.isFinite(snoozeUntil) || (snoozeUntil!) <= Date.now() || (snoozeUntil!) > Date.now() + 30 * 86_400_000)) {
+    return { error: { detail: "snooze-until must be between now and 30 days from now" } };
+  }
+  return { snoozeUntil };
+}
+
+function incidentUpdatePayload(
+  artifact: PlatformArtifact,
+  attrs: Record<string, unknown>,
+  userId: string | null,
+  snoozeUntil: number | null,
+): Record<string, unknown> {
+  const classification = stringAttribute(attrs, "resolution-classification", "resolutionClassification");
+  const comment = stringAttribute(attrs, "comment");
+  const comments = Array.isArray(artifact.payload["comments"]) ? [...artifact.payload["comments"]] : [];
+  if (comment !== null) comments.push({ body: comment, actorId: userId, createdAt: new Date().toISOString() });
+  const assignee = stringAttribute(attrs, "assignee", "assigned-to");
+  const evidence = stringAttribute(attrs, "evidence-assessment-id", "evidenceAssessmentId");
+  return {
+    ...artifactPayload(artifact),
+    ...(assignee === null ? {} : { assignee }),
+    comments: comments.slice(-100),
+    "snooze-until": snoozeUntil,
+    ...(classification === null ? {} : { "resolution-classification": classification }),
+    ...(evidence === null ? {} : { "evidence-assessment-id": evidence }),
+  };
+}
+
+async function queueDependencyRuns(
+  targets: readonly string[],
+  rootOrgId: string,
+  rowId: string,
+  workspaceId: string,
+  sourceRunId: unknown,
+  context: ParamContext,
+): Promise<Record<string, unknown>[]> {
+  const queuedPlans: Record<string, unknown>[] = [];
+  for (const targetId of targets.slice(0, 100)) {
+    const target = await workspaceByPermission(targetId, context, "plan");
+    if (target === undefined || target.orgId !== rootOrgId) continue;
+    const configuration = await latestConfigurationVersion(target.id);
+    const runId = newResourceId("run");
+    await db.insert(runs).values({ id: runId, workspaceId: target.id, configurationVersionId: configuration?.id ?? null, status: "pending", operation: "plan_only", planOnly: true, autoApply: false, message: `Dependency preview ${rowId} from ${workspaceId}`, createdBy: context.user?.id ?? null, createdAt: Date.now() });
+    queuedPlans.push({ workspaceId: target.id, runId, sourceRunId: sourceRunId ?? null, status: "queued" });
+  }
+  return queuedPlans;
+}
+
+type ImpactEdge = { from: string; to: string; source: "explicit" | "observed-output" | "inferred"; sourceRunId?: string | null };
+
+async function authorizedImpactEdges(
+  rawEdges: readonly Record<string, unknown>[],
+  workspace: WorkspaceRow,
+  sourceRunId: string | null,
+  context: ParamContext,
+): Promise<ImpactEdge[]> {
+  const authorizedEdges: ImpactEdge[] = [];
+  for (const edge of rawEdges) {
+    const from = typeof edge["from"] === "string" ? edge["from"] : workspace.id;
+    const to = typeof edge["to"] === "string" ? edge["to"] : "";
+    if (to === "") continue;
+    const target = await workspaceByPermission(to, context, "read");
+    if (target === undefined || target.orgId !== workspace.orgId) continue;
+    const source = edge["source"] === "observed-output" || edge["source"] === "inferred" ? edge["source"] : "explicit";
+    authorizedEdges.push({ from, to, source, sourceRunId });
+  }
+  return authorizedEdges;
+}
+
 export const platformRoutes = new Elysia({ name: "platform" })
   .use(authPlugin)
   .post("/api/v2/workspaces/:workspace_id/state-comparisons", async (context: ParamContext): Promise<unknown> =>
@@ -294,20 +471,7 @@ export const platformRoutes = new Elysia({ name: "platform" })
     const mappings = validateImportMappings(attrs["mappings"] ?? attrs["resources"]);
     if (mappings.errors.length > 0) return errorDocument(context.set, 422, mappings.errors.join("; "));
     const latest = await db.query.stateVersions.findFirst({ where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")), orderBy: [desc(stateVersions.serial)] });
-    const existingIds = new Set<string>();
-    const existingState = latest === undefined ? null : parseTerraformStatePayload(latest.statePayload);
-    if (existingState !== null && Array.isArray(existingState["resources"])) {
-      for (const resource of existingState["resources"]) {
-        if (resource === null || typeof resource !== "object" || Array.isArray(resource)) continue;
-        const instances = (resource as Record<string, unknown>)["instances"];
-        if (!Array.isArray(instances)) continue;
-        for (const instance of instances) {
-          if (instance === null || typeof instance !== "object" || Array.isArray(instance)) continue;
-          const instanceAttrs = (instance as Record<string, unknown>)["attributes"];
-          if (instanceAttrs !== null && typeof instanceAttrs === "object" && !Array.isArray(instanceAttrs) && typeof (instanceAttrs as Record<string, unknown>)["id"] === "string") existingIds.add((instanceAttrs as Record<string, unknown>)["id"] as string);
-        }
-      }
-    }
+    const existingIds = collectExistingStateIds(latest);
     const conflicts = mappings.mappings.filter((mapping): boolean => existingIds.has(mapping.providerId)).map((mapping): string => mapping.address);
     const generated = mappings.mappings.map(importConfiguration);
     const artifact = await createPlatformArtifact({
@@ -373,40 +537,12 @@ export const platformRoutes = new Elysia({ name: "platform" })
     if (assessment === undefined) return notFound(context.set);
     const workspace = await workspaceByPermission(assessment.workspaceId, context, "run-tasks");
     if (workspace === undefined) return notFound(context.set);
-    const checks = await db.query.assessmentCheckResults.findMany({ where: eq(assessmentCheckResults.assessmentResultId, assessmentId), columns: { address: true, kind: true, status: true } });
-    const fingerprint = driftFingerprint({
-      workspaceId: workspace.id,
-      assessmentId,
-      drifted: assessment.drifted,
-      checks: checks.map((check): Record<string, unknown> => ({ address: check.address, kind: check.kind, status: check.status })),
-    });
+    const fingerprint = await driftCheckFingerprint(workspace.id, assessment);
     const incidents = await listPlatformArtifacts({ kind: "drift-incident", organizationId: workspace.orgId, workspaceId: workspace.id });
     const existing = incidents.find((row): boolean => row.payload["fingerprint"] === fingerprint && row.status !== "resolved");
     const now = Date.now();
-    const historyEntry = { assessmentId, fingerprint, observedAt: new Date(now).toISOString(), drifted: assessment.drifted };
-    const payload = existing === undefined
-      ? {
-          fingerprint,
-          "first-assessment-id": assessmentId,
-          "latest-assessment-id": assessmentId,
-          "observed-at": new Date(now).toISOString(),
-          assignee: stringAttribute(attributesFrom(context.body), "assignee", "assigned-to"),
-          comments: [],
-          history: [historyEntry],
-          "snooze-until": null,
-          "resolution-classification": null,
-          "remediation-run-id": null,
-          "assessment-age-ms": 0,
-        }
-      : {
-          ...artifactPayload(existing),
-          "latest-assessment-id": assessmentId,
-          "assessment-age-ms": Math.max(0, now - assessment.createdAt),
-          history: [...(Array.isArray(existing.payload["history"]) ? existing.payload["history"] : []), historyEntry].slice(-100),
-        };
-    const artifact = existing === undefined
-      ? await createPlatformArtifact({ kind: "drift-incident", organizationId: workspace.orgId, workspaceId: workspace.id, actorId: context.user?.id ?? null, dedupeKey: `drift:${workspace.id}:${fingerprint}`, payload, status: "open" })
-      : await updatePlatformArtifact(existing.id, "drift-incident", workspace.orgId, { status: existing.status === "snoozed" && typeof existing.payload["snooze-until"] === "number" && existing.payload["snooze-until"] > now ? "snoozed" : "open", payload });
+    const payload = driftIncidentPayload(existing, assessment, fingerprint, now, stringAttribute(attributesFrom(context.body), "assignee", "assigned-to"));
+    const artifact = await persistDriftIncident(existing, workspace, fingerprint, payload, context.user?.id ?? null, now);
     if (artifact === undefined) return notFound(context.set);
     context.set.status = existing === undefined ? 201 : 200;
     return { data: artifactResource(artifact, "drift-incidents") };
@@ -415,35 +551,17 @@ export const platformRoutes = new Elysia({ name: "platform" })
     const attrs = attributesFrom(context.body);
     const row = await db.query.durableJobs.findFirst({ where: and(eq(durableJobs.id, context.params["incident_id"] ?? ""), eq(durableJobs.kind, "drift-incident")) });
     if (row === undefined || typeof row.payload["organizationId"] !== "string") return notFound(context.set);
-    const organizationId = row.payload["organizationId"] as string;
+    const organizationId = row.payload["organizationId"];
     const artifact = row as PlatformArtifact;
     const workspaceId = typeof row.payload["workspaceId"] === "string" ? row.payload["workspaceId"] : "";
     if (await workspaceByPermission(workspaceId, context, "run-tasks") === undefined) return notFound(context.set);
     const status = stringAttribute(attrs, "status") ?? artifact.status;
     if (!["open", "snoozed", "resolved"].includes(status)) return errorDocument(context.set, 422, "status must be open, snoozed, or resolved");
-    const classification = stringAttribute(attrs, "resolution-classification", "resolutionClassification");
-    if (status === "resolved" && classification === null) return errorDocument(context.set, 422, "resolved incidents require an explicit resolution classification");
-    if (status === "resolved" && stringAttribute(attrs, "evidence-assessment-id", "evidenceAssessmentId") === null && attrs["acknowledged-exception"] !== true) {
-      return errorDocument(context.set, 422, "resolved incidents require a subsequent assessment or acknowledged exception");
-    }
-    const until = attrs["snooze-until"] ?? attrs["snoozeUntil"];
-    const snoozeUntil = status === "snoozed" ? typeof until === "string" ? Date.parse(until) : typeof until === "number" ? until : Number.NaN : null;
-    if (status === "snoozed" && (!Number.isFinite(snoozeUntil) || (snoozeUntil as number) <= Date.now() || (snoozeUntil as number) > Date.now() + 30 * 86_400_000)) {
-      return errorDocument(context.set, 422, "snooze-until must be between now and 30 days from now");
-    }
-    const comment = stringAttribute(attrs, "comment");
-    const comments = Array.isArray(artifact.payload["comments"]) ? [...artifact.payload["comments"]] : [];
-    if (comment !== null) comments.push({ body: comment, actorId: context.user?.id ?? null, createdAt: new Date().toISOString() });
-    const assignee = stringAttribute(attrs, "assignee", "assigned-to");
-    const evidence = stringAttribute(attrs, "evidence-assessment-id", "evidenceAssessmentId");
-    const payload = {
-      ...artifactPayload(artifact),
-      ...(assignee === null ? {} : { assignee }),
-      comments: comments.slice(-100),
-      "snooze-until": snoozeUntil,
-      ...(classification === null ? {} : { "resolution-classification": classification }),
-      ...(evidence === null ? {} : { "evidence-assessment-id": evidence }),
-    };
+    const resolutionError = incidentResolutionError(attrs, status);
+    if (resolutionError !== null) return errorDocument(context.set, 422, resolutionError.detail);
+    const snooze = parseIncidentSnooze(attrs, status);
+    if ("error" in snooze) return errorDocument(context.set, 422, snooze.error.detail);
+    const payload = incidentUpdatePayload(artifact, attrs, context.user?.id ?? null, snooze.snoozeUntil);
     const updated = await updatePlatformArtifact(artifact.id, "drift-incident", organizationId, { status, payload });
     if (updated === undefined) return notFound(context.set);
     return { data: artifactResource(updated, "drift-incidents") };
@@ -483,16 +601,7 @@ export const platformRoutes = new Elysia({ name: "platform" })
       if (source === undefined || source.workspace.id !== workspace.id) return notFound(context.set);
     }
     const rawEdges = jsonArray(attrs["edges"] ?? attrs["dependencies"]);
-    const authorizedEdges: { from: string; to: string; source: "explicit" | "observed-output" | "inferred"; sourceRunId?: string | null }[] = [];
-    for (const edge of rawEdges) {
-      const from = typeof edge["from"] === "string" ? edge["from"] : workspace.id;
-      const to = typeof edge["to"] === "string" ? edge["to"] : "";
-      if (to === "") continue;
-      const target = await workspaceByPermission(to, context, "read");
-      if (target === undefined || target.orgId !== workspace.orgId) continue;
-      const source = edge["source"] === "observed-output" || edge["source"] === "inferred" ? edge["source"] : "explicit";
-      authorizedEdges.push({ from, to, source, sourceRunId });
-    }
+    const authorizedEdges = await authorizedImpactEdges(rawEdges, workspace, sourceRunId, context);
     const graph = dependencyImpact({ rootWorkspaceId: workspace.id, edges: authorizedEdges, maxFanout: typeof attrs["max-fanout"] === "number" ? attrs["max-fanout"] : 100 });
     const artifact = await createPlatformArtifact({
       kind: "dependency-impact",
@@ -508,7 +617,7 @@ export const platformRoutes = new Elysia({ name: "platform" })
   .post("/api/v2/dependency-impact-previews/:preview_id/queue", async (context: ParamContext): Promise<unknown> => {
     const row = await db.query.durableJobs.findFirst({ where: and(eq(durableJobs.id, context.params["preview_id"] ?? ""), eq(durableJobs.kind, "dependency-impact")) });
     if (row === undefined || typeof row.payload["organizationId"] !== "string") return notFound(context.set);
-    const organizationId = row.payload["organizationId"] as string;
+    const organizationId = row.payload["organizationId"];
     const workspaceId = typeof row.payload["workspaceId"] === "string" ? row.payload["workspaceId"] : "";
     const root = await workspaceByPermission(workspaceId, context, "plan");
     if (root === undefined) return notFound(context.set);
@@ -518,15 +627,7 @@ export const platformRoutes = new Elysia({ name: "platform" })
     const requested = stringArrayAttribute(attributesFrom(context.body), "workspace-ids", "workspaceIds");
     const edges = jsonArray(payload["edges"]);
     const targets = [...new Set((requested.length > 0 ? requested : edges.map((edge): string => typeof edge["to"] === "string" ? edge["to"] : "").filter(Boolean)))];
-    const queuedPlans: Record<string, unknown>[] = [];
-    for (const targetId of targets.slice(0, 100)) {
-      const target = await workspaceByPermission(targetId, context, "plan");
-      if (target === undefined || target.orgId !== root.orgId) continue;
-      const configuration = await latestConfigurationVersion(target.id);
-      const runId = newResourceId("run");
-      await db.insert(runs).values({ id: runId, workspaceId: target.id, configurationVersionId: configuration?.id ?? null, status: "pending", operation: "plan_only", planOnly: true, autoApply: false, message: `Dependency preview ${row.id} from ${workspaceId}`, createdBy: context.user?.id ?? null, createdAt: Date.now() });
-      queuedPlans.push({ workspaceId: target.id, runId, sourceRunId: payload["source-run-id"] ?? null, status: "queued" });
-    }
+    const queuedPlans = await queueDependencyRuns(targets, root.orgId, row.id, workspaceId, payload["source-run-id"], context);
     const updated = await updatePlatformArtifact(row.id, "dependency-impact", organizationId, { status: "plans-queued", payload: { ...payload, "queued-plans": queuedPlans } });
     if (updated === undefined) return notFound(context.set);
     return { data: artifactResource(updated, "dependency-impact-previews") };
@@ -582,7 +683,7 @@ export const platformRoutes = new Elysia({ name: "platform" })
     const manifest = payload["manifest"];
     if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest)) return errorDocument(context.set, 409, "The preview has no immutable selection manifest");
     const manifestRecord = manifest as Record<string, unknown>;
-    const expectedDigest = typeof manifestRecord["selection-digest"] === "string" ? manifestRecord["selection-digest"] as string : "";
+    const expectedDigest = typeof manifestRecord["selection-digest"] === "string" ? manifestRecord["selection-digest"] : "";
     const suppliedDigest = stringAttribute(attrs, "selection-digest", "selectionDigest");
     if (suppliedDigest !== null && suppliedDigest !== expectedDigest) return errorDocument(context.set, 409, "The selection manifest digest does not match the preview", "Selection Changed");
     return errorDocument(context.set, 501, "Fleet execution is not implemented. This manifest remains a preview; no target actions have been queued or completed.", "Fleet Execution Unavailable");

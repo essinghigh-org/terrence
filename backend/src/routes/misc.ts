@@ -6,6 +6,7 @@ import { db } from "../db";
 import { runTriggers, auditLogs, githubWebhookDeliveries, workspaces, workspaceVariables, users, organizationMemberships, teams } from "../db/schema";
 import { eq, and, asc, count, desc, inArray, or, sql, type SQL } from "drizzle-orm";
 import { auditLog, checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace, pageRequest, pagination, workspaceIdsForPermission } from "../lib/utils";
+import type { RequestWithUrl } from "../lib/utils";
 import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
 import { workspaceVariableResource } from "../lib/response";
@@ -261,6 +262,27 @@ async function pagedAuditLogs(where: SQL | undefined, page: AuditLogPage): Promi
 const AUDIT_LOG_ACCESS_DENIED = Symbol("audit-log-access-denied");
 type AuditLogResult = PagedAuditLogs | null | typeof AUDIT_LOG_ACCESS_DENIED;
 
+async function auditLogOrgIdsForUser(
+  user: Readonly<typeof users.$inferSelect>,
+): Promise<string[]> {
+  const scopes = currentTokenScopes();
+  const memberships = await db.query.organizationMemberships.findMany({
+    where: and(eq(organizationMemberships.userId, user.id), eq(organizationMemberships.status, "active")),
+    columns: { orgId: true, role: true },
+  });
+  if (scopes !== null) {
+    if (!scopeGrants(scopes, "audit-logs:read")) return [];
+    const candidateOrgIds = user.isSiteAdmin === true || user.isSiteAuditor === true
+      ? (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id)
+      : memberships.filter((membership): boolean => membership.role === "owner").map(({ orgId }): string => orgId);
+    return candidateOrgIds.filter((orgId): boolean => scopeCoversOrg(scopes, orgId));
+  }
+  if (user.isSiteAdmin === true || user.isSiteAuditor === true) {
+    return (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id);
+  }
+  return memberships.filter((membership): boolean => membership.role === "owner").map(({ orgId }): string => orgId);
+}
+
 async function auditLogsForPrincipal(
   user: Readonly<typeof users.$inferSelect> | null | undefined,
   token: Readonly<{ id: string; orgId: string | null; teamId: string | null; tokenType?: string; scopes?: string | null }> | null | undefined,
@@ -276,25 +298,7 @@ async function auditLogsForPrincipal(
     }
     orgIds = [token.orgId];
   } else {
-    const scopes = currentTokenScopes();
-    const memberships = await db.query.organizationMemberships.findMany({
-      where: and(eq(organizationMemberships.userId, user.id), eq(organizationMemberships.status, "active")),
-      columns: { orgId: true, role: true },
-    });
-    if (scopes !== null) {
-      if (!scopeGrants(scopes, "audit-logs:read")) {
-        orgIds = [];
-      } else {
-        const candidateOrgIds = user.isSiteAdmin === true || user.isSiteAuditor === true
-          ? (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id)
-          : memberships.filter((membership): boolean => membership.role === "owner").map(({ orgId }): string => orgId);
-        orgIds = candidateOrgIds.filter((orgId): boolean => scopeCoversOrg(scopes, orgId));
-      }
-    } else if (user.isSiteAdmin === true || user.isSiteAuditor === true) {
-      orgIds = (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id);
-    } else {
-      orgIds = memberships.filter((membership): boolean => membership.role === "owner").map(({ orgId }): string => orgId);
-    }
+    orgIds = await auditLogOrgIdsForUser(user);
   }
   const uniqueOrgIds = [...new Set(orgIds)];
   if (uniqueOrgIds.length === 0) return user === null || user === undefined ? null : { logs: [], total: 0 };
@@ -327,28 +331,259 @@ function firstWebhookHeader(request: Request, names: readonly string[]): string 
   return null;
 }
 
+function parseVariableAttributes(body: unknown): { data: Record<string, unknown>; attributes: Record<string, unknown> } {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  return { data, attributes };
+}
+
+async function buildVariablePatchUpdates(
+  attributes: Record<string, unknown>,
+  variable: typeof workspaceVariables.$inferSelect,
+): Promise<Partial<typeof workspaceVariables.$inferInsert>> {
+  let sensitive = typeof attributes["sensitive"] === "boolean" ? attributes["sensitive"] : variable.sensitive === true;
+  if (variable.sensitive === true && !sensitive && attributes["value"] === undefined) sensitive = true;
+  // Re-encrypt when the value or sensitive flag changed; flipping sensitive
+  // on encrypts the existing plaintext (todo 169).
+  const suppliedValue = typeof attributes["value"] === "string" ? attributes["value"] : null;
+  const effectiveValue = suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value);
+  const stored = await variableValueForWrite(sensitive, effectiveValue);
+  return {
+    key: typeof attributes["key"] === "string" ? attributes["key"] : variable.key,
+    value: stored.value,
+    valueEncrypted: stored.valueEncrypted,
+    category: typeof attributes["category"] === "string" ? attributes["category"] : variable.category,
+    sensitive,
+    hcl: typeof attributes["hcl"] === "boolean" ? attributes["hcl"] : variable.hcl === true,
+    description: attributes["description"] === null
+      ? null
+      : typeof attributes["description"] === "string" ? attributes["description"] : variable.description,
+  };
+}
+
+function parseVariableWorkspaceId(data: Record<string, unknown>): { workspaceId: string; workspaceData: Record<string, unknown> } {
+  const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
+  const workspaceRelationship = relationships["workspace"] !== null && typeof relationships["workspace"] === "object"
+    ? relationships["workspace"] as Record<string, unknown>
+    : {};
+  const workspaceData = workspaceRelationship["data"] !== null && typeof workspaceRelationship["data"] === "object"
+    ? workspaceRelationship["data"] as Record<string, unknown>
+    : {};
+  return { workspaceId: typeof workspaceData["id"] === "string" ? workspaceData["id"] : "", workspaceData };
+}
+
+async function buildNewVariableInsert(
+  workspaceId: string,
+  normalizedAttributes: Record<string, unknown> & { value: string },
+): Promise<typeof workspaceVariables.$inferInsert> {
+  const categoryValue: unknown = normalizedAttributes["category"];
+  const descriptionValue: unknown = normalizedAttributes["description"];
+  const sensitiveValue = normalizedAttributes["sensitive"] === true;
+  // Sensitive values are encrypted at rest (todo 167/168).
+  const stored = await variableValueForWrite(sensitiveValue, normalizedAttributes.value);
+  return {
+    id: newResourceId("var"),
+    workspaceId,
+    key: normalizedAttributes["key"] as string,
+    value: stored.value,
+    valueEncrypted: stored.valueEncrypted,
+    category: categoryValue === "env" ? "env" : "terraform",
+    sensitive: sensitiveValue,
+    hcl: normalizedAttributes["hcl"] === true,
+    description: typeof descriptionValue === "string" ? descriptionValue : null,
+  };
+}
+
+function parseRunTriggerSourceable(body: unknown): { srcId: string; srcType: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+  const sourceable = rels["sourceable"] as Record<string, unknown> | undefined;
+  const srcData = typeof sourceable?.["data"] === "object" && sourceable["data"] !== null ? (sourceable["data"] as Record<string, unknown>) : undefined;
+  return { srcId: typeof srcData?.["id"] === "string" ? srcData["id"] : "", srcType: srcData?.["type"] };
+}
+
+async function resolveRunTriggerSource(srcId: string, orgId: string, workspaceId: string): Promise<Readonly<{ name: string }> | Readonly<{ error: string }>> {
+  const srcWs = await db.query.workspaces.findFirst({ where: eq(workspaces.id, srcId) });
+  if (srcWs === undefined || srcWs.orgId !== orgId) return { error: "Sourceable workspace must belong to the same organization" };
+  if (srcId === workspaceId) return { error: "Sourceable workspace cannot be the workspace itself" };
+  return { name: srcWs.name };
+}
+
+async function verifyApprovalWebhookRequest(
+  secret: unknown,
+  request: Request,
+  body: unknown,
+  set: SetObj,
+): Promise<Readonly<{ rawBody: string }> | Readonly<{ error: unknown }>> {
+  if (typeof secret !== "string" || secret === "") {
+    return { error: webhookUnauthorized(set, "Approval webhook secret is not configured") };
+  }
+  const rawBody = typeof body === "string" ? body : await request.text().catch((): string => "");
+  const signature = request.headers.get("x-terrence-signature");
+  if (signature === null) {
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Missing signature" }] } };
+  }
+  const expected = Buffer.from(createHmac("sha256", secret).update(rawBody).digest("hex"));
+  const provided = Buffer.from(signature);
+  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+    return { error: webhookUnauthorized(set, "Invalid approval webhook signature") };
+  }
+  return { rawBody };
+}
+
+function parseApprovalWebhookPayload(rawBody: string, set: SetObj): Readonly<{ runId: string }> | Readonly<{ error: unknown }> {
+  let parsed: Readonly<Record<string, unknown>> = {};
+  try {
+    const value: unknown = JSON.parse(rawBody);
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) parsed = value as Readonly<Record<string, unknown>>;
+  } catch {
+    return { error: webhookUnprocessable(set, "Invalid JSON payload") };
+  }
+  const runId = typeof parsed["run"] === "string" ? parsed["run"] : typeof parsed["run_id"] === "string" ? parsed["run_id"] : "";
+  if (runId === "") return { error: webhookUnprocessable(set, "Missing run id") };
+  const action = typeof parsed["action"] === "string" ? parsed["action"] : "";
+  if (action !== "confirm") {
+    return { error: webhookUnprocessable(set, "Invalid action; expected \"confirm\"") };
+  }
+  return { runId };
+}
+
+async function confirmRunApplyForWebhook(runId: string, set: SetObj): Promise<unknown> {
+  // The HMAC is the actor for this path; do not leave the event looking like
+  // an anonymous browser request merely because the webhook has no bearer.
+  setAuditPrincipal({ userId: null, credentialClass: "system-token", authenticated: true });
+  const outcome = await confirmRunForApply(runId, { isWebhookApproval: true });
+  if (!outcome.ok) {
+    await auditLog("apply", "runs", runId, null, null, { source: "approval-webhook", reason: outcome.reason ?? "apply could not be started" }, { result: "denied", immutable: true });
+    (set as { status: number }).status = 409;
+    return { errors: [{ status: "409", title: "Conflict", detail: outcome.reason ?? "Apply could not be started" }] };
+  }
+  log.info(`Approval webhook confirmed apply for run ${runId}`);
+  return { data: { id: runId, type: "runs", attributes: { status: outcome.status } } };
+}
+
+async function verifyGitHubWebhookSignature(
+  request: Request,
+  body: unknown,
+  set: SetObj,
+): Promise<Readonly<{ rawBody: string }> | Readonly<{ error: unknown }>> {
+  const secret = await getGitHubWebhookSecret();
+  const signature = request.headers.get("x-hub-signature-256");
+  const rawBody = typeof body === "string" ? body : await request.text().catch((): string => "");
+  if (typeof secret !== "string" || secret.length === 0) {
+    return { error: webhookUnauthorized(set, "GitHub webhook secret is not configured") };
+  }
+  if (signature === null) {
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Missing signature" }] } };
+  }
+  const expectedSignature = Buffer.from(`sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`);
+  const providedSignature = Buffer.from(signature);
+  if (providedSignature.length !== expectedSignature.length || !timingSafeEqual(providedSignature, expectedSignature)) {
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid signature" }] } };
+  }
+  return { rawBody };
+}
+
+async function claimGitHubDelivery(request: Request): Promise<{ deliveryId: string | null; duplicate: boolean }> {
+  const deliveryHeader = request.headers.get("x-github-delivery");
+  const deliveryId = deliveryHeader !== null && deliveryHeader !== "" ? deliveryHeader : null;
+  if (deliveryId === null) return { deliveryId: null, duplicate: false };
+  const claimed = await db.insert(githubWebhookDeliveries)
+    .values({ id: deliveryId, status: "queued", receivedAt: Date.now() })
+    .onConflictDoNothing()
+    .returning({ id: githubWebhookDeliveries.id });
+  return { deliveryId, duplicate: claimed.length === 0 };
+}
+
+async function filteredWorkspaceVariables(
+  orgName: string,
+  workspaceName: string,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+  request: RequestWithUrl | undefined,
+  set: SetObj,
+): Promise<unknown> {
+  const org = await cachedOrgByName(orgName);
+  const workspace = org === undefined
+    ? undefined
+    : await db.query.workspaces.findFirst({
+        where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)),
+      });
+  const authorized = workspace === undefined
+    ? undefined
+    : await findAuthorizedWorkspace(workspace.id, userId, orgId, teamId, "variables-read");
+  if (authorized === undefined) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
+  const requestWithUrl = request ?? { url: "http://localhost/api/v2/vars" };
+  const where = eq(workspaceVariables.workspaceId, authorized.id);
+  const page = pageRequest(requestWithUrl);
+  const [variables, countRows] = await Promise.all([
+    db.select().from(workspaceVariables)
+      .where(where)
+      .orderBy(asc(workspaceVariables.id))
+      .limit(page.size)
+      .offset((page.number - 1) * page.size),
+    db.select({ total: count() }).from(workspaceVariables).where(where),
+  ]);
+  const totalCount = countRows[0]?.total ?? 0;
+  return {
+    data: variables.map(globalVariableResource),
+    ...pagination(requestWithUrl, page.number, page.size, totalCount),
+  };
+}
+
+function parseRunTriggerSourceIds(items: unknown): { ids: string[] } | { error: string } {
+  if (!Array.isArray(items)) {
+    return { error: "Run trigger relationships must be an array of workspace resource identifiers" };
+  }
+  const sourceIds: string[] = [];
+  for (const item of items) {
+    if (item === null || typeof item !== "object") {
+      return { error: "Run trigger source must be a workspace resource identifier" };
+    }
+    const identifier = item as Record<string, unknown>;
+    if (identifier["type"] !== "workspaces" || typeof identifier["id"] !== "string" || identifier["id"] === "") {
+      return { error: "Run trigger source must be a workspace resource identifier" };
+    }
+    sourceIds.push(identifier["id"]);
+  }
+  return { ids: sourceIds };
+}
+
+async function insertRunTriggerSources(orgId: string, workspaceId: string, sourceIds: string[]): Promise<string | null> {
+  const uniqueSourceIds = [...new Set(sourceIds)];
+  const sourceWorkspaces = uniqueSourceIds.length === 0
+    ? []
+    : await db.query.workspaces.findMany({ where: inArray(workspaces.id, uniqueSourceIds), columns: { id: true, orgId: true } });
+  const validSources = new Set(sourceWorkspaces.filter((source): boolean => source.orgId === orgId && source.id !== workspaceId).map((source): string => source.id));
+  if (validSources.size !== uniqueSourceIds.length) {
+    return "Sourceable workspace must belong to the same organization and cannot be the workspace itself";
+  }
+  if (uniqueSourceIds.length > 0) {
+    await db.insert(runTriggers).values(uniqueSourceIds.map((sourceWorkspaceId: string): typeof runTriggers.$inferInsert => ({
+      id: newResourceId("rt"),
+      workspaceId,
+      sourceWorkspaceId,
+    }))).onConflictDoNothing();
+  }
+  return null;
+}
+
 export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
     .post("/api/webhooks/github", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
-    const secret = await getGitHubWebhookSecret();
-    const signature = request.headers.get("x-hub-signature-256");
-    const rawBody = typeof body === "string" ? body : await request.text().catch((): string => "");
-    if (typeof secret !== "string" || secret.length === 0) {
-      return webhookUnauthorized(set, "GitHub webhook secret is not configured");
-    }
-    if (signature === null) {
-        (set as { status: number }).status = 401;
-        return { errors: [{ status: "401", title: "Unauthorized", detail: "Missing signature" }] };
-      }
-
-      const expectedSignature = Buffer.from(`sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`);
-      const providedSignature = Buffer.from(signature);
-      if (providedSignature.length !== expectedSignature.length || !timingSafeEqual(providedSignature, expectedSignature)) {
-        (set as { status: number }).status = 401;
-        return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid signature" }] };
-      }
-
+    const verified = await verifyGitHubWebhookSignature(request, body, set);
+    if ("error" in verified) return verified.error;
+    const rawBody = verified.rawBody;
     const eventName = request.headers.get("x-github-event");
     if (eventName !== null) {
       let payload: Record<string, unknown> = {};
@@ -356,21 +591,13 @@ export const miscRoutes = new Elysia({ name: "misc" })
         const parsed: unknown = JSON.parse(rawBody);
         if (parsed !== null && typeof parsed === "object") payload = parsed as Record<string, unknown>;
       } catch {}
-      const deliveryHeader = request.headers.get("x-github-delivery");
-      const deliveryId = deliveryHeader !== null && deliveryHeader !== "" ? deliveryHeader : null;
-      if (deliveryId !== null) {
-        const claimed = await db.insert(githubWebhookDeliveries)
-          .values({ id: deliveryId, status: "queued", receivedAt: Date.now() })
-          .onConflictDoNothing()
-          .returning({ id: githubWebhookDeliveries.id });
-        if (claimed.length === 0) {
-          // Redelivery of a delivery we already hold: acknowledged without
-          // reprocessing (todo 184/199). A failed delivery stays failed until
-          // the admin retry endpoint re-arms it.
-          return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
-        }
+      const { deliveryId, duplicate } = await claimGitHubDelivery(request);
+      if (duplicate) {
+        // Redelivery of a delivery we already hold: acknowledged without
+        // reprocessing (todo 184/199). A failed delivery stays failed until
+        // the admin retry endpoint re-arms it.
+        return webhookAcknowledged;
       }
-
       if (eventName === "push" || eventName === "pull_request") {
         log.info(`Received GitHub ${eventName} event.`);
       }
@@ -384,7 +611,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
       });
     }
 
-    return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
+    return webhookAcknowledged;
   })
   .post("/api/webhooks/gitlab", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
     const secret = process.env["GITLAB_WEBHOOK_SECRET"];
@@ -440,45 +667,11 @@ export const miscRoutes = new Elysia({ name: "misc" })
     if (settings["enabled"] !== true) {
       return webhookUnprocessable(set, "External apply approval is not enabled");
     }
-    const secret = settings["secret"];
-    if (typeof secret !== "string" || secret === "") {
-      return webhookUnauthorized(set, "Approval webhook secret is not configured");
-    }
-    const rawBody = typeof body === "string" ? body : await request.text().catch((): string => "");
-    const signature = request.headers.get("x-terrence-signature");
-    if (signature === null) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Missing signature" }] };
-    }
-    const expected = Buffer.from(createHmac("sha256", secret).update(rawBody).digest("hex"));
-    const provided = Buffer.from(signature);
-    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
-      return webhookUnauthorized(set, "Invalid approval webhook signature");
-    }
-    let parsed: Readonly<Record<string, unknown>> = {};
-    try {
-      const value: unknown = JSON.parse(rawBody);
-      if (value !== null && typeof value === "object" && !Array.isArray(value)) parsed = value as Readonly<Record<string, unknown>>;
-    } catch {
-      return webhookUnprocessable(set, "Invalid JSON payload");
-    }
-    const runId = typeof parsed["run"] === "string" ? parsed["run"] : typeof parsed["run_id"] === "string" ? parsed["run_id"] : "";
-    if (runId === "") return webhookUnprocessable(set, "Missing run id");
-    const action = typeof parsed["action"] === "string" ? parsed["action"] : "";
-    if (action !== "confirm") {
-      return webhookUnprocessable(set, "Invalid action; expected \"confirm\"");
-    }
-    // The HMAC is the actor for this path; do not leave the event looking like
-    // an anonymous browser request merely because the webhook has no bearer.
-    setAuditPrincipal({ userId: null, credentialClass: "system-token", authenticated: true });
-    const outcome = await confirmRunForApply(runId, { isWebhookApproval: true });
-    if (!outcome.ok) {
-      await auditLog("apply", "runs", runId, null, null, { source: "approval-webhook", reason: outcome.reason ?? "apply could not be started" }, { result: "denied", immutable: true });
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: outcome.reason ?? "Apply could not be started" }] };
-    }
-    log.info(`Approval webhook confirmed apply for run ${runId}`);
-    return { data: { id: runId, type: "runs", attributes: { status: outcome.status } } };
+    const verified = await verifyApprovalWebhookRequest(settings["secret"], request, body, set);
+    if ("error" in verified) return verified.error;
+    const parsedRequest = parseApprovalWebhookPayload(verified.rawBody, set);
+    if ("error" in parsedRequest) return parsedRequest.error;
+    return confirmRunApplyForWebhook(parsedRequest.runId, set);
   })
   // --- Entitlements ---
   .get("/api/v2/entitlements", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -525,34 +718,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     }
 
     if (orgName !== null && workspaceName !== null) {
-      const org = await cachedOrgByName(orgName);
-      const workspace = org === undefined
-        ? undefined
-        : await db.query.workspaces.findFirst({
-          where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)),
-        });
-      const authorized = workspace === undefined
-        ? undefined
-        : await findAuthorizedWorkspace(workspace.id, user?.id, orgId, teamId, "variables-read");
-      if (authorized === undefined) {
-        (set as { status: number }).status = 404;
-        return { errors: [{ status: "404", title: "Not Found" }] };
-      }
-      const where = eq(workspaceVariables.workspaceId, authorized.id);
-      const page = pageRequest(request ?? { url: "http://localhost/api/v2/vars" });
-      const [variables, countRows] = await Promise.all([
-        db.select().from(workspaceVariables)
-          .where(where)
-          .orderBy(asc(workspaceVariables.id))
-          .limit(page.size)
-          .offset((page.number - 1) * page.size),
-        db.select({ total: count() }).from(workspaceVariables).where(where),
-      ]);
-      const totalCount = countRows[0]?.total ?? 0;
-      return {
-        data: variables.map(globalVariableResource),
-        ...pagination(request ?? { url: "http://localhost/api/v2/vars" }, page.number, page.size, totalCount),
-      };
+      return filteredWorkspaceVariables(orgName, workspaceName, user?.id, orgId, teamId, request, set);
     }
 
     const requestWithUrl = request ?? { url: "http://localhost/api/v2/vars" };
@@ -579,17 +745,8 @@ export const miscRoutes = new Elysia({ name: "misc" })
     };
   })
   .post("/api/v2/vars", async ({ body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
-    const workspaceRelationship = relationships["workspace"] !== null && typeof relationships["workspace"] === "object"
-      ? relationships["workspace"] as Record<string, unknown>
-      : {};
-    const workspaceData = workspaceRelationship["data"] !== null && typeof workspaceRelationship["data"] === "object"
-      ? workspaceRelationship["data"] as Record<string, unknown>
-      : {};
-    const workspaceId = typeof workspaceData["id"] === "string" ? workspaceData["id"] : "";
+    const { data, attributes } = parseVariableAttributes(body);
+    const { workspaceId, workspaceData } = parseVariableWorkspaceId(data);
     const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "variables-write");
     const normalizedAttributes: Record<string, unknown> & { value: string } = {
       ...attributes,
@@ -604,22 +761,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
       (set as { status: number }).status = workspace === undefined ? 404 : 422;
       return { errors: [{ status: String(workspace === undefined ? 404 : 422), title: workspace === undefined ? "Not Found" : "Unprocessable Entity" }] };
     }
-    const categoryValue: unknown = normalizedAttributes["category"];
-    const descriptionValue: unknown = normalizedAttributes["description"];
-    const sensitiveValue = normalizedAttributes["sensitive"] === true;
-    // Sensitive values are encrypted at rest (todo 167/168).
-    const stored = await variableValueForWrite(sensitiveValue, normalizedAttributes.value);
-    const variable: typeof workspaceVariables.$inferInsert = {
-      id: newResourceId("var"),
-      workspaceId,
-      key: normalizedAttributes["key"] as string,
-      value: stored.value,
-      valueEncrypted: stored.valueEncrypted,
-      category: categoryValue === "env" ? "env" : "terraform",
-      sensitive: sensitiveValue,
-      hcl: normalizedAttributes["hcl"] === true,
-      description: typeof descriptionValue === "string" ? descriptionValue : null,
-    };
+    const variable = await buildNewVariableInsert(workspaceId, normalizedAttributes);
     await db.insert(workspaceVariables).values(variable);
     (set as { status: number }).status = 201;
     return { data: globalVariableResource(variable as WorkspaceVariable) };
@@ -634,31 +776,12 @@ export const miscRoutes = new Elysia({ name: "misc" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+    const { data, attributes } = parseVariableAttributes(body);
     if ((data["type"] !== undefined && data["type"] !== "vars") || !validVariableAttributes(attributes, true)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
-    let sensitive = typeof attributes["sensitive"] === "boolean" ? attributes["sensitive"] : variable.sensitive === true;
-    if (variable.sensitive === true && !sensitive && attributes["value"] === undefined) sensitive = true;
-    // Re-encrypt when the value or sensitive flag changed; flipping sensitive
-    // on encrypts the existing plaintext (todo 169).
-    const suppliedValue = typeof attributes["value"] === "string" ? attributes["value"] : null;
-    const effectiveValue = suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value);
-    const stored = await variableValueForWrite(sensitive, effectiveValue);
-    const updates: Partial<typeof workspaceVariables.$inferInsert> = {
-      key: typeof attributes["key"] === "string" ? attributes["key"] : variable.key,
-      value: stored.value,
-      valueEncrypted: stored.valueEncrypted,
-      category: typeof attributes["category"] === "string" ? attributes["category"] : variable.category,
-      sensitive,
-      hcl: typeof attributes["hcl"] === "boolean" ? attributes["hcl"] : variable.hcl === true,
-      description: attributes["description"] === null
-        ? null
-        : typeof attributes["description"] === "string" ? attributes["description"] : variable.description,
-    };
+    const updates = await buildVariablePatchUpdates(attributes, variable);
     await db.update(workspaceVariables).set(updates).where(eq(workspaceVariables.id, variable.id));
     return { data: globalVariableResource({ ...variable, ...updates } as WorkspaceVariable) };
   })
@@ -781,23 +904,20 @@ export const miscRoutes = new Elysia({ name: "misc" })
     const workspaceId = params["workspace_id"] ?? "";
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId, "admin")) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-    const sourceable = rels["sourceable"] as Record<string, unknown> | undefined;
-    const srcData = typeof sourceable?.["data"] === "object" && sourceable["data"] !== null ? (sourceable["data"] as Record<string, unknown>) : undefined;
-    const srcId = typeof srcData?.["id"] === "string" ? srcData["id"] : "";
-    if (srcData?.["type"] !== "workspaces" || srcId === "") {
+    const { srcId, srcType } = parseRunTriggerSourceable(body);
+    if (srcType !== "workspaces" || srcId === "") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace must be a workspace resource identifier" }] };
     }
-    const srcWs = await db.query.workspaces.findFirst({ where: eq(workspaces.id, srcId) });
-    if (srcWs === undefined || srcWs.orgId !== ws.orgId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace must belong to the same organization" }] }; }
-    if (srcId === workspaceId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace cannot be the workspace itself" }] }; }
+    const resolved = await resolveRunTriggerSource(srcId, ws.orgId, workspaceId);
+    if ("error" in resolved) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: resolved.error }] };
+    }
     const id = newResourceId("rt");
     await db.insert(runTriggers).values({ id, workspaceId, sourceWorkspaceId: srcId }).onConflictDoNothing();
     (set as { status: number }).status = 201;
-    return { data: { id, type: "run-triggers", attributes: { "created-at": new Date().toISOString(), "sourceable-name": srcWs.name, "workspace-name": ws.name }, relationships: { sourceable: { data: { id: srcId, type: "workspaces" } }, "sourceable-workspace": { data: { id: srcId, type: "workspaces" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };
+    return { data: { id, type: "run-triggers", attributes: { "created-at": new Date().toISOString(), "sourceable-name": resolved.name, "workspace-name": ws.name }, relationships: { sourceable: { data: { id: srcId, type: "workspaces" } }, "sourceable-workspace": { data: { id: srcId, type: "workspaces" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };
   })
   .get("/api/v2/run-triggers/:run_trigger_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const triggerId = params["run_trigger_id"] ?? "";
@@ -822,39 +942,15 @@ export const miscRoutes = new Elysia({ name: "misc" })
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId, "admin")) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload["data"];
-    if (!Array.isArray(items)) {
+    const parsedIds = parseRunTriggerSourceIds(payload["data"]);
+    if ("error" in parsedIds) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Run trigger relationships must be an array of workspace resource identifiers" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: parsedIds.error }] };
     }
-    const sourceIds: string[] = [];
-    for (const item of items) {
-      if (item === null || typeof item !== "object") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Run trigger source must be a workspace resource identifier" }] };
-      }
-      const identifier = item as Record<string, unknown>;
-      if (identifier["type"] !== "workspaces" || typeof identifier["id"] !== "string" || identifier["id"] === "") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Run trigger source must be a workspace resource identifier" }] };
-      }
-      sourceIds.push(identifier["id"]);
-    }
-    const uniqueSourceIds = [...new Set(sourceIds)];
-    const sourceWorkspaces = uniqueSourceIds.length === 0
-      ? []
-      : await db.query.workspaces.findMany({ where: inArray(workspaces.id, uniqueSourceIds), columns: { id: true, orgId: true } });
-    const validSources = new Set(sourceWorkspaces.filter((source): boolean => source.orgId === ws.orgId && source.id !== workspaceId).map((source): string => source.id));
-    if (validSources.size !== uniqueSourceIds.length) {
+    const sourcesError = await insertRunTriggerSources(ws.orgId, workspaceId, parsedIds.ids);
+    if (sourcesError !== null) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace must belong to the same organization and cannot be the workspace itself" }] };
-    }
-    if (uniqueSourceIds.length > 0) {
-      await db.insert(runTriggers).values(uniqueSourceIds.map((sourceWorkspaceId: string): typeof runTriggers.$inferInsert => ({
-        id: newResourceId("rt"),
-        workspaceId,
-        sourceWorkspaceId,
-      }))).onConflictDoNothing();
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: sourcesError }] };
     }
     (set as { status: number }).status = 204;
     return new Response(null, { status: 204 });

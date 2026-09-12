@@ -32,29 +32,46 @@ function isValidSyslogUrl(url: SyslogUrlFields): boolean {
   );
 }
 
+function parseSyslogScheme(value: string): { scheme: SyslogTransport; rest: string } | null {
+  const schemeMatch = /^(udp|tcp):\/\//.exec(value);
+  if (schemeMatch === null || schemeMatch[1] === undefined) return null;
+  return { scheme: schemeMatch[1] as SyslogTransport, rest: value.slice(schemeMatch[0].length) };
+}
+
+function parseSyslogHost(url: URL): { host: string; isIpv6: boolean } | null {
+  const isIpv6 = url.hostname.startsWith("[") && url.hostname.endsWith("]");
+  const host = isIpv6 ? url.hostname.slice(1, -1) : url.hostname;
+  if (!isIpv6 && !/^[A-Za-z0-9._-]+$/.test(host)) return null;
+  return { host, isIpv6 };
+}
+
+function parseSyslogPort(url: URL): number | null {
+  const port = Number.parseInt(url.port, 10);
+  return Number.isFinite(port) && port >= 1 && port <= 65_535 ? port : null;
+}
+
 /** Parse TERRENCE_SYSLOG_TARGET ("udp://host:514", "tcp://host:514"). */
 export function parseSyslogTarget(raw: string | undefined): SyslogTarget | null {
   const value = raw?.trim() ?? "";
   if (value === "") return null;
-  const schemeMatch = /^(udp|tcp):\/\//.exec(value);
-  if (schemeMatch === null || schemeMatch[1] === undefined) return null;
+  const scheme = parseSyslogScheme(value);
+  if (scheme === null) return null;
   let url: URL;
   try {
-    url = new URL(`http://${value.slice(schemeMatch[0].length)}`);
+    url = new URL(`http://${scheme.rest}`);
   } catch {
     return null;
   }
   if (!isValidSyslogUrl(url)) return null;
-  const isIpv6 = url.hostname.startsWith("[") && url.hostname.endsWith("]");
-  const host = isIpv6 ? url.hostname.slice(1, -1) : url.hostname;
-  if (!isIpv6 && !/^[A-Za-z0-9._-]+$/.test(host)) return null;
-  const port = Number.parseInt(url.port, 10);
-  if (!Number.isFinite(port) || port < 1 || port > 65_535) return null;
+  const host = parseSyslogHost(url);
+  if (host === null) return null;
+  const port = parseSyslogPort(url);
+  if (port === null) return null;
   return {
-    transport: schemeMatch[1] as SyslogTransport,
-    host,
+    transport: scheme.scheme,
+    host: host.host,
     port,
-    ...(isIpv6 ? { family: 6 as const } : {}),
+    ...(host.isIpv6 ? { family: 6 as const } : {}),
   };
 }
 
@@ -95,13 +112,7 @@ function structuredDataEnd(value: string): number | null {
  * flagging the cut for collectors. */
 const JSON_TRUNCATION_SUFFIX = '"truncated":true}';
 
-/** Shorten a JSON object message to maxBytes while keeping it parseable:
- * cut after the last depth-1 boundary (`{` or `,`) that fits with the
- * truncation suffix. Falls back to a bare flagged object, then `{}`. */
-function truncateJsonMessage(message: string, maxBytes: number): string {
-  const fallback = `{"truncated":true}`;
-  if (Buffer.byteLength(fallback, "utf8") > maxBytes) return "{}";
-  if (message.trimStart().startsWith("{") === false) return fallback;
+function jsonDepth1Boundaries(message: string): number[] {
   const boundaries: number[] = [];
   let depth = 0;
   let inString = false;
@@ -121,16 +132,32 @@ function truncateJsonMessage(message: string, maxBytes: number): string {
     } else if (ch === "}" || ch === "]") depth -= 1;
     else if (ch === "," && depth === 1) boundaries.push(index + 1);
   }
+  return boundaries;
+}
+
+function selectTruncationBoundary(message: string, boundaries: number[], maxBytes: number): number {
   let lo = 0;
   let hi = boundaries.length;
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
-    const candidate = `${message.slice(0, boundaries[mid - 1] as number)}${JSON_TRUNCATION_SUFFIX}`;
+    const candidate = `${message.slice(0, boundaries[mid - 1])}${JSON_TRUNCATION_SUFFIX}`;
     if (Buffer.byteLength(candidate, "utf8") <= maxBytes) lo = mid;
     else hi = mid - 1;
   }
+  return lo;
+}
+
+/** Shorten a JSON object message to maxBytes while keeping it parseable:
+ * cut after the last depth-1 boundary (`{` or `,`) that fits with the
+ * truncation suffix. Falls back to a bare flagged object, then `{}`. */
+function truncateJsonMessage(message: string, maxBytes: number): string {
+  const fallback = `{"truncated":true}`;
+  if (Buffer.byteLength(fallback, "utf8") > maxBytes) return "{}";
+  if (message.trimStart().startsWith("{") === false) return fallback;
+  const boundaries = jsonDepth1Boundaries(message);
+  const lo = selectTruncationBoundary(message, boundaries, maxBytes);
   if (lo === 0) return fallback;
-  return `${message.slice(0, boundaries[lo - 1] as number)}${JSON_TRUNCATION_SUFFIX}`;
+  return `${message.slice(0, boundaries[lo - 1])}${JSON_TRUNCATION_SUFFIX}`;
 }
 
 function truncateSyslogFrame(frame: string, jsonBody: boolean): Buffer {

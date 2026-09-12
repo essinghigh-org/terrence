@@ -136,21 +136,27 @@ export const mcpRoutes = new Elysia()
 // ---------------------------------------------------------------------------
 // JSON-RPC dispatcher
 // ---------------------------------------------------------------------------
-async function handleJsonRpc(session: McpSession, rawBody: unknown): Promise<unknown> {
+function parseJsonRpcRequest(rawBody: unknown): { id: string | null; method: string; params: Record<string, unknown> } | { error: unknown } {
   if (rawBody === null || typeof rawBody !== "object") {
-    return errorRes(null, -32700, "Parse error: body must be a JSON object");
+    return { error: errorRes(null, -32700, "Parse error: body must be a JSON object") };
   }
   const req = rawBody as Record<string, unknown>;
   if (req["jsonrpc"] !== "2.0" || typeof req["method"] !== "string") {
-    return errorRes(null, -32600, "Invalid Request: must have jsonrpc='2.0' and method");
+    return { error: errorRes(null, -32600, "Invalid Request: must have jsonrpc='2.0' and method") };
   }
   const id = req["id"] !== undefined && (typeof req["id"] === "string" || typeof req["id"] === "number") ? String(req["id"]) : null;
   const params = typeof req["params"] === "object" && req["params"] !== null
     ? req["params"] as Record<string, unknown>
     : {};
+  return { id, method: req["method"], params };
+}
 
+async function handleJsonRpc(session: McpSession, rawBody: unknown): Promise<unknown> {
+  const parsed = parseJsonRpcRequest(rawBody);
+  if ("error" in parsed) return parsed.error;
+  const { id, method, params } = parsed;
   try {
-    switch (req["method"]) {
+    switch (method) {
       case "initialize":
         return handleInitialize(id, params);
       case "notifications/initialized":
@@ -160,7 +166,7 @@ async function handleJsonRpc(session: McpSession, rawBody: unknown): Promise<unk
       case "tools/call":
         return await handleToolsCall(session, id, params);
       default:
-        return errorRes(id, -32601, `Method not found: ${req["method"]}`);
+        return errorRes(id, -32601, `Method not found: ${method}`);
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

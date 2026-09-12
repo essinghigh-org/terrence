@@ -148,6 +148,33 @@ function callbackUrl(request: RequestInfo): string {
   return new URL("/users/oidc/callback", ssoBaseUrl(request)).toString();
 }
 
+function discoveryString(config: Partial<Record<string, unknown>>, key: string): string | null {
+  const value = config[key];
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+function discoveryStringArray(config: Partial<Record<string, unknown>>, key: string): string[] | undefined {
+  const value = config[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : undefined;
+}
+
+function requireDiscoveredEndpoints(
+  issuer: string,
+  authorizationEndpoint: string | null,
+  tokenEndpoint: string | null,
+  jwksUri: string | null,
+): { authorizationEndpoint: string; tokenEndpoint: string; jwksUri: string } {
+  if (authorizationEndpoint === null || tokenEndpoint === null || jwksUri === null
+    || !secureOidcEndpoint(authorizationEndpoint, issuer)
+    || !secureOidcEndpoint(tokenEndpoint, issuer)
+    || !secureOidcEndpoint(jwksUri, issuer)) {
+    throw new Error("OIDC discovery document is missing required endpoints");
+  }
+  return { authorizationEndpoint, tokenEndpoint, jwksUri };
+}
+
 async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
   const issuer = normalizeIssuer(providerIssuer);
   if (!secureOidcEndpoint(issuer)) throw new Error("OIDC issuer must be an https URL without embedded credentials");
@@ -166,31 +193,25 @@ async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
     });
     if (!response.ok) throw new Error(`OIDC discovery failed: ${response.status}`);
     const config = await response.json() as Partial<Record<string, unknown>>;
-    const discoveredIssuer = typeof config["issuer"] === "string" && config["issuer"] !== "" ? normalizeIssuer(config["issuer"]) : null;
+    const rawIssuer = discoveryString(config, "issuer");
+    const discoveredIssuer = rawIssuer === null ? null : normalizeIssuer(rawIssuer);
     if (discoveredIssuer === null || discoveredIssuer !== issuer) {
       // RFC 8414: the document issuer must equal the configured issuer.
       throw new Error("OIDC discovery issuer does not match the configured issuer");
     }
-    const authorizationEndpoint = typeof config["authorization_endpoint"] === "string" && config["authorization_endpoint"] !== "" ? config["authorization_endpoint"] : null;
-    const tokenEndpoint = typeof config["token_endpoint"] === "string" && config["token_endpoint"] !== "" ? config["token_endpoint"] : null;
-    const jwksUri = typeof config["jwks_uri"] === "string" && config["jwks_uri"] !== "" ? config["jwks_uri"] : null;
-    if (authorizationEndpoint === null || tokenEndpoint === null || jwksUri === null
-      || !secureOidcEndpoint(authorizationEndpoint, issuer)
-      || !secureOidcEndpoint(tokenEndpoint, issuer)
-      || !secureOidcEndpoint(jwksUri, issuer)) {
-      throw new Error("OIDC discovery document is missing required endpoints");
-    }
+    const authorizationEndpoint = discoveryString(config, "authorization_endpoint");
+    const tokenEndpoint = discoveryString(config, "token_endpoint");
+    const jwksUri = discoveryString(config, "jwks_uri");
+    const endpoints = requireDiscoveredEndpoints(issuer, authorizationEndpoint, tokenEndpoint, jwksUri);
+    const signingAlgorithms = discoveryStringArray(config, "id_token_signing_alg_values_supported");
+    const pkceMethods = discoveryStringArray(config, "code_challenge_methods_supported");
     const discovered: OidcDiscovery = {
       issuer: discoveredIssuer,
-      authorizationEndpoint,
-      tokenEndpoint,
-      jwksUri,
-      ...(Array.isArray(config["id_token_signing_alg_values_supported"])
-        ? { signingAlgorithms: config["id_token_signing_alg_values_supported"].filter((value): value is string => typeof value === "string") }
-        : {}),
-      ...(Array.isArray(config["code_challenge_methods_supported"])
-        ? { pkceMethods: config["code_challenge_methods_supported"].filter((value): value is string => typeof value === "string") }
-        : {}),
+      authorizationEndpoint: endpoints.authorizationEndpoint,
+      tokenEndpoint: endpoints.tokenEndpoint,
+      jwksUri: endpoints.jwksUri,
+      ...(signingAlgorithms === undefined ? {} : { signingAlgorithms }),
+      ...(pkceMethods === undefined ? {} : { pkceMethods }),
     };
     discoveryCache.set(issuer, { config: discovered, fetchedAt: Date.now() });
     return discovered;
@@ -253,13 +274,11 @@ function parseJwt(token: string): { header: Record<string, unknown>; payload: Re
   return { header, payload, signature: signature ?? "", signingInput: `${headerPart}.${payloadPart}` };
 }
 
-async function verifyJwtSignature(
+function checkJwtAlgorithm(
   header: Readonly<Record<string, unknown>>,
-  signingInput: string,
-  signature: string,
   settings: OidcSettings,
   discoveryConfig: OidcDiscovery,
-): Promise<void> {
+): string {
   const alg = String(header["alg"]);
   if (!ALLOWED_ALGS.has(alg)) {
     throw new Error("Unsupported ID token algorithm.");
@@ -273,20 +292,31 @@ async function verifyJwtSignature(
   if (discoveryConfig.signingAlgorithms !== undefined && !discoveryConfig.signingAlgorithms.includes(alg)) {
     throw new Error("ID token algorithm is not allowed by the provider configuration.");
   }
-  const signatureBuffer = Buffer.from(signature, "base64url");
-  const data = Buffer.from(signingInput, "utf8");
+  return alg;
+}
 
-  if (alg.startsWith("HS")) {
-    if (settings.clientSecret === null) throw new Error("ID token uses a symmetric algorithm but no client secret is configured");
-    const hsHash: Record<string, string> = { HS256: "sha256", HS384: "sha384", HS512: "sha512" };
-    const hash = hsHash[alg];
-    if (hash === undefined) throw new Error(`Unsupported ID token algorithm: ${alg}`);
-    const expected = createHmac(hash, settings.clientSecret).update(data).digest();
-    if (expected.length !== signatureBuffer.length) throw new Error("ID token signature is invalid");
-    if (!timingSafeEqual(expected, signatureBuffer)) throw new Error("ID token signature is invalid");
-    return;
-  }
+function verifyHmacSignature(
+  alg: string,
+  data: Buffer,
+  signatureBuffer: Buffer,
+  clientSecret: string | null,
+): void {
+  if (clientSecret === null) throw new Error("ID token uses a symmetric algorithm but no client secret is configured");
+  const hsHash: Record<string, string> = { HS256: "sha256", HS384: "sha384", HS512: "sha512" };
+  const hash = hsHash[alg];
+  if (hash === undefined) throw new Error(`Unsupported ID token algorithm: ${alg}`);
+  const expected = createHmac(hash, clientSecret).update(data).digest();
+  if (expected.length !== signatureBuffer.length) throw new Error("ID token signature is invalid");
+  if (!timingSafeEqual(expected, signatureBuffer)) throw new Error("ID token signature is invalid");
+}
 
+async function verifyAsymmetricSignature(
+  alg: string,
+  header: Readonly<Record<string, unknown>>,
+  data: Buffer,
+  signatureBuffer: Buffer,
+  discoveryConfig: OidcDiscovery,
+): Promise<void> {
   const hashName: Record<string, string> = {
     RS256: "sha256", RS384: "sha384", RS512: "sha512",
     ES256: "sha256", ES384: "sha384", ES512: "sha512",
@@ -315,6 +345,23 @@ async function verifyJwtSignature(
     }
   }
   throw new Error("ID token signature is invalid");
+}
+
+async function verifyJwtSignature(
+  header: Readonly<Record<string, unknown>>,
+  signingInput: string,
+  signature: string,
+  settings: OidcSettings,
+  discoveryConfig: OidcDiscovery,
+): Promise<void> {
+  const alg = checkJwtAlgorithm(header, settings, discoveryConfig);
+  const signatureBuffer = Buffer.from(signature, "base64url");
+  const data = Buffer.from(signingInput, "utf8");
+  if (alg.startsWith("HS")) {
+    verifyHmacSignature(alg, data, signatureBuffer, settings.clientSecret);
+    return;
+  }
+  await verifyAsymmetricSignature(alg, header, data, signatureBuffer, discoveryConfig);
 }
 
 async function fetchJwks(jwksUri: string, forceRefresh = false): Promise<Record<string, unknown>[]> {
@@ -389,6 +436,18 @@ async function resolveVerificationKey(
   return (await fetchJwks(jwksUri, true)).filter((candidate): boolean => candidate["kid"] === kid && matches(candidate));
 }
 
+function verifyAudience(
+  payload: Readonly<Record<string, unknown>>,
+  settings: OidcSettings,
+): void {
+  const audience = Array.isArray(payload["aud"]) ? payload["aud"] : [payload["aud"]];
+  if (settings.clientId === null || !audience.includes(settings.clientId) || audience.some((value): boolean => typeof value !== "string")) {
+    throw new Error("ID token audience does not match");
+  }
+  if (audience.length > 1 && payload["azp"] !== settings.clientId) throw new Error("ID token authorized party does not match");
+  if (payload["azp"] !== undefined && payload["azp"] !== settings.clientId) throw new Error("ID token authorized party does not match");
+}
+
 function verifyClaims(
   payload: Readonly<Record<string, unknown>>,
   settings: OidcSettings,
@@ -400,13 +459,65 @@ function verifyClaims(
   if (typeof payload["iss"] !== "string" || normalizeIssuer(payload["iss"]) !== settings.issuer) {
     throw new Error("ID token issuer does not match");
   }
-  const audience = Array.isArray(payload["aud"]) ? payload["aud"] : [payload["aud"]];
-  if (settings.clientId === null || !audience.includes(settings.clientId) || audience.some((value): boolean => typeof value !== "string")) {
-    throw new Error("ID token audience does not match");
-  }
-  if (audience.length > 1 && payload["azp"] !== settings.clientId) throw new Error("ID token authorized party does not match");
-  if (payload["azp"] !== undefined && payload["azp"] !== settings.clientId) throw new Error("ID token authorized party does not match");
+  verifyAudience(payload, settings);
   if (typeof payload["nonce"] !== "string" || payload["nonce"] !== nonce) throw new Error("ID token nonce does not match");
+}
+
+async function loadOidcLoginConfig(
+  issuer: string,
+  pkceMethod: OidcSettings["pkceMethod"],
+): Promise<{ config: OidcDiscovery } | { failure: unknown }> {
+  let config: OidcDiscovery;
+  try {
+    config = await discovery(issuer);
+  } catch (error: unknown) {
+    await auditLog("sso-failure", "oidc", null, null, null, { reason: error instanceof Error ? error.message : "discovery failed" });
+    return { failure: ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "OIDC discovery failed. Please try again."), 502) };
+  }
+  if (pkceMethod === "S256" && config.pkceMethods !== undefined && !config.pkceMethods.includes("S256")) {
+    await auditLog("sso-failure", "oidc", null, null, null, { reason: "OIDC provider does not advertise S256 PKCE" });
+    return { failure: ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "The OIDC provider does not support the required S256 PKCE method."), 502) };
+  }
+  return { config };
+}
+
+async function buildAuthorizeRedirect(
+  request: RequestInfo,
+  settings: OidcSettings,
+  config: OidcDiscovery,
+): Promise<Response> {
+  let verifier: string | null = null;
+  let challenge: string | null = null;
+  if (settings.pkceMethod === "S256") {
+    verifier = randomBytes(32).toString("base64url");
+    challenge = createHash("sha256").update(verifier).digest("base64url");
+  }
+
+  const state = randomBytes(24).toString("base64url");
+  const nonce = randomBytes(24).toString("base64url");
+  await storeSsoChallenge(OIDC_CHALLENGE_KIND, state, { nonce, verifier }, Date.now() + PENDING_TTL_MS);
+
+  const authorize = new URL(config.authorizationEndpoint);
+  authorize.searchParams.set("response_type", "code");
+  authorize.searchParams.set("client_id", settings.clientId ?? "");
+  authorize.searchParams.set("redirect_uri", callbackUrl(request));
+  authorize.searchParams.set("scope", settings.scopes);
+  authorize.searchParams.set("state", state);
+  authorize.searchParams.set("nonce", nonce);
+  if (settings.pkceMethod === "S256" && verifier !== null && challenge !== null) {
+    authorize.searchParams.set("code_challenge", challenge);
+    authorize.searchParams.set("code_challenge_method", "S256");
+  }
+  // Bind the flow to the browser that started it: the callback will only
+  // be honored when the same cookie comes back with the state.
+  return new Response(null, {
+    status: 302,
+    headers: {
+      "Cache-Control": "no-store",
+      Location: authorize.toString(),
+      "Set-Cookie": stateCookie(request, state, Math.ceil(PENDING_TTL_MS / 1000)),
+    },
+  });
 }
 
 // app.ts applies the sensitive-path rate limiter to both OIDC endpoints before
@@ -417,50 +528,9 @@ export const oidcRoutes = new Elysia({ name: "oidc-sso" })
     if (!settings.enabled || settings.issuer === null || settings.clientId === null) {
       return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "OpenID Connect sign-in is not enabled."), 404);
     }
-    let config: OidcDiscovery;
-    try {
-      config = await discovery(settings.issuer);
-    } catch (error: unknown) {
-      await auditLog("sso-failure", "oidc", null, null, null, { reason: error instanceof Error ? error.message : "discovery failed" });
-      return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "OIDC discovery failed. Please try again."), 502);
-    }
-    if (settings.pkceMethod === "S256" && config.pkceMethods !== undefined && !config.pkceMethods.includes("S256")) {
-      await auditLog("sso-failure", "oidc", null, null, null, { reason: "OIDC provider does not advertise S256 PKCE" });
-      return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "The OIDC provider does not support the required S256 PKCE method."), 502);
-    }
-
-    let verifier: string | null = null;
-    let challenge: string | null = null;
-    if (settings.pkceMethod === "S256") {
-      verifier = randomBytes(32).toString("base64url");
-      challenge = createHash("sha256").update(verifier).digest("base64url");
-    }
-
-    const state = randomBytes(24).toString("base64url");
-    const nonce = randomBytes(24).toString("base64url");
-    await storeSsoChallenge(OIDC_CHALLENGE_KIND, state, { nonce, verifier }, Date.now() + PENDING_TTL_MS);
-
-    const authorize = new URL(config.authorizationEndpoint);
-    authorize.searchParams.set("response_type", "code");
-    authorize.searchParams.set("client_id", settings.clientId);
-    authorize.searchParams.set("redirect_uri", callbackUrl(request));
-    authorize.searchParams.set("scope", settings.scopes);
-    authorize.searchParams.set("state", state);
-    authorize.searchParams.set("nonce", nonce);
-    if (settings.pkceMethod === "S256" && verifier !== null && challenge !== null) {
-      authorize.searchParams.set("code_challenge", challenge);
-      authorize.searchParams.set("code_challenge_method", "S256");
-    }
-    // Bind the flow to the browser that started it: the callback will only
-    // be honored when the same cookie comes back with the state.
-    return new Response(null, {
-      status: 302,
-      headers: {
-        "Cache-Control": "no-store",
-        Location: authorize.toString(),
-        "Set-Cookie": stateCookie(request, state, Math.ceil(PENDING_TTL_MS / 1000)),
-      },
-    });
+    const loaded = await loadOidcLoginConfig(settings.issuer, settings.pkceMethod);
+    if ("failure" in loaded) return loaded.failure;
+    return buildAuthorizeRedirect(request, settings, loaded.config);
   })
   .get("/users/oidc/callback", async ({ query, request, set, server }: {
     query: Readonly<Record<string, unknown>>;
@@ -481,23 +551,19 @@ export const oidcRoutes = new Elysia({ name: "oidc-sso" })
     return handleCallback({ ...query, ...form }, request, set, server);
   });
 
-async function handleCallback(
+type CallbackFailure = { failure: Response };
+
+async function consumeCallbackState(
   params: Readonly<Record<string, unknown>>,
   request: RequestInfo,
   set: SetObj,
-  server: unknown,
-): Promise<unknown> {
-  const settings = await oidcSettings();
-  if (!settings.enabled || settings.issuer === null || settings.clientId === null) {
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "OpenID Connect sign-in is not enabled."), 404);
-  }
-
+): Promise<CallbackFailure | { value: { nonce: string; verifier: string | null } }> {
   const state = typeof params["state"] === "string" ? params["state"] : "";
   // The flow started in a specific browser; only accept the callback if the
   // same cookie accompanies it. This prevents an attacker who obtains a
   // valid code+state from delivering it to a victim's browser.
   if (state === "" || cookieValue(request, OIDC_STATE_COOKIE) !== state) {
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The sign-in request is invalid. Please try again."), 400);
+    return { failure: callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The sign-in request is invalid. Please try again."), 400) };
   }
   const pendingPayload = await consumeSsoChallenge(OIDC_CHALLENGE_KIND, state);
   const pending = pendingPayload !== undefined
@@ -506,44 +572,59 @@ async function handleCallback(
     ? { nonce: pendingPayload["nonce"], verifier: pendingPayload["verifier"] }
     : undefined;
   if (pending === undefined) {
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The sign-in request has expired or is invalid. Please try again."), 400);
+    return { failure: callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The sign-in request has expired or is invalid. Please try again."), 400) };
   }
+  return { value: pending };
+}
 
+async function checkProviderError(
+  params: Readonly<Record<string, unknown>>,
+  request: RequestInfo,
+  set: SetObj,
+): Promise<Response | null> {
   const error = typeof params["error"] === "string" ? params["error"] : "";
-  if (error !== "") {
-    const description = typeof params["error_description"] === "string" ? params["error_description"] : error;
-    await auditLog("sso-failure", "oidc", null, null, null, { reason: error });
-    // ssoHtmlPage escapes the message, so no ad-hoc escaping is needed here.
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", `The identity provider refused sign-in: ${description}`), 400);
-  }
+  if (error === "") return null;
+  const description = typeof params["error_description"] === "string" ? params["error_description"] : error;
+  await auditLog("sso-failure", "oidc", null, null, null, { reason: error });
+  // ssoHtmlPage escapes the message, so no ad-hoc escaping is needed here.
+  return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", `The identity provider refused sign-in: ${description}`), 400);
+}
 
-  const code = typeof params["code"] === "string" ? params["code"] : "";
-  if (code === "") {
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The identity provider did not return an authorization code."), 400);
-  }
-
-  let config: OidcDiscovery;
+async function loadCallbackDiscovery(
+  issuer: string,
+  request: RequestInfo,
+  set: SetObj,
+): Promise<CallbackFailure | { config: OidcDiscovery }> {
   try {
-    config = await discovery(settings.issuer);
+    return { config: await discovery(issuer) };
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : "unknown error";
     await auditLog("sso-failure", "oidc", null, null, null, { reason: detail });
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "OIDC discovery failed. Please try again."), 502);
+    return { failure: callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "OIDC discovery failed. Please try again."), 502) };
   }
+}
 
+async function exchangeCodeForToken(
+  code: string,
+  verifier: string | null,
+  request: RequestInfo,
+  set: SetObj,
+  settings: OidcSettings,
+  config: OidcDiscovery,
+): Promise<CallbackFailure | { idToken: string }> {
   // Exchange the authorization code at the token endpoint.
   const tokenBody = new URLSearchParams();
   tokenBody.set("grant_type", "authorization_code");
   tokenBody.set("code", code);
   tokenBody.set("redirect_uri", callbackUrl(request));
-  tokenBody.set("client_id", settings.clientId);
-  if (pending.verifier !== null) tokenBody.set("code_verifier", pending.verifier);
+  tokenBody.set("client_id", settings.clientId ?? "");
+  if (verifier !== null) tokenBody.set("code_verifier", verifier);
   const tokenHeaders: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded" };
   if (settings.clientSecret !== null) {
     // RFC 6749 §2.3.1: client_id and client_secret must be form-urlencoded
     // before the Basic credentials are base64-encoded.
     tokenHeaders["Authorization"] = `Basic ${Buffer.from(
-      `${encodeURIComponent(settings.clientId)}:${encodeURIComponent(settings.clientSecret)}`,
+      `${encodeURIComponent(settings.clientId ?? "")}:${encodeURIComponent(settings.clientSecret)}`,
     ).toString("base64")}`;
   }
   let tokenResponse: Response;
@@ -558,7 +639,7 @@ async function handleCallback(
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : "network error";
     await auditLog("sso-failure", "oidc", null, null, null, { reason: detail });
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "Token exchange failed. Please try again."), 502);
+    return { failure: callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "Token exchange failed. Please try again."), 502) };
   }
   const tokenData = await tokenResponse.json().catch((): Record<string, unknown> => ({})) as Record<string, unknown>;
   if (!tokenResponse.ok || typeof tokenData["id_token"] !== "string") {
@@ -568,27 +649,38 @@ async function handleCallback(
         ? tokenData["error"]
         : String(tokenResponse.status);
     await auditLog("sso-failure", "oidc", null, null, null, { reason: detail });
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "Token exchange failed. Please try again."), 502);
+    return { failure: callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "Token exchange failed. Please try again."), 502) };
   }
+  return { idToken: tokenData["id_token"] };
+}
 
+async function validateIdToken(
+  idToken: string,
+  settings: OidcSettings,
+  config: OidcDiscovery,
+  nonce: string,
+): Promise<{ failureDetail: string } | { value: { payload: Record<string, unknown> } }> {
   // Validate the ID token.
-  let header: Record<string, unknown>;
-  let payload: Record<string, unknown>;
   try {
-    const jwt = parseJwt(tokenData["id_token"]);
-    header = jwt.header;
-    payload = jwt.payload;
-    await verifyJwtSignature(header, jwt.signingInput, jwt.signature, settings, config);
-    verifyClaims(payload, settings, pending.nonce);
+    const jwt = parseJwt(idToken);
+    await verifyJwtSignature(jwt.header, jwt.signingInput, jwt.signature, settings, config);
+    verifyClaims(jwt.payload, settings, nonce);
+    return { value: { payload: jwt.payload } };
   } catch (error: unknown) {
-    const detail = error instanceof Error ? error.message : "ID token validation failed";
-    await auditLog("sso-failure", "oidc", null, null, null, { reason: detail });
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The identity provider response could not be validated. Please try again."), 400);
+    return { failureDetail: error instanceof Error ? error.message : "ID token validation failed" };
   }
+}
 
+type CallbackIdentity = { subject: string; email: string | null; username: string };
+
+function resolveCallbackIdentity(
+  payload: Readonly<Record<string, unknown>>,
+  request: RequestInfo,
+  set: SetObj,
+): CallbackFailure | { value: CallbackIdentity } {
   const subject = typeof payload["sub"] === "string" && payload["sub"] !== "" ? payload["sub"] : null;
   if (subject === null) {
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The ID token contains no subject."), 400);
+    return { failure: callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The ID token contains no subject."), 400) };
   }
   const email = validEmail(typeof payload["email"] === "string" ? payload["email"] : null);
   const username = sanitizeUsername(
@@ -597,16 +689,26 @@ async function handleCallback(
         : `oidc-${subject.slice(0, 24)}`,
   );
   if (username === null) {
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The ID token contains no usable username claim."), 400);
+    return { failure: callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The ID token contains no usable username claim."), 400) };
   }
+  return { value: { subject, email, username } };
+}
 
+async function provisionCallbackUser(
+  identity: CallbackIdentity,
+  payload: Readonly<Record<string, unknown>>,
+  settings: OidcSettings,
+  request: RequestInfo,
+  set: SetObj,
+  server: unknown,
+): Promise<CallbackFailure | { value: { user: { id: string; username: string } } }> {
   let result: Awaited<ReturnType<typeof provisionSsoUser>>;
   try {
     result = await provisionSsoUser({
       provider: "oidc",
-      subject,
-      username,
-      email,
+      subject: identity.subject,
+      username: identity.username,
+      email: identity.email,
       // Only link to an existing account when the IdP issued an explicitly
       // verified email claim; otherwise the account is auto-provisioned.
       emailVerified: payload["email_verified"] === true && typeof payload["email"] === "string",
@@ -615,17 +717,60 @@ async function handleCallback(
   } catch (error: unknown) {
     if (error instanceof SsoConflictError) {
       await auditLog("sso-conflict", "oidc", null, null, null, { username: error.username });
-      return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", error.message), 409);
+      return { failure: callbackResponse(request, set, ssoHtmlPage("OpenID Connect", error.message), 409) };
     }
     const detail = error instanceof Error ? error.message : "provisioning failed";
     await auditLog("sso-failure", "oidc", null, null, null, { reason: detail });
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "Sign-in could not be completed. Please try again."), 500);
+    return { failure: callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "Sign-in could not be completed. Please try again."), 500) };
   }
   if (isUserLoginBlocked(result.user)) {
     await auditLog("sso-failure", "oidc", result.user.id, result.user.id, null, { reason: "account is suspended or deleted" });
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "This account is not available."), 403);
+    return { failure: callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "This account is not available."), 403) };
   }
-  await auditLog("sso-login", "oidc", result.user.id, result.user.id, null, { username: result.user.username });
   await issueSsoLogin(result.user, { set, request, server }, { wantsToken: false });
+  return { value: { user: result.user } };
+}
+
+async function handleCallback(
+  params: Readonly<Record<string, unknown>>,
+  request: RequestInfo,
+  set: SetObj,
+  server: unknown,
+): Promise<unknown> {
+  const settings = await oidcSettings();
+  if (!settings.enabled || settings.issuer === null || settings.clientId === null) {
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "OpenID Connect sign-in is not enabled."), 404);
+  }
+
+  const claimed = await consumeCallbackState(params, request, set);
+  if ("failure" in claimed) return claimed.failure;
+
+  const providerFailure = await checkProviderError(params, request, set);
+  if (providerFailure !== null) return providerFailure;
+
+  const code = typeof params["code"] === "string" ? params["code"] : "";
+  if (code === "") {
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The identity provider did not return an authorization code."), 400);
+  }
+
+  const loaded = await loadCallbackDiscovery(settings.issuer, request, set);
+  if ("failure" in loaded) return loaded.failure;
+
+  const exchanged = await exchangeCodeForToken(code, claimed.value.verifier, request, set, settings, loaded.config);
+  if ("failure" in exchanged) return exchanged.failure;
+
+  const validated = await validateIdToken(exchanged.idToken, settings, loaded.config, claimed.value.nonce);
+  if ("failureDetail" in validated) {
+    await auditLog("sso-failure", "oidc", null, null, null, { reason: validated.failureDetail });
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The identity provider response could not be validated. Please try again."), 400);
+  }
+
+  const identity = resolveCallbackIdentity(validated.value.payload, request, set);
+  if ("failure" in identity) return identity.failure;
+
+  const provisioned = await provisionCallbackUser(identity.value, validated.value.payload, settings, request, set, server);
+  if ("failure" in provisioned) return provisioned.failure;
+
+  await auditLog("sso-login", "oidc", provisioned.value.user.id, provisioned.value.user.id, null, { username: provisioned.value.user.username });
   return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "You are signed in.", { redirectUrl: "/app" }), 200);
 }

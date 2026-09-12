@@ -60,7 +60,7 @@ type LoggingValidation = Readonly<
   | { ok: false; error: string }
 >;
 
-function validateLoggingAttributes(
+function checkLoggingScalars(
   attrs: Readonly<Record<string, unknown>>,
 ): LoggingValidation {
   const enabled = attrs["enabled"];
@@ -73,17 +73,28 @@ function validateLoggingAttributes(
       return { ok: false, error: `${key} must be one of: ${LOG_LEVELS.join(", ")} or null` };
     }
   }
+  return { ok: true, values: {} };
+}
+
+function checkSyslogTargets(
+  attrs: Readonly<Record<string, unknown>>,
+): LoggingValidation {
   const targets = attrs["syslog-targets"];
-  if (targets !== undefined && targets !== null) {
-    if (!Array.isArray(targets) || targets.length > 16) {
-      return { ok: false, error: "syslog-targets must be an array of at most 16 targets or null" };
-    }
-    for (const value of targets) {
-      if (typeof value !== "string" || parseSyslogTarget(value) === null) {
-        return { ok: false, error: "syslog-targets entries must be udp://host:port or tcp://host:port" };
-      }
+  if (targets === undefined || targets === null) return { ok: true, values: {} };
+  if (!Array.isArray(targets) || targets.length > 16) {
+    return { ok: false, error: "syslog-targets must be an array of at most 16 targets or null" };
+  }
+  for (const value of targets) {
+    if (typeof value !== "string" || parseSyslogTarget(value) === null) {
+      return { ok: false, error: "syslog-targets entries must be udp://host:port or tcp://host:port" };
     }
   }
+  return { ok: true, values: {} };
+}
+
+function normalizeSyslogFields(
+  attrs: Readonly<Record<string, unknown>>,
+): LoggingValidation {
   const normalized: Record<string, unknown> = { ...attrs };
   const rawFormat = attrs["syslog-format"];
   if (rawFormat !== undefined && rawFormat !== null) {
@@ -104,6 +115,433 @@ function validateLoggingAttributes(
     normalized[key] = trimmed;
   }
   return { ok: true, values: normalized };
+}
+
+function validateLoggingAttributes(
+  attrs: Readonly<Record<string, unknown>>,
+): LoggingValidation {
+  const scalars = checkLoggingScalars(attrs);
+  if (!scalars.ok) return scalars;
+  const targets = checkSyslogTargets(attrs);
+  if (!targets.ok) return targets;
+  return normalizeSyslogFields(attrs);
+}
+
+function smtpTestRecipient(body: unknown): string | null {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  return typeof attrs["email"] === "string" ? normalizeEmail(attrs["email"]) : null;
+}
+
+function smtpTestSender(settings: Record<string, unknown>): { host: string; senderEmail: string } {
+  return {
+    host: typeof settings["host"] === "string" ? settings["host"].trim() : "",
+    senderEmail: typeof settings["sender-email"] === "string" ? settings["sender-email"].trim() : "",
+  };
+}
+
+function resolveSmtpTestConfig(
+  body: unknown,
+  settings: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { config: Parameters<typeof sendEmail>[0]; recipient: string } | { error: unknown } {
+  const recipient = smtpTestRecipient(body);
+  const { host, senderEmail } = smtpTestSender(settings);
+  if (settings["enabled"] !== true || host === "" || senderEmail === "" || recipient === null) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SMTP must be enabled and configured, and a valid email is required" }] } };
+  }
+  return {
+    config: {
+      host,
+      port: typeof settings["port"] === "number" ? settings["port"] : 25,
+      username: typeof settings["username"] === "string" && settings["username"] !== "" ? settings["username"] : null,
+      password: typeof settings["password"] === "string" ? settings["password"] : null,
+      senderEmail,
+      auth: settings["auth"] === "none" || settings["auth"] === "login" || settings["auth"] === "plain" ? settings["auth"] : "plain",
+      encryption: isSmtpEncryption(settings["encryption"]) ? settings["encryption"] : null,
+    },
+    recipient,
+  };
+}
+
+async function deliverSmtpTest(
+  config: Parameters<typeof sendEmail>[0],
+  recipient: string,
+  set: ParamCtx["set"],
+): Promise<{ sent: true } | { error: unknown }> {
+  try {
+    await sendEmail(
+      config,
+      {
+        to: [recipient],
+        subject: "Terrence SMTP test",
+        text: "This is a test message from Terrence SMTP settings.",
+        html: "<html><body><p>This is a test message from Terrence SMTP settings.</p></body></html>",
+      },
+    );
+  } catch {
+    (set as { status: number }).status = 502;
+    return { error: { errors: [{ status: "502", title: "Bad Gateway", detail: "SMTP test delivery failed" }] } };
+  }
+  return { sent: true };
+}
+
+type TwilioVerifyConfig = Readonly<{
+  testNumber: string;
+  accountSid: string;
+  authToken: string;
+  fromNumber: string;
+}>;
+
+function twilioVerifyTestNumber(body: unknown): string {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  return typeof attrs["test-number"] === "string" ? attrs["test-number"].trim() : "";
+}
+
+function resolveTwilioVerifyConfig(
+  body: unknown,
+  settings: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { config: TwilioVerifyConfig } | { error: unknown } {
+  const testNumber = twilioVerifyTestNumber(body);
+  const accountSid = typeof settings["account-sid"] === "string" ? settings["account-sid"] : "";
+  const authToken = typeof settings["auth-token"] === "string" ? settings["auth-token"] : "";
+  const fromNumber = typeof settings["from-number"] === "string" ? settings["from-number"] : "";
+  if (settings["enabled"] !== true || testNumber === "" || accountSid === "" || authToken === "" || fromNumber === "") {
+    (set as { status: number }).status = 400;
+    return { error: { errors: [{ status: "400", title: "Bad Request", detail: "Twilio must be enabled and fully configured, and test-number is required" }] } };
+  }
+  return { config: { testNumber, accountSid, authToken, fromNumber } };
+}
+
+async function sendTwilioVerify(
+  config: TwilioVerifyConfig,
+  set: ParamCtx["set"],
+): Promise<{ response: Response } | { error: unknown }> {
+  const form = new URLSearchParams({ Body: "Terrence verification message", To: config.testNumber, From: config.fromNumber });
+  try {
+    const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.accountSid)}/Messages.json`, {
+      method: "POST",
+      headers: { Authorization: `Basic ${btoa(`${config.accountSid}:${config.authToken}`)}`, "Content-Type": "application/x-www-form-urlencoded" },
+      body: form,
+      signal: AbortSignal.timeout(10_000),
+    });
+    return { response };
+  } catch {
+    (set as { status: number }).status = 503;
+    return { error: { errors: [{ status: "503", title: "Service Unavailable", detail: "Twilio verification could not reach the provider" }] } };
+  }
+}
+
+async function checkTwilioVerifyResult(
+  response: Response,
+  set: ParamCtx["set"],
+): Promise<{ ok: true } | { error: unknown }> {
+  const responseText = await response.text().catch((): string => "");
+  if (response.ok) return { ok: true };
+  let detail = "Twilio rejected the verification message";
+  try {
+    const parsed = JSON.parse(responseText) as { message?: unknown };
+    if (typeof parsed.message === "string" && parsed.message !== "") detail = parsed.message;
+  } catch {
+    // Keep the stable API error when Twilio does not return JSON.
+  }
+  (set as { status: number }).status = 400;
+  return { error: { errors: [{ status: "400", title: "Bad Request", detail }] } };
+}
+
+function checkOidcScalars(
+  attrs: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { ok: true } | { error: unknown } {
+  if (attrs["enabled"] !== undefined && typeof attrs["enabled"] !== "boolean") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enabled must be a boolean" }] } };
+  }
+  if (attrs["link-by-email"] !== undefined && typeof attrs["link-by-email"] !== "boolean") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "link-by-email must be a boolean" }] } };
+  }
+  for (const key of ["issuer", "client-id", "client-secret", "scopes", "pkce-method", "signing-alg"] as const) {
+    if (attrs[key] !== undefined && attrs[key] !== null && typeof attrs[key] !== "string") {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a string or null` }] } };
+    }
+  }
+  return { ok: true };
+}
+
+function checkOidcIdentityRequired(
+  enabled: boolean,
+  issuer: unknown,
+  clientId: unknown,
+  set: ParamCtx["set"],
+): { ok: true } | { error: unknown } {
+  if (enabled && (typeof issuer !== "string" || issuer === "" || typeof clientId !== "string" || clientId === "")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "issuer and client-id are required when OIDC is enabled" }] } };
+  }
+  return { ok: true };
+}
+
+function resolveOidcIdentity(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { enabled: boolean; issuer: unknown; clientId: unknown } | { error: unknown } {
+  const enabled = typeof attrs["enabled"] === "boolean" ? attrs["enabled"] : current["enabled"] === true;
+  const issuerValue = attrs["issuer"] === undefined
+    ? current["issuer"]
+    : typeof attrs["issuer"] === "string" ? attrs["issuer"].trim() : null;
+  const clientId = attrs["client-id"] === undefined
+    ? current["client-id"]
+    : typeof attrs["client-id"] === "string" ? attrs["client-id"].trim() : null;
+  const issuer = typeof issuerValue === "string" && issuerValue !== "" ? normalizeIssuer(issuerValue) : issuerValue;
+  const required = checkOidcIdentityRequired(enabled, issuer, clientId, set);
+  if ("error" in required) return required;
+  if (typeof issuer === "string" && issuer !== "") {
+    if (!validOidcIssuer(issuer)) {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "issuer must be a valid URL" }] } };
+    }
+  }
+  return { enabled, issuer, clientId };
+}
+
+function resolveOidcCrypto(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { pkce: unknown; signingAlg: string | null } | { error: unknown } {
+  const pkce = attrs["pkce-method"] === undefined ? current["pkce-method"] : attrs["pkce-method"];
+  if (pkce !== null && pkce !== undefined && pkce !== "" && pkce !== "S256" && pkce !== "none") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "pkce-method must be \"S256\", \"none\", or null" }] } };
+  }
+  const signingAlgInput = attrs["signing-alg"] === undefined ? current["signing-alg"] : attrs["signing-alg"];
+  const signingAlg = signingAlgInput === null || signingAlgInput === undefined
+    ? null
+    : typeof signingAlgInput === "string" && signingAlgInput.trim() !== "" ? signingAlgInput.trim() : null;
+  if (signingAlg !== null && !OIDC_SIGNING_ALGORITHMS.has(signingAlg)) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "signing-alg must be a supported ID token algorithm or null" }] } };
+  }
+  return { pkce, signingAlg };
+}
+
+async function checkOidcLockout(
+  enabled: boolean,
+  set: ParamCtx["set"],
+): Promise<{ ok: true } | { error: unknown }> {
+  const [samlEnabledForSso, ldapEnabledForSso] = await Promise.all([
+    currentSamlSettings().then((settings): boolean => settings.enabled),
+    ldapSettings().then((settings): boolean => settings.enabled),
+  ]);
+  const authError = await authLockoutResponse(set, {
+    saml: samlEnabledForSso,
+    oidc: enabled,
+    ldap: ldapEnabledForSso,
+  });
+  if (authError !== null) return { error: authError };
+  return { ok: true };
+}
+
+function resolveOidcSecret(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  enabled: boolean,
+  pkce: unknown,
+  signingAlg: string | null,
+  set: ParamCtx["set"],
+): { clientSecret: unknown } | { error: unknown } {
+  const clientSecret = attrs["client-secret"] === null
+    ? null
+    : typeof attrs["client-secret"] === "string" && attrs["client-secret"] !== ""
+      ? attrs["client-secret"]
+      : current["client-secret"];
+  if (attrs["client-secret"] === "") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "client-secret must be a non-empty string or null" }] } };
+  }
+  if (enabled && signingAlg?.startsWith("HS") === true && (typeof clientSecret !== "string" || clientSecret === "")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "a client secret is required for symmetric signing algorithms" }] } };
+  }
+  // Without PKCE, the token exchange authenticates the client with its
+  // secret; an enabled provider with no secret could be impersonated.
+  if (enabled && pkce !== "S256" && (typeof clientSecret !== "string" || clientSecret === "")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "a client secret is required when pkce-method is not S256" }] } };
+  }
+  return { clientSecret };
+}
+
+function checkLdapScalars(
+  attrs: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { ok: true } | { error: unknown } {
+  for (const key of ["enabled", "link-by-email"] as const) {
+    if (attrs[key] !== undefined && typeof attrs[key] !== "boolean") {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a boolean` }] } };
+    }
+  }
+  for (const key of ["host", "bind-dn", "bind-password", "base-dn", "user-filter", "attr-username", "attr-email", "attr-display-name"] as const) {
+    if (attrs[key] !== undefined && attrs[key] !== null && typeof attrs[key] !== "string") {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a string or null` }] } };
+    }
+  }
+  return { ok: true };
+}
+
+function resolveLdapConnection(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { port: number; encryption: string } | { error: unknown } {
+  const port = attrs["port"] === undefined ? current["port"] : attrs["port"];
+  if (!(typeof port === "number" && Number.isInteger(port) && port > 0 && port <= 65535)) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "port must be an integer between 1 and 65535" }] } };
+  }
+  const encryption = attrs["encryption"] === undefined ? current["encryption"] : attrs["encryption"];
+  if (encryption !== "plain" && encryption !== "starttls" && encryption !== "ldaps") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "encryption must be one of plain, starttls, ldaps" }] } };
+  }
+  return { port, encryption };
+}
+
+function resolveLdapDirectory(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { enabled: boolean; host: unknown; baseDn: unknown; attrUsername: string; attrEmail: string } | { error: unknown } {
+  const enabled = typeof attrs["enabled"] === "boolean" ? attrs["enabled"] : current["enabled"] === true;
+  const host = attrs["host"] === null ? null : typeof attrs["host"] === "string" ? attrs["host"].trim() : current["host"];
+  const baseDn = attrs["base-dn"] === null ? null : typeof attrs["base-dn"] === "string" ? attrs["base-dn"].trim() : current["base-dn"];
+  // A blank or absent value falls back to the attribute's default; the
+  // helper guarantees the result is never an empty string.
+  const attrFallback = (key: "attr-username" | "attr-email", fallback: string): string => {
+    const input = attrs[key];
+    const stored = current[key];
+    return typeof input === "string"
+      ? input.trim() || fallback
+      : input === null ? fallback
+        : typeof stored === "string" && stored.trim() !== "" ? stored.trim() : fallback;
+  };
+  const attrUsername = attrFallback("attr-username", "uid");
+  const attrEmail = attrFallback("attr-email", "mail");
+  if (enabled && (typeof host !== "string" || host === "" || typeof baseDn !== "string" || baseDn === "")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "host and base-dn are required when LDAP is enabled" }] } };
+  }
+  return { enabled, host, baseDn, attrUsername, attrEmail };
+}
+
+function resolveLdapBind(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  enabled: boolean,
+  encryption: string,
+  set: ParamCtx["set"],
+): { bindDn: unknown; bindDnProvided: boolean } | { error: unknown } {
+  // A bind DN without a password performs an unauthenticated (anonymous)
+  // bind per RFC 4511 §4.2; reject the misconfiguration up front rather
+  // than silently downgrading at login time.
+  // A blank or whitespace-only bind DN means "no service account"; storing
+  // it as a string would make authenticateLdap require a bind password
+  // forever, and a padded one would be validated trimmed but persisted raw.
+  const bindDnProvided = attrs["bind-dn"] !== undefined;
+  const bindDn = typeof attrs["bind-dn"] === "string"
+    ? (attrs["bind-dn"].trim() === "" ? null : attrs["bind-dn"].trim())
+    : attrs["bind-dn"] === null ? null : current["bind-dn"];
+  const bindPassword = attrs["bind-password"] === undefined ? current["bind-password"] : attrs["bind-password"];
+  if (typeof bindDn === "string" && bindDn !== "" && (typeof bindPassword !== "string" || bindPassword === "")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "bind-password is required when bind-dn is set" }] } };
+  }
+  // The bind password travels over the wire on every bind: never allow it
+  // over an unencrypted connection. The ldap settings default ("ldaps")
+  // keeps new configurations secure by construction.
+  if (enabled && encryption === "plain" && typeof bindDn === "string" && bindDn !== ""
+    && typeof bindPassword === "string" && bindPassword !== "") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "bind credentials cannot be sent over plaintext LDAP; use starttls or ldaps" }] } };
+  }
+  return { bindDn, bindDnProvided };
+}
+
+function resolveLdapUserFilter(
+  attrs: Record<string, unknown>,
+  current: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { userFilter: string } | { error: unknown } {
+  const userFilter = typeof attrs["user-filter"] === "string" && attrs["user-filter"] !== ""
+    ? attrs["user-filter"]
+    : typeof current["user-filter"] === "string" && current["user-filter"] !== ""
+      ? current["user-filter"]
+      : "(uid={{username}})";
+  if (!userFilter.includes("{{username}}")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "user-filter must contain the {{username}} placeholder" }] } };
+  }
+  return { userFilter };
+}
+
+async function checkLdapLockout(
+  enabled: boolean,
+  set: ParamCtx["set"],
+): Promise<{ ok: true } | { error: unknown }> {
+  const [samlEnabledForSso, oidcEnabledForSso] = await Promise.all([
+    currentSamlSettings().then((settings): boolean => settings.enabled),
+    getSettings("oidc").then((settings): boolean => settings["enabled"] === true),
+  ]);
+  const authError = await authLockoutResponse(set, {
+    saml: samlEnabledForSso,
+    oidc: oidcEnabledForSso,
+    ldap: enabled,
+  });
+  if (authError !== null) return { error: authError };
+  return { ok: true };
+}
+
+async function persistLdapSettings(
+  attrs: Record<string, unknown>,
+  resolved: Readonly<{
+    encryption: string;
+    attrUsername: string;
+    attrEmail: string;
+    host: unknown;
+    baseDn: unknown;
+    bindDn: unknown;
+    bindDnProvided: boolean;
+    userFilter: string;
+  }>,
+): Promise<unknown> {
+  const updated = await updateSettings("ldap", {
+    ...attrs,
+    encryption: resolved.encryption,
+    "attr-username": resolved.attrUsername,
+    "attr-email": resolved.attrEmail,
+    ...(attrs["host"] === undefined ? {} : { host: resolved.host }),
+    ...(attrs["base-dn"] === undefined ? {} : { "base-dn": resolved.baseDn }),
+    // Clearing the bind DN removes the service account: drop the stored
+    // bind password with it so no orphaned secret lingers.
+    ...(resolved.bindDnProvided ? { "bind-dn": resolved.bindDn, ...(resolved.bindDn === null ? { "bind-password": null } : {}) } : {}),
+    "user-filter": resolved.userFilter,
+  });
+  const { "bind-password": updatedBindPassword, ...safeUpdated } = updated;
+  invalidatePingSsoCache();
+  return settingResource("ldap-settings", {
+    ...safeUpdated,
+    "bind-password-set": typeof updatedBindPassword === "string" && updatedBindPassword !== "",
+  });
 }
 
 export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
@@ -172,38 +610,10 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .post("/api/v2/admin/smtp-settings/test", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
     const settings = await getSettings("smtp");
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const recipient = typeof attrs["email"] === "string" ? normalizeEmail(attrs["email"]) : null;
-    const host = typeof settings["host"] === "string" ? settings["host"].trim() : "";
-    const senderEmail = typeof settings["sender-email"] === "string" ? settings["sender-email"].trim() : "";
-    if (settings["enabled"] !== true || host === "" || senderEmail === "" || recipient === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SMTP must be enabled and configured, and a valid email is required" }] };
-    }
-    try {
-      await sendEmail(
-        {
-          host,
-          port: typeof settings["port"] === "number" ? settings["port"] : 25,
-          username: typeof settings["username"] === "string" && settings["username"] !== "" ? settings["username"] : null,
-          password: typeof settings["password"] === "string" ? settings["password"] : null,
-          senderEmail,
-          auth: settings["auth"] === "none" || settings["auth"] === "login" || settings["auth"] === "plain" ? settings["auth"] : "plain",
-          encryption: isSmtpEncryption(settings["encryption"]) ? settings["encryption"] : null,
-        },
-        {
-          to: [recipient],
-          subject: "Terrence SMTP test",
-          text: "This is a test message from Terrence SMTP settings.",
-          html: "<html><body><p>This is a test message from Terrence SMTP settings.</p></body></html>",
-        },
-      );
-    } catch {
-      (set as { status: number }).status = 502;
-      return { errors: [{ status: "502", title: "Bad Gateway", detail: "SMTP test delivery failed" }] };
-    }
+    const resolved = resolveSmtpTestConfig(body, settings, set);
+    if ("error" in resolved) return resolved.error;
+    const delivered = await deliverSmtpTest(resolved.config, resolved.recipient, set);
+    if ("error" in delivered) return delivered.error;
     (set as { status: number }).status = 204;
     return {};
   })
@@ -222,42 +632,12 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .post("/api/v2/admin/twilio-settings/verify", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
     const settings = await getSettings("twilio");
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const testNumber = typeof attrs["test-number"] === "string" ? attrs["test-number"].trim() : "";
-    const accountSid = typeof settings["account-sid"] === "string" ? settings["account-sid"] : "";
-    const authToken = typeof settings["auth-token"] === "string" ? settings["auth-token"] : "";
-    const fromNumber = typeof settings["from-number"] === "string" ? settings["from-number"] : "";
-    if (settings["enabled"] !== true || testNumber === "" || accountSid === "" || authToken === "" || fromNumber === "") {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Twilio must be enabled and fully configured, and test-number is required" }] };
-    }
-    const form = new URLSearchParams({ Body: "Terrence verification message", To: testNumber, From: fromNumber });
-    let response: Response;
-    try {
-      response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(accountSid)}/Messages.json`, {
-        method: "POST",
-        headers: { Authorization: `Basic ${btoa(`${accountSid}:${authToken}`)}`, "Content-Type": "application/x-www-form-urlencoded" },
-        body: form,
-        signal: AbortSignal.timeout(10_000),
-      });
-    } catch {
-      (set as { status: number }).status = 503;
-      return { errors: [{ status: "503", title: "Service Unavailable", detail: "Twilio verification could not reach the provider" }] };
-    }
-    const responseText = await response.text().catch((): string => "");
-    if (!response.ok) {
-      let detail = "Twilio rejected the verification message";
-      try {
-        const parsed = JSON.parse(responseText) as { message?: unknown };
-        if (typeof parsed.message === "string" && parsed.message !== "") detail = parsed.message;
-      } catch {
-        // Keep the stable API error when Twilio does not return JSON.
-      }
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail }] };
-    }
+    const resolved = resolveTwilioVerifyConfig(body, settings, set);
+    if ("error" in resolved) return resolved.error;
+    const sent = await sendTwilioVerify(resolved.config, set);
+    if ("error" in sent) return sent.error;
+    const checked = await checkTwilioVerifyResult(sent.response, set);
+    if ("error" in checked) return checked.error;
     (set as { status: number }).status = 200;
     return {};
   })
@@ -285,87 +665,23 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const current = await getSettingsFresh("oidc", false);
-    if (attrs["enabled"] !== undefined && typeof attrs["enabled"] !== "boolean") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enabled must be a boolean" }] };
-    }
-    if (attrs["link-by-email"] !== undefined && typeof attrs["link-by-email"] !== "boolean") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "link-by-email must be a boolean" }] };
-    }
-    for (const key of ["issuer", "client-id", "client-secret", "scopes", "pkce-method", "signing-alg"] as const) {
-      if (attrs[key] !== undefined && attrs[key] !== null && typeof attrs[key] !== "string") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a string or null` }] };
-      }
-    }
-    const enabled = typeof attrs["enabled"] === "boolean" ? attrs["enabled"] : current["enabled"] === true;
-    const issuerValue = attrs["issuer"] === undefined
-      ? current["issuer"]
-      : typeof attrs["issuer"] === "string" ? attrs["issuer"].trim() : null;
-    const clientId = attrs["client-id"] === undefined
-      ? current["client-id"]
-      : typeof attrs["client-id"] === "string" ? attrs["client-id"].trim() : null;
-    const issuer = typeof issuerValue === "string" && issuerValue !== "" ? normalizeIssuer(issuerValue) : issuerValue;
-    if (enabled && (typeof issuer !== "string" || issuer === "" || typeof clientId !== "string" || clientId === "")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "issuer and client-id are required when OIDC is enabled" }] };
-    }
-    if (typeof issuer === "string" && issuer !== "") {
-      if (!validOidcIssuer(issuer)) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "issuer must be a valid URL" }] };
-      }
-    }
-    const pkce = attrs["pkce-method"] === undefined ? current["pkce-method"] : attrs["pkce-method"];
-    if (pkce !== null && pkce !== undefined && pkce !== "" && pkce !== "S256" && pkce !== "none") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "pkce-method must be \"S256\", \"none\", or null" }] };
-    }
-    const signingAlgInput = attrs["signing-alg"] === undefined ? current["signing-alg"] : attrs["signing-alg"];
-    const signingAlg = signingAlgInput === null || signingAlgInput === undefined
-      ? null
-      : typeof signingAlgInput === "string" && signingAlgInput.trim() !== "" ? signingAlgInput.trim() : null;
-    if (signingAlg !== null && !OIDC_SIGNING_ALGORITHMS.has(signingAlg)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "signing-alg must be a supported ID token algorithm or null" }] };
-    }
-    const [samlEnabledForSso, ldapEnabledForSso] = await Promise.all([
-      currentSamlSettings().then((settings): boolean => settings.enabled),
-      ldapSettings().then((settings): boolean => settings.enabled),
-    ]);
-    const authError = await authLockoutResponse(set, {
-      saml: samlEnabledForSso,
-      oidc: enabled,
-      ldap: ldapEnabledForSso,
-    });
-    if (authError !== null) return authError;
-    const clientSecret = attrs["client-secret"] === null
-      ? null
-      : typeof attrs["client-secret"] === "string" && attrs["client-secret"] !== ""
-        ? attrs["client-secret"]
-        : current["client-secret"];
-    if (attrs["client-secret"] === "") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "client-secret must be a non-empty string or null" }] };
-    }
-    if (enabled && signingAlg?.startsWith("HS") === true && (typeof clientSecret !== "string" || clientSecret === "")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "a client secret is required for symmetric signing algorithms" }] };
-    }
-    // Without PKCE, the token exchange authenticates the client with its
-    // secret; an enabled provider with no secret could be impersonated.
-    if (enabled && pkce !== "S256" && (typeof clientSecret !== "string" || clientSecret === "")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "a client secret is required when pkce-method is not S256" }] };
-    }
+    const scalars = checkOidcScalars(attrs, set);
+    if ("error" in scalars) return scalars.error;
+    const identity = resolveOidcIdentity(attrs, current, set);
+    if ("error" in identity) return identity.error;
+    const crypto = resolveOidcCrypto(attrs, current, set);
+    if ("error" in crypto) return crypto.error;
+    const lockout = await checkOidcLockout(identity.enabled, set);
+    if ("error" in lockout) return lockout.error;
+    const secret = resolveOidcSecret(attrs, current, identity.enabled, crypto.pkce, crypto.signingAlg, set);
+    if ("error" in secret) return secret.error;
     const updated = await updateSettings("oidc", {
       ...attrs,
-      issuer,
-      "client-id": clientId,
-      "client-secret": clientSecret,
-      "pkce-method": pkce === "" || pkce === undefined ? null : pkce,
-      "signing-alg": signingAlg,
+      issuer: identity.issuer,
+      "client-id": identity.clientId,
+      "client-secret": secret.clientSecret,
+      "pkce-method": crypto.pkce === "" || crypto.pkce === undefined ? null : crypto.pkce,
+      "signing-alg": crypto.signingAlg,
     });
     invalidatePingSsoCache();
     return oidcSettingsResource(updated);
@@ -447,106 +763,27 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const current = await getSettingsFresh("ldap", false);
-    for (const key of ["enabled", "link-by-email"] as const) {
-      if (attrs[key] !== undefined && typeof attrs[key] !== "boolean") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a boolean` }] };
-      }
-    }
-    for (const key of ["host", "bind-dn", "bind-password", "base-dn", "user-filter", "attr-username", "attr-email", "attr-display-name"] as const) {
-      if (attrs[key] !== undefined && attrs[key] !== null && typeof attrs[key] !== "string") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a string or null` }] };
-      }
-    }
-    const port = attrs["port"] === undefined ? current["port"] : attrs["port"];
-    if (!(typeof port === "number" && Number.isInteger(port) && port > 0 && port <= 65535)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "port must be an integer between 1 and 65535" }] };
-    }
-    const encryption = attrs["encryption"] === undefined ? current["encryption"] : attrs["encryption"];
-    if (encryption !== "plain" && encryption !== "starttls" && encryption !== "ldaps") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "encryption must be one of plain, starttls, ldaps" }] };
-    }
-    const enabled = typeof attrs["enabled"] === "boolean" ? attrs["enabled"] : current["enabled"] === true;
-    const host = attrs["host"] === null ? null : typeof attrs["host"] === "string" ? attrs["host"].trim() : current["host"];
-    const baseDn = attrs["base-dn"] === null ? null : typeof attrs["base-dn"] === "string" ? attrs["base-dn"].trim() : current["base-dn"];
-    // A blank or absent value falls back to the attribute's default; the
-    // helper guarantees the result is never an empty string.
-    const attrFallback = (key: "attr-username" | "attr-email", fallback: string): string => {
-      const input = attrs[key];
-      const stored = current[key];
-      return typeof input === "string"
-        ? input.trim() || fallback
-        : input === null ? fallback
-          : typeof stored === "string" && stored.trim() !== "" ? stored.trim() : fallback;
-    };
-    const attrUsername = attrFallback("attr-username", "uid");
-    const attrEmail = attrFallback("attr-email", "mail");
-    if (enabled && (typeof host !== "string" || host === "" || typeof baseDn !== "string" || baseDn === "")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "host and base-dn are required when LDAP is enabled" }] };
-    }
-    // A bind DN without a password performs an unauthenticated (anonymous)
-    // bind per RFC 4511 §4.2; reject the misconfiguration up front rather
-    // than silently downgrading at login time.
-    // A blank or whitespace-only bind DN means "no service account"; storing
-    // it as a string would make authenticateLdap require a bind password
-    // forever, and a padded one would be validated trimmed but persisted raw.
-    const bindDnProvided = attrs["bind-dn"] !== undefined;
-    const bindDn = typeof attrs["bind-dn"] === "string"
-      ? (attrs["bind-dn"].trim() === "" ? null : attrs["bind-dn"].trim())
-      : attrs["bind-dn"] === null ? null : current["bind-dn"];
-    const bindPassword = attrs["bind-password"] === undefined ? current["bind-password"] : attrs["bind-password"];
-    if (typeof bindDn === "string" && bindDn !== "" && (typeof bindPassword !== "string" || bindPassword === "")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "bind-password is required when bind-dn is set" }] };
-    }
-    // The bind password travels over the wire on every bind: never allow it
-    // over an unencrypted connection. The ldap settings default ("ldaps")
-    // keeps new configurations secure by construction.
-    if (enabled && encryption === "plain" && typeof bindDn === "string" && bindDn !== ""
-      && typeof bindPassword === "string" && bindPassword !== "") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "bind credentials cannot be sent over plaintext LDAP; use starttls or ldaps" }] };
-    }
-    const userFilter = typeof attrs["user-filter"] === "string" && attrs["user-filter"] !== ""
-      ? attrs["user-filter"]
-      : typeof current["user-filter"] === "string" && current["user-filter"] !== ""
-        ? current["user-filter"]
-        : "(uid={{username}})";
-    if (!userFilter.includes("{{username}}")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "user-filter must contain the {{username}} placeholder" }] };
-    }
-    const [samlEnabledForSso, oidcEnabledForSso] = await Promise.all([
-      currentSamlSettings().then((settings): boolean => settings.enabled),
-      getSettings("oidc").then((settings): boolean => settings["enabled"] === true),
-    ]);
-    const authError = await authLockoutResponse(set, {
-      saml: samlEnabledForSso,
-      oidc: oidcEnabledForSso,
-      ldap: enabled === true,
-    });
-    if (authError !== null) return authError;
-    const updated = await updateSettings("ldap", {
-      ...attrs,
-      encryption,
-      "attr-username": attrUsername,
-      "attr-email": attrEmail,
-      ...(attrs["host"] === undefined ? {} : { host }),
-      ...(attrs["base-dn"] === undefined ? {} : { "base-dn": baseDn }),
-      // Clearing the bind DN removes the service account: drop the stored
-      // bind password with it so no orphaned secret lingers.
-      ...(bindDnProvided ? { "bind-dn": bindDn, ...(bindDn === null ? { "bind-password": null } : {}) } : {}),
-      "user-filter": userFilter,
-    });
-    const { "bind-password": updatedBindPassword, ...safeUpdated } = updated;
-    invalidatePingSsoCache();
-    return settingResource("ldap-settings", {
-      ...safeUpdated,
-      "bind-password-set": typeof updatedBindPassword === "string" && updatedBindPassword !== "",
+    const scalars = checkLdapScalars(attrs, set);
+    if ("error" in scalars) return scalars.error;
+    const connection = resolveLdapConnection(attrs, current, set);
+    if ("error" in connection) return connection.error;
+    const directory = resolveLdapDirectory(attrs, current, set);
+    if ("error" in directory) return directory.error;
+    const bind = resolveLdapBind(attrs, current, directory.enabled, connection.encryption, set);
+    if ("error" in bind) return bind.error;
+    const filter = resolveLdapUserFilter(attrs, current, set);
+    if ("error" in filter) return filter.error;
+    const lockout = await checkLdapLockout(directory.enabled, set);
+    if ("error" in lockout) return lockout.error;
+    return persistLdapSettings(attrs, {
+      encryption: connection.encryption,
+      attrUsername: directory.attrUsername,
+      attrEmail: directory.attrEmail,
+      host: directory.host,
+      baseDn: directory.baseDn,
+      bindDn: bind.bindDn,
+      bindDnProvided: bind.bindDnProvided,
+      userFilter: filter.userFilter,
     });
     });
   });

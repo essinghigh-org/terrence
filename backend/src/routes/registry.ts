@@ -35,6 +35,7 @@ import {
   pageRequest,
   pagination,
   type DeepReadonly,
+  type RequestWithUrl,
 } from "../lib/utils";
 import { join } from "path";
 import { mkdir, rm, writeFile } from "fs/promises";
@@ -341,6 +342,72 @@ async function checkRegistryManagementRead(
     );
 }
 
+type TestConfigVersionRow = DeepReadonly<typeof moduleTestConfigurationVersions.$inferSelect>;
+
+async function resolveTestConfigVersionForUpload(
+  configurationVersionId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<Readonly<{ configuration: TestConfigVersionRow; mod: ModItem } | { failure: unknown }>> {
+  const configuration = await db.query.moduleTestConfigurationVersions.findFirst({ where: eq(moduleTestConfigurationVersions.id, configurationVersionId) });
+  const mod = configuration === undefined ? undefined : await db.query.registryModules.findFirst({ where: eq(registryModules.id, configuration.moduleId) });
+  const path = `/api/v2/module-test-configuration-versions/${configurationVersionId}/upload`;
+  const authorized = mod !== undefined && (await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"));
+  if (configuration === undefined || mod === undefined || (!authorized && !validSignedApiURL(request, path, "PUT"))) return { failure: registryNotFound(set) };
+  return { configuration, mod };
+}
+
+async function readAndValidateUploadArchive(
+  body: unknown,
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<Readonly<{ bytes: Uint8Array } | { failure: unknown }>> {
+  const contentLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > MAX_MODULE_ARCHIVE_BYTES) {
+    (set as { status: number }).status = 413;
+    return { failure: { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds the upload limit" }] } };
+  }
+  const bytes = await uploadedBytes(body, request);
+  if (bytes.byteLength === 0) {
+    (set as { status: number }).status = 400;
+    return { failure: { errors: [{ status: "400", title: "Bad Request", detail: "Configuration archive is empty" }] } };
+  }
+  if (bytes.byteLength > MAX_MODULE_ARCHIVE_BYTES) {
+    (set as { status: number }).status = 413;
+    return { failure: { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds the upload limit" }] } };
+  }
+  return { bytes };
+}
+
+async function claimAndStoreConfigArchive(
+  configurationId: string,
+  bytes: Uint8Array,
+): Promise<Readonly<{ alreadyUploaded: true } | { stored: true }>> {
+  const claimed = await db.update(moduleTestConfigurationVersions)
+    .set({ status: "uploading" })
+    .where(and(
+      eq(moduleTestConfigurationVersions.id, configurationId),
+      eq(moduleTestConfigurationVersions.status, "pending"),
+      isNull(moduleTestConfigurationVersions.archivePath),
+    ))
+    .returning({ id: moduleTestConfigurationVersions.id });
+  if (claimed.length !== 1) return { alreadyUploaded: true as const };
+  const archivePath = join(CV_STORAGE_DIR, `module-test-config-${configurationId}.tar.gz`);
+  try {
+    await mkdir(CV_STORAGE_DIR, { recursive: true, mode: 0o700 });
+    await writeFile(archivePath, bytes, { mode: 0o600 });
+    const uploadedAt = Date.now();
+    await db.update(moduleTestConfigurationVersions).set({ archivePath, status: "uploaded", uploadedAt }).where(eq(moduleTestConfigurationVersions.id, configurationId));
+  } catch (error: unknown) {
+    await db.update(moduleTestConfigurationVersions).set({ status: "pending" }).where(and(eq(moduleTestConfigurationVersions.id, configurationId), eq(moduleTestConfigurationVersions.status, "uploading")));
+    throw error;
+  }
+  return { stored: true as const };
+}
+
 async function uploadedBytes(body: unknown, request: ParamCtx["request"]): Promise<Uint8Array> {
   if (body instanceof Blob) return new Uint8Array(await body.arrayBuffer());
   if (body instanceof ArrayBuffer) return new Uint8Array(body);
@@ -348,6 +415,56 @@ async function uploadedBytes(body: unknown, request: ParamCtx["request"]): Promi
   if (typeof body === "string") return new TextEncoder().encode(body);
   if (body !== undefined) return new TextEncoder().encode(JSON.stringify(body));
   return new Uint8Array(await request.arrayBuffer());
+}
+
+async function createVcsBranchVersion(
+  mod: ModItem,
+  version: string,
+  set: SetObj,
+): Promise<unknown> {
+  if (mod.publishingWorkflow !== "branch") {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Tag-based module versions are created by matching VCS tags" }] };
+  }
+  try {
+    await synchronizeRegistryModule(mod, version);
+    const created = await db.query.registryModuleVersions.findFirst({
+      where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)),
+    });
+    if (created === undefined) throw new Error("The branch revision did not produce a module version");
+    (set as { status: number }).status = 201;
+    return { data: registryModuleVersionResource(created) };
+  } catch (error: unknown) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Branch publication failed" }] };
+  }
+}
+
+async function resolveModuleVersionKeyId(
+  mod: ModItem,
+  attributes: Readonly<Record<string, unknown>>,
+): Promise<Readonly<{ keyId: string | null } | { error: string }>> {
+  const rawKeyId = attributes["key-id"];
+  if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) {
+    return { error: "key-id must identify a GPG key" };
+  }
+  const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
+  if (keyId !== null && await registrySigningKey(mod.orgId, mod.namespace, keyId) === undefined) {
+    return { error: "key-id must identify a GPG key in the module namespace" };
+  }
+  return { keyId };
+}
+
+function parseModuleVersionEnvelope(
+  body: unknown,
+): Readonly<{ attributes: Readonly<Record<string, unknown>> } | { error: string }> {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  if (data["type"] !== undefined && data["type"] !== "registry-module-versions") {
+    return { error: "data.type must be registry-module-versions" };
+  }
+  const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  return { attributes };
 }
 
 async function createRegistryModuleVersion(
@@ -368,34 +485,15 @@ async function createRegistryModuleVersion(
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Version ${version} already exists` }] };
   }
   if (mod.publishingMechanism === "vcs") {
-    if (mod.publishingWorkflow !== "branch") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Tag-based module versions are created by matching VCS tags" }] };
-    }
-    try {
-      await synchronizeRegistryModule(mod, version);
-      const created = await db.query.registryModuleVersions.findFirst({
-        where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)),
-      });
-      if (created === undefined) throw new Error("The branch revision did not produce a module version");
-      (set as { status: number }).status = 201;
-      return { data: registryModuleVersionResource(created) };
-    } catch (error: unknown) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Branch publication failed" }] };
-    }
+    return await createVcsBranchVersion(mod, version, set);
   }
 
-  const rawKeyId = attributes["key-id"];
-  if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) {
+  const key = await resolveModuleVersionKeyId(mod, attributes);
+  if ("error" in key) {
     (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key" }] };
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: key.error }] };
   }
-  const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
-  if (keyId !== null && await registrySigningKey(mod.orgId, mod.namespace, keyId) === undefined) {
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key in the module namespace" }] };
-  }
+  const keyId = key.keyId;
   const commitSha = typeof attributes["commit-sha"] === "string" && attributes["commit-sha"] !== ""
     ? attributes["commit-sha"]
     : null;
@@ -467,83 +565,150 @@ type TerraformType =
   | Readonly<{ kind: "tuple"; constraint: string; items: readonly TerraformType[] }>
   | Readonly<{ kind: "object"; constraint: string; fields: Readonly<Record<string, TerraformType>> }>;
 
-function parseTerraformType(source: string): TerraformType | undefined {
-  let position = 0;
-  const skipSpace = (): void => {
-    while (/\s/.test(source[position] ?? "")) position += 1;
-  };
-  const take = (value: string): boolean => {
-    skipSpace();
-    if (!source.startsWith(value, position)) return false;
-    position += value.length;
-    return true;
-  };
-  const identifier = (): string | undefined => {
-    skipSpace();
-    const match = /^[A-Za-z_][A-Za-z0-9_-]*/.exec(source.slice(position));
-    if (match === null) return undefined;
-    position += match[0].length;
-    return match[0];
-  };
-  const parse = (): TerraformType | undefined => {
-    const rawName = identifier();
+function parseScalarType(name: string): TerraformType | undefined {
+  if (name === "any" || name === "dynamic") return { kind: "any", constraint: "any" };
+  if (name === "string") return { kind: "string", constraint: "string" };
+  if (name === "number" || name === "integer" || name === "float") return { kind: "number", constraint: "number" };
+  if (name === "bool" || name === "boolean") return { kind: "bool", constraint: "bool" };
+  if (name === "array") return { kind: "list", constraint: "list(any)", item: { kind: "any", constraint: "any" } };
+  return undefined;
+}
+
+function parseBareCollectionType(name: string): TerraformType | undefined {
+  if (name === "list" || name === "set" || name === "map") {
+    return { kind: name, constraint: `${name}(any)`, item: { kind: "any", constraint: "any" } };
+  }
+  return undefined;
+}
+
+class TerraformTypeParser {
+  private position = 0;
+
+  constructor(private readonly source: string) {}
+
+  public parseDocument(): TerraformType | undefined {
+    const parsed = this.parse();
+    this.skipSpace();
+    return parsed !== undefined && this.position === this.source.length ? parsed : undefined;
+  }
+
+  public parse(): TerraformType | undefined {
+    const rawName = this.identifier();
     if (rawName === undefined) return undefined;
     const name = rawName.toLowerCase();
-    if (name === "any" || name === "dynamic") return { kind: "any", constraint: "any" };
-    if (name === "string") return { kind: "string", constraint: "string" };
-    if (name === "number" || name === "integer" || name === "float") return { kind: "number", constraint: "number" };
-    if (name === "bool" || name === "boolean") return { kind: "bool", constraint: "bool" };
-    if (name === "array") return { kind: "list", constraint: "list(any)", item: { kind: "any", constraint: "any" } };
-
-    if (!take("(")) {
-      if (name === "list" || name === "set" || name === "map") {
-        return { kind: name, constraint: `${name}(any)`, item: { kind: "any", constraint: "any" } };
-      }
-      return undefined;
-    }
-    if (name === "list" || name === "set" || name === "map" || name === "optional") {
-      const item = parse();
-      if (item === undefined || !take(")")) return undefined;
-      return { kind: name, constraint: `${name}(${item.constraint})`, item };
-    }
-    if (name === "tuple") {
-      if (!take("[")) return undefined;
-      const items: TerraformType[] = [];
-      skipSpace();
-      while ((source[position] ?? "") !== "]") {
-        const item = parse();
-        if (item === undefined) return undefined;
-        items.push(item);
-        skipSpace();
-        if ((source[position] ?? "") === "]") break;
-        if (!take(",")) return undefined;
-      }
-      if (!take("]") || !take(")")) return undefined;
-      return { kind: "tuple", constraint: `tuple([${items.map((item): string => item.constraint).join(", ")}])`, items };
-    }
-    if (name === "object") {
-      if (!take("{")) return undefined;
-      const fields: Record<string, TerraformType> = {};
-      skipSpace();
-      while ((source[position] ?? "") !== "}") {
-        const fieldName = identifier();
-        if (fieldName === undefined || fields[fieldName] !== undefined || (!take("=") && !take(":"))) return undefined;
-        const fieldType = parse();
-        if (fieldType === undefined) return undefined;
-        fields[fieldName] = fieldType;
-        skipSpace();
-        if ((source[position] ?? "") === "}") break;
-        if (!take(",")) return undefined;
-      }
-      if (!take("}") || !take(")")) return undefined;
-      const entries = Object.entries(fields).map(([key, value]): string => `${key} = ${value.constraint}`);
-      return { kind: "object", constraint: `object({ ${entries.join(", ")} })`, fields };
-    }
+    const scalar = parseScalarType(name);
+    if (scalar !== undefined) return scalar;
+    if (!this.take("(")) return parseBareCollectionType(name);
+    if (name === "list" || name === "set" || name === "map" || name === "optional") return this.parseCollectionType(name);
+    if (name === "tuple") return this.parseTupleType();
+    if (name === "object") return this.parseObjectType();
     return undefined;
-  };
-  const parsed = parse();
-  skipSpace();
-  return parsed !== undefined && position === source.length ? parsed : undefined;
+  }
+
+  private skipSpace(): void {
+    while (/\s/.test(this.source[this.position] ?? "")) this.position += 1;
+  }
+
+  private take(value: string): boolean {
+    this.skipSpace();
+    if (!this.source.startsWith(value, this.position)) return false;
+    this.position += value.length;
+    return true;
+  }
+
+  private identifier(): string | undefined {
+    this.skipSpace();
+    const match = /^[A-Za-z_][A-Za-z0-9_-]*/.exec(this.source.slice(this.position));
+    if (match === null) return undefined;
+    this.position += match[0].length;
+    return match[0];
+  }
+
+  private parseCollectionType(name: "list" | "set" | "map" | "optional"): TerraformType | undefined {
+    const item = this.parse();
+    if (item === undefined || !this.take(")")) return undefined;
+    return { kind: name, constraint: `${name}(${item.constraint})`, item };
+  }
+
+  private parseTupleType(): TerraformType | undefined {
+    if (!this.take("[")) return undefined;
+    const items = this.parseTupleItems();
+    if (items === undefined) return undefined;
+    if (!this.take("]") || !this.take(")")) return undefined;
+    return { kind: "tuple", constraint: `tuple([${items.map((item): string => item.constraint).join(", ")}])`, items };
+  }
+
+  private parseTupleItems(): TerraformType[] | undefined {
+    const items: TerraformType[] = [];
+    this.skipSpace();
+    while ((this.source[this.position] ?? "") !== "]") {
+      const item = this.parse();
+      if (item === undefined) return undefined;
+      items.push(item);
+      this.skipSpace();
+      if ((this.source[this.position] ?? "") === "]") break;
+      if (!this.take(",")) return undefined;
+    }
+    return items;
+  }
+
+  private parseObjectType(): TerraformType | undefined {
+    if (!this.take("{")) return undefined;
+    const fields = this.parseObjectFields();
+    if (fields === undefined) return undefined;
+    if (!this.take("}") || !this.take(")")) return undefined;
+    const entries = Object.entries(fields).map(([key, value]): string => `${key} = ${value.constraint}`);
+    return { kind: "object", constraint: `object({ ${entries.join(", ")} })`, fields };
+  }
+
+  private parseObjectFields(): Record<string, TerraformType> | undefined {
+    const fields: Record<string, TerraformType> = {};
+    this.skipSpace();
+    while ((this.source[this.position] ?? "") !== "}") {
+      const fieldName = this.identifier();
+      if (fieldName === undefined || fields[fieldName] !== undefined || (!this.take("=") && !this.take(":"))) return undefined;
+      const fieldType = this.parse();
+      if (fieldType === undefined) return undefined;
+      fields[fieldName] = fieldType;
+      this.skipSpace();
+      if ((this.source[this.position] ?? "") === "}") break;
+      if (!this.take(",")) return undefined;
+    }
+    return fields;
+  }
+}
+
+function parseTerraformType(source: string): TerraformType | undefined {
+  return new TerraformTypeParser(source).parseDocument();
+}
+
+function matchesListType(value: unknown, item: TerraformType): boolean {
+  return Array.isArray(value) && value.every((entry: unknown): boolean => matchesTerraformType(entry, item));
+}
+
+function matchesMapType(value: unknown, item: TerraformType): boolean {
+  return value !== null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Object.values(value).every((entry: unknown): boolean => matchesTerraformType(entry, item));
+}
+
+function matchesTupleType(value: unknown, items: readonly TerraformType[]): boolean {
+  return Array.isArray(value)
+    && value.length === items.length
+    && value.every((entry: unknown, index: number): boolean => {
+      const item = items[index];
+      return item !== undefined && matchesTerraformType(entry, item);
+    });
+}
+
+function matchesObjectType(value: unknown, fields: Readonly<Record<string, TerraformType>>): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return Object.entries(fields).every(([key, fieldType]): boolean => {
+    const optional = fieldType.kind === "optional";
+    return (optional && record[key] === undefined) || matchesTerraformType(record[key], fieldType);
+  });
 }
 
 function matchesTerraformType(value: unknown, type: TerraformType): boolean {
@@ -551,31 +716,40 @@ function matchesTerraformType(value: unknown, type: TerraformType): boolean {
   if (type.kind === "string") return typeof value === "string";
   if (type.kind === "number") return typeof value === "number" && Number.isFinite(value);
   if (type.kind === "bool") return typeof value === "boolean";
-  if (type.kind === "list" || type.kind === "set") {
-    return Array.isArray(value) && value.every((entry: unknown): boolean => matchesTerraformType(entry, type.item));
-  }
-  if (type.kind === "map") {
-    return value !== null
-      && typeof value === "object"
-      && !Array.isArray(value)
-      && Object.values(value).every((entry: unknown): boolean => matchesTerraformType(entry, type.item));
-  }
+  if (type.kind === "list" || type.kind === "set") return matchesListType(value, type.item);
+  if (type.kind === "map") return matchesMapType(value, type.item);
   if (type.kind === "optional") return value === null || matchesTerraformType(value, type.item);
-  if (type.kind === "tuple") {
-    return Array.isArray(value)
-      && value.length === type.items.length
-      && value.every((entry: unknown, index: number): boolean => {
-        const item = type.items[index];
-        return item !== undefined && matchesTerraformType(entry, item);
-      });
-  }
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  if (type.kind === "tuple") return matchesTupleType(value, type.items);
   const objectType = type as Extract<TerraformType, Readonly<{ kind: "object" }>>;
-  const record = value as Record<string, unknown>;
-  return Object.entries(objectType.fields).every(([key, fieldType]): boolean => {
-    const optional = fieldType.kind === "optional";
-    return (optional && record[key] === undefined) || matchesTerraformType(record[key], fieldType);
-  });
+  return matchesObjectType(value, objectType.fields);
+}
+
+function variableOptionValues(id: string | undefined, values: Readonly<Record<string, unknown>>): VariableOptionInput | Readonly<{ error: string }> {
+  const variableName = values["variable-name"];
+  const variableType = values["variable-type"];
+  const options = values["options"];
+  if (typeof variableName !== "string" || !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(variableName)) {
+    return { error: "variable-name must be a valid Terraform variable name" };
+  }
+  if (typeof variableType !== "string") return { error: `variable-type is required for ${variableName}` };
+  const terraformType = parseTerraformType(variableType.trim());
+  if (terraformType === undefined) return { error: `variable-type is invalid for ${variableName}` };
+  if (!Array.isArray(options)) return { error: `options must be an array for ${variableName}` };
+  if (!options.every((option: unknown): boolean => matchesTerraformType(option, terraformType))) {
+    return { error: `options must match variable-type for ${variableName}` };
+  }
+  return { id, variableName, variableType: variableType.trim(), options };
+}
+
+function variableOptionEntry(entry: unknown): VariableOptionInput | Readonly<{ error: string }> {
+  if (entry === null || typeof entry !== "object") return { error: "variable-options entries must be objects" };
+  const item = entry as Record<string, unknown>;
+  if (item["type"] !== "variable-options") return { error: "variable-options type must be variable-options" };
+  const id = item["id"];
+  if (id !== undefined && (typeof id !== "string" || id === "")) return { error: "variable-options id must be a non-empty string" };
+  const attributes = item["attributes"];
+  if (attributes === null || typeof attributes !== "object") return { error: "variable-options attributes are required" };
+  return variableOptionValues(typeof id === "string" ? id : undefined, attributes as Record<string, unknown>);
 }
 
 function variableOptionsInput(raw: unknown): readonly VariableOptionInput[] | Readonly<{ error: string }> {
@@ -583,46 +757,25 @@ function variableOptionsInput(raw: unknown): readonly VariableOptionInput[] | Re
   const parsed: VariableOptionInput[] = [];
   const names = new Set<string>();
   for (const entry of raw) {
-    if (entry === null || typeof entry !== "object") return { error: "variable-options entries must be objects" };
-    const item = entry as Record<string, unknown>;
-    if (item["type"] !== "variable-options") return { error: "variable-options type must be variable-options" };
-    const id = item["id"];
-    if (id !== undefined && (typeof id !== "string" || id === "")) return { error: "variable-options id must be a non-empty string" };
-    const attributes = item["attributes"];
-    if (attributes === null || typeof attributes !== "object") return { error: "variable-options attributes are required" };
-    const values = attributes as Record<string, unknown>;
-    const variableName = values["variable-name"];
-    const variableType = values["variable-type"];
-    const options = values["options"];
-    if (typeof variableName !== "string" || !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(variableName)) {
-      return { error: "variable-name must be a valid Terraform variable name" };
-    }
-    if (names.has(variableName)) return { error: `variable-options contains duplicate variable-name ${variableName}` };
-    names.add(variableName);
-    if (typeof variableType !== "string") return { error: `variable-type is required for ${variableName}` };
-    const terraformType = parseTerraformType(variableType.trim());
-    if (terraformType === undefined) return { error: `variable-type is invalid for ${variableName}` };
-    if (!Array.isArray(options)) return { error: `options must be an array for ${variableName}` };
-    if (!options.every((option: unknown): boolean => matchesTerraformType(option, terraformType))) {
-      return { error: `options must match variable-type for ${variableName}` };
-    }
-    parsed.push({
-      id: typeof id === "string" ? id : undefined,
-      variableName,
-      variableType: variableType.trim(),
-      options,
-    });
+    const result = variableOptionEntry(entry);
+    if ("error" in result) return result;
+    if (names.has(result.variableName)) return { error: `variable-options contains duplicate variable-name ${result.variableName}` };
+    names.add(result.variableName);
+    parsed.push(result);
   }
   return parsed;
 }
 
-function noCodeInput(body: unknown, requireModule: boolean): NoCodeInput | Readonly<{ error: string }> {
+function noCodeDataSection(body: unknown): Readonly<{ data: Record<string, unknown> } | { error: string }> {
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
   const rawData = payload["data"];
   if (rawData === null || typeof rawData !== "object") return { error: "data is required" };
   const data = rawData as Record<string, unknown>;
   if (data["type"] !== "no-code-modules") return { error: "data.type must be no-code-modules" };
+  return { data };
+}
 
+function noCodeAttributesSection(data: Readonly<Record<string, unknown>>): Readonly<{ enabled: unknown; versionPin: unknown } | { error: string }> {
   const rawAttributes = data["attributes"];
   if (rawAttributes !== undefined && (rawAttributes === null || typeof rawAttributes !== "object")) {
     return { error: "data.attributes must be an object" };
@@ -634,7 +787,10 @@ function noCodeInput(body: unknown, requireModule: boolean): NoCodeInput | Reado
   if (versionPin !== undefined && (typeof versionPin !== "string" || versionPin.trim() === "")) {
     return { error: "version-pin must be a non-empty string" };
   }
+  return { enabled, versionPin };
+}
 
+function noCodeRelationshipsSection(data: Readonly<Record<string, unknown>>): Readonly<{ relationships: Record<string, unknown> } | { error: string }> {
   const rawRelationships = data["relationships"];
   if (rawRelationships !== undefined && (rawRelationships === null || typeof rawRelationships !== "object")) {
     return { error: "data.relationships must be an object" };
@@ -642,6 +798,13 @@ function noCodeInput(body: unknown, requireModule: boolean): NoCodeInput | Reado
   const relationships = typeof rawRelationships === "object"
     ? rawRelationships as Record<string, unknown>
     : {};
+  return { relationships };
+}
+
+function noCodeModuleIdSection(
+  relationships: Readonly<Record<string, unknown>>,
+  requireModule: boolean,
+): Readonly<{ moduleId: string | undefined } | { error: string }> {
   const rawRegistryModule = relationships["registry-module"];
   let moduleId: string | undefined;
   if (rawRegistryModule !== undefined) {
@@ -662,24 +825,251 @@ function noCodeInput(body: unknown, requireModule: boolean): NoCodeInput | Reado
     moduleId = registryData["id"];
   }
   if (requireModule && moduleId === undefined) return { error: "registry-module relationship is required" };
+  return { moduleId };
+}
 
+function noCodeVariableOptionsSection(
+  relationships: Readonly<Record<string, unknown>>,
+): Readonly<{ variableOptions: readonly VariableOptionInput[] | undefined } | { error: string }> {
   const rawVariableOptions = relationships["variable-options"];
-  let variableOptions: readonly VariableOptionInput[] | undefined;
-  if (rawVariableOptions !== undefined) {
-    if (rawVariableOptions === null || typeof rawVariableOptions !== "object") {
-      return { error: "variable-options relationship is invalid" };
-    }
-    const options = variableOptionsInput((rawVariableOptions as Record<string, unknown>)["data"]);
-    if ("error" in options) return options;
-    variableOptions = options;
+  if (rawVariableOptions === undefined) return { variableOptions: undefined };
+  if (rawVariableOptions === null || typeof rawVariableOptions !== "object") {
+    return { error: "variable-options relationship is invalid" };
   }
+  const options = variableOptionsInput((rawVariableOptions as Record<string, unknown>)["data"]);
+  if ("error" in options) return options;
+  return { variableOptions: options };
+}
+
+function noCodeInput(body: unknown, requireModule: boolean): NoCodeInput | Readonly<{ error: string }> {
+  const dataSection = noCodeDataSection(body);
+  if ("error" in dataSection) return dataSection;
+  const attributeSection = noCodeAttributesSection(dataSection.data);
+  if ("error" in attributeSection) return attributeSection;
+  const relationshipSection = noCodeRelationshipsSection(dataSection.data);
+  if ("error" in relationshipSection) return relationshipSection;
+  const moduleSection = noCodeModuleIdSection(relationshipSection.relationships, requireModule);
+  if ("error" in moduleSection) return moduleSection;
+  const optionsSection = noCodeVariableOptionsSection(relationshipSection.relationships);
+  if ("error" in optionsSection) return optionsSection;
 
   return {
-    moduleId,
-    versionPin: typeof versionPin === "string" ? versionPin.trim() : undefined,
-    enabled: typeof enabled === "boolean" ? enabled : undefined,
-    variableOptions,
+    moduleId: moduleSection.moduleId,
+    versionPin: typeof attributeSection.versionPin === "string" ? attributeSection.versionPin.trim() : undefined,
+    enabled: typeof attributeSection.enabled === "boolean" ? attributeSection.enabled : undefined,
+    variableOptions: optionsSection.variableOptions,
   };
+}
+
+type VcsModuleEnvelope = Readonly<{
+  data: Record<string, unknown>;
+  attributes: Record<string, unknown>;
+  vcsRepo: Record<string, unknown>;
+}>;
+
+type VcsModuleNaming = Readonly<{
+  identifier: string;
+  name: string;
+  provider: string;
+}>;
+
+type VcsModuleConnection = Readonly<{
+  githubAppInstallationId: unknown;
+  oauthTokenId: unknown;
+  connectionCount: number;
+  branch: string | null;
+}>;
+
+type VcsModuleOptions = Readonly<{
+  sourceDirectory: string;
+  tagPrefix: string;
+  initialVersion: string;
+  identifierValid: boolean;
+}>;
+
+function parseVcsEnvelope(body: unknown): VcsModuleEnvelope {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  const vcsRepo = attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object"
+    ? attributes["vcs-repo"] as Record<string, unknown>
+    : {};
+  return { data, attributes, vcsRepo };
+}
+
+function parseVcsNaming(attributes: Readonly<Record<string, unknown>>, vcsRepo: Readonly<Record<string, unknown>>): VcsModuleNaming {
+  const identifier = typeof vcsRepo["identifier"] === "string" ? vcsRepo["identifier"].trim() : "";
+  const repositoryName = identifier.split("/").at(-1) ?? "";
+  const conventional = /^terraform-([a-z0-9]+)-([A-Za-z0-9][A-Za-z0-9_-]*)$/.exec(repositoryName);
+  const rawModuleName = attributes["module-name"] ?? attributes["name"];
+  const rawProvider = attributes["module-provider"] ?? attributes["provider"];
+  const name = typeof rawModuleName === "string" ? rawModuleName.trim() : conventional?.[2] ?? "";
+  const provider = typeof rawProvider === "string" ? rawProvider.trim() : conventional?.[1] ?? "";
+  return { identifier, name, provider };
+}
+
+function parseVcsConnection(vcsRepo: Readonly<Record<string, unknown>>): VcsModuleConnection {
+  const githubAppInstallationId = vcsRepo["github-app-installation-id"];
+  const oauthTokenId = vcsRepo["oauth-token-id"];
+  const connectionCount = Number(typeof githubAppInstallationId === "string" && githubAppInstallationId !== "")
+    + Number(typeof oauthTokenId === "string" && oauthTokenId !== "");
+  const branch = typeof vcsRepo["branch"] === "string" && vcsRepo["branch"].trim() !== "" ? vcsRepo["branch"].trim() : null;
+  return { githubAppInstallationId, oauthTokenId, connectionCount, branch };
+}
+
+function parseVcsOptions(
+  attributes: Readonly<Record<string, unknown>>,
+  vcsRepo: Readonly<Record<string, unknown>>,
+  identifier: string,
+): VcsModuleOptions {
+  const rawSourceDirectory = attributes["source-directory"] ?? vcsRepo["source-directory"];
+  const rawTagPrefix = attributes["tag-prefix"] ?? vcsRepo["tag-prefix"];
+  const sourceDirectory = typeof rawSourceDirectory === "string" ? rawSourceDirectory.trim() : "";
+  const tagPrefix = typeof rawTagPrefix === "string" ? rawTagPrefix.trim() : "";
+  const rawInitialVersion = attributes["initial-version"] ?? attributes["version"];
+  const initialVersion = typeof rawInitialVersion === "string" ? rawInitialVersion.replace(/^v/, "") : "0.0.0";
+  const identifierParts = identifier.split("/");
+  const identifierValid = identifierParts.length === 2
+    && identifierParts.every((part): boolean => /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part));
+  return { sourceDirectory, tagPrefix, initialVersion, identifierValid };
+}
+
+function isValidSourceDirectory(sourceDirectory: string): boolean {
+  return sourceDirectory === ""
+    || (!sourceDirectory.startsWith("/") && !sourceDirectory.includes("\\") && !sourceDirectory.split("/").includes(".."));
+}
+
+function vcsModuleFieldError(
+  data: Readonly<Record<string, unknown>>,
+  naming: VcsModuleNaming,
+  connection: VcsModuleConnection,
+  options: VcsModuleOptions,
+): string | null {
+  if (data["type"] !== "registry-modules" || !options.identifierValid || connection.connectionCount !== 1) {
+    return "A repository identifier and exactly one VCS connection are required";
+  }
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?$/.test(naming.name) || !/^[a-z0-9]{1,64}$/.test(naming.provider)) {
+    return "Repository name must follow terraform-<provider>-<module>, or module-name and provider must be supplied";
+  }
+  if (!isValidSourceDirectory(options.sourceDirectory) || options.tagPrefix.length > 128) {
+    return "Source directory or tag prefix is invalid";
+  }
+  if (connection.branch !== null && !validModuleVersion(options.initialVersion)) {
+    return "Branch-based publication requires a semantic initial-version";
+  }
+  return null;
+}
+
+type VcsConnectionStatus = Readonly<{
+  available: boolean;
+  repositoryBaseUrl: string | null;
+}>;
+
+async function resolveGithubAppConnection(orgId: string, installationId: string): Promise<VcsConnectionStatus> {
+  const available = await db.query.githubAppInstallations.findFirst({
+    where: and(eq(githubAppInstallations.id, installationId), eq(githubAppInstallations.orgId, orgId)),
+  }) !== undefined;
+  return { available, repositoryBaseUrl: integrationSetting("GITHUB_APP_HTTP_URL") ?? "https://github.com" };
+}
+
+async function resolveOauthConnection(orgId: string, oauthTokenId: unknown): Promise<VcsConnectionStatus> {
+  const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId as string) });
+  const client = token === undefined ? undefined : await db.query.oauthClients.findFirst({
+    where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
+  });
+  const available = client !== undefined && ["github", "github_enterprise"].includes(client.serviceProvider);
+  return { available, repositoryBaseUrl: client?.httpUrl ?? (client?.serviceProvider === "github" ? "https://github.com" : null) };
+}
+
+async function resolveVcsConnection(orgId: string, connection: VcsModuleConnection): Promise<VcsConnectionStatus> {
+  if (typeof connection.githubAppInstallationId === "string") {
+    return resolveGithubAppConnection(orgId, connection.githubAppInstallationId);
+  }
+  return resolveOauthConnection(orgId, connection.oauthTokenId);
+}
+
+function vcsConnectionRef(connection: VcsModuleConnection): Readonly<{ type: "github-app" | "oauth-token"; id: string }> {
+  if (typeof connection.githubAppInstallationId === "string") {
+    return { type: "github-app", id: connection.githubAppInstallationId };
+  }
+  return { type: "oauth-token", id: connection.oauthTokenId as string };
+}
+
+function vcsDisplayIdentifier(vcsRepo: Readonly<Record<string, unknown>>, identifier: string): string {
+  if (typeof vcsRepo["display-identifier"] === "string") return vcsRepo["display-identifier"];
+  if (typeof vcsRepo["display_identifier"] === "string") return vcsRepo["display_identifier"];
+  return identifier;
+}
+
+function buildVcsRepositoryUrl(
+  repositoryBaseUrl: string | null,
+  rawRepositoryUrl: unknown,
+  identifier: string,
+): Readonly<{ url: string | null } | { error: string }> {
+  let repositoryUrl: string | null = null;
+  if (repositoryBaseUrl !== null) {
+    try {
+      const parsed = new URL(repositoryBaseUrl);
+      if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+        parsed.username = "";
+        parsed.password = "";
+        repositoryUrl = `${parsed.toString().replace(/\/$/, "")}/${identifier}`;
+      }
+    } catch {
+      // An invalid optional connection URL should not fabricate a github.com link.
+    }
+  }
+  if (typeof rawRepositoryUrl === "string") {
+    try {
+      const parsed = new URL(rawRepositoryUrl);
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error();
+      parsed.username = "";
+      parsed.password = "";
+      repositoryUrl = parsed.toString();
+    } catch {
+      return { error: "repository-url must be an HTTP or HTTPS URL" };
+    }
+  }
+  return { url: repositoryUrl };
+}
+
+async function checkVcsRepositoryAccess(
+  orgId: string,
+  connection: VcsModuleConnection,
+  identifier: string,
+): Promise<string | null> {
+  try {
+    await validateRegistryModuleRepository({
+      orgId,
+      vcsConnectionType: typeof connection.githubAppInstallationId === "string" ? "github-app" : "oauth-token",
+      vcsConnectionId: typeof connection.githubAppInstallationId === "string" ? connection.githubAppInstallationId : connection.oauthTokenId as string,
+      repositoryIdentifier: identifier,
+    });
+  } catch (error: unknown) {
+    return error instanceof Error ? error.message : "Repository validation failed";
+  }
+  return null;
+}
+
+async function finishVcsModuleCreation(
+  id: string,
+  branch: string | null,
+  initialVersion: string,
+  orgName: string,
+  set: ParamCtx["set"],
+): Promise<unknown> {
+  const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
+  if (mod === undefined) throw new Error("Registry module could not be created");
+  try {
+    await synchronizeRegistryModule(mod, branch === null ? undefined : initialVersion);
+  } catch {
+    // Registration succeeded. Sync records its error on the module, and a
+    // later tag webhook or explicit resync can retry version publication.
+  }
+  const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
+  if (updated === undefined) throw new Error("Registry module could not be created");
+  (set as { status: number }).status = 201;
+  return { data: await registryModuleResource(updated, orgName, true) };
 }
 
 function variableOptionResource(option: NoCodeVariableOptionItem): Record<string, unknown> {
@@ -829,6 +1219,52 @@ async function findTestVarsModule(params: TestVarsParams): Promise<DeepReadonly<
   });
 }
 
+type TestVariableRow = DeepReadonly<typeof testVariables.$inferSelect>;
+type TestVariableFieldInput = Exclude<ReturnType<typeof testVariableInput>, Readonly<{ error: string }>>;
+
+async function resolveTestVariableForWrite(
+  params: TestVarsParams,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ variable: TestVariableRow } | { failure: unknown }>> {
+  const variable = await findTestVariable(params);
+  if (variable === undefined || !(await checkOrganizationPermission((await findTestVarsModule(params))?.orgId ?? "", userId, tokenOrgId, teamId ?? null, "manage-modules"))) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { variable };
+}
+
+async function validateTestVariableKey(
+  moduleId: string,
+  excludeId: string,
+  key: string,
+  set: SetObj,
+): Promise<{ failure: unknown } | null> {
+  if (key.trim() === "") {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key must not be empty" }] } };
+  }
+  const dup = await db.query.testVariables.findFirst({ where: and(eq(testVariables.moduleId, moduleId), eq(testVariables.key, key), ne(testVariables.id, excludeId)) });
+  if (dup !== undefined) {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A test variable with this key already exists" }] } };
+  }
+  return null;
+}
+
+function testVariableScalarUpdates(input: TestVariableFieldInput): Partial<typeof testVariables.$inferInsert> {
+  const updates: Partial<typeof testVariables.$inferInsert> = {};
+  if (input.value !== undefined) updates.value = input.value;
+  if (input.sensitive !== undefined) updates.sensitive = input.sensitive;
+  if (input.hcl !== undefined) updates.hcl = input.hcl;
+  if (input.category !== undefined) updates.category = input.category;
+  if (input.description !== undefined) updates.description = input.description ?? null;
+  return updates;
+}
+
 async function findTestVariable(params: TestVarsParams): Promise<DeepReadonly<typeof testVariables.$inferSelect> | undefined> {
   const mod = await findTestVarsModule(params);
   if (mod === undefined || params.variable_id === undefined) return undefined;
@@ -969,13 +1405,19 @@ async function testRunConfigurationArchive(
     : { archivePath: null, moduleConfigurationVersionId: null };
 }
 
-function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null }> | Readonly<{ error: string }> {
+function testVariableAttributes(body: unknown): Readonly<{ attrs: Record<string, unknown> } | { error: string }> {
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
   const data = payload["data"];
   if (data === null || typeof data !== "object") return { error: "data is required" };
   const attributes = (data as Record<string, unknown>)["attributes"];
   if (attributes === null || typeof attributes !== "object") return { error: "data.attributes is required" };
-  const attrs = attributes as Record<string, unknown>;
+  return { attrs: attributes as Record<string, unknown> };
+}
+
+function validateTestVariableKeyCategory(
+  attrs: Readonly<Record<string, unknown>>,
+  requireKey: boolean,
+): Readonly<{ key: unknown; category: unknown; cat: string } | { error: string }> {
   const key = attrs["key"];
   const category = attrs["category"];
   if (typeof category !== "undefined" && category !== null && typeof category !== "string") return { error: "category must be a string" };
@@ -983,6 +1425,15 @@ function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?:
   if (typeof key !== "undefined" && key !== null && typeof key !== "string") return { error: "key must be a string" };
   const cat = typeof category === "string" ? category : "terraform";
   if (cat !== "terraform" && cat !== "env") return { error: "category must be terraform or env" };
+  return { key, category, cat };
+}
+
+function assembleTestVariableResult(
+  attrs: Readonly<Record<string, unknown>>,
+  key: unknown,
+  category: unknown,
+  cat: string,
+): { key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null } {
   const result: { key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null } = {};
   // Only set category when the caller provided it, so a PATCH that omits
   // category preserves the stored one (create defaults to "terraform").
@@ -993,6 +1444,629 @@ function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?:
   if (typeof attrs["hcl"] === "boolean") result.hcl = attrs["hcl"];
   if (typeof attrs["description"] === "string") result.description = attrs["description"];
   return result;
+}
+
+type TestConfigRow = DeepReadonly<typeof moduleTestConfigurations.$inferSelect>;
+
+type OrgRowForWrite = NonNullable<Awaited<ReturnType<typeof cachedOrgByName>>>;
+
+type NoCodeRow = typeof noCodeModules.$inferSelect;
+
+function moduleListWhere(orgId: string, query: URLSearchParams): SQL | undefined {
+  const search = (query.get("q") ?? "").trim().toLocaleLowerCase();
+  const provider = query.get("filter[provider]");
+  const publishingMechanism = query.get("filter[publishing_mechanism]");
+  const conditions: SQL[] = [eq(registryModules.orgId, orgId)];
+  if (search !== "") {
+    const pattern = `%${search}%`;
+    const searchCondition = or(
+      sql`lower(${registryModules.namespace}) like ${pattern}`,
+      sql`lower(${registryModules.name}) like ${pattern}`,
+      sql`lower(${registryModules.provider}) like ${pattern}`,
+    );
+    if (searchCondition !== undefined) conditions.push(searchCondition);
+  }
+  if (provider !== null && provider !== "") conditions.push(eq(registryModules.provider, provider));
+  if (publishingMechanism !== null && publishingMechanism !== "") {
+    conditions.push(eq(registryModules.publishingMechanism, publishingMechanism));
+  }
+  return and(...conditions);
+}
+
+function moduleListOrderBy(sort: string | null): SQL[] {
+  if (sort === "name") return [asc(registryModules.name), asc(registryModules.provider), asc(registryModules.id)];
+  if (sort === "provider") return [asc(registryModules.provider), asc(registryModules.name), asc(registryModules.id)];
+  return [desc(registryModules.updatedAt), asc(registryModules.id)];
+}
+
+async function buildModuleListResponse(
+  request: RequestWithUrl,
+  page: Readonly<{ number: number; size: number }>,
+  orgName: string,
+  canManage: boolean,
+  pageModules: readonly ModItem[],
+  total: number,
+  providerRows: readonly { provider: string }[],
+): Promise<Record<string, unknown>> {
+  const pageData = pagination(request, page.number, page.size, total);
+  const pageVersions = pageModules.length === 0 ? [] : await db.query.registryModuleVersions.findMany({
+    where: inArray(registryModuleVersions.moduleId, pageModules.map((mod): string => mod.id)),
+    orderBy: [desc(registryModuleVersions.createdAt)],
+  });
+  const versionsByModule = Map.groupBy(pageVersions, (version): string => version.moduleId);
+  return {
+    data: await Promise.all(pageModules.map(async (mod): Promise<Record<string, unknown>> =>
+      await registryModuleResource(mod, orgName, canManage, versionsByModule.get(mod.id) ?? []))),
+    ...pageData,
+    meta: {
+      ...pageData.meta,
+      providers: providerRows.map(({ provider: name }): string => name).sort(),
+    },
+  };
+}
+
+function parseRegistryModuleFields(
+  body: unknown,
+  orgName: string,
+): Readonly<{ name: string; provider: string } | { error: string }> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
+  const provider = typeof attributes["provider"] === "string" ? attributes["provider"].trim() : "";
+  const namespace = attributes["namespace"];
+  const registryName = attributes["registry-name"];
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?$/.test(name) || !/^[a-z0-9]{1,64}$/.test(provider)) {
+    return { error: "Name and provider must follow private module naming rules" };
+  }
+  if ((namespace !== undefined && namespace !== orgName) || (registryName !== undefined && registryName !== "private")) {
+    return { error: "Private modules use the organization namespace and private registry" };
+  }
+  return { name, provider };
+}
+
+async function resolveOrgForNoCodeWrite(
+  orgName: string,
+  user: ParamCtx["user"],
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ org: OrgRowForWrite } | { failure: unknown }>> {
+  const org = await cachedOrgByName(orgName);
+  const hasSupportedPrincipal = user !== null && user !== undefined || teamId !== null && teamId !== undefined;
+  if (
+    org === undefined
+    || !hasSupportedPrincipal
+    || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+  ) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { org };
+}
+
+async function resolveNoCodeCreationTarget(
+  org: OrgRowForWrite,
+  input: NoCodeInput,
+  set: SetObj,
+): Promise<Readonly<{ mod: ModItem; version: ModVerItem } | { failure: unknown }>> {
+  if (input.moduleId === undefined) {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "registry-module relationship is required" }] } };
+  }
+  const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, input.moduleId) });
+  if (mod?.orgId !== org.id) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  const version = input.versionPin === undefined
+    ? (await availableModuleVersions(mod.id))[0]
+    : await db.query.registryModuleVersions.findFirst({
+        where: and(
+          eq(registryModuleVersions.moduleId, mod.id),
+          eq(registryModuleVersions.version, input.versionPin),
+        ),
+      });
+  if (version?.status !== "ok") {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "version-pin must identify a published version of the registry module" }] } };
+  }
+  return { mod, version };
+}
+
+async function upsertNoCodeRow(
+  existing: NoCodeRow | undefined,
+  mod: ModItem,
+  version: ModVerItem,
+  enabled: boolean | undefined,
+): Promise<NoCodeRow> {
+  const now = Date.now();
+  if (existing === undefined) {
+    const row: NoCodeRow = { id: newResourceId("nocode"), moduleId: mod.id, versionId: version.id, enabled: enabled ?? false, createdAt: now, updatedAt: now };
+    await db.insert(noCodeModules).values(row);
+    return row;
+  }
+  await db.update(noCodeModules)
+    .set({ versionId: version.id, enabled: enabled ?? false, updatedAt: now })
+    .where(eq(noCodeModules.id, existing.id));
+  return { ...existing, versionId: version.id, enabled: enabled ?? false, updatedAt: now };
+}
+
+type ProviderPlatformChain = Readonly<{
+  org: OrgRowForWrite;
+  provider: ProvItem;
+  version: ProvVerItem;
+  platform: PlatItem;
+}>;
+
+async function resolveProviderPlatformChain(
+  params: ParamCtx["params"],
+  set: SetObj,
+): Promise<Readonly<{ chain: ProviderPlatformChain } | { failure: unknown }>> {
+  if (params["registry_name"] !== "private") return { failure: registryNotFound(set) };
+  const org = await cachedOrgByName(params["org_name"] ?? "");
+  const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
+  const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
+  const platform = version === undefined ? undefined : await db.query.registryProviderPlatforms.findFirst({ where: and(eq(registryProviderPlatforms.versionId, version.id), eq(registryProviderPlatforms.os, params["os"] ?? ""), eq(registryProviderPlatforms.arch, params["arch"] ?? "")) });
+  if (org === undefined || provider === undefined || version === undefined || platform === undefined) {
+    return { failure: registryNotFound(set) };
+  }
+  return { chain: { org, provider, version, platform } };
+}
+
+async function resolveModuleVersionForManage(
+  versionId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ ver: ModVerItem; mod: ModItem } | { failure: unknown }>> {
+  const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+  if (ver === undefined) { (set as { status: number }).status = 404; return { failure: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
+  if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"))) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { ver, mod };
+}
+
+async function ingestModuleVersionUpload(
+  versionId: string,
+  moduleId: string,
+  bytes: Uint8Array,
+  set: SetObj,
+): Promise<unknown> {
+  const claimed = await db.update(registryModuleVersions)
+    .set({ status: "ingesting", updatedAt: Date.now() })
+    .where(and(
+      eq(registryModuleVersions.id, versionId),
+      isNull(registryModuleVersions.archivePath),
+      ne(registryModuleVersions.status, "ingesting"),
+    ))
+    .returning({ id: registryModuleVersions.id });
+  if (claimed.length !== 1) {
+    (set as { status: number }).status = 409;
+    return { errors: [{ status: "409", title: "Conflict", detail: "Module version content was already uploaded" }] };
+  }
+  const rawPath = join(CV_STORAGE_DIR, `registry-module-${versionId}.${crypto.randomUUID()}.upload`);
+  const archivePath = join(REGISTRY_MODULE_STORAGE_DIR, `${versionId}.tar.gz`);
+  try {
+    await mkdir(CV_STORAGE_DIR, { recursive: true, mode: 0o700 });
+    await writeFile(rawPath, bytes, { mode: 0o600 });
+    const metadata = await ingestModuleArchive(rawPath, archivePath, "", inspectRegistryModule);
+    const publishedAt = Date.now();
+    await db.transaction(async (tx): Promise<void> => {
+      await tx.update(registryModuleVersions).set({
+        archivePath,
+        status: "ok",
+        metadata,
+        ingestError: null,
+        publishedAt,
+        updatedAt: publishedAt,
+      }).where(eq(registryModuleVersions.id, versionId));
+      await tx.update(registryModules).set({
+        status: "setup_complete",
+        description: metadata.description,
+        updatedAt: publishedAt,
+      }).where(eq(registryModules.id, moduleId));
+    });
+    const updated = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+    (set as { status: number }).status = 200;
+    if (updated === undefined) throw new Error("Uploaded registry module version could not be loaded");
+    return { data: registryModuleVersionResource(updated) };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Module archive ingestion failed";
+    await db.update(registryModuleVersions).set({ status: "errored", ingestError: message.slice(0, 2_000), updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: message }] };
+  } finally {
+    await rm(rawPath, { force: true });
+  }
+}
+
+async function resolveProviderVersionByIdForWrite(
+  versionId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ version: ProvVerItem } | { failure: unknown }>> {
+  const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, versionId) });
+  if (ver === undefined) { (set as { status: number }).status = 404; return { failure: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
+  if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, userId, tokenOrgId, teamId ?? null, "manage-providers"))) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { version: ver };
+}
+
+async function resolveProviderByIdForWrite(
+  providerId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ provider: ProvItem } | { failure: unknown }>> {
+  const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
+  if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, userId, tokenOrgId, teamId ?? null, "manage-providers"))) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { provider: prov };
+}
+
+async function resolveNoCodeDetailsForWrite(
+  id: string,
+  user: ParamCtx["user"],
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ details: NoCodeDetails } | { failure: unknown }>> {
+  const details = await noCodeDetails(id);
+  const hasSupportedPrincipal = user !== null && user !== undefined || teamId !== null && teamId !== undefined;
+  if (
+    details === undefined
+    || !hasSupportedPrincipal
+    || !(await checkOrganizationPermission(details.org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+  ) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { details };
+}
+
+async function resolveNoCodeTarget(
+  details: NoCodeDetails,
+  input: NoCodeInput,
+  set: SetObj,
+): Promise<Readonly<{ targetModule: ModItem; targetVersion: ModVerItem } | { failure: unknown }>> {
+  const targetModule = input.moduleId === undefined
+    ? details.mod
+    : await db.query.registryModules.findFirst({ where: eq(registryModules.id, input.moduleId) });
+  if (targetModule?.orgId !== details.org.id) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  const targetVersion = input.versionPin === undefined
+    ? (await availableModuleVersions(targetModule.id))[0]
+    : await db.query.registryModuleVersions.findFirst({
+        where: and(
+          eq(registryModuleVersions.moduleId, targetModule.id),
+          eq(registryModuleVersions.version, input.versionPin),
+        ),
+      });
+  if (targetVersion?.status !== "ok") {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "version-pin must identify a published version of the registry module" }] } };
+  }
+  return { targetModule, targetVersion };
+}
+
+type TestRunArchiveSelection = Readonly<{
+  archivePath: string;
+  version: ModVerItem;
+  moduleConfigurationVersionId: string | null;
+}>;
+
+async function resolveTestRunModuleForWrite(
+  params: ParamCtx["params"],
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ mod: ModItem } | { failure: unknown }>> {
+  const mod = await findTestRunModule(params);
+  if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"))) return { failure: registryNotFound(set) };
+  return { mod };
+}
+
+function parseTestRunConfigurationVersion(body: unknown): { configurationVersionId: string | undefined } {
+  const rawPayload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = rawPayload["data"] !== null && typeof rawPayload["data"] === "object" ? rawPayload["data"] as Record<string, unknown> : {};
+  const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
+  const configurationRelationship = relationships["configuration-version"];
+  const configurationData = configurationRelationship !== null && typeof configurationRelationship === "object" ? (configurationRelationship as Record<string, unknown>)["data"] : undefined;
+  const configurationVersionId = configurationData !== null && typeof configurationData === "object" && typeof (configurationData as Record<string, unknown>)["id"] === "string"
+    ? (configurationData as Record<string, unknown>)["id"] as string
+    : undefined;
+  return { configurationVersionId };
+}
+
+async function selectTestRunArchive(
+  moduleId: string,
+  configurationVersionId: string | undefined,
+  orgId: string,
+): Promise<TestRunArchiveSelection | Readonly<{ error: string }>> {
+  const selected = await testRunConfigurationArchive(moduleId, configurationVersionId, orgId);
+  if (configurationVersionId !== undefined && selected.archivePath === null) {
+    return { error: "The configuration version is not uploaded or is not available to this module" };
+  }
+  const versions = await availableModuleVersions(moduleId);
+  const version = versions[0];
+  if (version === undefined) {
+    return { error: "The module has no published version available for testing" };
+  }
+  const archivePath = selected.archivePath ?? version.archivePath;
+  if (archivePath === null || !(await Bun.file(archivePath).exists())) {
+    return { error: "The module archive is not available for testing" };
+  }
+  return { archivePath, version, moduleConfigurationVersionId: selected.moduleConfigurationVersionId };
+}
+
+async function resolveModuleVersionForWrite(
+  params: Readonly<Record<string, string>>,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ version: ModVerItem } | { failure: unknown }>> {
+  if (params["registry_name"] !== "private") return { failure: registryNotFound(set) };
+  const org = await cachedOrgByName(params["org_name"] ?? "");
+  const mod = org === undefined ? undefined : await db.query.registryModules.findFirst({
+    where: and(
+      eq(registryModules.orgId, org.id),
+      eq(registryModules.namespace, params["namespace"] ?? ""),
+      eq(registryModules.name, params["module_name"] ?? ""),
+      eq(registryModules.provider, params["provider"] ?? ""),
+    ),
+  });
+  if (org === undefined || mod === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-modules"))) return { failure: registryNotFound(set) };
+  const version = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, params["version"] ?? "")) });
+  if (version === undefined) return { failure: registryNotFound(set) };
+  return { version };
+}
+
+function parseDeprecationFlag(body: unknown): Readonly<{ deprecated: boolean } | { error: string }> {
+  const attrs = jsonApiAttributes(body);
+  const deprecation = attrs["deprecation"] !== null && typeof attrs["deprecation"] === "object" ? attrs["deprecation"] as Record<string, unknown> : {};
+  const status = deprecation["deprecated-status"];
+  const deprecated = typeof attrs["deprecated"] === "boolean"
+    ? attrs["deprecated"]
+    : status === "Deprecated"
+      ? true
+      : status === "Undeprecated"
+        ? false
+        : undefined;
+  if (deprecated === undefined) {
+    return { error: "deprecation.deprecated-status must be Deprecated or Undeprecated" };
+  }
+  return { deprecated };
+}
+
+async function resolveRegistryModuleForWrite(
+  params: Readonly<Record<string, string>>,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ org: OrgRowForWrite; mod: ModItem } | { failure: unknown }>> {
+  const org = await cachedOrgByName(params["org_name"] ?? "");
+  if (org === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-modules"))) return { failure: registryNotFound(set) };
+  const mod = await db.query.registryModules.findFirst({
+    where: and(
+      eq(registryModules.orgId, org.id),
+      eq(registryModules.namespace, params["namespace"] ?? ""),
+      eq(registryModules.name, params["module_name"] ?? ""),
+      eq(registryModules.provider, params["provider"] ?? ""),
+    ),
+  });
+  if (mod === undefined) return { failure: registryNotFound(set) };
+  return { org, mod };
+}
+
+function validateModulePatchFields(
+  attributes: Readonly<Record<string, unknown>>,
+  currentBranch: string | null,
+): Readonly<{ sourceDirectory: unknown; tagPrefix: unknown } | { error: string }> {
+  const sourceDirectory = attributes["source-directory"];
+  const tagPrefix = attributes["tag-prefix"];
+  const vcsRepo = attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object" ? attributes["vcs-repo"] as Record<string, unknown> : {};
+  const requestedBranch = vcsRepo["branch"];
+  if (sourceDirectory !== undefined && (typeof sourceDirectory !== "string" || sourceDirectory.startsWith("/") || sourceDirectory.includes("\\") || sourceDirectory.split("/").includes(".."))) {
+    return { error: "source-directory must be a safe relative path" };
+  }
+  if (tagPrefix !== undefined && (typeof tagPrefix !== "string" || tagPrefix.length > 128)) {
+    return { error: "tag-prefix must be at most 128 characters" };
+  }
+  if (requestedBranch !== undefined && requestedBranch !== currentBranch) {
+    return { error: "Switching publishing workflows is not supported; create a new module instead" };
+  }
+  return { sourceDirectory, tagPrefix };
+}
+
+type ProviderPlatformFields = Readonly<{
+  os: string;
+  arch: string;
+  filename: string;
+  downloadUrl: string;
+  shasum: string;
+}>;
+
+type ProviderVersionFields = Readonly<{
+  version: string;
+  keyId: string | null;
+  protocols: string[];
+  shasumsUrl: string | null;
+  shasumsSignatureUrl: string | null;
+}>;
+
+async function resolveProviderForWrite(
+  params: Readonly<Record<string, string>>,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ provider: ProvItem } | { failure: unknown }>> {
+  if (params["registry_name"] !== "private") return { failure: registryNotFound(set) };
+  const org = await cachedOrgByName(params["org_name"] ?? "");
+  const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
+  if (org === undefined || provider === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-providers"))) return { failure: registryNotFound(set) };
+  return { provider };
+}
+
+async function parseProviderVersionFields(
+  body: unknown,
+  orgId: string,
+  namespace: string,
+): Promise<ProviderVersionFields | Readonly<{ error: string }>> {
+  const attrs = jsonApiAttributes(body);
+  const version = typeof attrs["version"] === "string" ? attrs["version"] : "";
+  if (version === "") return { error: "Version is required" };
+  const rawKeyId = attrs["key-id"];
+  if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) return { error: "key-id must identify a GPG key" };
+  const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
+  if (keyId !== null && await registrySigningKey(orgId, namespace, keyId) === undefined) return { error: "key-id must identify a GPG key in the provider namespace" };
+  const protocols = Array.isArray(attrs["protocols"]) ? (attrs["protocols"] as string[]) : ["5.0"];
+  return {
+    version,
+    keyId,
+    protocols,
+    shasumsUrl: typeof attrs["shasums-url"] === "string" ? attrs["shasums-url"] : null,
+    shasumsSignatureUrl: typeof attrs["shasums-signature-url"] === "string" ? attrs["shasums-signature-url"] : null,
+  };
+}
+
+function jsonApiAttributes(body: unknown): Record<string, unknown> {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  return data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+}
+
+function parsePlatformFields(body: unknown): ProviderPlatformFields | Readonly<{ error: string }> {
+  const attrs = jsonApiAttributes(body);
+  const os = typeof attrs["os"] === "string" ? attrs["os"] : "";
+  const arch = typeof attrs["arch"] === "string" ? attrs["arch"] : "";
+  const filename = typeof attrs["filename"] === "string" ? attrs["filename"] : "";
+  const downloadUrl = typeof attrs["download-url"] === "string" ? attrs["download-url"] : "";
+  const shasum = typeof attrs["shasum"] === "string" ? attrs["shasum"] : "";
+  if (os === "" || arch === "" || filename === "" || downloadUrl === "" || shasum === "") {
+    return { error: "os, arch, filename, download-url, and shasum are required" };
+  }
+  return { os, arch, filename, downloadUrl, shasum };
+}
+
+async function resolveProviderVersionForWrite(
+  params: Readonly<Record<string, string>>,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ version: ProvVerItem } | { failure: unknown }>> {
+  if (params["registry_name"] !== "private") return { failure: registryNotFound(set) };
+  const org = await cachedOrgByName(params["org_name"] ?? "");
+  const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
+  const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
+  if (org === undefined || provider === undefined || version === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-providers"))) return { failure: registryNotFound(set) };
+  return { version };
+}
+
+async function resolveTestConfigModule(
+  params: Readonly<Record<string, string>>,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Readonly<{ mod: ModItem } | { failure: unknown }>> {
+  if (params["module_id"] !== "private") return { failure: registryNotFound(set) };
+  const { namespace, name, provider } = params;
+  const org = await cachedOrgByName(namespace ?? "");
+  const mod = await db.query.registryModules.findFirst({
+    where: and(eq(registryModules.orgId, org?.id ?? ""), eq(registryModules.namespace, namespace ?? ""), eq(registryModules.name, name ?? ""), eq(registryModules.provider, provider ?? "")),
+  });
+  if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"))) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { mod };
+}
+
+function resolveTestConfigBasics(
+  attrs: Readonly<Record<string, unknown>>,
+  existing: TestConfigRow | undefined,
+  legacyProviderUrl: string | null,
+): Readonly<{ id: string; oidcEnabled: boolean; oidcProvider: string | null; rawConfiguration: unknown } | { error: string }> {
+  const rawEnabled = attrs["oidc-enabled"];
+  const rawProvider = attrs["oidc-provider"];
+  if (rawEnabled !== undefined && typeof rawEnabled !== "boolean") {
+    return { error: "oidc-enabled must be a boolean" };
+  }
+  const id = existing?.id ?? crypto.randomUUID();
+  const oidcEnabled = typeof rawEnabled === "boolean" ? rawEnabled : existing?.oidcEnabled ?? legacyProviderUrl !== null;
+  const oidcProvider = typeof rawProvider === "string" ? rawProvider : existing?.oidcProvider ?? null;
+  return { id, oidcEnabled, oidcProvider, rawConfiguration: attrs["oidc-configuration"] };
+}
+
+function testConfigOidcError(
+  oidcEnabled: boolean,
+  oidcProvider: string | null,
+  oidcConfiguration: Readonly<Record<string, unknown>> | null,
+): string | null {
+  if (oidcEnabled && oidcConfiguration === null) {
+    return "oidc-configuration is required when OIDC is enabled";
+  }
+  if (oidcEnabled && oidcConfiguration !== null) {
+    const requiredFields: Record<string, readonly string[]> = {
+      aws: ["role-arn"],
+      gcp: ["service-account-email", "workload-provider-name"],
+      azure: ["tenant-id", "client-id", "subscription-id"],
+      vault: ["url", "role-name"],
+    };
+    const missing = (requiredFields[oidcProvider ?? ""] ?? []).filter((field): boolean => typeof oidcConfiguration[field] !== "string" || oidcConfiguration[field] === "");
+    if (missing.length > 0) {
+      return `oidc-configuration requires ${missing.join(", ")}`;
+    }
+  }
+  return null;
+}
+
+function resolveTestConfigConfiguration(
+  oidcEnabled: boolean,
+  oidcProvider: string | null,
+  rawConfiguration: unknown,
+  existingConfiguration: Readonly<Record<string, unknown>> | null | undefined,
+): Readonly<{ configuration: Record<string, unknown> | null } | { error: string }> {
+  if (oidcEnabled && (oidcProvider === null || !["aws", "gcp", "azure", "vault"].includes(oidcProvider))) {
+    return { error: "oidc-provider must be aws, gcp, azure, or vault when OIDC is enabled" };
+  }
+  if (rawConfiguration !== undefined && (rawConfiguration === null || typeof rawConfiguration !== "object" || Array.isArray(rawConfiguration))) {
+    return { error: "oidc-configuration must be an object" };
+  }
+  const oidcConfiguration = rawConfiguration === undefined
+    ? existingConfiguration ?? null
+    : rawConfiguration as Record<string, unknown>;
+  const oidcError = testConfigOidcError(oidcEnabled, oidcProvider, oidcConfiguration);
+  if (oidcError !== null) return { error: oidcError };
+  return { configuration: oidcConfiguration };
+}
+
+function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null }> | Readonly<{ error: string }> {
+  const envelope = testVariableAttributes(body);
+  if ("error" in envelope) return envelope;
+  const checked = validateTestVariableKeyCategory(envelope.attrs, requireKey);
+  if ("error" in checked) return checked;
+  return assembleTestVariableResult(envelope.attrs, checked.key, checked.category, checked.cat);
 }
 
 type NoCodeDetails = Readonly<{
@@ -1224,37 +2298,14 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const query = new URL(request.url).searchParams;
-    const search = (query.get("q") ?? "").trim().toLocaleLowerCase();
-    const provider = query.get("filter[provider]");
-    const publishingMechanism = query.get("filter[publishing_mechanism]");
-    const requestedSort = query.get("sort");
-    const sort = requestedSort === "name" || requestedSort === "provider" ? requestedSort : "updated";
-    const conditions: SQL[] = [eq(registryModules.orgId, org.id)];
-    if (search !== "") {
-      const pattern = `%${search}%`;
-      const searchCondition = or(
-        sql`lower(${registryModules.namespace}) like ${pattern}`,
-        sql`lower(${registryModules.name}) like ${pattern}`,
-        sql`lower(${registryModules.provider}) like ${pattern}`,
-      );
-      if (searchCondition !== undefined) conditions.push(searchCondition);
-    }
-    if (provider !== null && provider !== "") conditions.push(eq(registryModules.provider, provider));
-    if (publishingMechanism !== null && publishingMechanism !== "") {
-      conditions.push(eq(registryModules.publishingMechanism, publishingMechanism));
-    }
-    const where = and(...conditions);
+    const where = moduleListWhere(org.id, query);
     const page = pageRequest(request);
     const start = (page.number - 1) * page.size;
     const canManage = await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules");
     const [pageModules, countRows, providerRows] = await Promise.all([
       db.query.registryModules.findMany({
         where,
-        orderBy: sort === "name"
-          ? [asc(registryModules.name), asc(registryModules.provider), asc(registryModules.id)]
-          : sort === "provider"
-            ? [asc(registryModules.provider), asc(registryModules.name), asc(registryModules.id)]
-            : [desc(registryModules.updatedAt), asc(registryModules.id)],
+        orderBy: moduleListOrderBy(query.get("sort")),
         limit: page.size,
         offset: start,
       }),
@@ -1263,40 +2314,16 @@ export const registryRoutes = new Elysia({ name: "registry" })
         .from(registryModules)
         .where(eq(registryModules.orgId, org.id)),
     ]);
-    const pageData = pagination(request, page.number, page.size, countRows[0]?.total ?? 0);
-    const pageVersions = pageModules.length === 0 ? [] : await db.query.registryModuleVersions.findMany({
-      where: inArray(registryModuleVersions.moduleId, pageModules.map((mod): string => mod.id)),
-      orderBy: [desc(registryModuleVersions.createdAt)],
-    });
-    const versionsByModule = Map.groupBy(pageVersions, (version): string => version.moduleId);
-    return {
-      data: await Promise.all(pageModules.map(async (mod): Promise<Record<string, unknown>> =>
-        await registryModuleResource(mod, org.name, canManage, versionsByModule.get(mod.id) ?? []))),
-      ...pageData,
-      meta: {
-        ...pageData.meta,
-        providers: providerRows.map(({ provider: name }): string => name).sort(),
-      },
-    };
+    return await buildModuleListResponse(request, page, org.name, canManage, pageModules, countRows[0]?.total ?? 0, providerRows);
   })
   .post("/api/v2/organizations/:org_name/registry-modules", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
-    const provider = typeof attributes["provider"] === "string" ? attributes["provider"].trim() : "";
-    const namespace = attributes["namespace"];
-    const registryName = attributes["registry-name"];
-    if (!/^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?$/.test(name) || !/^[a-z0-9]{1,64}$/.test(provider)) {
+    const fields = parseRegistryModuleFields(body, org.name);
+    if ("error" in fields) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name and provider must follow private module naming rules" }] };
-    }
-    if ((namespace !== undefined && namespace !== org.name) || (registryName !== undefined && registryName !== "private")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Private modules use the organization namespace and private registry" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
     }
     const id = newResourceId("mod");
     const now = Date.now();
@@ -1304,8 +2331,8 @@ export const registryRoutes = new Elysia({ name: "registry" })
       id,
       orgId: org.id,
       namespace: org.name,
-      name,
-      provider,
+      name: fields.name,
+      provider: fields.provider,
       publishingMechanism: "manual",
       status: "pending",
       createdAt: now,
@@ -1326,126 +2353,56 @@ export const registryRoutes = new Elysia({ name: "registry" })
   .post("/api/v2/organizations/:org_name/registry-modules/vcs", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const org = await cachedOrgByName(params["org_name"] ?? "");
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const vcsRepo = attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object"
-      ? attributes["vcs-repo"] as Record<string, unknown>
-      : {};
-    const identifier = typeof vcsRepo["identifier"] === "string" ? vcsRepo["identifier"].trim() : "";
-    const repositoryName = identifier.split("/").at(-1) ?? "";
-    const conventional = /^terraform-([a-z0-9]+)-([A-Za-z0-9][A-Za-z0-9_-]*)$/.exec(repositoryName);
-    const rawModuleName = attributes["module-name"] ?? attributes["name"];
-    const rawProvider = attributes["module-provider"] ?? attributes["provider"];
-    const name = typeof rawModuleName === "string" ? rawModuleName.trim() : conventional?.[2] ?? "";
-    const provider = typeof rawProvider === "string" ? rawProvider.trim() : conventional?.[1] ?? "";
-    const githubAppInstallationId = vcsRepo["github-app-installation-id"];
-    const oauthTokenId = vcsRepo["oauth-token-id"];
-    const connectionCount = Number(typeof githubAppInstallationId === "string" && githubAppInstallationId !== "")
-      + Number(typeof oauthTokenId === "string" && oauthTokenId !== "");
-    const branch = typeof vcsRepo["branch"] === "string" && vcsRepo["branch"].trim() !== "" ? vcsRepo["branch"].trim() : null;
-    const rawSourceDirectory = attributes["source-directory"] ?? vcsRepo["source-directory"];
-    const rawTagPrefix = attributes["tag-prefix"] ?? vcsRepo["tag-prefix"];
-    const sourceDirectory = typeof rawSourceDirectory === "string" ? rawSourceDirectory.trim() : "";
-    const tagPrefix = typeof rawTagPrefix === "string" ? rawTagPrefix.trim() : "";
-    const rawInitialVersion = attributes["initial-version"] ?? attributes["version"];
-    const initialVersion = typeof rawInitialVersion === "string" ? rawInitialVersion.replace(/^v/, "") : "0.0.0";
-    const identifierParts = identifier.split("/");
-    const identifierValid = identifierParts.length === 2
-      && identifierParts.every((part): boolean => /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part));
-    if (data["type"] !== "registry-modules" || !identifierValid || connectionCount !== 1) {
+    const envelope = parseVcsEnvelope(body);
+    const naming = parseVcsNaming(envelope.attributes, envelope.vcsRepo);
+    const connection = parseVcsConnection(envelope.vcsRepo);
+    const options = parseVcsOptions(envelope.attributes, envelope.vcsRepo, naming.identifier);
+    const fieldError = vcsModuleFieldError(
+      envelope.data,
+      naming,
+      connection,
+      options,
+    );
+    if (fieldError !== null) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A repository identifier and exactly one VCS connection are required" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fieldError }] };
     }
-    if (!/^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?$/.test(name) || !/^[a-z0-9]{1,64}$/.test(provider)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Repository name must follow terraform-<provider>-<module>, or module-name and provider must be supplied" }] };
-    }
-    if ((sourceDirectory !== "" && (sourceDirectory.startsWith("/") || sourceDirectory.includes("\\") || sourceDirectory.split("/").includes(".."))) || tagPrefix.length > 128) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Source directory or tag prefix is invalid" }] };
-    }
-    if (branch !== null && !validModuleVersion(initialVersion)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Branch-based publication requires a semantic initial-version" }] };
-    }
-    let connectionAvailable = false;
-    let repositoryBaseUrl: string | null = null;
-    if (typeof githubAppInstallationId === "string") {
-      connectionAvailable = await db.query.githubAppInstallations.findFirst({
-        where: and(eq(githubAppInstallations.id, githubAppInstallationId), eq(githubAppInstallations.orgId, org.id)),
-      }) !== undefined;
-      repositoryBaseUrl = integrationSetting("GITHUB_APP_HTTP_URL") ?? "https://github.com";
-    } else {
-      const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId as string) });
-      const client = token === undefined ? undefined : await db.query.oauthClients.findFirst({
-        where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, org.id)),
-      });
-      connectionAvailable = client !== undefined && ["github", "github_enterprise"].includes(client.serviceProvider);
-      repositoryBaseUrl = client?.httpUrl ?? (client?.serviceProvider === "github" ? "https://github.com" : null);
-    }
+    const connectionStatus = await resolveVcsConnection(org.id, connection);
+    const connectionAvailable = connectionStatus.available;
     if (!connectionAvailable) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The selected VCS connection is unavailable or unsupported" }] };
     }
     const now = Date.now();
     const id = newResourceId("mod");
-    const rawRepositoryUrl = vcsRepo["repository-url"];
-    let repositoryUrl: string | null = null;
-    if (repositoryBaseUrl !== null) {
-      try {
-        const parsed = new URL(repositoryBaseUrl);
-        if (parsed.protocol === "https:" || parsed.protocol === "http:") {
-          parsed.username = "";
-          parsed.password = "";
-          repositoryUrl = `${parsed.toString().replace(/\/$/, "")}/${identifier}`;
-        }
-      } catch {
-        // An invalid optional connection URL should not fabricate a github.com link.
-      }
-    }
-    if (typeof rawRepositoryUrl === "string") {
-      try {
-        const parsed = new URL(rawRepositoryUrl);
-        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error();
-        parsed.username = "";
-        parsed.password = "";
-        repositoryUrl = parsed.toString();
-      } catch {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "repository-url must be an HTTP or HTTPS URL" }] };
-      }
-    }
-    try {
-      await validateRegistryModuleRepository({
-        orgId: org.id,
-        vcsConnectionType: typeof githubAppInstallationId === "string" ? "github-app" : "oauth-token",
-        vcsConnectionId: typeof githubAppInstallationId === "string" ? githubAppInstallationId : oauthTokenId as string,
-        repositoryIdentifier: identifier,
-      });
-    } catch (error: unknown) {
+    const connectionRef = vcsConnectionRef(connection);
+    const urlResult = buildVcsRepositoryUrl(connectionStatus.repositoryBaseUrl, envelope.vcsRepo["repository-url"], naming.identifier);
+    if ("error" in urlResult) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Repository validation failed" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: urlResult.error }] };
+    }
+    const accessError = await checkVcsRepositoryAccess(org.id, connection, naming.identifier);
+    if (accessError !== null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: accessError }] };
     }
     try {
       await db.insert(registryModules).values({
         id,
         orgId: org.id,
         namespace: org.name,
-        name,
-        provider,
+        name: naming.name,
+        provider: naming.provider,
         publishingMechanism: "vcs",
-        publishingWorkflow: branch === null ? "tag" : "branch",
-        vcsConnectionType: typeof githubAppInstallationId === "string" ? "github-app" : "oauth-token",
-        vcsConnectionId: typeof githubAppInstallationId === "string" ? githubAppInstallationId : oauthTokenId as string,
-        repositoryIdentifier: identifier,
-        repositoryDisplayIdentifier: typeof vcsRepo["display-identifier"] === "string"
-          ? vcsRepo["display-identifier"]
-          : typeof vcsRepo["display_identifier"] === "string" ? vcsRepo["display_identifier"] : identifier,
-        repositoryUrl,
-        sourceDirectory,
-        tagPrefix,
-        branch,
+        publishingWorkflow: connection.branch === null ? "tag" : "branch",
+        vcsConnectionType: connectionRef.type,
+        vcsConnectionId: connectionRef.id,
+        repositoryIdentifier: naming.identifier,
+        repositoryDisplayIdentifier: vcsDisplayIdentifier(envelope.vcsRepo, naming.identifier),
+        repositoryUrl: urlResult.url,
+        sourceDirectory: options.sourceDirectory,
+        tagPrefix: options.tagPrefix,
+        branch: connection.branch,
         status: "pending",
         createdAt: now,
         updatedAt: now,
@@ -1455,18 +2412,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "This private module already exists" }] };
     }
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
-    if (mod === undefined) throw new Error("Registry module could not be created");
-    try {
-      await synchronizeRegistryModule(mod, branch === null ? undefined : initialVersion);
-    } catch {
-      // Registration succeeded. Sync records its error on the module, and a
-      // later tag webhook or explicit resync can retry version publication.
-    }
-    const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
-    if (updated === undefined) throw new Error("Registry module could not be created");
-    (set as { status: number }).status = 201;
-    return { data: await registryModuleResource(updated, org.name, true) };
+    return finishVcsModuleCreation(id, connection.branch, options.initialVersion, org.name, set);
   })
   .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
@@ -1503,52 +2449,22 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return version === undefined ? registryNotFound(set) : { data: registryModuleVersionResource(version) };
   })
   .patch("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/:version", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const mod = org === undefined ? undefined : await db.query.registryModules.findFirst({
-      where: and(
-        eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params["namespace"] ?? ""),
-        eq(registryModules.name, params["module_name"] ?? ""),
-        eq(registryModules.provider, params["provider"] ?? ""),
-      ),
-    });
-    if (org === undefined || mod === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    const version = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, params["version"] ?? "")) });
-    if (version === undefined) return registryNotFound(set);
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const deprecation = attrs["deprecation"] !== null && typeof attrs["deprecation"] === "object" ? attrs["deprecation"] as Record<string, unknown> : {};
-    const status = deprecation["deprecated-status"];
-    const deprecated = typeof attrs["deprecated"] === "boolean"
-      ? attrs["deprecated"]
-      : status === "Deprecated"
-        ? true
-        : status === "Undeprecated"
-          ? false
-          : undefined;
-    if (deprecated === undefined) {
+    const resolved = await resolveModuleVersionForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { version } = resolved;
+    const parsed = parseDeprecationFlag(body);
+    if ("error" in parsed) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "deprecation.deprecated-status must be Deprecated or Undeprecated" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: parsed.error }] };
     }
-    await db.update(registryModuleVersions).set({ isDeprecated: deprecated, updatedAt: Date.now() }).where(eq(registryModuleVersions.id, version.id));
+    await db.update(registryModuleVersions).set({ isDeprecated: parsed.deprecated, updatedAt: Date.now() }).where(eq(registryModuleVersions.id, version.id));
     const updated = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, version.id) });
     return updated === undefined ? registryNotFound(set) : { data: registryModuleVersionResource(updated) };
   })
   .delete("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/:version", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const mod = org === undefined ? undefined : await db.query.registryModules.findFirst({
-      where: and(
-        eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params["namespace"] ?? ""),
-        eq(registryModules.name, params["module_name"] ?? ""),
-        eq(registryModules.provider, params["provider"] ?? ""),
-      ),
-    });
-    const version = mod === undefined ? undefined : await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, params["version"] ?? "")) });
-    if (org === undefined || mod === undefined || version === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
+    const resolved = await resolveModuleVersionForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
+    const { version } = resolved;
     await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, version.id));
     if (version.archivePath !== null) await rm(version.archivePath, { force: true });
     (set as { status: number }).status = 204;
@@ -1581,39 +2497,17 @@ export const registryRoutes = new Elysia({ name: "registry" })
     }
   })
   .patch("/api/v2/organizations/:org_name/registry-modules/private/:namespace/:module_name/:provider", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    const mod = await db.query.registryModules.findFirst({
-      where: and(
-        eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params["namespace"] ?? ""),
-        eq(registryModules.name, params["module_name"] ?? ""),
-        eq(registryModules.provider, params["provider"] ?? ""),
-      ),
-    });
-    if (mod === undefined) return registryNotFound(set);
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const sourceDirectory = attributes["source-directory"];
-    const tagPrefix = attributes["tag-prefix"];
-    const vcsRepo = attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object" ? attributes["vcs-repo"] as Record<string, unknown> : {};
-    const requestedBranch = vcsRepo["branch"];
-    if (sourceDirectory !== undefined && (typeof sourceDirectory !== "string" || sourceDirectory.startsWith("/") || sourceDirectory.includes("\\") || sourceDirectory.split("/").includes(".."))) {
+    const resolved = await resolveRegistryModuleForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { org, mod } = resolved;
+    const validated = validateModulePatchFields(jsonApiAttributes(body), mod.branch);
+    if ("error" in validated) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "source-directory must be a safe relative path" }] };
-    }
-    if (tagPrefix !== undefined && (typeof tagPrefix !== "string" || tagPrefix.length > 128)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "tag-prefix must be at most 128 characters" }] };
-    }
-    if (requestedBranch !== undefined && requestedBranch !== mod.branch) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Switching publishing workflows is not supported; create a new module instead" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: validated.error }] };
     }
     await db.update(registryModules).set({
-      ...(typeof sourceDirectory === "string" ? { sourceDirectory } : {}),
-      ...(typeof tagPrefix === "string" ? { tagPrefix } : {}),
+      ...(typeof validated.sourceDirectory === "string" ? { sourceDirectory: validated.sourceDirectory } : {}),
+      ...(typeof validated.tagPrefix === "string" ? { tagPrefix: validated.tagPrefix } : {}),
       updatedAt: Date.now(),
     }).where(eq(registryModules.id, mod.id));
     const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, mod.id) });
@@ -1669,58 +2563,21 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   // --- No-Code Module Allowlist ---
   .post("/api/v2/organizations/:org_name/no-code-modules", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    const hasSupportedPrincipal = user !== null && user !== undefined || teamId !== null && teamId !== undefined;
-    if (
-      org === undefined
-      || !hasSupportedPrincipal
-      || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
-    ) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
+    const access = await resolveOrgForNoCodeWrite(params["org_name"] ?? "", user, tokenOrgId, teamId, set);
+    if ("failure" in access) return access.failure;
+    const { org } = access;
 
     const input = noCodeInput(body, true);
     if ("error" in input) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
     }
-    if (input.moduleId === undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "registry-module relationship is required" }] };
-    }
-
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, input.moduleId) });
-    if (mod?.orgId !== org.id) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const version = input.versionPin === undefined
-      ? (await availableModuleVersions(mod.id))[0]
-      : await db.query.registryModuleVersions.findFirst({
-          where: and(
-            eq(registryModuleVersions.moduleId, mod.id),
-            eq(registryModuleVersions.version, input.versionPin),
-          ),
-        });
-    if (version?.status !== "ok") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "version-pin must identify a published version of the registry module" }] };
-    }
+    const target = await resolveNoCodeCreationTarget(org, input, set);
+    if ("failure" in target) return target.failure;
+    const { mod, version } = target;
 
     const existing = await db.query.noCodeModules.findFirst({ where: eq(noCodeModules.moduleId, mod.id) });
-    const now = Date.now();
-    const noCode = existing === undefined
-      ? { id: newResourceId("nocode"), moduleId: mod.id, versionId: version.id, enabled: input.enabled ?? false, createdAt: now, updatedAt: now }
-      : { ...existing, versionId: version.id, enabled: input.enabled ?? false, updatedAt: now };
-    if (existing === undefined) {
-      await db.insert(noCodeModules).values(noCode);
-    } else {
-      await db.update(noCodeModules)
-        .set({ versionId: version.id, enabled: input.enabled ?? false, updatedAt: now })
-        .where(eq(noCodeModules.id, existing.id));
-    }
+    const noCode = await upsertNoCodeRow(existing, mod, version, input.enabled);
     if (input.variableOptions !== undefined) await replaceVariableOptions(noCode.id, input.variableOptions);
     const options = await db.query.noCodeVariableOptions.findMany({
       where: eq(noCodeVariableOptions.noCodeModuleId, noCode.id),
@@ -1785,40 +2642,17 @@ export const registryRoutes = new Elysia({ name: "registry" })
     };
   })
   .patch("/api/v2/no-code-modules/:id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const details = await noCodeDetails(params["id"] ?? "");
-    const hasSupportedPrincipal = user !== null && user !== undefined || teamId !== null && teamId !== undefined;
-    if (
-      details === undefined
-      || !hasSupportedPrincipal
-      || !(await checkOrganizationPermission(details.org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
-    ) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
+    const access = await resolveNoCodeDetailsForWrite(params["id"] ?? "", user, tokenOrgId, teamId, set);
+    if ("failure" in access) return access.failure;
+    const { details } = access;
     const input = noCodeInput(body, false);
     if ("error" in input) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
     }
-    const targetModule = input.moduleId === undefined
-      ? details.mod
-      : await db.query.registryModules.findFirst({ where: eq(registryModules.id, input.moduleId) });
-    if (targetModule?.orgId !== details.org.id) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const targetVersion = input.versionPin === undefined
-      ? (await availableModuleVersions(targetModule.id))[0]
-      : await db.query.registryModuleVersions.findFirst({
-          where: and(
-            eq(registryModuleVersions.moduleId, targetModule.id),
-            eq(registryModuleVersions.version, input.versionPin),
-          ),
-        });
-    if (targetVersion?.status !== "ok") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "version-pin must identify a published version of the registry module" }] };
-    }
+    const target = await resolveNoCodeTarget(details, input, set);
+    if ("failure" in target) return target.failure;
+    const { targetModule, targetVersion } = target;
     const duplicate = await db.query.noCodeModules.findFirst({ where: eq(noCodeModules.moduleId, targetModule.id) });
     if (duplicate !== undefined && duplicate.id !== details.noCode.id) {
       (set as { status: number }).status = 422;
@@ -1951,44 +2785,30 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   .post("/api/v2/registry-providers/:provider_id/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const providerId = params["provider_id"] ?? "";
-    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
-    if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const version = typeof attributes["version"] === "string" ? attributes["version"] : "";
-    if (version === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version is required" }] }; }
-    const rawKeyId = attributes["key-id"];
-    if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) {
+    const resolved = await resolveProviderByIdForWrite(providerId, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { provider } = resolved;
+    const fields = await parseProviderVersionFields(body, provider.orgId, provider.namespace);
+    if ("error" in fields) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key" }] };
-    }
-    const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
-    if (keyId !== null && await registrySigningKey(prov.orgId, prov.namespace, keyId) === undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key in the provider namespace" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
     }
     const id = newResourceId("provver");
-    const protocols = Array.isArray(attributes["protocols"]) ? (attributes["protocols"] as string[]) : ["5.0"];
-    const shasumsUrl = typeof attributes["shasums-url"] === "string" ? attributes["shasums-url"] : null;
-    const shasumsSignatureUrl = typeof attributes["shasums-signature-url"] === "string" ? attributes["shasums-signature-url"] : null;
     try {
-      await db.insert(registryProviderVersions).values({ id, providerId, version, keyId, protocols, shasumsUrl, shasumsSignatureUrl, createdAt: Date.now() });
+      await db.insert(registryProviderVersions).values({ id, providerId, version: fields.version, keyId: fields.keyId, protocols: fields.protocols, shasumsUrl: fields.shasumsUrl, shasumsSignatureUrl: fields.shasumsSignatureUrl, createdAt: Date.now() });
     } catch (error: unknown) {
       if (!isUniqueConstraintError(error)) throw error;
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Provider version already exists" }] };
     }
     (set as { status: number }).status = 201;
-    return { data: { id, type: "registry-provider-versions", attributes: { version, "key-id": keyId, protocols, "shasums-url": shasumsUrl, "shasums-signature-url": shasumsSignatureUrl, "created-at": new Date().toISOString() } } };
+    return { data: { id, type: "registry-provider-versions", attributes: { version: fields.version, "key-id": fields.keyId, protocols: fields.protocols, "shasums-url": fields.shasumsUrl, "shasums-signature-url": fields.shasumsSignatureUrl, "created-at": new Date().toISOString() } } };
   })
   .delete("/api/v2/registry-provider-versions/:version_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const versionId = params["version_id"] ?? "";
-    const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, versionId) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
-    if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(registryProviderVersions).where(eq(registryProviderVersions.id, versionId));
+    const resolved = await resolveProviderVersionByIdForWrite(params["version_id"] ?? "", user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
+    const { version } = resolved;
+    await db.delete(registryProviderVersions).where(eq(registryProviderVersions.id, version.id));
     (set as { status: number }).status = 204;
     return {};
   })
@@ -2003,26 +2823,18 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: platforms.map((p: PlatItem): Record<string, unknown> => ({ id: p.id, type: "registry-provider-platforms", attributes: { os: p.os, arch: p.arch, filename: p.filename, "download-url": p.downloadUrl, shasum: p.shasum } })) };
   })
   .post("/api/v2/registry-provider-versions/:version_id/platforms", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
-    const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, versionId) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
-    if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const os = typeof attributes["os"] === "string" ? attributes["os"] : "";
-    const arch = typeof attributes["arch"] === "string" ? attributes["arch"] : "";
-    const filename = typeof attributes["filename"] === "string" ? attributes["filename"] : "";
-    const downloadUrl = typeof attributes["download-url"] === "string" ? attributes["download-url"] : "";
-    const shasum = typeof attributes["shasum"] === "string" ? attributes["shasum"] : "";
-    if (os === "" || arch === "" || filename === "" || downloadUrl === "" || shasum === "") {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "os, arch, filename, download-url, and shasum are required" }] };
+    const resolved = await resolveProviderVersionByIdForWrite(params["version_id"] ?? "", user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { version } = resolved;
+    const fields = parsePlatformFields(body);
+    if ("error" in fields) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
     }
     const id = newResourceId("provplat");
-    await db.insert(registryProviderPlatforms).values({ id, versionId, os, arch, filename, downloadUrl, shasum, createdAt: Date.now() });
+    await db.insert(registryProviderPlatforms).values({ id, versionId: version.id, os: fields.os, arch: fields.arch, filename: fields.filename, downloadUrl: fields.downloadUrl, shasum: fields.shasum, createdAt: Date.now() });
     (set as { status: number }).status = 201;
-    return { data: { id, type: "registry-provider-platforms", attributes: { os, arch, filename, "download-url": downloadUrl, shasum } } };
+    return { data: { id, type: "registry-provider-platforms", attributes: { os: fields.os, arch: fields.arch, filename: fields.filename, "download-url": fields.downloadUrl, shasum: fields.shasum } } };
   })
   .delete("/api/v2/registry-provider-platforms/:platform_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const platformId = params["platform_id"] ?? "";
@@ -2055,24 +2867,18 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return version === undefined ? registryNotFound(set) : { data: registryProviderVersionResource(version) };
   })
   .post("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-    if (org === undefined || provider === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return registryNotFound(set);
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const version = typeof attrs["version"] === "string" ? attrs["version"] : "";
-    if (version === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version is required" }] }; }
-    const rawKeyId = attrs["key-id"];
-    if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key" }] }; }
-    const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
-    if (keyId !== null && await registrySigningKey(org.id, provider.namespace, keyId) === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key in the provider namespace" }] }; }
+    const resolved = await resolveProviderForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { provider } = resolved;
+    const fields = await parseProviderVersionFields(body, provider.orgId, provider.namespace);
+    if ("error" in fields) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
+    }
     const id = newResourceId("provver");
-    const protocols = Array.isArray(attrs["protocols"]) ? (attrs["protocols"] as string[]) : ["5.0"];
     const createdAt = Date.now();
     try {
-      await db.insert(registryProviderVersions).values({ id, providerId: provider.id, version, keyId, protocols, shasumsUrl: typeof attrs["shasums-url"] === "string" ? attrs["shasums-url"] : null, shasumsSignatureUrl: typeof attrs["shasums-signature-url"] === "string" ? attrs["shasums-signature-url"] : null, createdAt });
+      await db.insert(registryProviderVersions).values({ id, providerId: provider.id, version: fields.version, keyId: fields.keyId, protocols: fields.protocols, shasumsUrl: fields.shasumsUrl, shasumsSignatureUrl: fields.shasumsSignatureUrl, createdAt });
     } catch (error: unknown) {
       if (!isUniqueConstraintError(error)) throw error;
       (set as { status: number }).status = 422;
@@ -2094,23 +2900,17 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return {};
   })
   .post("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
-    if (org === undefined || provider === undefined || version === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return registryNotFound(set);
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const os = typeof attrs["os"] === "string" ? attrs["os"] : "";
-    const arch = typeof attrs["arch"] === "string" ? attrs["arch"] : "";
-    const filename = typeof attrs["filename"] === "string" ? attrs["filename"] : "";
-    const downloadUrl = typeof attrs["download-url"] === "string" ? attrs["download-url"] : "";
-    const shasum = typeof attrs["shasum"] === "string" ? attrs["shasum"] : "";
-    if (os === "" || arch === "" || filename === "" || downloadUrl === "" || shasum === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "os, arch, filename, download-url, and shasum are required" }] }; }
+    const resolved = await resolveProviderVersionForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { version } = resolved;
+    const fields = parsePlatformFields(body);
+    if ("error" in fields) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
+    }
     const id = newResourceId("provplat");
     try {
-      await db.insert(registryProviderPlatforms).values({ id, versionId: version.id, os, arch, filename, downloadUrl, shasum, createdAt: Date.now() });
+      await db.insert(registryProviderPlatforms).values({ id, versionId: version.id, os: fields.os, arch: fields.arch, filename: fields.filename, downloadUrl: fields.downloadUrl, shasum: fields.shasum, createdAt: Date.now() });
     } catch (error: unknown) {
       if (!isUniqueConstraintError(error)) throw error;
       (set as { status: number }).status = 422;
@@ -2130,22 +2930,18 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: platforms.map(registryProviderPlatformResource) };
   })
   .get("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms/:os/:arch", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
-    const platform = version === undefined ? undefined : await db.query.registryProviderPlatforms.findFirst({ where: and(eq(registryProviderPlatforms.versionId, version.id), eq(registryProviderPlatforms.os, params["os"] ?? ""), eq(registryProviderPlatforms.arch, params["arch"] ?? "")) });
-    if (org === undefined || provider === undefined || version === undefined || platform === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) return registryNotFound(set);
-    return { data: registryProviderPlatformResource(platform) };
+    const resolved = await resolveProviderPlatformChain(params, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { chain } = resolved;
+    if (!(await checkRegistryManagementRead(user?.id, chain.org.id, "providers", tokenOrgId, teamId ?? null))) return registryNotFound(set);
+    return { data: registryProviderPlatformResource(chain.platform) };
   })
   .delete("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms/:os/:arch", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
-    const platform = version === undefined ? undefined : await db.query.registryProviderPlatforms.findFirst({ where: and(eq(registryProviderPlatforms.versionId, version.id), eq(registryProviderPlatforms.os, params["os"] ?? ""), eq(registryProviderPlatforms.arch, params["arch"] ?? "")) });
-    if (org === undefined || provider === undefined || version === undefined || platform === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return registryNotFound(set);
-    await db.delete(registryProviderPlatforms).where(eq(registryProviderPlatforms.id, platform.id));
+    const resolved = await resolveProviderPlatformChain(params, set);
+    if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
+    const { chain } = resolved;
+    if (!(await checkOrganizationPermission(chain.org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return registryNotFound(set);
+    await db.delete(registryProviderPlatforms).where(eq(registryProviderPlatforms.id, chain.platform.id));
     (set as { status: number }).status = 204;
     return {};
   })
@@ -2162,14 +2958,12 @@ export const registryRoutes = new Elysia({ name: "registry" })
       ),
     });
     if (mod === undefined) return registryNotFound(set);
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    if (data["type"] !== undefined && data["type"] !== "registry-module-versions") {
+    const envelope = parseModuleVersionEnvelope(body);
+    if ("error" in envelope) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be registry-module-versions" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: envelope.error }] };
     }
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    return createRegistryModuleVersion(mod, attributes, set);
+    return createRegistryModuleVersion(mod, envelope.attributes, set);
   })
   .get("/api/v2/registry-modules/:module_id/versions", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const moduleId = params["module_id"] ?? "";
@@ -2248,11 +3042,9 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   // --- Module Version Upload ---
   .put("/api/v2/registry-module-versions/:version_id/upload", async ({ params, body, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
-    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const access = await resolveModuleVersionForManage(params["version_id"] ?? "", user?.id, tokenOrgId, teamId, set);
+    if ("failure" in access) return access.failure;
+    const { ver, mod } = access;
     if (mod.publishingMechanism !== "manual") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "VCS-backed module versions are ingested from their configured VCS connection" }] };
@@ -2271,52 +3063,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       (set as { status: number }).status = 413;
       return { errors: [{ status: "413", title: "Payload Too Large", detail: "Module archive exceeds the upload limit" }] };
     }
-    const claimed = await db.update(registryModuleVersions)
-      .set({ status: "ingesting", updatedAt: Date.now() })
-      .where(and(
-        eq(registryModuleVersions.id, versionId),
-        isNull(registryModuleVersions.archivePath),
-        ne(registryModuleVersions.status, "ingesting"),
-      ))
-      .returning({ id: registryModuleVersions.id });
-    if (claimed.length !== 1) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Module version content was already uploaded" }] };
-    }
-    const rawPath = join(CV_STORAGE_DIR, `registry-module-${versionId}.${crypto.randomUUID()}.upload`);
-    const archivePath = join(REGISTRY_MODULE_STORAGE_DIR, `${versionId}.tar.gz`);
-    try {
-      await mkdir(CV_STORAGE_DIR, { recursive: true, mode: 0o700 });
-      await writeFile(rawPath, bytes, { mode: 0o600 });
-      const metadata = await ingestModuleArchive(rawPath, archivePath, "", inspectRegistryModule);
-      const publishedAt = Date.now();
-      await db.transaction(async (tx): Promise<void> => {
-        await tx.update(registryModuleVersions).set({
-          archivePath,
-          status: "ok",
-          metadata,
-          ingestError: null,
-          publishedAt,
-          updatedAt: publishedAt,
-        }).where(eq(registryModuleVersions.id, versionId));
-        await tx.update(registryModules).set({
-          status: "setup_complete",
-          description: metadata.description,
-          updatedAt: publishedAt,
-        }).where(eq(registryModules.id, mod.id));
-      });
-      const updated = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
-      (set as { status: number }).status = 200;
-      if (updated === undefined) throw new Error("Uploaded registry module version could not be loaded");
-      return { data: registryModuleVersionResource(updated) };
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Module archive ingestion failed";
-      await db.update(registryModuleVersions).set({ status: "errored", ingestError: message.slice(0, 2_000), updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: message }] };
-    } finally {
-      await rm(rawPath, { force: true });
-    }
+    return await ingestModuleVersionUpload(ver.id, mod.id, bytes, set);
   })
   .patch("/api/v2/registry-module-versions/:version_id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const versionId = params["version_id"] ?? "";
@@ -2359,46 +3106,15 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: testConfigurationVersionResource({ id, moduleId: mod.id, archivePath: null, status: "pending", createdAt: now, uploadedAt: null }, mod.id, request) };
   })
   .put("/api/v2/module-test-configuration-versions/:configuration_version_id/upload", async ({ params, body, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const configuration = await db.query.moduleTestConfigurationVersions.findFirst({ where: eq(moduleTestConfigurationVersions.id, params["configuration_version_id"] ?? "") });
-    const mod = configuration === undefined ? undefined : await db.query.registryModules.findFirst({ where: eq(registryModules.id, configuration.moduleId) });
-    const path = `/api/v2/module-test-configuration-versions/${params["configuration_version_id"] ?? ""}/upload`;
-    const authorized = mod !== undefined && (await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"));
-    if (configuration === undefined || mod === undefined || (!authorized && !validSignedApiURL(request, path, "PUT"))) return registryNotFound(set);
-    const contentLength = Number(request.headers.get("content-length"));
-    if (Number.isFinite(contentLength) && contentLength > MAX_MODULE_ARCHIVE_BYTES) {
-      (set as { status: number }).status = 413;
-      return { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds the upload limit" }] };
-    }
-    const bytes = await uploadedBytes(body, request);
-    if (bytes.byteLength === 0) {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Configuration archive is empty" }] };
-    }
-    if (bytes.byteLength > MAX_MODULE_ARCHIVE_BYTES) {
-      (set as { status: number }).status = 413;
-      return { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds the upload limit" }] };
-    }
-    const claimed = await db.update(moduleTestConfigurationVersions)
-      .set({ status: "uploading" })
-      .where(and(
-        eq(moduleTestConfigurationVersions.id, configuration.id),
-        eq(moduleTestConfigurationVersions.status, "pending"),
-        isNull(moduleTestConfigurationVersions.archivePath),
-      ))
-      .returning({ id: moduleTestConfigurationVersions.id });
-    if (claimed.length !== 1) {
+    const access = await resolveTestConfigVersionForUpload(params["configuration_version_id"] ?? "", user?.id, tokenOrgId, teamId, request, set);
+    if ("failure" in access) return access.failure;
+    const { configuration, mod } = access;
+    const archive = await readAndValidateUploadArchive(body, request, set);
+    if ("failure" in archive) return archive.failure;
+    const stored = await claimAndStoreConfigArchive(configuration.id, archive.bytes);
+    if ("alreadyUploaded" in stored) {
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
-    }
-    const archivePath = join(CV_STORAGE_DIR, `module-test-config-${configuration.id}.tar.gz`);
-    try {
-      await mkdir(CV_STORAGE_DIR, { recursive: true, mode: 0o700 });
-      await writeFile(archivePath, bytes, { mode: 0o600 });
-      const uploadedAt = Date.now();
-      await db.update(moduleTestConfigurationVersions).set({ archivePath, status: "uploaded", uploadedAt }).where(eq(moduleTestConfigurationVersions.id, configuration.id));
-    } catch (error: unknown) {
-      await db.update(moduleTestConfigurationVersions).set({ status: "pending" }).where(and(eq(moduleTestConfigurationVersions.id, configuration.id), eq(moduleTestConfigurationVersions.status, "uploading")));
-      throw error;
     }
     const updated = await db.query.moduleTestConfigurationVersions.findFirst({ where: eq(moduleTestConfigurationVersions.id, configuration.id) });
     if (updated === undefined) return registryNotFound(set);
@@ -2406,44 +3122,27 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: testConfigurationVersionResource(updated, mod.id, request) };
   })
   .post("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const mod = await findTestRunModule(params);
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
+    const resolved = await resolveTestRunModuleForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { mod } = resolved;
     const configuration = moduleTestConfiguration(body);
     if ("error" in configuration) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: configuration.error }] };
     }
-    const rawPayload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = rawPayload["data"] !== null && typeof rawPayload["data"] === "object" ? rawPayload["data"] as Record<string, unknown> : {};
-    const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
-    const configurationRelationship = relationships["configuration-version"];
-    const configurationData = configurationRelationship !== null && typeof configurationRelationship === "object" ? (configurationRelationship as Record<string, unknown>)["data"] : undefined;
-    const configurationVersionId = configurationData !== null && typeof configurationData === "object" && typeof (configurationData as Record<string, unknown>)["id"] === "string"
-      ? (configurationData as Record<string, unknown>)["id"] as string
-      : undefined;
-    const selected = await testRunConfigurationArchive(mod.id, configurationVersionId, mod.orgId);
-    if (configurationVersionId !== undefined && selected.archivePath === null) {
+    const { configurationVersionId } = parseTestRunConfigurationVersion(body);
+    const selection = await selectTestRunArchive(mod.id, configurationVersionId, mod.orgId);
+    if ("error" in selection) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The configuration version is not uploaded or is not available to this module" }] };
-    }
-    const versions = await availableModuleVersions(mod.id);
-    const version = versions[0];
-    if (version === undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The module has no published version available for testing" }] };
-    }
-    const archivePath = selected.archivePath ?? version.archivePath;
-    if (archivePath === null || !(await Bun.file(archivePath).exists())) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The module archive is not available for testing" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: selection.error }] };
     }
     const now = Date.now();
     const id = newResourceId("trun");
     const runValues: typeof moduleTestRuns.$inferInsert = {
       id,
       moduleId: mod.id,
-      versionId: version.id,
-      configurationVersionId: selected.moduleConfigurationVersionId,
+      versionId: selection.version.id,
+      configurationVersionId: selection.moduleConfigurationVersionId,
       status: "queued",
       testStatus: null,
       testsPassed: null,
@@ -2471,7 +3170,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const created = await db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, id) });
     if (created === undefined) throw new Error("Created module test run could not be loaded");
     (set as { status: number }).status = 201;
-    return { data: testRunResource(created, mod.id, version.version) };
+    return { data: testRunResource(created, mod.id, selection.version.version) };
   })
   .get("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs", async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const mod = await findTestRunModule(params);
@@ -2562,33 +3261,23 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: testVariableResource(created) };
   })
   .get("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const variable = await findTestVariable(params);
-    if (variable === undefined || !(await checkOrganizationPermission((await findTestVarsModule(params))?.orgId ?? "", user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const resolved = await resolveTestVariableForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { variable } = resolved;
     return { data: testVariableResource(variable) };
   })
   .patch("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const variable = await findTestVariable(params);
-    if (variable === undefined || !(await checkOrganizationPermission((await findTestVarsModule(params))?.orgId ?? "", user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const resolved = await resolveTestVariableForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { variable } = resolved;
     const input = testVariableInput(body, false);
     if ("error" in input) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] }; }
-    const updates: Partial<typeof testVariables.$inferInsert> = { updatedAt: Date.now() };
+    const updates: Partial<typeof testVariables.$inferInsert> = { updatedAt: Date.now(), ...testVariableScalarUpdates(input) };
     if (input.key !== undefined) {
-      if (input.key.trim() === "") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key must not be empty" }] };
-      }
-      const dup = await db.query.testVariables.findFirst({ where: and(eq(testVariables.moduleId, variable.moduleId), eq(testVariables.key, input.key), ne(testVariables.id, variable.id)) });
-      if (dup !== undefined) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A test variable with this key already exists" }] };
-      }
+      const keyFailure = await validateTestVariableKey(variable.moduleId, variable.id, input.key, set);
+      if (keyFailure !== null) return keyFailure.failure;
       updates.key = input.key;
     }
-    if (input.value !== undefined) updates.value = input.value;
-    if (input.sensitive !== undefined) updates.sensitive = input.sensitive;
-    if (input.hcl !== undefined) updates.hcl = input.hcl;
-    if (input.category !== undefined) updates.category = input.category;
-    if (input.description !== undefined) updates.description = input.description ?? null;
     let conflict = "";
     await db.transaction(async (tx): Promise<void> => {
       // Duplicate-key enforcement and the write share one transaction so a
@@ -2609,8 +3298,9 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: updated === undefined ? undefined : testVariableResource(updated) };
   })
   .delete("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const variable = await findTestVariable(params);
-    if (variable === undefined || !(await checkOrganizationPermission((await findTestVarsModule(params))?.orgId ?? "", user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const resolved = await resolveTestVariableForWrite(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
+    const { variable } = resolved;
     await db.delete(testVariables).where(eq(testVariables.id, variable.id));
     (set as { status: number }).status = 204;
     return {};
@@ -2680,58 +3370,26 @@ export const registryRoutes = new Elysia({ name: "registry" })
     };
   })
   .patch("/api/v2/registry-modules/:module_id/:namespace/:name/:provider/test-configuration", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["module_id"] !== "private") return registryNotFound(set);
-    const { namespace, name, provider } = params;
-    const org = await cachedOrgByName(namespace ?? "");
-    const mod = await db.query.registryModules.findFirst({
-      where: and(eq(registryModules.orgId, org?.id ?? ""), eq(registryModules.namespace, namespace ?? ""), eq(registryModules.name, name ?? ""), eq(registryModules.provider, provider ?? "")),
-    });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
+    const resolved = await resolveTestConfigModule(params, user?.id, tokenOrgId, teamId, set);
+    if ("failure" in resolved) return resolved.failure;
+    const { mod } = resolved;
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = (data?.["attributes"] as Record<string, unknown>) ?? {};
-    const rawEnabled = attrs["oidc-enabled"];
-    const rawProvider = attrs["oidc-provider"];
-    const rawConfiguration = attrs["oidc-configuration"];
     const legacyProviderUrl = typeof attrs["oidc-provider-url"] === "string" ? attrs["oidc-provider-url"] : null;
-    if (rawEnabled !== undefined && typeof rawEnabled !== "boolean") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "oidc-enabled must be a boolean" }] };
-    }
     const existing = await db.query.moduleTestConfigurations.findFirst({ where: eq(moduleTestConfigurations.moduleId, mod.id) });
-    const id = existing?.id ?? crypto.randomUUID();
-    const oidcEnabled = typeof rawEnabled === "boolean" ? rawEnabled : existing?.oidcEnabled ?? legacyProviderUrl !== null;
-    const oidcProvider = typeof rawProvider === "string" ? rawProvider : existing?.oidcProvider ?? null;
-    if (oidcEnabled && (oidcProvider === null || !["aws", "gcp", "azure", "vault"].includes(oidcProvider))) {
+    const basics = resolveTestConfigBasics(attrs, existing, legacyProviderUrl);
+    if ("error" in basics) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "oidc-provider must be aws, gcp, azure, or vault when OIDC is enabled" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: basics.error }] };
     }
-    if (rawConfiguration !== undefined && (rawConfiguration === null || typeof rawConfiguration !== "object" || Array.isArray(rawConfiguration))) {
+    const configResult = resolveTestConfigConfiguration(basics.oidcEnabled, basics.oidcProvider, basics.rawConfiguration, existing?.oidcConfiguration);
+    if ("error" in configResult) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "oidc-configuration must be an object" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: configResult.error }] };
     }
-    const oidcConfiguration = rawConfiguration === undefined
-      ? existing?.oidcConfiguration ?? null
-      : rawConfiguration as Record<string, unknown>;
-    if (oidcEnabled && oidcConfiguration === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "oidc-configuration is required when OIDC is enabled" }] };
-    }
-    if (oidcEnabled && oidcConfiguration !== null) {
-      const requiredFields: Record<string, readonly string[]> = {
-        aws: ["role-arn"],
-        gcp: ["service-account-email", "workload-provider-name"],
-        azure: ["tenant-id", "client-id", "subscription-id"],
-        vault: ["url", "role-name"],
-      };
-      const missing = (requiredFields[oidcProvider ?? ""] ?? []).filter((field): boolean => typeof oidcConfiguration[field] !== "string" || oidcConfiguration[field] === "");
-      if (missing.length > 0) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `oidc-configuration requires ${missing.join(", ")}` }] };
-      }
-    }
+    const { id, oidcEnabled, oidcProvider } = basics;
+    const { configuration: oidcConfiguration } = configResult;
     const updatedAt = Date.now();
     if (existing !== undefined) {
       await db.update(moduleTestConfigurations).set({ oidcEnabled, oidcProvider, oidcConfiguration, oidcProviderUrl: legacyProviderUrl ?? existing.oidcProviderUrl, updatedAt }).where(eq(moduleTestConfigurations.id, id));

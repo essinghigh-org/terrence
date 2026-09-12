@@ -475,6 +475,58 @@ function applySection(state: RunViewState, kind: AuxKind, value: unknown): RunVi
   }
 }
 
+function runLoadedTransition(
+  state: RunViewState,
+  action: Readonly<Extract<RunViewAction, { type: "run-loaded" }>>,
+): RunViewState {
+  const status = action.run.attributes.status;
+  // Clear the in-flight action as soon as the run actually leaves the
+  // status it was sent from. This is what makes the busy state truthful
+  // rather than a fixed timeout.
+  const stillAwaiting = state.awaitingTransitionFrom !== null
+    && state.awaitingTransitionFrom === status;
+  return {
+    ...state,
+    run: action.run,
+    creatorUsername: action.creatorUsername,
+    creatorAvatarUrl: action.creatorAvatarUrl,
+    loading: false,
+    loadError: "",
+    fresh: true,
+    awaitingTransitionFrom: stillAwaiting ? state.awaitingTransitionFrom : null,
+    awaitingAction: stillAwaiting ? state.awaitingAction : null,
+  };
+}
+
+function auxStatusTransition(
+  state: RunViewState,
+  action: Readonly<Extract<RunViewAction, { type: "aux-status" }>>,
+): RunViewState {
+  // Track *which* sections are failing, not just whether the last pass
+  // had a failure. A refresh that touches only the event timeline must
+  // not clear a failure reported by the cost estimate, and must not
+  // re-assert one it did not look at — which is what made the
+  // "Some run details could not be refreshed" banner flap between
+  // passes that happened to fetch different subsets.
+  const touched = new Set(action.kinds);
+  const nowFailing = new Set(action.failed);
+  const next = ALL_AUX_KINDS.filter((kind: AuxKind): boolean =>
+    nowFailing.has(kind)
+    || (!touched.has(kind) && state.failedSections.includes(kind)));
+  const unchanged = next.length === state.failedSections.length
+    && next.every((kind: AuxKind, index: number): boolean => state.failedSections[index] === kind);
+  return unchanged ? state : { ...state, failedSections: next };
+}
+
+function logChunkTransition(
+  state: RunViewState,
+  action: Readonly<Extract<RunViewAction, { type: "log-chunk" }>>,
+): RunViewState {
+  const key = action.phase === "plan" ? "planLog" : "applyLog";
+  const next = appendLogChunk(state[key], action.tail, action.requestedOffset);
+  return next === state[key] ? state : { ...state, [key]: next };
+}
+
 /**
  * The whole run page reduces through here. Every path that used to call one of
  * a dozen `setX` setters now goes through one transition, so there is exactly
@@ -489,25 +541,8 @@ export function runViewReducer(
   switch (action.type) {
     case "reset":
       return INITIAL_RUN_VIEW_STATE;
-    case "run-loaded": {
-      const status = action.run.attributes.status;
-      // Clear the in-flight action as soon as the run actually leaves the
-      // status it was sent from. This is what makes the busy state truthful
-      // rather than a fixed timeout.
-      const stillAwaiting = state.awaitingTransitionFrom !== null
-        && state.awaitingTransitionFrom === status;
-      return {
-        ...state,
-        run: action.run,
-        creatorUsername: action.creatorUsername,
-        creatorAvatarUrl: action.creatorAvatarUrl,
-        loading: false,
-        loadError: "",
-        fresh: true,
-        awaitingTransitionFrom: stillAwaiting ? state.awaitingTransitionFrom : null,
-        awaitingAction: stillAwaiting ? state.awaitingAction : null,
-      };
-    }
+    case "run-loaded":
+      return runLoadedTransition(state, action);
     case "run-failed":
       return { ...state, loading: false, fresh: false, loadError: action.message };
     case "run-missing":
@@ -516,27 +551,10 @@ export function runViewReducer(
       return { ...state, loading: false, fresh: false, run: null, awaitingTransitionFrom: null, awaitingAction: null };
     case "section":
       return applySection(state, action.kind, action.value);
-    case "aux-status": {
-      // Track *which* sections are failing, not just whether the last pass
-      // had a failure. A refresh that touches only the event timeline must
-      // not clear a failure reported by the cost estimate, and must not
-      // re-assert one it did not look at — which is what made the
-      // "Some run details could not be refreshed" banner flap between
-      // passes that happened to fetch different subsets.
-      const touched = new Set(action.kinds);
-      const nowFailing = new Set(action.failed);
-      const next = ALL_AUX_KINDS.filter((kind: AuxKind): boolean =>
-        nowFailing.has(kind)
-        || (!touched.has(kind) && state.failedSections.includes(kind)));
-      const unchanged = next.length === state.failedSections.length
-        && next.every((kind: AuxKind, index: number): boolean => state.failedSections[index] === kind);
-      return unchanged ? state : { ...state, failedSections: next };
-    }
-    case "log-chunk": {
-      const key = action.phase === "plan" ? "planLog" : "applyLog";
-      const next = appendLogChunk(state[key], action.tail, action.requestedOffset);
-      return next === state[key] ? state : { ...state, [key]: next };
-    }
+    case "aux-status":
+      return auxStatusTransition(state, action);
+    case "log-chunk":
+      return logChunkTransition(state, action);
     case "action-sent":
       return { ...state, awaitingTransitionFrom: action.fromStatus, awaitingAction: action.action };
     case "action-settled":

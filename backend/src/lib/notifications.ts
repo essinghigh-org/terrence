@@ -851,20 +851,18 @@ export async function verifyDestinationOwnership(
   return { successful, echoed: boundedBody.slice(0, 256), bodyLacksEcho, headerLacksEcho };
 }
 
-export async function deliverRunNotifications(
-  runId: string,
-  trigger: string,
-  statusOverride?: string,
-  options: RunNotificationDeliveryOptions = {},
-): Promise<NotificationDelivery[]> {
+type NotificationRunRow = DeepReadonly<typeof runs.$inferSelect>;
+type NotificationWorkspaceRow = DeepReadonly<typeof workspaces.$inferSelect>;
+
+async function loadNotifiableRun(runId: string): Promise<{ run: NotificationRunRow; workspace: NotificationWorkspaceRow } | null> {
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-  if (run === undefined) return [];
+  if (run === undefined) return null;
   const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
-  if (workspace === undefined) return [];
+  if (workspace === undefined) return null;
 
   // the reference format parity: notifications are not delivered for local-execution runs.
   if (workspace.executionMode === "local") {
-    return [];
+    return null;
   }
 
   // the reference format parity: notifications are not delivered for speculative runs
@@ -875,9 +873,86 @@ export async function deliverRunNotifications(
       columns: { speculative: true },
     });
     if (configurationVersion?.speculative === true) {
-      return [];
+      return null;
     }
   }
+  return { run, workspace };
+}
+
+async function matchingConfigurations(
+  configurations: readonly NotificationConfiguration[],
+  workspaceId: string,
+  trigger: string,
+): Promise<NotificationConfiguration[]> {
+  const candidates = (await withoutProjectExclusions(configurations, workspaceId)).filter((configuration: NotificationConfiguration): boolean =>
+    configuration.enabled === true && configuration.triggers.includes(trigger));
+  // Snoozes suppress repetitive low-priority events at the destination, while
+  // critical failures remain visible. The state is shared across replicas and
+  // expires automatically, so a muted endpoint cannot hide a later incident.
+  return (await Promise.all(candidates.map(async (configuration): Promise<NotificationConfiguration | null> =>
+    await notificationSnoozedForTrigger(configuration.id, trigger) ? null : configuration))).filter(
+      (configuration): configuration is NotificationConfiguration => configuration !== null,
+    );
+}
+
+function runPageUrl(
+  run: NotificationRunRow,
+  workspace: NotificationWorkspaceRow,
+  organization: { name?: string | null } | undefined,
+): string {
+  const baseUrl = process.env["PUBLIC_URL"] ?? "http://localhost";
+  return new URL(
+    `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/workspaces/${encodeURIComponent(workspace.name)}/runs/${encodeURIComponent(run.id)}`,
+    baseUrl,
+  ).toString();
+}
+
+async function postRunNotifications(
+  matching: readonly NotificationConfiguration[],
+  input: Readonly<{
+    run: NotificationRunRow;
+    workspace: NotificationWorkspaceRow;
+    organization: { name: string | null } | undefined;
+    creator: { username: string | null } | undefined;
+    runUrl: string;
+    updatedAt: string;
+    runStatus: string;
+    trigger: string;
+    eventId: string | undefined;
+  }>,
+): Promise<NotificationDelivery[]> {
+  return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
+    postNotification(configuration, {
+      payload_version: 1,
+      ...(input.eventId === undefined ? {} : { event_id: input.eventId }),
+      notification_configuration_id: configuration.id,
+      run_url: input.runUrl,
+      run_id: input.run.id,
+      run_message: input.run.message ?? "",
+      run_created_at: new Date(input.run.createdAt).toISOString(),
+      run_created_by: input.creator?.username ?? null,
+      workspace_id: input.workspace.id,
+      workspace_name: input.workspace.name,
+      organization_name: input.organization?.name ?? input.workspace.orgId,
+      notifications: [{
+        message: runNotificationMessage(input.trigger, input.runStatus),
+        trigger: input.trigger,
+        run_status: input.runStatus,
+        run_updated_at: input.updatedAt,
+        run_updated_by: input.creator?.username ?? null,
+      }],
+    })));
+}
+
+export async function deliverRunNotifications(
+  runId: string,
+  trigger: string,
+  statusOverride?: string,
+  options: RunNotificationDeliveryOptions = {},
+): Promise<NotificationDelivery[]> {
+  const loaded = await loadNotifiableRun(runId);
+  if (loaded === null) return [];
+  const { run, workspace } = loaded;
 
   const [organization, creator, configurations] = await Promise.all([
     db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) }),
@@ -894,21 +969,7 @@ export async function deliverRunNotifications(
     }),
   ]);
 
-  const candidates = (await withoutProjectExclusions(configurations, workspace.id)).filter((configuration: NotificationConfiguration): boolean =>
-    configuration.enabled === true && configuration.triggers.includes(trigger));
-  // Snoozes suppress repetitive low-priority events at the destination, while
-  // critical failures remain visible. The state is shared across replicas and
-  // expires automatically, so a muted endpoint cannot hide a later incident.
-  const matching = (await Promise.all(candidates.map(async (configuration): Promise<NotificationConfiguration | null> =>
-    await notificationSnoozedForTrigger(configuration.id, trigger) ? null : configuration))).filter(
-      (configuration): configuration is NotificationConfiguration => configuration !== null,
-    );
-  const baseUrl = process.env["PUBLIC_URL"] ?? "http://localhost";
-  const runUrl = new URL(
-    `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/workspaces/${encodeURIComponent(workspace.name)}/runs/${encodeURIComponent(run.id)}`,
-    baseUrl,
-  ).toString();
-  const updatedAt = new Date().toISOString();
+  const matching = await matchingConfigurations(configurations, workspace.id, trigger);
   const runStatus = statusOverride ?? run.status;
 
   const dedupKey = `${run.id}:${trigger}:${runStatus}`;
@@ -922,27 +983,17 @@ export async function deliverRunNotifications(
     await deliveryDedupRecord("run", dedupKey);
   }
 
-  return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
-    postNotification(configuration, {
-      payload_version: 1,
-      ...(options.eventId === undefined ? {} : { event_id: options.eventId }),
-      notification_configuration_id: configuration.id,
-      run_url: runUrl,
-      run_id: run.id,
-      run_message: run.message ?? "",
-      run_created_at: new Date(run.createdAt).toISOString(),
-      run_created_by: creator?.username ?? null,
-      workspace_id: workspace.id,
-      workspace_name: workspace.name,
-      organization_name: organization?.name ?? workspace.orgId,
-      notifications: [{
-        message: runNotificationMessage(trigger, runStatus),
-        trigger,
-        run_status: runStatus,
-        run_updated_at: updatedAt,
-        run_updated_by: creator?.username ?? null,
-      }],
-    })));
+  return postRunNotifications(matching, {
+    run,
+    workspace,
+    organization,
+    creator,
+    runUrl: runPageUrl(run, workspace, organization),
+    updatedAt: new Date().toISOString(),
+    runStatus,
+    trigger,
+    eventId: options.eventId,
+  });
 }
 
 function runNotificationEventId(runId: string, trigger: string, status: string): string {

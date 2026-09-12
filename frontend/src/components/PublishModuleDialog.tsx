@@ -25,6 +25,75 @@ type Repository = Readonly<{ identifier: string; name: string; owner?: string }>
 type SourceKind = "vcs" | "manual";
 type Workflow = "tag" | "branch";
 
+function publishButtonLabel(publishing: boolean, source: SourceKind, manualTarget: boolean): string {
+  if (publishing) return "Publishing…";
+  if (source === "vcs") return "Publish from VCS";
+  return manualTarget ? "Retry upload" : "Upload module";
+}
+
+function VcsSourceFields({
+  connection,
+  onConnectionChange,
+  connections,
+  loadingConnections,
+  error,
+  publishing,
+  repository,
+  onRepositoryChange,
+  repositories,
+  loadingRepositories,
+  workflow,
+  onWorkflowChange,
+}: Readonly<{
+  connection: string;
+  onConnectionChange: (value: string) => void;
+  connections: VcsConnection[];
+  loadingConnections: boolean;
+  error: string;
+  publishing: boolean;
+  repository: string;
+  onRepositoryChange: (value: string) => void;
+  repositories: Repository[];
+  loadingRepositories: boolean;
+  workflow: Workflow;
+  onWorkflowChange: (value: Workflow) => void;
+}>): React.JSX.Element {
+  return (
+    <>
+      <Field>
+        <FieldLabel htmlFor="module-vcs-connection">VCS connection</FieldLabel>
+        <Select id="module-vcs-connection" value={connection} onValueChange={onConnectionChange} disabled={loadingConnections || publishing}>
+          <SelectItem value="">{loadingConnections ? "Loading connections…" : "Select a connection"}</SelectItem>
+          {connections.map((candidate): React.JSX.Element => <SelectItem key={candidate.value} value={candidate.value}>{candidate.label}</SelectItem>)}
+        </Select>
+        {!loadingConnections && error === "" && connections.length === 0 && (
+          <FieldDescription>
+            No supported GitHub connections are registered. Add a GitHub App installation or GitHub OAuth connection before publishing a VCS module.
+          </FieldDescription>
+        )}
+      </Field>
+      <Field>
+        <FieldLabel htmlFor="module-vcs-repository">Repository</FieldLabel>
+        <VcsRepoSelector
+          id="module-vcs-repository"
+          value={repository}
+          onValueChange={onRepositoryChange}
+          repositories={repositories}
+          loading={loadingRepositories}
+          disabled={connection === "" || publishing}
+        />
+      </Field>
+      <FieldSet>
+        <FieldLegend variant="label">Publishing workflow</FieldLegend>
+        <div className="flex flex-wrap gap-5" role="radiogroup" aria-label="Publishing workflow">
+          <label className="flex items-center gap-2 text-sm"><input type="radio" name="workflow" checked={workflow === "tag"} onChange={(): void => { onWorkflowChange("tag"); }} />Tag-based</label>
+          <label className="flex items-center gap-2 text-sm"><input type="radio" name="workflow" checked={workflow === "branch"} onChange={(): void => { onWorkflowChange("branch"); }} />Branch-based</label>
+        </div>
+      </FieldSet>
+    </>
+  );
+}
+
 export function PublishModuleDialog({
   open,
   orgName,
@@ -266,38 +335,20 @@ export function PublishModuleDialog({
 
         <FieldGroup>
           {source === "vcs" && (
-            <>
-              <Field>
-                <FieldLabel htmlFor="module-vcs-connection">VCS connection</FieldLabel>
-                <Select id="module-vcs-connection" value={connection} onValueChange={setConnection} disabled={loadingConnections || publishing}>
-                  <SelectItem value="">{loadingConnections ? "Loading connections…" : "Select a connection"}</SelectItem>
-                  {connections.map((candidate): React.JSX.Element => <SelectItem key={candidate.value} value={candidate.value}>{candidate.label}</SelectItem>)}
-                </Select>
-                {!loadingConnections && error === "" && connections.length === 0 && (
-                  <FieldDescription>
-                    No supported GitHub connections are registered. Add a GitHub App installation or GitHub OAuth connection before publishing a VCS module.
-                  </FieldDescription>
-                )}
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="module-vcs-repository">Repository</FieldLabel>
-                <VcsRepoSelector
-                  id="module-vcs-repository"
-                  value={repository}
-                  onValueChange={setRepository}
-                  repositories={repositories}
-                  loading={loadingRepositories}
-                  disabled={connection === "" || publishing}
-                />
-              </Field>
-              <FieldSet>
-                <FieldLegend variant="label">Publishing workflow</FieldLegend>
-                <div className="flex flex-wrap gap-5" role="radiogroup" aria-label="Publishing workflow">
-                  <label className="flex items-center gap-2 text-sm"><input type="radio" name="workflow" checked={workflow === "tag"} onChange={(): void => { setWorkflow("tag"); }} />Tag-based</label>
-                  <label className="flex items-center gap-2 text-sm"><input type="radio" name="workflow" checked={workflow === "branch"} onChange={(): void => { setWorkflow("branch"); }} />Branch-based</label>
-                </div>
-              </FieldSet>
-            </>
+            <VcsSourceFields
+              connection={connection}
+              onConnectionChange={(value: string): void => { setConnection(value); }}
+              connections={connections}
+              loadingConnections={loadingConnections}
+              error={error}
+              publishing={publishing}
+              repository={repository}
+              onRepositoryChange={(value: string): void => { setRepository(value); }}
+              repositories={repositories}
+              loadingRepositories={loadingRepositories}
+              workflow={workflow}
+              onWorkflowChange={(value: Workflow): void => { setWorkflow(value); }}
+            />
           )}
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -328,7 +379,7 @@ export function PublishModuleDialog({
         {error !== "" && <FieldError>{error}</FieldError>}
         <DialogFooter>
           <Button type="button" variant="outline" disabled={publishing} onClick={(): void => { discardManualTarget(); onOpenChange(false); reset(); }}>Cancel</Button>
-          <Button type="button" disabled={publishing} onClick={publish}>{publishing ? "Publishing…" : source === "vcs" ? "Publish from VCS" : manualTarget === null ? "Upload module" : "Retry upload"}</Button>
+          <Button type="button" disabled={publishing} onClick={publish}>{publishButtonLabel(publishing, source, manualTarget !== null)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

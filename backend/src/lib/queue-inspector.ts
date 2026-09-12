@@ -317,41 +317,53 @@ async function inspectQueuedAgentJob(
   }, position);
 }
 
-async function inspectPendingRun(
-  run: RunRow,
+type PoolInspection = Awaited<ReturnType<typeof inspectPool>>;
+
+function pendingEarlyBlock(
+  base: QueueInspection,
+  position: number | null,
   workspace: WorkspaceRow,
   context: Required<Pick<QueueInspectorContext, "now">> & QueueInspectorContext,
-): Promise<QueueInspection> {
-  const base = baseInspection(run, workspace, context);
+): QueueInspection | null {
   const phase = "plan" as const;
-  const position = await pendingPosition(run);
   const maintenance = maintenanceSnapshot();
-  const storageReason = storageDegradedReason();
   if (maintenance.active || isMaintenanceActive()) {
     return withPosition({ ...base, state: "blocked", reasonCode: "maintenance", reason: maintenance.reason ?? "Run claims are paused while maintenance mode is active.", phase, constraints: ["maintenance gate must be open"] }, position);
   }
   if (context.workerDraining === true) {
     return withPosition({ ...base, state: "blocked", reasonCode: "worker-draining", reason: "The worker is draining and will not claim new runs.", phase, constraints: ["worker drain must be inactive"] }, position);
   }
+  const storageReason = storageDegradedReason();
   if (storageReason !== null) {
     return withPosition({ ...base, state: "blocked", reasonCode: "storage-degraded", reason: `Run claims are paused: ${storageReason}`, phase, constraints: ["storage health must be normal"] }, position);
   }
   if (workspace.locked === true) {
     return withPosition({ ...base, state: "waiting", reasonCode: "workspace-lock", reason: workspace.lockedReason === null || workspace.lockedReason === "" ? "The workspace is locked; this run waits for it to be unlocked." : `The workspace is locked: ${workspace.lockedReason}`, phase, constraints: ["workspace must be unlocked"], workspace: { ...base.workspace, serializationBlocked: false } }, position);
   }
-  const serialization = await workspaceSerializationBlocker(run);
-  if (serialization.blocked) {
-    return withPosition({ ...base, state: "waiting", reasonCode: "workspace-serialization", reason: `Another ${serialization.status ?? "active"} run is using this workspace.`, phase, constraints: ["workspace serialization permits one blocking run"] , workspace: { ...base.workspace, serializationBlocked: true } }, position);
+  return null;
+}
+
+function pendingAgentInspection(
+  base: QueueInspection,
+  position: number | null,
+  requiredBinary: string,
+  poolInspection: PoolInspection,
+): QueueInspection {
+  const phase = "plan" as const;
+  const poolBase = { ...base, phase, requiredCapabilities: [requiredBinary], competingJobClass: "run", agentPool: poolInspection.pool, constraints: poolInspection.constraints };
+  if (poolInspection.reasonCode !== null) {
+    return withPosition({ ...poolBase, state: poolInspection.reasonCode === "agent-pool-scope" || poolInspection.reasonCode === "agent-pool-missing" ? "blocked" : "waiting", reasonCode: poolInspection.reasonCode, reason: poolInspection.reason ?? "The agent pool is not currently claimable." }, position);
   }
-  if (workspace.executionMode === "agent") {
-    const requiredBinary = binaryFor(workspace);
-    const poolInspection = await inspectPool(workspace, requiredBinary, context.now);
-    const poolBase = { ...base, phase, requiredCapabilities: [requiredBinary], competingJobClass: "run", agentPool: poolInspection.pool, constraints: poolInspection.constraints };
-    if (poolInspection.reasonCode !== null) {
-      return withPosition({ ...poolBase, state: poolInspection.reasonCode === "agent-pool-scope" || poolInspection.reasonCode === "agent-pool-missing" ? "blocked" : "waiting", reasonCode: poolInspection.reasonCode, reason: poolInspection.reason ?? "The agent pool is not currently claimable." }, position);
-    }
-    return withPosition({ ...poolBase, state: "ready", reasonCode: "agent-capacity-available", reason: "The worker can enqueue this run for a compatible agent on its next poll." }, position);
-  }
+  return withPosition({ ...poolBase, state: "ready", reasonCode: "agent-capacity-available", reason: "The worker can enqueue this run for a compatible agent on its next poll." }, position);
+}
+
+function pendingLocalInspection(
+  base: QueueInspection,
+  position: number | null,
+  workspace: WorkspaceRow,
+  context: Required<Pick<QueueInspectorContext, "now">> & QueueInspectorContext,
+): QueueInspection {
+  const phase = "plan" as const;
   if (workspace.executionMode === "local") {
     return withPosition({ ...base, state: "blocked", reasonCode: "local-execution-disabled", reason: "This workspace is configured for local execution; the server will not claim this remote run.", phase, constraints: ["workspace execution mode must not be local"] }, position);
   }
@@ -363,22 +375,77 @@ async function inspectPendingRun(
   return withPosition({ ...base, state: "ready", reasonCode: "local-capacity-available", reason: "A local execution slot is available; the worker can claim this run on its next poll.", phase, constraints: ["workspace serialization permits this run", "local execution slot available"] }, position);
 }
 
+async function inspectPendingRun(
+  run: RunRow,
+  workspace: WorkspaceRow,
+  context: Required<Pick<QueueInspectorContext, "now">> & QueueInspectorContext,
+): Promise<QueueInspection> {
+  const base = baseInspection(run, workspace, context);
+  const position = await pendingPosition(run);
+  const early = pendingEarlyBlock(base, position, workspace, context);
+  if (early !== null) return early;
+  const serialization = await workspaceSerializationBlocker(run);
+  if (serialization.blocked) {
+    return withPosition({ ...base, state: "waiting", reasonCode: "workspace-serialization", reason: `Another ${serialization.status ?? "active"} run is using this workspace.`, phase: "plan", constraints: ["workspace serialization permits one blocking run"] , workspace: { ...base.workspace, serializationBlocked: true } }, position);
+  }
+  if (workspace.executionMode === "agent") {
+    const requiredBinary = binaryFor(workspace);
+    const poolInspection = await inspectPool(workspace, requiredBinary, context.now);
+    return pendingAgentInspection(base, position, requiredBinary, poolInspection);
+  }
+  return pendingLocalInspection(base, position, workspace, context);
+}
+
+function confirmedScheduleBlock(base: QueueInspection, run: RunRow, now: number): QueueInspection | null {
+  const scheduledAt = run.scheduledAt;
+  if (scheduledAt === null || scheduledAt === undefined) {
+    return { ...base, state: "waiting", reasonCode: "awaiting-apply", reason: "The plan is confirmed and is waiting for an apply action.", phase: "apply", constraints: ["an apply action or schedule is required"] };
+  }
+  if (scheduledAt > now) {
+    return { ...base, state: "waiting", reasonCode: "scheduled", reason: "The scheduled apply time has not arrived.", phase: "apply", scheduledAt: iso(scheduledAt), constraints: ["scheduled-at must be in the past"] };
+  }
+  return null;
+}
+
+function confirmedLockBlock(base: QueueInspection, workspace: WorkspaceRow): QueueInspection | null {
+  if (workspace.locked !== true) return null;
+  return { ...base, state: "waiting", reasonCode: "workspace-lock", reason: workspace.lockedReason === null || workspace.lockedReason === "" ? "The scheduled apply is waiting for the workspace lock to clear." : `The workspace is locked: ${workspace.lockedReason}`, phase: "apply", constraints: ["workspace must be unlocked"] };
+}
+
+function confirmedAgentApply(base: QueueInspection, requiredBinary: string, poolInspection: PoolInspection): QueueInspection {
+  return {
+    ...base,
+    state: poolInspection.reasonCode === null ? "ready" : poolInspection.reasonCode === "agent-pool-scope" || poolInspection.reasonCode === "agent-pool-missing" ? "blocked" : "waiting",
+    reasonCode: poolInspection.reasonCode ?? "agent-capacity-available",
+    reason: poolInspection.reason ?? "A compatible agent is available; the scheduled apply can be queued.",
+    phase: "apply",
+    requiredCapabilities: [requiredBinary],
+    competingJobClass: "run",
+    constraints: poolInspection.constraints,
+    agentPool: poolInspection.pool,
+  };
+}
+
+function confirmedLocalApply(
+  base: QueueInspection,
+  context: Required<Pick<QueueInspectorContext, "now">> & QueueInspectorContext,
+): QueueInspection {
+  if (context.localConcurrencyLimit !== undefined && context.localExecuting !== undefined && context.localExecuting >= context.localConcurrencyLimit) {
+    return { ...base, state: "waiting", reasonCode: "local-capacity", reason: `All ${context.localConcurrencyLimit} local execution slots are busy.`, phase: "apply", constraints: [`local executions below concurrency limit (${context.localExecuting}/${context.localConcurrencyLimit})`] };
+  }
+  return { ...base, state: "ready", reasonCode: "local-capacity-available", reason: "The scheduled apply is due and a local execution slot is available.", phase: "apply", constraints: ["apply gates must be open", "local execution slot available"] };
+}
+
 async function inspectConfirmedRun(
   run: RunRow,
   workspace: WorkspaceRow,
   context: Required<Pick<QueueInspectorContext, "now">> & QueueInspectorContext,
 ): Promise<QueueInspection> {
   const base = baseInspection(run, workspace, context);
-  const scheduledAt = run.scheduledAt;
-  if (scheduledAt === null || scheduledAt === undefined) {
-    return { ...base, state: "waiting", reasonCode: "awaiting-apply", reason: "The plan is confirmed and is waiting for an apply action.", phase: "apply", constraints: ["an apply action or schedule is required"] };
-  }
-  if (scheduledAt > context.now) {
-    return { ...base, state: "waiting", reasonCode: "scheduled", reason: "The scheduled apply time has not arrived.", phase: "apply", scheduledAt: iso(scheduledAt), constraints: ["scheduled-at must be in the past"] };
-  }
-  if (workspace.locked === true) {
-    return { ...base, state: "waiting", reasonCode: "workspace-lock", reason: workspace.lockedReason === null || workspace.lockedReason === "" ? "The scheduled apply is waiting for the workspace lock to clear." : `The workspace is locked: ${workspace.lockedReason}`, phase: "apply", constraints: ["workspace must be unlocked"] };
-  }
+  const scheduled = confirmedScheduleBlock(base, run, context.now);
+  if (scheduled !== null) return scheduled;
+  const locked = confirmedLockBlock(base, workspace);
+  if (locked !== null) return locked;
   const gateReason = context.applyGateReason === undefined ? await applyGateBlockReason(new Date(context.now)) : context.applyGateReason;
   if (gateReason !== null) {
     return { ...base, state: "waiting", reasonCode: "apply-gate", reason: gateReason, phase: "apply", constraints: ["approval, maintenance and storage apply gates must be open"] };
@@ -389,22 +456,9 @@ async function inspectConfirmedRun(
   if (workspace.executionMode === "agent") {
     const requiredBinary = binaryFor(workspace);
     const poolInspection = await inspectPool(workspace, requiredBinary, context.now);
-    return {
-      ...base,
-      state: poolInspection.reasonCode === null ? "ready" : poolInspection.reasonCode === "agent-pool-scope" || poolInspection.reasonCode === "agent-pool-missing" ? "blocked" : "waiting",
-      reasonCode: poolInspection.reasonCode ?? "agent-capacity-available",
-      reason: poolInspection.reason ?? "A compatible agent is available; the scheduled apply can be queued.",
-      phase: "apply",
-      requiredCapabilities: [requiredBinary],
-      competingJobClass: "run",
-      constraints: poolInspection.constraints,
-      agentPool: poolInspection.pool,
-    };
+    return confirmedAgentApply(base, requiredBinary, poolInspection);
   }
-  if (context.localConcurrencyLimit !== undefined && context.localExecuting !== undefined && context.localExecuting >= context.localConcurrencyLimit) {
-    return { ...base, state: "waiting", reasonCode: "local-capacity", reason: `All ${context.localConcurrencyLimit} local execution slots are busy.`, phase: "apply", constraints: [`local executions below concurrency limit (${context.localExecuting}/${context.localConcurrencyLimit})`] };
-  }
-  return { ...base, state: "ready", reasonCode: "local-capacity-available", reason: "The scheduled apply is due and a local execution slot is available.", phase: "apply", constraints: ["apply gates must be open", "local execution slot available"] };
+  return confirmedLocalApply(base, context);
 }
 
 /** Inspect one run using the same pool, lock and serialization constraints used by workers. */

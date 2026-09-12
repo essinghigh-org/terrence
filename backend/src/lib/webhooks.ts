@@ -249,18 +249,9 @@ function validateGithubPushFields(ref: string | undefined, commitSha: string | u
   return undefined;
 }
 
-function parseGithubPushWebhook(payload: WebhookPayload, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined; sourceIdentity: VcsSourceIdentity }>): WebhookDetails | undefined {
-  const ref = requiredString(payload["ref"]);
-  const commitSha = requiredString(payload["after"]);
-  const headCommit = asRecord(payload["head_commit"]);
-  const commitMessage = requiredString(headCommit?.["message"]);
-  const commitUrl = requiredString(headCommit?.["url"]);
-  const filesChanged = changedFiles(payload);
-  if (validateGithubPushFields(ref, commitSha, commitMessage, commitUrl, filesChanged) !== undefined) return undefined;
-  if (ref === undefined || commitSha === undefined || commitMessage === undefined || commitUrl === undefined || filesChanged === undefined) return undefined;
-  const branchTag = parseRefBranchTag(ref);
-  if (branchTag === undefined) return undefined;
-  if (branchTag.branch !== undefined && filesChanged.size === 0) return undefined;
+type WebhookBase = DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined; sourceIdentity: VcsSourceIdentity }>;
+
+function buildGithubPushDetails(branchTag: { branch?: string; tag?: string }, base: WebhookBase, commitMessage: string, commitSha: string, commitUrl: string, filesChanged: ReadonlySet<string>): WebhookDetails {
   return {
     ...(branchTag.branch === undefined ? {} : { branch: branchTag.branch }),
     cloneUrl: base.cloneUrl,
@@ -275,6 +266,21 @@ function parseGithubPushWebhook(payload: WebhookPayload, base: DeepReadonly<{ cl
     sourceIdentity: base.sourceIdentity,
     ...(branchTag.tag === undefined ? {} : { tag: branchTag.tag }),
   };
+}
+
+function parseGithubPushWebhook(payload: WebhookPayload, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined; sourceIdentity: VcsSourceIdentity }>): WebhookDetails | undefined {
+  const ref = requiredString(payload["ref"]);
+  const commitSha = requiredString(payload["after"]);
+  const headCommit = asRecord(payload["head_commit"]);
+  const commitMessage = requiredString(headCommit?.["message"]);
+  const commitUrl = requiredString(headCommit?.["url"]);
+  const filesChanged = changedFiles(payload);
+  if (validateGithubPushFields(ref, commitSha, commitMessage, commitUrl, filesChanged) !== undefined) return undefined;
+  if (ref === undefined || commitSha === undefined || commitMessage === undefined || commitUrl === undefined || filesChanged === undefined) return undefined;
+  const branchTag = parseRefBranchTag(ref);
+  if (branchTag === undefined) return undefined;
+  if (branchTag.branch !== undefined && filesChanged.size === 0) return undefined;
+  return buildGithubPushDetails(branchTag, base, commitMessage, commitSha, commitUrl, filesChanged);
 }
 
 function validateGithubPrFields(branch: string | undefined, commitSha: string | undefined, commitMessage: string | undefined, commitUrl: string | undefined, pullRequestNumber: unknown): string | undefined {
@@ -410,19 +416,7 @@ function validateGitlabMrFields(branch: string | undefined, commitSha: string | 
   return undefined;
 }
 
-function parseGitlabMergeRequestWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
-  const attributes = asRecord(payload["object_attributes"]);
-  const action = attributes?.["action"];
-  if (!["open", "reopen", "update"].includes(typeof action === "string" ? action : "")) return undefined;
-  const lastCommit = asRecord(attributes?.["last_commit"]);
-  const branch = requiredString(attributes?.["source_branch"]);
-  const targetBranch = requiredString(attributes?.["target_branch"]);
-  const commitSha = requiredString(lastCommit?.["id"]);
-  const commitMessage = resolveGitlabMrCommitMessage(attributes, lastCommit);
-  const commitUrl = resolveGitlabMrCommitUrl(attributes, lastCommit);
-  const pullRequestNumber = attributes?.["iid"];
-  if (validateGitlabMrFields(branch, commitSha, commitUrl, pullRequestNumber) !== undefined) return undefined;
-  if (branch === undefined || commitSha === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
+function buildPullRequestDetails(branch: string, targetBranch: string | undefined, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity, commitMessage: string, commitSha: string, commitUrl: string, pullRequestNumber: number): ParsedProviderWebhook {
   return {
     kind: "pull_request",
     details: {
@@ -441,6 +435,22 @@ function parseGitlabMergeRequestWebhook(payload: WebhookPayload, repoFullName: s
   };
 }
 
+function parseGitlabMergeRequestWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
+  const attributes = asRecord(payload["object_attributes"]);
+  const action = attributes?.["action"];
+  if (!["open", "reopen", "update"].includes(typeof action === "string" ? action : "")) return undefined;
+  const lastCommit = asRecord(attributes?.["last_commit"]);
+  const branch = requiredString(attributes?.["source_branch"]);
+  const targetBranch = requiredString(attributes?.["target_branch"]);
+  const commitSha = requiredString(lastCommit?.["id"]);
+  const commitMessage = resolveGitlabMrCommitMessage(attributes, lastCommit);
+  const commitUrl = resolveGitlabMrCommitUrl(attributes, lastCommit);
+  const pullRequestNumber = attributes?.["iid"];
+  if (validateGitlabMrFields(branch, commitSha, commitUrl, pullRequestNumber) !== undefined) return undefined;
+  if (branch === undefined || commitSha === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
+  return buildPullRequestDetails(branch, targetBranch, repoFullName, cloneUrl, senderUsername, sourceIdentity, commitMessage, commitSha, commitUrl, pullRequestNumber);
+}
+
 function extractBitbucketChanges(payload: WebhookPayload): unknown[] | undefined {
   const push = asRecord(payload["push"]);
   const changes = push?.["changes"];
@@ -456,25 +466,7 @@ function validateBitbucketPushFields(referenceType: string | undefined, referenc
   return undefined;
 }
 
-function parseBitbucketPushChange(
-  changeValue: unknown,
-  repoFullName: string,
-  cloneUrl: string,
-  senderUsername: string,
-  sourceIdentity: VcsSourceIdentity,
-): ParsedProviderWebhook | undefined {
-  const change = asRecord(changeValue);
-  const reference = asRecord(change?.["new"]);
-  const target = asRecord(reference?.["target"]);
-  const targetLinks = asRecord(target?.["links"]);
-  const html = asRecord(targetLinks?.["html"]);
-  const referenceType = requiredString(reference?.["type"]);
-  const referenceName = requiredString(reference?.["name"]);
-  const commitSha = requiredString(target?.["hash"]);
-  const commitMessage = requiredString(target?.["message"]) ?? "VCS push";
-  const commitUrl = requiredString(html?.["href"]);
-  if (validateBitbucketPushFields(referenceType, referenceName, commitSha, commitUrl) !== undefined) return undefined;
-  if ((referenceType !== "branch" && referenceType !== "tag") || referenceName === undefined || commitSha === undefined || commitUrl === undefined) return undefined;
+function buildBitbucketPushDetails(referenceType: "branch" | "tag", referenceName: string, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity, commitMessage: string, commitSha: string, commitUrl: string): ParsedProviderWebhook {
   return {
     kind: "push",
     details: {
@@ -489,6 +481,40 @@ function parseBitbucketPushChange(
       sourceIdentity,
     },
   };
+}
+
+function extractBitbucketPushFields(changeValue: unknown): {
+  referenceType: string | undefined;
+  referenceName: string | undefined;
+  commitSha: string | undefined;
+  commitMessage: string;
+  commitUrl: string | undefined;
+} {
+  const change = asRecord(changeValue);
+  const reference = asRecord(change?.["new"]);
+  const target = asRecord(reference?.["target"]);
+  const targetLinks = asRecord(target?.["links"]);
+  const html = asRecord(targetLinks?.["html"]);
+  return {
+    referenceType: requiredString(reference?.["type"]),
+    referenceName: requiredString(reference?.["name"]),
+    commitSha: requiredString(target?.["hash"]),
+    commitMessage: requiredString(target?.["message"]) ?? "VCS push",
+    commitUrl: requiredString(html?.["href"]),
+  };
+}
+
+function parseBitbucketPushChange(
+  changeValue: unknown,
+  repoFullName: string,
+  cloneUrl: string,
+  senderUsername: string,
+  sourceIdentity: VcsSourceIdentity,
+): ParsedProviderWebhook | undefined {
+  const { referenceType, referenceName, commitSha, commitMessage, commitUrl } = extractBitbucketPushFields(changeValue);
+  if (validateBitbucketPushFields(referenceType, referenceName, commitSha, commitUrl) !== undefined) return undefined;
+  if ((referenceType !== "branch" && referenceType !== "tag") || referenceName === undefined || commitSha === undefined || commitUrl === undefined) return undefined;
+  return buildBitbucketPushDetails(referenceType, referenceName, repoFullName, cloneUrl, senderUsername, sourceIdentity, commitMessage, commitSha, commitUrl);
 }
 
 function parseBitbucketPushWebhooks(
@@ -527,37 +553,35 @@ function resolveBitbucketPrCommitUrl(pullRequest: Readonly<Record<string, unknow
   return requiredString(commitHtml?.["href"]);
 }
 
-function parseBitbucketPullRequestWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
+function extractBitbucketPrFields(payload: WebhookPayload): {
+  branch: string | undefined;
+  targetBranch: string | undefined;
+  commitSha: string | undefined;
+  commitMessage: string;
+  commitUrl: string | undefined;
+  pullRequestNumber: unknown;
+} {
   const pullRequest = asRecord(payload["pullrequest"]);
   const source = asRecord(pullRequest?.["source"]);
   const destination = asRecord(pullRequest?.["destination"]);
   const branchValue = asRecord(source?.["branch"]);
   const destinationBranch = asRecord(destination?.["branch"]);
   const commit = asRecord(source?.["commit"]);
-  const branch = requiredString(branchValue?.["name"]);
-  const targetBranch = requiredString(destinationBranch?.["name"]);
-  const commitSha = requiredString(commit?.["hash"]);
-  const commitMessage = requiredString(pullRequest?.["title"]) ?? "Pull request";
-  const commitUrl = resolveBitbucketPrCommitUrl(pullRequest, commit);
-  const pullRequestNumber = pullRequest?.["id"];
+  return {
+    branch: requiredString(branchValue?.["name"]),
+    targetBranch: requiredString(destinationBranch?.["name"]),
+    commitSha: requiredString(commit?.["hash"]),
+    commitMessage: requiredString(pullRequest?.["title"]) ?? "Pull request",
+    commitUrl: resolveBitbucketPrCommitUrl(pullRequest, commit),
+    pullRequestNumber: pullRequest?.["id"],
+  };
+}
+
+function parseBitbucketPullRequestWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
+  const { branch, targetBranch, commitSha, commitMessage, commitUrl, pullRequestNumber } = extractBitbucketPrFields(payload);
   if (validateBitbucketPrFields(branch, commitSha, commitUrl, pullRequestNumber) !== undefined) return undefined;
   if (branch === undefined || commitSha === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
-  return {
-    kind: "pull_request",
-    details: {
-      branch,
-      ...(targetBranch === undefined ? {} : { targetBranch }),
-      cloneUrl,
-      commitMessage,
-      commitSha,
-      commitUrl,
-      filesChanged: new Set<string>(),
-      pullRequestNumber,
-      repoFullName,
-      senderUsername,
-      sourceIdentity,
-    },
-  };
+  return buildPullRequestDetails(branch, targetBranch, repoFullName, cloneUrl, senderUsername, sourceIdentity, commitMessage, commitSha, commitUrl, pullRequestNumber);
 }
 
 function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetails | undefined {
@@ -606,7 +630,12 @@ function bitbucketCloneUrl(repository: Readonly<Record<string, unknown>>): strin
   return undefined;
 }
 
-function bitbucketWebhook(eventName: string, payload: WebhookPayload): readonly ParsedProviderWebhook[] | undefined {
+function resolveBitbucketIdentity(payload: WebhookPayload): {
+  repoFullName: string;
+  cloneUrl: string;
+  senderUsername: string;
+  sourceIdentity: VcsSourceIdentity;
+} | undefined {
   const repository = asRecord(payload["repository"]);
   const actor = asRecord(payload["actor"]);
   const repoFullName = requiredString(repository?.["full_name"]);
@@ -617,6 +646,13 @@ function bitbucketWebhook(eventName: string, payload: WebhookPayload): readonly 
   if (senderUsername === undefined) return undefined;
   const sourceIdentity = vcsSourceIdentity("bitbucket", cloneUrl);
   if (sourceIdentity === undefined) return undefined;
+  return { repoFullName, cloneUrl, senderUsername, sourceIdentity };
+}
+
+function bitbucketWebhook(eventName: string, payload: WebhookPayload): readonly ParsedProviderWebhook[] | undefined {
+  const identity = resolveBitbucketIdentity(payload);
+  if (identity === undefined) return undefined;
+  const { repoFullName, cloneUrl, senderUsername, sourceIdentity } = identity;
   if (eventName === "repo:push") return parseBitbucketPushWebhooks(payload, repoFullName, cloneUrl, senderUsername, sourceIdentity);
   if (eventName === "pullrequest:created" || eventName === "pullrequest:updated") {
     const parsed = parseBitbucketPullRequestWebhook(payload, repoFullName, cloneUrl, senderUsername, sourceIdentity);
@@ -1631,6 +1667,35 @@ async function latestCommitSha(workspace: DeepReadonly<typeof workspaces.$inferS
 }
 
 /** Create a configuration version from VCS for a manual run, fetching the latest code on the default branch. */
+async function resolveVcsSource(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  vcs: DeepReadonly<NonNullable<typeof workspaces.$inferSelect["vcsRepo"]>>,
+): Promise<string> {
+  if (vcs.githubAppInstallationId !== undefined && vcs.githubAppInstallationId !== "") {
+    return "github";
+  }
+  if (vcs.oauthTokenId === undefined || vcs.oauthTokenId === "") {
+    return "tfe-api";
+  }
+  const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, vcs.oauthTokenId) });
+  if (token === undefined) return "tfe-api";
+  const client = await db.query.oauthClients.findFirst({
+    where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
+  });
+  return providerForServiceProvider(client?.serviceProvider ?? "") ?? "tfe-api";
+}
+
+function buildVcsCommitUrl(
+  identity: Awaited<ReturnType<typeof configuredVcsSource>>,
+  vcsIdentifier: string,
+  sha: string,
+): string | undefined {
+  if (identity === undefined) return undefined;
+  const repositoryPath = vcsIdentifier.split("/").map(encodeURIComponent).join("/");
+  const commitPath = identity.provider === "gitlab" ? "-/commit" : identity.provider === "bitbucket" ? "commits" : "commit";
+  return `https://${identity.host}/${repositoryPath}/${commitPath}/${encodeURIComponent(sha)}`;
+}
+
 export async function createConfigurationVersionFromVcs(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
 ): Promise<string | { error: string }> {
@@ -1642,24 +1707,10 @@ export async function createConfigurationVersionFromVcs(
   if (sha === undefined) return { error: "Failed to retrieve the latest commit from VCS. Check VCS credentials." };
 
   // Determine the VCS source
-  let source = "tfe-api";
-  if (vcs.githubAppInstallationId !== undefined && vcs.githubAppInstallationId !== "") {
-    source = "github";
-  } else if (vcs.oauthTokenId !== undefined && vcs.oauthTokenId !== "") {
-    const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, vcs.oauthTokenId) });
-    if (token !== undefined) {
-      const client = await db.query.oauthClients.findFirst({
-        where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
-      });
-      const provider = providerForServiceProvider(client?.serviceProvider ?? "");
-      source = provider ?? "tfe-api";
-    }
-  }
+  const source = await resolveVcsSource(workspace, vcs);
 
   const identity = await configuredVcsSource(workspace);
-  const repositoryPath = vcs.identifier.split("/").map(encodeURIComponent).join("/");
-  const commitPath = identity?.provider === "gitlab" ? "-/commit" : identity?.provider === "bitbucket" ? "commits" : "commit";
-  const commitUrl = identity === undefined ? undefined : `https://${identity.host}/${repositoryPath}/${commitPath}/${encodeURIComponent(sha)}`;
+  const commitUrl = buildVcsCommitUrl(identity, vcs.identifier, sha);
 
   const cvId = newResourceId("cv");
   await db.insert(configurationVersions).values({
@@ -1691,6 +1742,35 @@ export function clearDefaultBranchCacheForTests(): void {
   defaultBranchCache.clear();
 }
 
+async function resolveExpectedBranch(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  vcsRepo: DeepReadonly<NonNullable<typeof workspaces.$inferSelect["vcsRepo"]>>,
+  configuredSource?: VcsSourceIdentity,
+): Promise<string | undefined> {
+  if (vcsRepo.branch !== undefined && vcsRepo.branch !== "") return vcsRepo.branch;
+  const source = configuredSource ?? await configuredVcsSource(workspace);
+  const connectionId = vcsRepo.githubAppInstallationId ?? vcsRepo.oauthTokenId ?? "unknown";
+  const sourceKey = source === undefined
+    ? "unknown"
+    : `${source.provider}:${source.host}:${source.installationId ?? "oauth"}:${connectionId}`;
+  const cacheKey = `${workspace.orgId}:${sourceKey}:${vcsRepo.identifier ?? ""}`;
+  const now = Date.now();
+  const cached = defaultBranchCache.get(cacheKey);
+  let expectedBranch: string | undefined;
+  if (cached !== undefined && cached.expiresAt > now) {
+    expectedBranch = cached.value;
+  } else {
+    if (cached !== undefined) defaultBranchCache.delete(cacheKey);
+    expectedBranch = await fetchDefaultBranch(workspace);
+    defaultBranchCache.set(cacheKey, {
+      value: expectedBranch,
+      expiresAt: now + (expectedBranch === undefined ? DEFAULT_BRANCH_NEGATIVE_TTL_MS : DEFAULT_BRANCH_CACHE_TTL_MS),
+    });
+  }
+  if (expectedBranch === undefined || expectedBranch === "") return undefined;
+  return expectedBranch;
+}
+
 async function matchesConfiguredBranch(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
@@ -1705,28 +1785,8 @@ async function matchesConfiguredBranch(
   // feat/* push into a real applyable run (run-157ebcd9cff343). Resolve the
   // default branch via the provider API and compare; fail closed if it
   // cannot be determined so we never mis-route a push.
-  let expectedBranch = vcsRepo.branch;
-  if (expectedBranch === undefined || expectedBranch === "") {
-    const source = configuredSource ?? await configuredVcsSource(workspace);
-    const connectionId = vcsRepo.githubAppInstallationId ?? vcsRepo.oauthTokenId ?? "unknown";
-    const sourceKey = source === undefined
-      ? "unknown"
-      : `${source.provider}:${source.host}:${source.installationId ?? "oauth"}:${connectionId}`;
-    const cacheKey = `${workspace.orgId}:${sourceKey}:${vcsRepo.identifier ?? ""}`;
-    const now = Date.now();
-    const cached = defaultBranchCache.get(cacheKey);
-    if (cached !== undefined && cached.expiresAt > now) {
-      expectedBranch = cached.value;
-    } else {
-      if (cached !== undefined) defaultBranchCache.delete(cacheKey);
-      expectedBranch = await fetchDefaultBranch(workspace);
-      defaultBranchCache.set(cacheKey, {
-        value: expectedBranch,
-        expiresAt: now + (expectedBranch === undefined ? DEFAULT_BRANCH_NEGATIVE_TTL_MS : DEFAULT_BRANCH_CACHE_TTL_MS),
-      });
-    }
-    if (expectedBranch === undefined || expectedBranch === "") return false;
-  }
+  const expectedBranch = await resolveExpectedBranch(workspace, vcsRepo, configuredSource);
+  if (expectedBranch === undefined) return false;
   // PR/MR events are matched against the target (base) branch: a workspace
   // pinned to `main` must trigger on PRs/MRs from feature branches that
   // target main, not on the source branch name (kanban 1.6).

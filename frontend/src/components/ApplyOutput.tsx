@@ -85,31 +85,177 @@ type DerivedApplyOutput = Readonly<{
   filteredResources: ResourceChange[];
 }>;
 
+function finalExecState(op: Operation): ExecutionState {
+  return op === "create" ? "created" :
+    op === "update" ? "modified" :
+    op === "delete" ? "destroyed" :
+    op === "replace" ? "replaced" :
+    op === "import" ? "imported" :
+    op === "move" ? "moved" : "removed";
+}
+
+function seedExecMap(
+  resources: readonly ResourceChange[],
+  applyFinished: boolean,
+  applyFailed: boolean,
+): Map<string, ResourceExecutionInfo> {
+  const map = new Map<string, ResourceExecutionInfo>();
+  for (const resource of resources) {
+    const op = operationForResource(resource);
+    if (op === "no-op" || op === "read") continue;
+    if (applyFinished && !applyFailed) {
+      map.set(resource.address, { state: finalExecState(op) });
+    } else {
+      map.set(resource.address, { state: "pending" });
+    }
+  }
+  return map;
+}
+
+function hookResourceAddr(json: JsonObject): string | undefined {
+  const hook = isRecord(json["hook"]) ? json["hook"] : undefined;
+  const rawResource = hook?.["resource"];
+  const resObj = isRecord(rawResource) ? rawResource : undefined;
+  const rawAddr = resObj?.["addr"];
+  return isString(rawAddr) ? rawAddr : undefined;
+}
+
+function applyStartState(hook: JsonObject | undefined): ExecutionState {
+  const rawAction = hook?.["action"];
+  const act = isString(rawAction) ? rawAction : "";
+  return act === "create" ? "creating" :
+    act === "update" ? "modifying" :
+    act === "delete" ? "destroying" : "creating";
+}
+
+function applyCompleteResult(hook: JsonObject | undefined): { state: ExecutionState; resourceId: string | undefined } {
+  const rawAction = hook?.["action"];
+  const act = isString(rawAction) ? rawAction : "";
+  const rawIdValue = hook?.["id_value"];
+  const idVal = isString(rawIdValue) ? rawIdValue : undefined;
+  const st: ExecutionState =
+    act === "create" ? "created" :
+    act === "update" ? "modified" :
+    act === "delete" ? "destroyed" : "created";
+  return { state: st, resourceId: idVal };
+}
+
+function applyJsonLineToMap(map: Map<string, ResourceExecutionInfo>, line: string): boolean {
+  try {
+// SAFETY: the fixture object is read as a record; each field is typed below.
+    const json = JSON.parse(line) as JsonObject;
+    const addr = hookResourceAddr(json);
+    if (addr === undefined || !map.has(addr)) return true;
+    const hook = isRecord(json["hook"]) ? json["hook"] : undefined;
+    const type = json["type"];
+    if (type === "apply_start") {
+      map.set(addr, { state: applyStartState(hook) });
+    } else if (type === "apply_progress") {
+      const current = map.get(addr);
+      const rawElapsed = hook?.["elapsed_seconds"];
+      const elapsed = isNumber(rawElapsed) ? `${rawElapsed}s` : undefined;
+      if (current !== undefined) {
+        map.set(addr, { ...current, elapsed });
+      }
+    } else if (type === "apply_complete") {
+      const result = applyCompleteResult(hook);
+      map.set(addr, { state: result.state, resourceId: result.resourceId });
+    } else if (type === "apply_errored") {
+      map.set(addr, { state: "failed", error: "Apply errored" });
+    }
+    return true;
+  } catch { return false; }
+}
+
+function applyCreationLine(map: Map<string, ResourceExecutionInfo>, address: string, line: string): boolean {
+  if (line.includes(": Creating...")) {
+    map.set(address, { state: "creating" });
+    return true;
+  }
+  if (line.includes(": Creation complete after")) {
+    const match = /Creation complete after ([^[\s]+)/.exec(line);
+    const idMatch = /\[id=([^\]]+)\]/.exec(line);
+    map.set(address, { state: "created", elapsed: match?.[1], resourceId: idMatch?.[1] });
+    return true;
+  }
+  if (line.includes(": Still creating...")) {
+    const match = /\[(.*?) elapsed\]/.exec(line);
+    map.set(address, { state: "creating", elapsed: match?.[1] });
+    return true;
+  }
+  return false;
+}
+
+function applyModificationLine(map: Map<string, ResourceExecutionInfo>, address: string, line: string): boolean {
+  if (line.includes(": Modifying...")) {
+    map.set(address, { state: "modifying" });
+    return true;
+  }
+  if (line.includes(": Modifications complete after")) {
+    const match = /Modifications complete after ([^[\s]+)/.exec(line);
+    map.set(address, { state: "modified", elapsed: match?.[1] });
+    return true;
+  }
+  if (line.includes(": Still modifying...")) {
+    const match = /\[(.*?) elapsed\]/.exec(line);
+    map.set(address, { state: "modifying", elapsed: match?.[1] });
+    return true;
+  }
+  return false;
+}
+
+function applyDestructionLine(map: Map<string, ResourceExecutionInfo>, address: string, line: string): boolean {
+  if (line.includes(": Destroying...")) {
+    map.set(address, { state: "destroying" });
+    return true;
+  }
+  if (line.includes(": Destruction complete after")) {
+    const match = /Destruction complete after ([^[\s]+)/.exec(line);
+    map.set(address, { state: "destroyed", elapsed: match?.[1] });
+    return true;
+  }
+  if (line.includes(": Still destroying...")) {
+    const match = /\[(.*?) elapsed\]/.exec(line);
+    map.set(address, { state: "destroying", elapsed: match?.[1] });
+    return true;
+  }
+  return false;
+}
+
+function applyErrorLine(map: Map<string, ResourceExecutionInfo>, address: string, line: string): boolean {
+  if (line.includes(": Error") || line.includes("Error: ")) {
+    map.set(address, { state: "failed", error: line });
+    return true;
+  }
+  return false;
+}
+
+function applyTextLineToMap(map: Map<string, ResourceExecutionInfo>, line: string): void {
+  for (const address of map.keys()) {
+    if (!line.includes(address)) continue;
+    if (applyCreationLine(map, address, line)) continue;
+    if (applyModificationLine(map, address, line)) continue;
+    if (applyDestructionLine(map, address, line)) continue;
+    applyErrorLine(map, address, line);
+  }
+}
+
+function markInterruptedFailed(map: Map<string, ResourceExecutionInfo>, applyFailed: boolean): void {
+  if (!applyFailed) return;
+  for (const [address, current] of map.entries()) {
+    if (["creating", "modifying", "destroying", "replacing"].includes(current.state)) {
+      map.set(address, { state: "failed", error: "Apply failed during execution" });
+    }
+  }
+}
+
 function parseApplyLogsToExecMap(
   logs: string,
   resources: readonly ResourceChange[],
   applyFinished: boolean,
   applyFailed: boolean,
 ): Map<string, ResourceExecutionInfo> {
-  const map = new Map<string, ResourceExecutionInfo>();
-
-  for (const resource of resources) {
-    const op = operationForResource(resource);
-    if (op === "no-op" || op === "read") continue;
-
-    if (applyFinished && !applyFailed) {
-      const finalState: ExecutionState =
-        op === "create" ? "created" :
-        op === "update" ? "modified" :
-        op === "delete" ? "destroyed" :
-        op === "replace" ? "replaced" :
-        op === "import" ? "imported" :
-        op === "move" ? "moved" : "removed";
-      map.set(resource.address, { state: finalState });
-    } else {
-      map.set(resource.address, { state: "pending" });
-    }
-  }
+  const map = seedExecMap(resources, applyFinished, applyFailed);
 
   if (logs === "") return map;
 
@@ -119,92 +265,13 @@ function parseApplyLogsToExecMap(
     if (trimmed === "") continue;
 
     if (trimmed.startsWith("{")) {
-      try {
-// SAFETY: the fixture object is read as a record; each field is typed below.
-        const json = JSON.parse(trimmed) as JsonObject;
-        const type = json["type"];
-        const hook = isRecord(json["hook"]) ? json["hook"] : undefined;
-        const rawResource = hook?.["resource"];
-        const resObj = isRecord(rawResource) ? rawResource : undefined;
-        const rawAddr = resObj?.["addr"];
-        const addr = isString(rawAddr) ? rawAddr : undefined;
-
-        if (addr !== undefined && map.has(addr)) {
-          if (type === "apply_start") {
-            const rawAction = hook?.["action"];
-            const act = isString(rawAction) ? rawAction : "";
-            const st: ExecutionState =
-              act === "create" ? "creating" :
-              act === "update" ? "modifying" :
-              act === "delete" ? "destroying" : "creating";
-            map.set(addr, { state: st });
-          } else if (type === "apply_progress") {
-            const current = map.get(addr);
-            const rawElapsed = hook?.["elapsed_seconds"];
-            const elapsed = isNumber(rawElapsed) ? `${rawElapsed}s` : undefined;
-            if (current !== undefined) {
-              map.set(addr, { ...current, elapsed });
-            }
-          } else if (type === "apply_complete") {
-            const rawAction = hook?.["action"];
-            const act = isString(rawAction) ? rawAction : "";
-            const rawIdValue = hook?.["id_value"];
-            const idVal = isString(rawIdValue) ? rawIdValue : undefined;
-            const st: ExecutionState =
-              act === "create" ? "created" :
-              act === "update" ? "modified" :
-              act === "delete" ? "destroyed" : "created";
-            map.set(addr, { state: st, resourceId: idVal });
-          } else if (type === "apply_errored") {
-            map.set(addr, { state: "failed", error: "Apply errored" });
-          }
-        }
-        continue;
-      } catch {}
+      if (applyJsonLineToMap(map, trimmed)) continue;
     }
 
-    for (const address of map.keys()) {
-      if (!line.includes(address)) continue;
-
-      if (line.includes(": Creating...")) {
-        map.set(address, { state: "creating" });
-      } else if (line.includes(": Creation complete after")) {
-        const match = /Creation complete after ([^[\s]+)/.exec(line);
-        const elapsed = match?.[1];
-        const idMatch = /\[id=([^\]]+)\]/.exec(line);
-        map.set(address, { state: "created", elapsed, resourceId: idMatch?.[1] });
-      } else if (line.includes(": Modifying...")) {
-        map.set(address, { state: "modifying" });
-      } else if (line.includes(": Modifications complete after")) {
-        const match = /Modifications complete after ([^[\s]+)/.exec(line);
-        map.set(address, { state: "modified", elapsed: match?.[1] });
-      } else if (line.includes(": Destroying...")) {
-        map.set(address, { state: "destroying" });
-      } else if (line.includes(": Destruction complete after")) {
-        const match = /Destruction complete after ([^[\s]+)/.exec(line);
-        map.set(address, { state: "destroyed", elapsed: match?.[1] });
-      } else if (line.includes(": Still creating...")) {
-        const match = /\[(.*?) elapsed\]/.exec(line);
-        map.set(address, { state: "creating", elapsed: match?.[1] });
-      } else if (line.includes(": Still modifying...")) {
-        const match = /\[(.*?) elapsed\]/.exec(line);
-        map.set(address, { state: "modifying", elapsed: match?.[1] });
-      } else if (line.includes(": Still destroying...")) {
-        const match = /\[(.*?) elapsed\]/.exec(line);
-        map.set(address, { state: "destroying", elapsed: match?.[1] });
-      } else if (line.includes(": Error") || line.includes("Error: ")) {
-        map.set(address, { state: "failed", error: line });
-      }
-    }
+    applyTextLineToMap(map, line);
   }
 
-  if (applyFailed) {
-    for (const [address, current] of map.entries()) {
-      if (["creating", "modifying", "destroying", "replacing"].includes(current.state)) {
-        map.set(address, { state: "failed", error: "Apply failed during execution" });
-      }
-    }
-  }
+  markInterruptedFailed(map, applyFailed);
 
   return map;
 }

@@ -249,38 +249,60 @@ type ErrorContext = Readonly<{
   set: unknown;
 }>;
 
-export function handleAppError(context: ErrorContext & { request: { url: string } }): { errors: { status: string; title: string; detail?: string }[] } | string | undefined {
-  const { code, error, set, request } = context;
-  const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
-  const pathname = new URL(request.url).pathname;
+type MutableErrorSet = { status?: number | string; headers: Record<string, string | number> };
+
+type AppErrorDocument = { errors: { status: string; title: string; detail?: string }[] };
+
+function applyDurableJobBudgetStatus(error: DurableJobBudgetError, mutableSet: MutableErrorSet): void {
+  mutableSet.status = error.status;
+  if (error.status === 429 && error.admission.retryAfterMs !== null) {
+    mutableSet.headers["Retry-After"] = Math.ceil(error.admission.retryAfterMs / 1_000);
+  }
+}
+
+function resolveBodyTooLarge(error: unknown, code: unknown): BodyTooLargeError | null {
+  // Elysia wraps onParse failures in its own ParseError; the original is
+  // preserved as `cause` (elysia/dist/error.js ParseError).
+  if (error instanceof BodyTooLargeError) return error;
+  if (code === "PARSE" && error instanceof Error && error.cause instanceof BodyTooLargeError) return error.cause;
+  return null;
+}
+
+function applyAppErrorStatus(
+  error: unknown,
+  code: unknown,
+  mutableSet: MutableErrorSet,
+): { constraint: string | null; bodyTooLarge: BodyTooLargeError | null } {
   const constraint = databaseConstraint(error);
   if (constraint !== null) mutableSet.status = 409;
   if (error instanceof SettingsValidationError) mutableSet.status = error.status;
-  if (error instanceof DurableJobBudgetError) {
-    mutableSet.status = error.status;
-    if (error.status === 429 && error.admission.retryAfterMs !== null) {
-      mutableSet.headers["Retry-After"] = Math.ceil(error.admission.retryAfterMs / 1_000);
-    }
-  }
-  // Elysia wraps onParse failures in its own ParseError; the original is
-  // preserved as `cause` (elysia/dist/error.js ParseError).
-  const bodyTooLarge = error instanceof BodyTooLargeError ? error
-    : code === "PARSE" && error instanceof Error && error.cause instanceof BodyTooLargeError ? error.cause : null;
+  if (error instanceof DurableJobBudgetError) applyDurableJobBudgetStatus(error, mutableSet);
+  return { constraint, bodyTooLarge: resolveBodyTooLarge(error, code) };
+}
+
+function settleErrorRequestMetrics(
+  request: { url: string },
+  code: unknown,
+  setStatus: number | string | undefined,
+  bodyTooLarge: BodyTooLargeError | null,
+): void {
   // Error path: the request never reached onAfterHandle, so settle the
   // in-flight counter here instead (same WeakMap consumption rule). The
   // status mirrors the branch logic below so 404/422/400/413 do not count
   // as 5xx.
   const errored = requestMeta.get(request as unknown as Request);
-  if (errored !== undefined) {
-    const status = code === "NOT_FOUND" ? 404
-      : code === "VALIDATION" ? 422
-        : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? (bodyTooLarge !== null ? 413 : 400)
-          : typeof mutableSet.status === "number" ? mutableSet.status : 500;
-    recordRequestLatency(errored.path, Date.now() - errored.startTime);
-    requestFinished(status);
-    requestMeta.delete(request as unknown as Request);
-    resetAuditRequest();
-  }
+  if (errored === undefined) return;
+  const status = code === "NOT_FOUND" ? 404
+    : code === "VALIDATION" ? 422
+      : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? (bodyTooLarge !== null ? 413 : 400)
+        : typeof setStatus === "number" ? setStatus : 500;
+  recordRequestLatency(errored.path, Date.now() - errored.startTime);
+  requestFinished(status);
+  requestMeta.delete(request as unknown as Request);
+  resetAuditRequest();
+}
+
+function formatKnownAppError(error: unknown): AppErrorDocument | null {
   if (error instanceof SettingsValidationError) {
     return { errors: [{ status: String(error.status), title: error.status === 422 ? "Unprocessable Entity" : "Service Unavailable", detail: error.message }] };
   }
@@ -293,45 +315,42 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
       }],
     };
   }
-  if (constraint !== null) {
-    mutableSet.headers["Content-Type"] = "application/vnd.api+json";
-    return { errors: [{ status: "409", title: "Conflict", detail: constraint === "unique" ? "A resource with these unique attributes already exists" : "The operation conflicts with a related resource" }] };
-  }
-  if (code === "NOT_FOUND") {
-    if (!(pathname === "/api" || pathname.startsWith("/api/"))) {
-      mutableSet.status = 404;
-      mutableSet.headers["Content-Type"] = "text/html; charset=utf-8";
-      return frontend404Html ?? "Not Found";
-    }
-    mutableSet.headers["Content-Type"] = "application/vnd.api+json";
+  return null;
+}
+
+function formatNotFoundAppError(pathname: string, mutableSet: MutableErrorSet): AppErrorDocument | string {
+  if (!(pathname === "/api" || pathname.startsWith("/api/"))) {
     mutableSet.status = 404;
-    // Issue #643: unknown API paths are usually provider clients probing
-    // for TFE surface Terrence never promised; say the scope outright.
-    return { errors: [{ status: "404", title: "Not Found", detail: COMPATIBILITY_PROMISE }] };
+    mutableSet.headers["Content-Type"] = "text/html; charset=utf-8";
+    return frontend404Html ?? "Not Found";
   }
   mutableSet.headers["Content-Type"] = "application/vnd.api+json";
-  if (bodyTooLarge !== null) {
-    mutableSet.status = 413;
-    return {
-      errors: [{
-        status: "413",
-        title: "Payload Too Large",
-        detail: `${bodyTooLarge.message} for this endpoint`,
-      }],
-    };
-  }
+  mutableSet.status = 404;
+  // Issue #643: unknown API paths are usually provider clients probing
+  // for TFE surface Terrence never promised; say the scope outright.
+  return { errors: [{ status: "404", title: "Not Found", detail: COMPATIBILITY_PROMISE }] };
+}
+
+function formatClientAppError(code: unknown, mutableSet: MutableErrorSet): AppErrorDocument | null {
   const clientStatus = code === "VALIDATION" ? 422
     : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? 400
       : null;
-  if (clientStatus !== null) {
-    mutableSet.status = clientStatus;
-    return {
-      errors: [{
-        status: String(clientStatus),
-        title: clientStatus === 422 ? "Unprocessable Content" : "Bad Request",
-      }],
-    };
-  }
+  if (clientStatus === null) return null;
+  mutableSet.status = clientStatus;
+  return {
+    errors: [{
+      status: String(clientStatus),
+      title: clientStatus === 422 ? "Unprocessable Content" : "Bad Request",
+    }],
+  };
+}
+
+function formatFallbackAppError(
+  code: unknown,
+  pathname: string,
+  error: unknown,
+  mutableSet: MutableErrorSet,
+): AppErrorDocument {
   mutableSet.status = 500;
   log.error("Unhandled request error", {
     code,
@@ -346,6 +365,48 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
       detail: "An unexpected error occurred",
     }],
   };
+}
+
+function formatAppErrorResponse(
+  error: unknown,
+  code: unknown,
+  pathname: string,
+  constraint: string | null,
+  bodyTooLarge: BodyTooLargeError | null,
+  mutableSet: MutableErrorSet,
+): AppErrorDocument | string | undefined {
+  const known = formatKnownAppError(error);
+  if (known !== null) return known;
+  if (constraint !== null) {
+    mutableSet.headers["Content-Type"] = "application/vnd.api+json";
+    return { errors: [{ status: "409", title: "Conflict", detail: constraint === "unique" ? "A resource with these unique attributes already exists" : "The operation conflicts with a related resource" }] };
+  }
+  if (code === "NOT_FOUND") {
+    return formatNotFoundAppError(pathname, mutableSet);
+  }
+  mutableSet.headers["Content-Type"] = "application/vnd.api+json";
+  if (bodyTooLarge !== null) {
+    mutableSet.status = 413;
+    return {
+      errors: [{
+        status: "413",
+        title: "Payload Too Large",
+        detail: `${bodyTooLarge.message} for this endpoint`,
+      }],
+    };
+  }
+  const client = formatClientAppError(code, mutableSet);
+  if (client !== null) return client;
+  return formatFallbackAppError(code, pathname, error, mutableSet);
+}
+
+export function handleAppError(context: ErrorContext & { request: { url: string } }): { errors: { status: string; title: string; detail?: string }[] } | string | undefined {
+  const { code, error, set, request } = context;
+  const mutableSet = set as MutableErrorSet;
+  const pathname = new URL(request.url).pathname;
+  const { constraint, bodyTooLarge } = applyAppErrorStatus(error, code, mutableSet);
+  settleErrorRequestMetrics(request, code, mutableSet.status, bodyTooLarge);
+  return formatAppErrorResponse(error, code, pathname, constraint, bodyTooLarge, mutableSet);
 }
 
 type PasswordGuardContext = Readonly<{
@@ -504,64 +565,353 @@ const RATE_LIMIT_ERROR_RESPONSE = new Response(
 
 
 
+function classifyResponseDocument(
+  response: AfterHandleContext["response"],
+): { isJsonDocument: boolean; isErrorDocument: boolean; responseObject: Record<string, unknown> | null; responseHeaders: Headers | null } {
+  const isJsonDocument = response !== null
+    && typeof response === "object"
+    && (Array.isArray(response) || Object.getPrototypeOf(response) === Object.prototype);
+  const responseObject = isJsonDocument ? response as Record<string, unknown> : null;
+  const isErrorDocument = responseObject !== null && Array.isArray(responseObject["errors"]);
+  const responseHeaders = response instanceof Response ? response.headers : null;
+  return { isJsonDocument, isErrorDocument, responseObject, responseHeaders };
+}
+
+function resolveResponseContentType(
+  set: AfterHandleContext["set"],
+  responseHeaders: Headers | null,
+): string | null {
+  const configuredContentType = set.headers["Content-Type"] ?? set.headers["content-type"];
+  return responseHeaders?.get("content-type")
+    ?? (configuredContentType === undefined ? null : String(configuredContentType));
+}
+
+function resolveAfterHandleStatus(
+  response: AfterHandleContext["response"],
+  set: AfterHandleContext["set"],
+): number {
+  return response instanceof Response
+    ? response.status
+    : typeof set.status === "number" ? set.status : Number.parseInt(String(set.status), 10) || 200;
+}
+
+function checkJsonApiResponse(
+  pathname: string,
+  isJsonDocument: boolean,
+  isErrorDocument: boolean,
+  declaredContentType: string | null,
+  responseStatus: number,
+  acceptHeader: string | null,
+): { isJsonApiDocument: boolean; isJsonApiResponse: boolean; unacceptable: boolean } {
+  const isJsonApiDocument = (isJsonApiResponsePath(pathname) || isErrorDocument)
+    && isJsonDocument
+    && (declaredContentType === null || isJsonApiResponseContentType(declaredContentType));
+  const isExplicitJsonApiResponse = isJsonApiResponseContentType(declaredContentType);
+  const isJsonApiResponse = isJsonApiResponsePath(pathname)
+    && responseStatus !== 204
+    && !(responseStatus >= 300 && responseStatus < 400)
+    && (isJsonApiDocument || isExplicitJsonApiResponse);
+  const unacceptable = isJsonApiResponse && !acceptsJsonApi(acceptHeader);
+  return { isJsonApiDocument, isJsonApiResponse, unacceptable };
+}
+
+function recordAfterHandleMetrics(
+  request: AfterHandleContext["request"],
+  response: AfterHandleContext["response"],
+  set: AfterHandleContext["set"],
+  unacceptable: boolean,
+): void {
+  const meta = requestMeta.get(request as unknown as Request);
+  if (meta === undefined) return;
+  const duration = Date.now() - meta.startTime;
+  const method = meta.method;
+  const path = meta.path;
+  const status = unacceptable ? 406 : set.status ?? (response instanceof Response ? response.status : 200);
+  const numericStatus = typeof status === "number" ? status : Number.parseInt(String(status), 10) || 200;
+  recordRequestLatency(path, duration);
+  requestFinished(numericStatus);
+  // Idempotent bookkeeping: the WeakMap entry is consumed here so an
+  // error path (onError) can never double-count the same request.
+  requestMeta.delete(request as unknown as Request);
+  resetAuditRequest();
+  if (path.startsWith("/api/")) {
+    // Canonical log line (loggingsucks.com wide-event pattern): one
+    // context-rich record per request instead of scattered statements.
+    log.info("request completed", {
+      requestId: meta.correlationId,
+      http: {
+        method,
+        path: redactPathSecrets(path),
+        status: numericStatus,
+        durationMs: duration,
+      },
+      // High-cardinality route bucket (no ids) so aggregations group
+      // cleanly; the raw path stays available for exact search except
+      // for redacted bearer segments (issue #609).
+      routeBucket: method + " " + pathnameBucket(path),
+      outcome: numericStatus < 400 ? "success" : numericStatus < 500 ? "client-error" : "server-error",
+    });
+  }
+}
+
+function applyTransportSecurityHeaders(
+  headers: Record<string, string | number>,
+  pathname: string,
+  request: AfterHandleContext["request"],
+): void {
+  try {
+    if (shouldSendHsts(request)) {
+      if (headers["Strict-Transport-Security"] === undefined) headers["Strict-Transport-Security"] = HSTS_VALUE;
+    }
+  } catch { /* HSTS is best-effort */ }
+  if (headers["Content-Type"] === undefined) {
+    const mime = staticMimeFor(pathname);
+    if (mime !== undefined) headers["Content-Type"] = mime;
+  }
+}
+
+function applyCacheVaryHeaders(
+  headers: Record<string, string | number>,
+  pathname: string,
+  request: AfterHandleContext["request"],
+): void {
+  const cacheControl = staticCacheControl(pathname);
+  if (cacheControl !== undefined) {
+    headers["Cache-Control"] = cacheControl;
+  } else if ((pathname === "/api" || pathname.startsWith("/api/")) && headers["Cache-Control"] === undefined) {
+    // Control-plane API responses can carry secrets/state; never let a
+    // browser or shared cache persist them (avatar images set their own
+    // Cache-Control intentionally, so we don't override those).
+    headers["Cache-Control"] = "no-store";
+  }
+
+  // When an Origin is reflected (or the server may vary by origin), the
+  // response MUST advertise that with Vary: Origin or shared caches will
+  // serve one origin's CORS decision to everyone.
+  const originHeader = request.headers.get("origin");
+  const corsConfigured = executionSetting("CORS_ORIGIN").length > 0;
+  if (originHeader !== null || corsConfigured) {
+    const { Vary: existingVary } = headers;
+    headers["Vary"] = existingVary === undefined ? "Origin" : `${String(existingVary)}, Origin`;
+  }
+}
+
+function applyDeprecationHeaders(headers: Record<string, string | number>, pathname: string): void {
+  if (pathname.startsWith("/api/v1/support-bundle-requests")) {
+    if (headers["Deprecation"] === undefined) headers["Deprecation"] = "true";
+    if (headers["Sunset"] === undefined) headers["Sunset"] = "Sat, 31 Dec 2028 23:59:59 GMT";
+    if (headers["Link"] === undefined) headers["Link"] = "</api/v1/support/bundle-requests>; rel=\"successor-version\"";
+  }
+}
+
+function enforceJsonApiAccept(
+  headers: Record<string, string | number>,
+  set: AfterHandleContext["set"],
+  isJsonApiDocument: boolean,
+  unacceptable: boolean,
+): Response | null {
+  if (isJsonApiDocument) {
+    headers["Content-Type"] = JSON_API_MEDIA_TYPE;
+  }
+  if (!unacceptable) return null;
+  headers["Content-Type"] = JSON_API_MEDIA_TYPE;
+  const vary = String(headers["Vary"] ?? "");
+  if (!vary.split(",").some((value): boolean => value.trim().toLowerCase() === "accept")) {
+    headers["Vary"] = vary === "" ? "Accept" : `${vary}, Accept`;
+  }
+  (set as { status: number }).status = 406;
+  const errorHeaders = new Headers();
+  for (const [name, value] of Object.entries(headers)) errorHeaders.set(name, String(value));
+  return new Response(JSON.stringify(mediaTypeError(406, `The Accept header must allow ${JSON_API_MEDIA_TYPE}`)), {
+    status: 406,
+    headers: errorHeaders,
+  });
+}
+
+function applyRateLimitStandardHeaders(
+  headers: Record<string, string | number>,
+  set: AfterHandleContext["set"],
+  responseHeaders: Headers | null,
+): void {
+  const limit = responseHeaders?.get("RateLimit-Limit") ?? set.headers["RateLimit-Limit"];
+  const remaining = responseHeaders?.get("RateLimit-Remaining") ?? set.headers["RateLimit-Remaining"];
+  if (limit !== undefined && limit !== null) headers["X-RateLimit-Limit"] = limit;
+  if (remaining !== undefined && remaining !== null) headers["X-RateLimit-Remaining"] = remaining;
+}
+
+function passthroughRateLimitRetryAfter(
+  headers: Record<string, string | number>,
+  responseHeaders: Headers | null,
+): void {
+  const responseRetryAfter = responseHeaders?.get("Retry-After");
+  if (responseRetryAfter !== undefined && responseRetryAfter !== null && headers["Retry-After"] === undefined) {
+    headers["Retry-After"] = responseRetryAfter;
+  }
+}
+
+function resolveRateLimitReset(
+  set: AfterHandleContext["set"],
+  responseHeaders: Headers | null,
+): string | number | null | undefined {
+  return responseHeaders?.get("RateLimit-Reset") ?? set.headers["RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset-At"];
+}
+
+function resolveRetryAfterSeconds(reset: string | number | null | undefined): number | null {
+  if (reset === undefined || reset === null) return null;
+  const asNum = Number(reset);
+  if (Number.isFinite(asNum) && asNum > 0) {
+    return asNum > 1_000_000_000 ? Math.max(1, Math.ceil((asNum - Date.now()) / 1000)) : Math.max(1, Math.ceil(asNum));
+  }
+  const asDate = Date.parse(String(reset));
+  if (!Number.isNaN(asDate)) return Math.max(1, Math.ceil((asDate - Date.now()) / 1000));
+  return null;
+}
+
+function applyRetryAfterFallback(
+  headers: Record<string, string | number>,
+  set: AfterHandleContext["set"],
+  responseHeaders: Headers | null,
+): void {
+  if ((set.status === 429 || String(set.status) === "429") && headers["Retry-After"] === undefined) {
+    const reset = resolveRateLimitReset(set, responseHeaders);
+    headers["Retry-After"] = String(resolveRetryAfterSeconds(reset) ?? 60);
+    if (headers["X-RateLimit-Reset"] === undefined && reset !== undefined && reset !== null) headers["X-RateLimit-Reset"] = String(reset);
+  }
+}
+
+function handleIfNoneMatch(
+  request: AfterHandleContext["request"],
+  headers: Record<string, string | number>,
+  etag: string,
+): Response | null {
+  if (request.method !== "GET") return null;
+  const inm = request.headers.get("if-none-match");
+  if (inm === null || (inm !== etag && inm !== "*")) return null;
+  headers["ETag"] = etag;
+  return new Response(null, { status: 304, headers: headers as Record<string, string> });
+}
+
+function applyDocumentEtag(
+  request: AfterHandleContext["request"],
+  headers: Record<string, string | number>,
+  pathname: string,
+  isJsonDocument: boolean,
+  response: AfterHandleContext["response"],
+): Response | null {
+  if (!isJsonDocument || (pathname !== "/api" && !pathname.startsWith("/api/"))) return null;
+  try {
+    const etag = strongDocumentEtag(response);
+    if (headers["ETag"] === undefined) headers["ETag"] = etag;
+    return handleIfNoneMatch(request, headers, etag);
+  } catch (error: unknown) {
+    // ETag generation must never silently mask a failure — log at debug so operators can observe.
+    try { log.debug("ETag generation failed", { error: String(error) }); } catch {}
+  }
+  return null;
+}
+
+type AuthBeforeHandleContext = {
+  readonly request: Request;
+  readonly token: { readonly id?: string; readonly scopes?: string | null } | null;
+  readonly user: { readonly id: string; readonly isSiteAdmin: boolean | null } | null;
+  readonly orgId?: string | null;
+  readonly teamId?: string | null;
+  readonly run?: { readonly runId: string } | null;
+  readonly systemToken?: { readonly id: string } | null;
+  readonly set: unknown;
+};
+
+function publishTokenScopes(
+  token: AuthBeforeHandleContext["token"],
+  set: AuthBeforeHandleContext["set"],
+): Record<string, unknown> | undefined {
+  // Publish fine-grained token scopes into request-scoped storage BEFORE
+  // handlers run, so permission helpers enforce them automatically. Legacy
+  // tokens (scopes null/absent) resolve to null = full permissions.
+  // A malformed scopes field is an auth failure: fail closed (401) rather
+  // than silently escalating a scoped token to full permissions.
+  if (token === null || typeof token.scopes !== "string" || token.scopes === "") {
+    setRequestTokenScopes(null);
+    return undefined;
+  }
+  let parsed: TokenScopes | null;
+  try {
+    parsed = parseTokenScopes(token.scopes);
+  } catch {
+    (set as Record<string, unknown>)["status"] = 401;
+    return { errors: [{ status: "401", title: "Unauthorized", detail: "Token scopes are malformed" }] };
+  }
+  setRequestTokenScopes(parsed);
+  return undefined;
+}
+
+function hasAuthPrincipal(
+  token: AuthBeforeHandleContext["token"],
+  user: AuthBeforeHandleContext["user"],
+  orgId: AuthBeforeHandleContext["orgId"],
+  teamId: AuthBeforeHandleContext["teamId"],
+  run: AuthBeforeHandleContext["run"],
+  systemToken: AuthBeforeHandleContext["systemToken"],
+): boolean {
+  if (token !== null && token !== undefined) return true;
+  if (user !== null && user !== undefined) return true;
+  if (orgId !== null && orgId !== undefined) return true;
+  if (teamId !== null && teamId !== undefined) return true;
+  if (run !== null && run !== undefined) return true;
+  if (systemToken !== null && systemToken !== undefined) return true;
+  return false;
+}
+
+function publishAuditPrincipal(
+  token: AuthBeforeHandleContext["token"],
+  user: AuthBeforeHandleContext["user"],
+  orgId: AuthBeforeHandleContext["orgId"],
+  teamId: AuthBeforeHandleContext["teamId"],
+  run: AuthBeforeHandleContext["run"],
+  systemToken: AuthBeforeHandleContext["systemToken"],
+): void {
+  // The auth derive already read the full user row; hand its site-admin flag
+  // to permission helpers so they skip a duplicate users read.
+  setRequestSiteAdmin(user?.id ?? null, user?.isSiteAdmin === true);
+  setAuditPrincipal({
+    userId: user?.id ?? null,
+    tokenId: token?.id ?? null,
+    orgId: orgId ?? null,
+    teamId: teamId ?? null,
+    runId: run?.runId ?? null,
+    systemTokenId: systemToken?.id ?? null,
+    scopes: currentTokenScopes(),
+    authenticated: hasAuthPrincipal(token, user, orgId, teamId, run, systemToken),
+  });
+}
+
+function rejectScopedSiteAdminAccess(
+  pathname: string,
+  set: AuthBeforeHandleContext["set"],
+): Record<string, unknown> | undefined {
+  const siteAdminPath = pathname === "/api/v2/admin"
+    || pathname.startsWith("/api/v2/admin/")
+    || pathname === "/api/v1/diagnostics"
+    || pathname === "/api/v1/usage/bundle"
+    || pathname === "/api/v1/support/bundle-requests"
+    || pathname.startsWith("/api/v1/support/bundle-requests/")
+    || pathname === "/api/v1/support-bundle-requests"
+    || pathname.startsWith("/api/v1/support-bundle-requests/");
+  if (currentTokenScopes() !== null && siteAdminPath) {
+    (set as Record<string, unknown>)["status"] = 403;
+    return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot access site-admin routes" }] };
+  }
+  return undefined;
+}
+
 export const app = new Elysia()
   .use(authPlugin)
-  .onBeforeHandle(({ request, token, user, orgId, teamId, run, systemToken, set }: {
-    readonly request: Request;
-    readonly token: { readonly id?: string; readonly scopes?: string | null } | null;
-    readonly user: { readonly id: string; readonly isSiteAdmin: boolean | null } | null;
-    readonly orgId?: string | null;
-    readonly teamId?: string | null;
-    readonly run?: { readonly runId: string } | null;
-    readonly systemToken?: { readonly id: string } | null;
-    readonly set: unknown;
-  }): Record<string, unknown> | undefined => {
-    // Publish fine-grained token scopes into request-scoped storage BEFORE
-    // handlers run, so permission helpers enforce them automatically. Legacy
-    // tokens (scopes null/absent) resolve to null = full permissions.
-    // A malformed scopes field is an auth failure: fail closed (401) rather
-    // than silently escalating a scoped token to full permissions.
-    if (token !== null && typeof token.scopes === "string" && token.scopes !== "") {
-      let parsed: TokenScopes | null;
-      try {
-        parsed = parseTokenScopes(token.scopes);
-      } catch {
-        (set as Record<string, unknown>)["status"] = 401;
-        return { errors: [{ status: "401", title: "Unauthorized", detail: "Token scopes are malformed" }] };
-      }
-      setRequestTokenScopes(parsed);
-    } else {
-      setRequestTokenScopes(null);
-    }
-    // The auth derive already read the full user row; hand its site-admin flag
-    // to permission helpers so they skip a duplicate users read.
-    setRequestSiteAdmin(user?.id ?? null, user?.isSiteAdmin === true);
-    setAuditPrincipal({
-      userId: user?.id ?? null,
-      tokenId: token?.id ?? null,
-      orgId: orgId ?? null,
-      teamId: teamId ?? null,
-      runId: run?.runId ?? null,
-      systemTokenId: systemToken?.id ?? null,
-      scopes: currentTokenScopes(),
-      authenticated: token !== null && token !== undefined || user !== null && user !== undefined
-        || orgId !== null && orgId !== undefined || teamId !== null && teamId !== undefined
-        || run !== null && run !== undefined || systemToken !== null && systemToken !== undefined,
-    });
+  .onBeforeHandle(({ request, token, user, orgId, teamId, run, systemToken, set }: AuthBeforeHandleContext): Record<string, unknown> | undefined => {
+    const scopesError = publishTokenScopes(token, set);
+    if (scopesError !== undefined) return scopesError;
+    publishAuditPrincipal(token, user, orgId, teamId, run, systemToken);
     const pathname = new URL(request.url).pathname;
-    const siteAdminPath = pathname === "/api/v2/admin"
-      || pathname.startsWith("/api/v2/admin/")
-      || pathname === "/api/v1/diagnostics"
-      || pathname === "/api/v1/usage/bundle"
-      || pathname === "/api/v1/support/bundle-requests"
-      || pathname.startsWith("/api/v1/support/bundle-requests/")
-      || pathname === "/api/v1/support-bundle-requests"
-      || pathname.startsWith("/api/v1/support-bundle-requests/");
-    if (currentTokenScopes() !== null && siteAdminPath) {
-      (set as Record<string, unknown>)["status"] = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot access site-admin routes" }] };
-    }
-    return undefined;
+    return rejectScopedSiteAdminAccess(pathname, set);
   })
   .onBeforeHandle(({ request, user, set }: PasswordGuardContext): Record<string, unknown> | undefined => {
     if (user?.mustChangePassword !== true) return;
@@ -691,7 +1041,7 @@ export const app = new Elysia()
     beginAuditRequest(correlationId, method, pathname);
     // Issue #648: remember the socket peer so generated links only honor
     // X-Forwarded-Host/Proto from a configured trusted proxy.
-    recordRequestPeer(request as unknown as object, socketPeerAddress(request, server));
+    recordRequestPeer(request, socketPeerAddress(request, server));
     (set.headers as Record<string, string | number>)["X-Request-Id"] = correlationId;
     requestStarted();
 
@@ -737,60 +1087,12 @@ export const app = new Elysia()
     headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,Retry-After,Idempotency-Replayed,X-Request-Id,ETag,Deprecation,Sunset";
   })
   .onAfterHandle(({ request, response, set }: AfterHandleContext): Response | void => {
+    const doc = classifyResponseDocument(response);
     const pathname = new URL(request.url).pathname;
-    const isJsonDocument = response !== null
-      && typeof response === "object"
-      && (Array.isArray(response) || Object.getPrototypeOf(response) === Object.prototype);
-    const responseObject = isJsonDocument ? response as Record<string, unknown> : null;
-    const isErrorDocument = responseObject !== null && Array.isArray(responseObject["errors"]);
-    const responseHeaders = response instanceof Response ? response.headers : null;
-    const configuredContentType = set.headers["Content-Type"] ?? set.headers["content-type"];
-    const declaredContentType = responseHeaders?.get("content-type")
-      ?? (configuredContentType === undefined ? null : String(configuredContentType));
-    const isJsonApiDocument = (isJsonApiResponsePath(pathname) || isErrorDocument)
-      && isJsonDocument
-      && (declaredContentType === null || isJsonApiResponseContentType(declaredContentType));
-    const isExplicitJsonApiResponse = isJsonApiResponseContentType(declaredContentType);
-    const responseStatus = response instanceof Response
-      ? response.status
-      : typeof set.status === "number" ? set.status : Number.parseInt(String(set.status), 10) || 200;
-    const isJsonApiResponse = isJsonApiResponsePath(pathname)
-      && responseStatus !== 204
-      && !(responseStatus >= 300 && responseStatus < 400)
-      && (isJsonApiDocument || isExplicitJsonApiResponse);
-    const unacceptable = isJsonApiResponse && !acceptsJsonApi(request.headers.get("accept"));
-    const meta = requestMeta.get(request as unknown as Request);
-    if (meta !== undefined) {
-      const duration = Date.now() - meta.startTime;
-      const method = meta.method;
-      const path = meta.path;
-      const status = unacceptable ? 406 : set.status ?? (response instanceof Response ? response.status : 200);
-      const numericStatus = typeof status === "number" ? status : Number.parseInt(String(status), 10) || 200;
-      recordRequestLatency(path, duration);
-      requestFinished(numericStatus);
-      // Idempotent bookkeeping: the WeakMap entry is consumed here so an
-      // error path (onError) can never double-count the same request.
-      requestMeta.delete(request as unknown as Request);
-      resetAuditRequest();
-      if (path.startsWith("/api/")) {
-        // Canonical log line (loggingsucks.com wide-event pattern): one
-        // context-rich record per request instead of scattered statements.
-        log.info("request completed", {
-          requestId: meta.correlationId,
-          http: {
-            method,
-            path: redactPathSecrets(path),
-            status: numericStatus,
-            durationMs: duration,
-          },
-          // High-cardinality route bucket (no ids) so aggregations group
-          // cleanly; the raw path stays available for exact search except
-          // for redacted bearer segments (issue #609).
-          routeBucket: method + " " + pathnameBucket(path),
-          outcome: numericStatus < 400 ? "success" : numericStatus < 500 ? "client-error" : "server-error",
-        });
-      }
-    }
+    const declaredContentType = resolveResponseContentType(set, doc.responseHeaders);
+    const responseStatus = resolveAfterHandleStatus(response, set);
+    const api = checkJsonApiResponse(pathname, doc.isJsonDocument, doc.isErrorDocument, declaredContentType, responseStatus, request.headers.get("accept"));
+    recordAfterHandleMetrics(request, response, set, api.unacceptable);
     const headers = set.headers as Record<string, string | number>;
 
     // Browser/document shell hardening (CSP, clickjacking, referrer, robots,
@@ -799,82 +1101,16 @@ export const app = new Elysia()
     applySecurityHeaders(headers);
     // HSTS (137): only when Terrence knows it is behind HTTPS, so plain HTTP
     // dev/test deployments are not forced into HTTPS by a cached header.
-    try {
-      if (shouldSendHsts(request)) {
-        if (headers["Strict-Transport-Security"] === undefined) headers["Strict-Transport-Security"] = HSTS_VALUE;
-      }
-    } catch { /* HSTS is best-effort */ }
-    if (headers["Content-Type"] === undefined) {
-      const mime = staticMimeFor(pathname);
-      if (mime !== undefined) headers["Content-Type"] = mime;
-    }
-    const cacheControl = staticCacheControl(pathname);
-    if (cacheControl !== undefined) {
-      headers["Cache-Control"] = cacheControl;
-    } else if ((pathname === "/api" || pathname.startsWith("/api/")) && headers["Cache-Control"] === undefined) {
-      // Control-plane API responses can carry secrets/state; never let a
-      // browser or shared cache persist them (avatar images set their own
-      // Cache-Control intentionally, so we don't override those).
-      headers["Cache-Control"] = "no-store";
-    }
-
-    // When an Origin is reflected (or the server may vary by origin), the
-    // response MUST advertise that with Vary: Origin or shared caches will
-    // serve one origin's CORS decision to everyone.
-    const originHeader = request.headers.get("origin");
-    const corsConfigured = executionSetting("CORS_ORIGIN").length > 0;
-    if (originHeader !== null || corsConfigured) {
-      const { Vary: existingVary } = headers;
-      headers["Vary"] = existingVary === undefined ? "Origin" : `${String(existingVary)}, Origin`;
-    }
-
+    applyTransportSecurityHeaders(headers, pathname, request);
+    applyCacheVaryHeaders(headers, pathname, request);
     // 458: emit deprecation headers for compat-legacy support-bundle path.
-    if (pathname.startsWith("/api/v1/support-bundle-requests")) {
-      if (headers["Deprecation"] === undefined) headers["Deprecation"] = "true";
-      if (headers["Sunset"] === undefined) headers["Sunset"] = "Sat, 31 Dec 2028 23:59:59 GMT";
-      if (headers["Link"] === undefined) headers["Link"] = "</api/v1/support/bundle-requests>; rel=\"successor-version\"";
-    }
-    if (isJsonApiDocument) {
-      headers["Content-Type"] = JSON_API_MEDIA_TYPE;
-    }
-    if (unacceptable) {
-      headers["Content-Type"] = JSON_API_MEDIA_TYPE;
-      const vary = String(headers["Vary"] ?? "");
-      if (!vary.split(",").some((value): boolean => value.trim().toLowerCase() === "accept")) {
-        headers["Vary"] = vary === "" ? "Accept" : `${vary}, Accept`;
-      }
-      (set as { status: number }).status = 406;
-      const errorHeaders = new Headers();
-      for (const [name, value] of Object.entries(headers)) errorHeaders.set(name, String(value));
-      return new Response(JSON.stringify(mediaTypeError(406, `The Accept header must allow ${JSON_API_MEDIA_TYPE}`)), {
-        status: 406,
-        headers: errorHeaders,
-      });
-    }
-    const limit = responseHeaders?.get("RateLimit-Limit") ?? set.headers["RateLimit-Limit"];
-    const remaining = responseHeaders?.get("RateLimit-Remaining") ?? set.headers["RateLimit-Remaining"];
-    if (limit !== undefined && limit !== null) headers["X-RateLimit-Limit"] = limit;
-    if (remaining !== undefined && remaining !== null) headers["X-RateLimit-Remaining"] = remaining;
+    applyDeprecationHeaders(headers, pathname);
+    const notAcceptable = enforceJsonApiAccept(headers, set, api.isJsonApiDocument, api.unacceptable);
+    if (notAcceptable !== null) return notAcceptable;
     // 461/462: standardize Retry-After + legacy X-RateLimit-Reset on 429; honor any explicit Retry-After already set.
-    const responseRetryAfter = responseHeaders?.get("Retry-After");
-    if (responseRetryAfter !== undefined && responseRetryAfter !== null && headers["Retry-After"] === undefined) {
-      headers["Retry-After"] = responseRetryAfter;
-    }
-    if ((set.status === 429 || String(set.status) === "429") && headers["Retry-After"] === undefined) {
-      const reset = responseHeaders?.get("RateLimit-Reset") ?? set.headers["RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset-At"];
-      let seconds: number | null = null;
-      if (reset !== undefined && reset !== null) {
-        const asNum = Number(reset);
-        if (Number.isFinite(asNum) && asNum > 0) {
-          seconds = asNum > 1_000_000_000 ? Math.max(1, Math.ceil((asNum - Date.now()) / 1000)) : Math.max(1, Math.ceil(asNum));
-        } else {
-          const asDate = Date.parse(String(reset));
-          if (!Number.isNaN(asDate)) seconds = Math.max(1, Math.ceil((asDate - Date.now()) / 1000));
-        }
-      }
-      headers["Retry-After"] = String(seconds ?? 60);
-      if (headers["X-RateLimit-Reset"] === undefined && reset !== undefined && reset !== null) headers["X-RateLimit-Reset"] = String(reset);
-    }
+    applyRateLimitStandardHeaders(headers, set, doc.responseHeaders);
+    passthroughRateLimitRetryAfter(headers, doc.responseHeaders);
+    applyRetryAfterFallback(headers, set, doc.responseHeaders);
     // Always clear the internal precondition marker — it is server-internal state, never a client header.
     // 452-454: ETag + conditional request handling.
     // Generates a 64-bit ETag (Bun.hash) so If-None-Match collisions are negligible;
@@ -883,22 +1119,8 @@ export const app = new Elysia()
     // NOTE: a post-response 412 cannot prevent the lost-update (the handler already wrote the row);
     // real lost-update protection requires the handler to load the current entity and check If-Match
     // before mutating state. This layer provides best-effort enforcement and marker hygiene.
-    if (isJsonDocument && (pathname === "/api" || pathname.startsWith("/api/"))) {
-      try {
-        const etag = strongDocumentEtag(response);
-        if (headers["ETag"] === undefined) headers["ETag"] = etag;
-        if (request.method === "GET") {
-          const inm = request.headers.get("if-none-match");
-          if (inm !== null && (inm === etag || inm === "*")) {
-            headers["ETag"] = etag;
-            return new Response(null, { status: 304, headers: headers as Record<string, string> });
-          }
-        }
-      } catch (error: unknown) {
-        // ETag generation must never silently mask a failure — log at debug so operators can observe.
-        try { log.debug("ETag generation failed", { error: String(error) }); } catch {}
-      }
-    }
+    const etagResponse = applyDocumentEtag(request, headers, pathname, doc.isJsonDocument, response);
+    if (etagResponse !== null) return etagResponse;
   })
   .onParse(async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | string | null | undefined> => {
     const pathname = new URL(request.url).pathname;
@@ -1113,7 +1335,7 @@ export const systemApiApp = new Elysia({ name: "system-api-listener" })
 setTimeout((): void => {
   let loggingRefreshFailureReported = false;
   const refreshLoggingSettings = (): void => {
-    void import("./lib/settings").then(({ getSettings }): Promise<void> =>
+    void import("./lib/settings").then(async ({ getSettings }): Promise<void> =>
       getSettings("logging").then(applyLoggingSettings),
     ).then((): void => {
       loggingRefreshFailureReported = false;

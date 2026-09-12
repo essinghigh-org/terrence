@@ -72,12 +72,23 @@ function isEmailAddressArray(value: unknown): value is readonly string[] {
     && value.every((item): item is string => typeof item === "string" && EMAIL_ADDRESS_RE.test(item));
 }
 
+function recordField(value: unknown, key: string): unknown {
+  if (value === null || typeof value !== "object") return undefined;
+  return (value as Record<string, unknown>)[key];
+}
+
+function userResourceId(entry: unknown): string | null {
+  if (entry === null || typeof entry !== "object") return null;
+  const resource = entry as Record<string, unknown>;
+  if (resource["type"] !== "users" || typeof resource["id"] !== "string" || resource["id"] === "") return null;
+  return resource["id"];
+}
+
 function relationshipUserIds(body: unknown): readonly string[] | false | undefined {
-  if (body === null || typeof body !== "object") return undefined;
-  const data = (body as Record<string, unknown>)["data"];
-  if (data === null || typeof data !== "object") return undefined;
-  const relationships = (data as Record<string, unknown>)["relationships"];
-  if (relationships === null || typeof relationships !== "object") return undefined;
+  const data = recordField(body, "data");
+  if (data === undefined) return undefined;
+  const relationships = recordField(data, "relationships");
+  if (relationships === undefined) return undefined;
   const usersRelationship = (relationships as Record<string, unknown>)["users"];
   if (usersRelationship === undefined) return undefined;
   if (usersRelationship === null || typeof usersRelationship !== "object") return false;
@@ -85,10 +96,9 @@ function relationshipUserIds(body: unknown): readonly string[] | false | undefin
   if (!Array.isArray(usersData)) return false;
   const ids: string[] = [];
   for (const user of usersData) {
-    if (user === null || typeof user !== "object") return false;
-    const resource = user as Record<string, unknown>;
-    if (resource["type"] !== "users" || typeof resource["id"] !== "string" || resource["id"] === "") return false;
-    ids.push(resource["id"]);
+    const id = userResourceId(user);
+    if (id === null) return false;
+    ids.push(id);
   }
   return [...new Set(ids)];
 }
@@ -208,6 +218,36 @@ async function subscriptionFor(configuration: NcItem): Promise<Subscription | un
   return undefined;
 }
 
+async function authorizeSubscription(
+  subscription: Subscription,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  tokenTeamId: string | null | undefined,
+  required: "read" | "manage",
+): Promise<boolean> {
+  if (subscription.type === "workspaces") {
+    return (await findAuthorizedWorkspace(
+      subscription.id,
+      userId,
+      tokenOrgId ?? null,
+      tokenTeamId ?? null,
+      required === "read" ? "read" : "admin",
+    )) !== undefined;
+  }
+  if (subscription.type === "projects") {
+    return checkOrganizationPermission(
+      subscription.orgId,
+      userId,
+      tokenOrgId ?? null,
+      tokenTeamId ?? null,
+      required === "read" ? "read-projects" : "manage-projects",
+    );
+  }
+  return required === "read"
+    ? checkOrgPermission(userId, subscription.orgId, "member", tokenOrgId, tokenTeamId ?? null)
+    : checkOrganizationPermission(subscription.orgId, userId, tokenOrgId ?? null, tokenTeamId ?? null, "manage-teams");
+}
+
 export async function authorizedConfiguration(
   id: string,
   userId: string | undefined,
@@ -221,77 +261,102 @@ export async function authorizedConfiguration(
   if (configuration === undefined) return undefined;
   const subscription = await subscriptionFor(configuration);
   if (subscription === undefined) return undefined;
-  const authorized = subscription.type === "workspaces"
-    ? (await findAuthorizedWorkspace(
-        subscription.id,
-        userId,
-        tokenOrgId ?? null,
-        tokenTeamId ?? null,
-        required === "read" ? "read" : "admin",
-      )) !== undefined
-    : subscription.type === "projects"
-      ? await checkOrganizationPermission(
-          subscription.orgId,
-          userId,
-          tokenOrgId ?? null,
-          tokenTeamId ?? null,
-          required === "read" ? "read-projects" : "manage-projects",
-        )
-      : required === "read"
-        ? await checkOrgPermission(userId, subscription.orgId, "member", tokenOrgId, tokenTeamId ?? null)
-        : await checkOrganizationPermission(subscription.orgId, userId, tokenOrgId ?? null, tokenTeamId ?? null, "manage-teams");
-  if (!authorized) return undefined;
+  if (!(await authorizeSubscription(subscription, userId, tokenOrgId, tokenTeamId, required))) return undefined;
   return configuration;
 }
 
-function createValues(
+function isCreatePayload(body: unknown): boolean {
+  if (body === null || typeof body !== "object") return false;
+  const data = (body as Record<string, unknown>)["data"];
+  return data !== null && typeof data === "object" && (data as Record<string, unknown>)["type"] === "notification-configurations";
+}
+
+type CreateScalars = {
+  name: string;
+  url: string;
+  destinationType: string;
+  emailAddresses: unknown;
+};
+
+function parseCreateScalars(attributes: Record<string, unknown>): CreateScalars {
+  return {
+    name: typeof attributes["name"] === "string" ? attributes["name"].trim() : "",
+    url: typeof attributes["url"] === "string" ? attributes["url"] : "",
+    destinationType: typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "",
+    emailAddresses: attributes["email-addresses"],
+  };
+}
+
+function resolveCreateEmails(
   body: unknown,
+  attributes: Record<string, unknown>,
   scope: Readonly<{ workspaceId?: string; projectId?: string; teamId?: string }>,
-): typeof notificationConfigurations.$inferInsert | undefined {
-  const data = body !== null && typeof body === "object" ? (body as Record<string, unknown>)["data"] : undefined;
-  if (data === null || typeof data !== "object" || (data as Record<string, unknown>)["type"] !== "notification-configurations") return undefined;
-  const attributes = attributesFrom(body);
-  const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
-  const url = typeof attributes["url"] === "string" ? attributes["url"] : "";
-  const destinationType = typeof attributes["destination-type"] === "string"
-    ? attributes["destination-type"]
-    : "";
-  const emailAddresses = attributes["email-addresses"];
+): { emailUserIds: readonly string[]; emailAllMembers: boolean } | undefined {
   if (isEncryptedTokenInput(attributes["token"])) return undefined;
   const emailUserIds = notificationUserIds(body, attributes);
   if (emailUserIds === false) return undefined;
   const emailAllMembers = typeof attributes["email-all-members"] === "boolean"
     ? attributes["email-all-members"]
     : (scope.projectId !== undefined || scope.teamId !== undefined) && emailUserIds.length === 0;
-  const triggers = attributes["triggers"] === undefined
-    ? []
-    : Array.isArray(attributes["triggers"]) && attributes["triggers"].every(isNotificationTrigger)
-      ? [...attributes["triggers"]]
-      : null;
-  const valid = name !== ""
-    && isNotificationDestination(destinationType)
-    && triggers !== null
-    && (destinationType === "email"
-      ? isValidEmailAddresses(emailAddresses) || emailAllMembers || emailUserIds.length > 0
-      : isWebhookUrl(url));
-  if (!valid) return undefined;
+  return { emailUserIds, emailAllMembers };
+}
 
+function resolveCreateTriggers(attributes: Record<string, unknown>): readonly string[] | null {
+  if (attributes["triggers"] === undefined) return [];
+  return Array.isArray(attributes["triggers"]) && attributes["triggers"].every(isNotificationTrigger)
+    ? [...attributes["triggers"]]
+    : null;
+}
+
+function createDestinationValid(
+  scalars: CreateScalars,
+  triggers: readonly string[] | null,
+  emailAllMembers: boolean,
+  emailUserIds: readonly string[],
+): boolean {
+  if (scalars.name === "" || !isNotificationDestination(scalars.destinationType) || triggers === null) return false;
+  return scalars.destinationType === "email"
+    ? isValidEmailAddresses(scalars.emailAddresses) || emailAllMembers || emailUserIds.length > 0
+    : isWebhookUrl(scalars.url);
+}
+
+function buildCreateValues(
+  scalars: CreateScalars,
+  scope: Readonly<{ workspaceId?: string; projectId?: string; teamId?: string }>,
+  triggers: readonly string[],
+  emails: Readonly<{ emailUserIds: readonly string[]; emailAllMembers: boolean }>,
+  attributes: Record<string, unknown>,
+): typeof notificationConfigurations.$inferInsert {
   return {
     id: newResourceId("nc"),
     workspaceId: scope.workspaceId ?? null,
     projectId: scope.projectId ?? null,
     teamId: scope.teamId ?? null,
-    name,
-    destinationType,
-    url: destinationType === "email" ? "" : url,
-    emailAddresses: destinationType === "email" && isEmailAddressArray(emailAddresses) ? [...emailAddresses] : null,
-    emailAllMembers: destinationType === "email" && emailAllMembers,
-    emailUserIds: destinationType === "email" ? [...emailUserIds] : [],
-    triggers: triggers ?? [],
+    name: scalars.name,
+    destinationType: scalars.destinationType,
+    url: scalars.destinationType === "email" ? "" : scalars.url,
+    emailAddresses: scalars.destinationType === "email" && isEmailAddressArray(scalars.emailAddresses) ? [...scalars.emailAddresses] : null,
+    emailAllMembers: scalars.destinationType === "email" && emails.emailAllMembers,
+    emailUserIds: scalars.destinationType === "email" ? [...emails.emailUserIds] : [],
+    triggers: [...triggers],
     enabled: typeof attributes["enabled"] === "boolean" ? attributes["enabled"] : true,
     token: typeof attributes["token"] === "string" ? attributes["token"] : null,
     createdAt: Date.now(),
   };
+}
+
+function createValues(
+  body: unknown,
+  scope: Readonly<{ workspaceId?: string; projectId?: string; teamId?: string }>,
+): typeof notificationConfigurations.$inferInsert | undefined {
+  if (!isCreatePayload(body)) return undefined;
+  const attributes = attributesFrom(body);
+  const scalars = parseCreateScalars(attributes);
+  const emails = resolveCreateEmails(body, attributes, scope);
+  if (emails === undefined) return undefined;
+  const triggers = resolveCreateTriggers(attributes);
+  if (triggers === null || !createDestinationValid(scalars, triggers, emails.emailAllMembers, emails.emailUserIds)) return undefined;
+  return buildCreateValues(scalars, scope, triggers, emails, attributes);
 }
 
 async function insertConfiguration(values: typeof notificationConfigurations.$inferInsert): Promise<boolean> {
@@ -344,6 +409,143 @@ async function decryptedNotification(configuration: NcItem): Promise<NcItem> {
   return configuration.token === null
     ? configuration
     : { ...configuration, token: isEncryptedSecret(configuration.token) ? await decryptSecret(configuration.token) : configuration.token };
+}
+
+function isPatchPayload(body: unknown): boolean {
+  const data = body !== null && typeof body === "object" ? (body as Record<string, unknown>)["data"] : undefined;
+  return data !== null && typeof data === "object" && (data as Record<string, unknown>)["type"] === "notification-configurations";
+}
+
+type PatchUpdates = Partial<typeof notificationConfigurations.$inferInsert>;
+type PatchField = { updates: PatchUpdates } | { error: unknown };
+
+function parsePatchScalars(attributes: Record<string, unknown>): PatchField {
+  const updates: PatchUpdates = {};
+  if (attributes["name"] !== undefined) {
+    if (typeof attributes["name"] !== "string" || attributes["name"].trim() === "") {
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "name must be a non-empty string" }] } };
+    }
+    updates.name = attributes["name"].trim();
+  }
+  if (attributes["destination-type"] !== undefined) {
+    if (typeof attributes["destination-type"] !== "string" || !isNotificationDestination(attributes["destination-type"])) {
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "destination-type is invalid" }] } };
+    }
+    updates.destinationType = attributes["destination-type"];
+  }
+  if (attributes["url"] !== undefined) {
+    if (typeof attributes["url"] !== "string") {
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "url must be a string" }] } };
+    }
+    updates.url = attributes["url"];
+  }
+  return { updates };
+}
+
+function parsePatchContactFields(attributes: Record<string, unknown>): PatchField {
+  const updates: PatchUpdates = {};
+  if (attributes["email-addresses"] !== undefined) {
+    if (!isEmailAddressArray(attributes["email-addresses"])) {
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "email-addresses must contain only valid email addresses", source: { pointer: "/data/attributes/email-addresses" } }] } };
+    }
+    updates.emailAddresses = [...attributes["email-addresses"]];
+  }
+  if (attributes["triggers"] !== undefined) {
+    if (!Array.isArray(attributes["triggers"]) || !attributes["triggers"].every(isNotificationTrigger)) {
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "triggers contains an unsupported notification trigger" }] } };
+    }
+    updates.triggers = [...attributes["triggers"]];
+  }
+  if (typeof attributes["enabled"] === "boolean") updates.enabled = attributes["enabled"];
+  if (attributes["token"] !== undefined) {
+    if (isEncryptedTokenInput(attributes["token"])) {
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "token must be plaintext" }] } };
+    }
+    updates.token = typeof attributes["token"] === "string" ? attributes["token"] : null;
+  }
+  if (typeof attributes["email-all-members"] === "boolean") updates.emailAllMembers = attributes["email-all-members"];
+  return { updates };
+}
+
+async function resolvePatchRecipients(
+  body: unknown,
+  attributes: Record<string, unknown>,
+  configuration: NcItem,
+): Promise<{ recipientIds: readonly string[] | undefined; emailAllMembers: boolean } | { error: unknown }> {
+  const relationshipIds = relationshipUserIds(body);
+  const recipientIds = relationshipIds ?? (
+    attributes["email-user-ids"] === undefined
+      ? undefined
+      : notificationUserIds(body, attributes)
+  );
+  if (recipientIds === false) {
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "users must contain valid user resource identifiers" }] } };
+  }
+  if (recipientIds === undefined) return { recipientIds: undefined, emailAllMembers: false };
+  const subscription = await subscriptionFor(configuration);
+  if (subscription === undefined || !(await validNotificationUsers(subscription.orgId, recipientIds))) {
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "All notification users must be active organization members" }] } };
+  }
+  const emailAllMembers = recipientIds.length === 0
+    && configuration.workspaceId === null
+    && attributes["email-all-members"] === undefined;
+  return { recipientIds, emailAllMembers };
+}
+
+function emailCandidateComplete(candidate: Readonly<{
+  emailAddresses?: readonly string[] | null | undefined;
+  emailUserIds?: readonly string[] | null | undefined;
+  emailAllMembers?: boolean | null | undefined;
+}>): boolean {
+  return (candidate.emailAddresses?.length ?? 0) > 0
+    || (candidate.emailUserIds?.length ?? 0) > 0
+    || candidate.emailAllMembers === true;
+}
+
+async function validatePatchCandidate(
+  configuration: NcItem,
+  attributes: Record<string, unknown>,
+  updates: PatchUpdates,
+): Promise<{ error: unknown; status: number } | { ok: true }> {
+  // destinationChanged must reflect what the CALLER actually changed, so
+  // compute it from the raw request attributes before normalization. The
+  // non-email branch below always back-fills email fields into `updates`,
+  // so a check against `updates` would be permanently true and would send
+  // a live verification POST for any unrelated PATCH (e.g. a rename).
+  const destinationChanged = [
+    "destination-type",
+    "url",
+    "email-addresses",
+    "token",
+  ].some((key): boolean => attributes[key] !== undefined);
+  const candidate = { ...configuration, ...updates } as typeof notificationConfigurations.$inferInsert;
+  if (candidate.destinationType === "email") {
+    if (!emailCandidateComplete(candidate)) {
+      return { status: 422, error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Email notifications require users, email-all-members, or email-addresses" }] } };
+    }
+    updates.url = "";
+  } else {
+    if (!isWebhookUrl(candidate.url)) {
+      return { status: 422, error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "URL must be a valid http(s) webhook" }] } };
+    }
+    updates.emailAddresses = null;
+    updates.emailAllMembers = false;
+    updates.emailUserIds = [];
+  }
+  if (candidate.enabled === true && (updates.enabled === true || destinationChanged) && !(await verifyDestinationBeforeUpdate(candidate))) {
+    return { status: 400, error: { errors: [{ status: "400", title: "Bad Request", detail: "Notification verification did not return a successful response" }] } };
+  }
+  return { ok: true };
+}
+
+async function persistPatchUpdates(
+  id: string,
+  attributes: Record<string, unknown>,
+  updates: PatchUpdates,
+): Promise<void> {
+  const persistedUpdates = { ...updates };
+  if (attributes["token"] !== undefined) persistedUpdates.token = await encryptNotificationToken(persistedUpdates.token);
+  await db.update(notificationConfigurations).set(persistedUpdates).where(eq(notificationConfigurations.id, id));
 }
 
 export const notificationRoutes = new Elysia({ name: "notifications" })
@@ -536,112 +738,37 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     if (configuration === undefined) return notFound(set);
 
     const attributes = attributesFrom(body);
-    const data = body !== null && typeof body === "object" ? (body as Record<string, unknown>)["data"] : undefined;
-    if (data === null || typeof data !== "object" || (data as Record<string, unknown>)["type"] !== "notification-configurations") {
+    if (!isPatchPayload(body)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be notification-configurations" }] };
     }
-    const updates: Partial<typeof notificationConfigurations.$inferInsert> = {};
-    if (attributes["name"] !== undefined) {
-      if (typeof attributes["name"] !== "string" || attributes["name"].trim() === "") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "name must be a non-empty string" }] };
-      }
-      updates.name = attributes["name"].trim();
-    }
-    if (attributes["destination-type"] !== undefined) {
-      if (typeof attributes["destination-type"] !== "string" || !isNotificationDestination(attributes["destination-type"])) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "destination-type is invalid" }] };
-      }
-      updates.destinationType = attributes["destination-type"];
-    }
-    if (attributes["url"] !== undefined) {
-      if (typeof attributes["url"] !== "string") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "url must be a string" }] };
-      }
-      updates.url = attributes["url"];
-    }
-    if (attributes["email-addresses"] !== undefined) {
-      if (!isEmailAddressArray(attributes["email-addresses"])) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "email-addresses must contain only valid email addresses", source: { pointer: "/data/attributes/email-addresses" } }] };
-      }
-      updates.emailAddresses = [...attributes["email-addresses"]];
-    }
-    if (attributes["triggers"] !== undefined) {
-      if (!Array.isArray(attributes["triggers"]) || !attributes["triggers"].every(isNotificationTrigger)) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "triggers contains an unsupported notification trigger" }] };
-      }
-      updates.triggers = [...attributes["triggers"]];
-    }
-    if (typeof attributes["enabled"] === "boolean") updates.enabled = attributes["enabled"];
-    if (attributes["token"] !== undefined) {
-      if (isEncryptedTokenInput(attributes["token"])) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "token must be plaintext" }] };
-      }
-      updates.token = typeof attributes["token"] === "string" ? attributes["token"] : null;
-    }
-    if (typeof attributes["email-all-members"] === "boolean") updates.emailAllMembers = attributes["email-all-members"];
-    const relationshipIds = relationshipUserIds(body);
-    const recipientIds = relationshipIds ?? (
-      attributes["email-user-ids"] === undefined
-        ? undefined
-        : notificationUserIds(body, attributes)
-    );
-    if (recipientIds === false) {
+    const scalars = parsePatchScalars(attributes);
+    if ("error" in scalars) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "users must contain valid user resource identifiers" }] };
+      return scalars.error;
     }
-    if (recipientIds !== undefined) {
-      const subscription = await subscriptionFor(configuration);
-      if (subscription === undefined || !(await validNotificationUsers(subscription.orgId, recipientIds))) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "All notification users must be active organization members" }] };
-      }
-      updates.emailUserIds = [...recipientIds];
-      if (recipientIds.length === 0 && configuration.workspaceId === null && attributes["email-all-members"] === undefined) {
-        updates.emailAllMembers = true;
-      }
+    const contact = parsePatchContactFields(attributes);
+    if ("error" in contact) {
+      (set as { status: number }).status = 422;
+      return contact.error;
+    }
+    const updates: PatchUpdates = { ...scalars.updates, ...contact.updates };
+    const recipients = await resolvePatchRecipients(body, attributes, configuration);
+    if ("error" in recipients) {
+      (set as { status: number }).status = 422;
+      return recipients.error;
+    }
+    if (recipients.recipientIds !== undefined) {
+      updates.emailUserIds = [...recipients.recipientIds];
+      if (recipients.emailAllMembers) updates.emailAllMembers = true;
     }
     if (Object.keys(updates).length > 0) {
-      // destinationChanged must reflect what the CALLER actually changed, so
-      // compute it from the raw request attributes before normalization. The
-      // non-email branch below always back-fills email fields into `updates`,
-      // so a check against `updates` would be permanently true and would send
-      // a live verification POST for any unrelated PATCH (e.g. a rename).
-      const destinationChanged = [
-        "destination-type",
-        "url",
-        "email-addresses",
-        "token",
-      ].some((key): boolean => attributes[key] !== undefined);
-      const candidate = { ...configuration, ...updates } as typeof notificationConfigurations.$inferInsert;
-      if (candidate.destinationType === "email") {
-        if ((candidate.emailAddresses?.length ?? 0) === 0 && (candidate.emailUserIds?.length ?? 0) === 0 && candidate.emailAllMembers !== true) {
-          (set as { status: number }).status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Email notifications require users, email-all-members, or email-addresses" }] };
-        }
-        updates.url = "";
-      } else {
-        if (!isWebhookUrl(candidate.url)) {
-          (set as { status: number }).status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "URL must be a valid http(s) webhook" }] };
-        }
-        updates.emailAddresses = null;
-        updates.emailAllMembers = false;
-        updates.emailUserIds = [];
+      const checked = await validatePatchCandidate(configuration, attributes, updates);
+      if ("error" in checked) {
+        (set as { status: number }).status = checked.status;
+        return checked.error;
       }
-      if (candidate.enabled === true && (updates.enabled === true || destinationChanged) && !(await verifyDestinationBeforeUpdate(candidate))) {
-        (set as { status: number }).status = 400;
-        return { errors: [{ status: "400", title: "Bad Request", detail: "Notification verification did not return a successful response" }] };
-      }
-      const persistedUpdates = { ...updates };
-      if (attributes["token"] !== undefined) persistedUpdates.token = await encryptNotificationToken(persistedUpdates.token);
-      await db.update(notificationConfigurations).set(persistedUpdates).where(eq(notificationConfigurations.id, id));
+      await persistPatchUpdates(id, attributes, updates);
     }
     const updated = await db.query.notificationConfigurations.findFirst({
       where: eq(notificationConfigurations.id, id),

@@ -125,9 +125,7 @@ function fieldValue(row: ExplorerRow, field: string): unknown {
   return key === undefined ? undefined : row.attributes[key];
 }
 
-function filterMatch(value: unknown, operator: string, expected: string[]): boolean {
-  const values = expected.map((item) => item.toLocaleLowerCase());
-  const actual = value === null || value === undefined ? "" : String(value).toLocaleLowerCase();
+function textFilterMatch(operator: string, values: string[], actual: string): boolean | undefined {
   switch (operator) {
     case "contains": return values.some((item) => actual.includes(item));
     case "does not contain": return values.every((item) => !actual.includes(item));
@@ -136,10 +134,22 @@ function filterMatch(value: unknown, operator: string, expected: string[]): bool
     case "is": return values.some((item) => actual === item);
     case "not-is":
     case "is_not": return values.every((item) => actual !== item);
+    default: return undefined;
+  }
+}
+
+function nullFilterMatch(operator: string, actual: string, value: unknown): boolean | undefined {
+  switch (operator) {
     case "is-null":
     case "is_empty": return value === null || value === undefined || actual === "";
     case "is-not-null":
     case "is_not_empty": return value !== null && value !== undefined && actual !== "";
+    default: return undefined;
+  }
+}
+
+function numericFilterMatch(operator: string, values: string[], value: unknown): boolean | undefined {
+  switch (operator) {
     case "greater-than":
     case "gt":
     case "is_after": return values.some((item) => compare(value, item) > 0);
@@ -148,8 +158,17 @@ function filterMatch(value: unknown, operator: string, expected: string[]): bool
     case "is_before": return values.some((item) => compare(value, item) < 0);
     case "gteq": return values.some((item) => compare(value, item) >= 0);
     case "lteq": return values.some((item) => compare(value, item) <= 0);
-    default: return false;
+    default: return undefined;
   }
+}
+
+function filterMatch(value: unknown, operator: string, expected: string[]): boolean {
+  const values = expected.map((item) => item.toLocaleLowerCase());
+  const actual = value === null || value === undefined ? "" : String(value).toLocaleLowerCase();
+  return textFilterMatch(operator, values, actual)
+    ?? nullFilterMatch(operator, actual, value)
+    ?? numericFilterMatch(operator, values, value)
+    ?? false;
 }
 
 function compare(value: unknown, expected: string): number {
@@ -270,6 +289,227 @@ function sqlColumn(name: string): SQL {
   return sql.raw(`"${name}"`);
 }
 
+type ExplorerColumnType = "boolean" | "numeric" | "date" | "text";
+
+function bulkActionAttributes(body: unknown): { dataObject: Record<string, unknown>; attributes: Record<string, unknown>; inputs: Record<string, unknown> } {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"];
+  const dataObject = data !== null && typeof data === "object" ? data as Record<string, unknown> : {};
+  const attributes = dataObject["attributes"] !== null && typeof dataObject["attributes"] === "object"
+    ? dataObject["attributes"] as Record<string, unknown>
+    : {};
+  const inputs = attributes["action_inputs"] !== null && typeof attributes["action_inputs"] === "object"
+    ? attributes["action_inputs"] as Record<string, unknown>
+    : {};
+  return { dataObject, attributes, inputs };
+}
+
+function parseBulkActionInputs(
+  body: unknown,
+  set: SetObj,
+): { subject: string; message: string; targetIds: unknown; query: unknown } | { error: unknown } {
+  const { dataObject, attributes, inputs } = bulkActionAttributes(body);
+  const subject = typeof inputs["subject"] === "string" ? inputs["subject"].trim() : "";
+  const message = typeof inputs["message"] === "string" ? inputs["message"].trim() : "";
+  const actionType = attributes["action_type"];
+  const targetIds = attributes["target_ids"];
+  const query = attributes["query"];
+  if (
+    dataObject["type"] !== "bulk_actions"
+    || (actionType !== "change_request" && actionType !== "change_requests")
+    || subject === ""
+    || message === ""
+    || (targetIds === undefined) === (query === undefined)
+  ) return { error: explorerBulkActionError(set, 422, "Unprocessable Entity", "Valid bulk-action inputs and exactly one target selector are required") };
+  return { subject, message, targetIds, query };
+}
+
+async function validateBulkTargetMembership(organizationId: string, requestedIds: string[], set: SetObj): Promise<unknown | null> {
+  const candidates = await db.query.workspaces.findMany({
+    columns: { id: true },
+    where: and(eq(workspaces.orgId, organizationId), inArray(workspaces.id, requestedIds)),
+  });
+  const candidateIds = new Set(candidates.map((workspace): string => workspace.id));
+  if (requestedIds.some((id): boolean => !candidateIds.has(id))) {
+    return explorerBulkActionError(set, 422, "Unprocessable Entity", "The target selector did not resolve to workspaces");
+  }
+  return null;
+}
+
+async function resolveBulkActionQuerySelection(
+  organization: Readonly<{ id: string; name: string }>,
+  query: unknown,
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<{ selectedIds: string[] } | { error: unknown }> {
+  let selection: ExplorerWorkspaceSelection | undefined;
+  try {
+    selection = await queryWorkspaceIds(organization.id, organization.name, query, request.signal);
+  } catch (cause: unknown) {
+    const response = queryBudgetError(set, cause);
+    if (response !== undefined) return { error: response };
+    throw cause;
+  }
+  const selectedIds = selection?.ids;
+  const selectedTotal = selection?.total;
+  if (selectedIds === undefined || selectedIds.length === 0) {
+    return { error: explorerBulkActionError(set, 422, "Unprocessable Entity", "The target selector did not resolve to workspaces") };
+  }
+  if (
+    selectedIds.length > MAX_EXPLORER_BULK_ACTION_TARGETS
+    || (selectedTotal !== undefined && selectedTotal > MAX_EXPLORER_BULK_ACTION_TARGETS)
+  ) {
+    return { error: explorerBulkActionError(set, 422, "Unprocessable Entity", `The target selector matches more than ${MAX_EXPLORER_BULK_ACTION_TARGETS} workspaces`) };
+  }
+  return { selectedIds };
+}
+
+async function resolveBulkActionTargetIds(
+  organization: Readonly<{ id: string; name: string }>,
+  targetIds: unknown,
+  query: unknown,
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<{ selectedIds: string[] } | { error: unknown }> {
+  if (targetIds !== undefined) {
+    if (
+      !Array.isArray(targetIds)
+      || targetIds.length === 0
+      || targetIds.length > MAX_EXPLORER_BULK_ACTION_TARGETS
+      || targetIds.some((id): boolean => typeof id !== "string")
+    ) {
+      return { error: explorerBulkActionError(set, 422, "Unprocessable Entity", `target_ids must contain between 1 and ${MAX_EXPLORER_BULK_ACTION_TARGETS} workspace IDs`) };
+    }
+    const requestedIds = [...new Set(targetIds as string[])];
+    const membershipError = await validateBulkTargetMembership(organization.id, requestedIds, set);
+    if (membershipError !== null) return { error: membershipError };
+    return { selectedIds: requestedIds };
+  }
+  return resolveBulkActionQuerySelection(organization, query, request, set);
+}
+
+async function createBulkActionRecords(
+  organization: Readonly<{ id: string }>,
+  selectedIds: string[],
+  subject: string,
+  message: string,
+  userId: string | null,
+  set: SetObj,
+): Promise<unknown> {
+  const now = Date.now();
+  const records = selectedIds.map((workspaceId): ExplorerBulkActionRecord =>
+    explorerBulkActionRecordValues(workspaceId, subject, message, userId, now));
+  await db.transaction(async (tx): Promise<void> => {
+    await tx.insert(explorerBulkActionRecords).values(records);
+    await tx.insert(auditLogs).values(records.map((record) => auditLogValues({
+      orgId: organization.id,
+      userId,
+      action: "create",
+      resourceType: "explorer-bulk-action-records",
+      resourceId: record.id,
+      details: {
+        workspaceId: record.workspaceId,
+        toStatus: "pending",
+      },
+      createdAt: now,
+    }) as typeof auditLogs.$inferInsert));
+  });
+  // Notifications reread the committed Explorer bulk-action rows. Dispatching only
+  // after commit prevents a failed transaction from producing a notification
+  // for a row that never became durable.
+  for (let i = 0; i < records.length; i += EXPLORER_NOTIFICATION_CONCURRENCY) {
+    await Promise.all(records
+      .slice(i, i + EXPLORER_NOTIFICATION_CONCURRENCY)
+      .map(async (record): Promise<void> => queueExplorerBulkActionNotification(record.id)));
+  }
+  (set as { status: number }).status = 201;
+  return {
+    data: explorerBulkActionResource(records[0]!, organization.id),
+    meta: {
+      "action-type": "change-requests",
+      "action-inputs": { subject, message },
+      "created-count": records.length,
+    },
+  };
+}
+
+function parseSavedViewCreate(
+  body: unknown,
+  set: SetObj,
+): { name: string; query: ExplorerQuery } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  if (data !== undefined && data["type"] !== undefined && data["type"] !== "explorer-views") {
+    (set as { status: number }).status = 422;
+    return { error: error("422", "Unprocessable Entity", "Invalid type") };
+  }
+  const name = typeof data?.["name"] === "string" ? data["name"].trim() : "";
+  if (name.length > 255) { (set as { status: number }).status = 422; return { error: error("422", "Unprocessable Entity", "Name too long") }; }
+  const query = queryObject(data?.["query"], data?.["query_type"] ?? data?.["query-type"]);
+  if (name === "" || query === undefined) { (set as { status: number }).status = 422; return { error: error("422", "Unprocessable Entity", "name, query_type, and query are required") }; }
+  return { name, query };
+}
+
+function parseSavedViewUpdate(
+  body: unknown,
+  defaultQueryType: string,
+  set: SetObj,
+): { name: string; query: ExplorerQuery } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const name = typeof data?.["name"] === "string" ? data["name"].trim() : "";
+  const query = queryObject(data?.["query"], data?.["query_type"] ?? data?.["query-type"] ?? defaultQueryType);
+  if (name === "" || query === undefined) { (set as { status: number }).status = 422; return { error: error("422", "Unprocessable Entity", "name and query are required") }; }
+  return { name, query };
+}
+
+function sqlBoundValue(value: string, operator: string, columnType: ExplorerColumnType): string | number | boolean | undefined {
+  const comparison = comparisonOperators.has(operator);
+  if (columnType === "boolean" && comparison) {
+    return value.toLowerCase() === "true" ? true : value.toLowerCase() === "false" ? false : undefined;
+  }
+  if (columnType === "numeric" && comparison) return Number(value);
+  if (columnType === "date" && comparison) return Date.parse(value);
+  return value;
+}
+
+function sqlBoundGuard(bound: string | number | boolean | undefined, operator: string, numeric: boolean, date: boolean, booleanColumn: boolean): SQL | null {
+  if (booleanColumn && comparisonOperators.has(operator) && typeof bound !== "boolean") return sql`1 = 0`;
+  if ((numeric || date) && comparisonOperators.has(operator) && typeof bound === "number" && !Number.isFinite(bound)) return sql`1 = 0`;
+  return null;
+}
+
+function sqlTextPredicate(operator: string, column: SQL, textColumn: SQL, value: string, bound: string | number | boolean | undefined, typed: boolean): SQL | undefined {
+  switch (operator) {
+    case "contains": return sql`lower(${textColumn}) LIKE lower(${`%${value}%`})`;
+    case "does not contain": return sql`lower(${textColumn}) NOT LIKE lower(${`%${value}%`})`;
+    case "starts-with": return sql`lower(${textColumn}) LIKE lower(${`${value}%`})`;
+    case "ends-with": return sql`lower(${textColumn}) LIKE lower(${`%${value}`})`;
+    case "is": return typed ? sql`${column} = ${bound}` : sql`lower(${textColumn}) = lower(${value})`;
+    case "not-is":
+    case "is_not": return typed ? sql`${column} <> ${bound}` : sql`lower(${textColumn}) <> lower(${value})`;
+    case "is-null":
+    case "is_empty": return sql`(${column} IS NULL OR ${textColumn} = '')`;
+    case "is-not-null":
+    case "is_not_empty": return sql`(${column} IS NOT NULL AND ${textColumn} <> '')`;
+    default: return undefined;
+  }
+}
+
+function sqlComparisonPredicate(operator: string, column: SQL, bound: string | number | boolean | undefined): SQL | undefined {
+  switch (operator) {
+    case "greater-than":
+    case "gt":
+    case "is_after": return sql`${column} > ${bound}`;
+    case "less-than":
+    case "lt":
+    case "is_before": return sql`${column} < ${bound}`;
+    case "gteq": return sql`${column} >= ${bound}`;
+    case "lteq": return sql`${column} <= ${bound}`;
+    default: return undefined;
+  }
+}
+
 function sqlFilter(columnName: string, filter: ExplorerFilter): SQL | undefined {
   const column = sqlColumn(columnName);
   const values = filter.value.length === 0 ? [""] : filter.value;
@@ -280,37 +520,13 @@ function sqlFilter(columnName: string, filter: ExplorerFilter): SQL | undefined 
     ? sql`CASE WHEN ${column} THEN 'true' ELSE 'false' END`
     : sql`CAST(${column} AS TEXT)`;
   const make = (value: string): SQL => {
-    const bound = boolean && comparisonOperators.has(filter.operator)
-      ? value.toLowerCase() === "true" ? true : value.toLowerCase() === "false" ? false : undefined
-      : numeric && comparisonOperators.has(filter.operator)
-      ? Number(value)
-      : date && comparisonOperators.has(filter.operator)
-        ? Date.parse(value)
-        : value;
-    if (boolean && comparisonOperators.has(filter.operator) && typeof bound !== "boolean") return sql`1 = 0`;
-    if ((numeric || date) && comparisonOperators.has(filter.operator) && typeof bound === "number" && !Number.isFinite(bound)) return sql`1 = 0`;
-    switch (filter.operator) {
-      case "contains": return sql`lower(${textColumn}) LIKE lower(${`%${value}%`})`;
-      case "does not contain": return sql`lower(${textColumn}) NOT LIKE lower(${`%${value}%`})`;
-      case "starts-with": return sql`lower(${textColumn}) LIKE lower(${`${value}%`})`;
-      case "ends-with": return sql`lower(${textColumn}) LIKE lower(${`%${value}`})`;
-      case "is": return numeric || date || boolean ? sql`${column} = ${bound}` : sql`lower(${textColumn}) = lower(${value})`;
-      case "not-is":
-      case "is_not": return numeric || date || boolean ? sql`${column} <> ${bound}` : sql`lower(${textColumn}) <> lower(${value})`;
-      case "is-null":
-      case "is_empty": return sql`(${column} IS NULL OR ${textColumn} = '')`;
-      case "is-not-null":
-      case "is_not_empty": return sql`(${column} IS NOT NULL AND ${textColumn} <> '')`;
-      case "greater-than":
-      case "gt":
-      case "is_after": return sql`${column} > ${bound}`;
-      case "less-than":
-      case "lt":
-      case "is_before": return sql`${column} < ${bound}`;
-      case "gteq": return sql`${column} >= ${bound}`;
-      case "lteq": return sql`${column} <= ${bound}`;
-      default: return sql`1 = 1`;
-    }
+    const columnType: ExplorerColumnType = boolean ? "boolean" : numeric ? "numeric" : date ? "date" : "text";
+    const bound = sqlBoundValue(value, filter.operator, columnType);
+    const guard = sqlBoundGuard(bound, filter.operator, numeric, date, boolean);
+    if (guard !== null) return guard;
+    return sqlTextPredicate(filter.operator, column, textColumn, value, bound, numeric || date || boolean)
+      ?? sqlComparisonPredicate(filter.operator, column, bound)
+      ?? sql`1 = 1`;
   };
   return values.length === 1 ? make(values[0] ?? "") : sql`(${sql.join(values.map(make), negativeFilterOperators.has(filter.operator) ? sql` AND ` : sql` OR `)})`;
 }
@@ -408,31 +624,51 @@ function membershipCatalogResource(row: Readonly<{
   };
 }
 
+function aggregateEqualityPredicate(operator: string, expression: SQL, bound: number): SQL | undefined {
+  switch (operator) {
+    case "is": return Number.isFinite(bound) ? sql`${expression} = ${bound}` : sql`1 = 0`;
+    case "not-is":
+    case "is_not": return Number.isFinite(bound) ? sql`${expression} <> ${bound}` : sql`1 = 1`;
+    default: return undefined;
+  }
+}
+
+function aggregateOrderingPredicate(operator: string, expression: SQL, bound: number): SQL | undefined {
+  const finite = Number.isFinite(bound);
+  switch (operator) {
+    case "greater-than":
+    case "gt":
+    case "is_after": return finite ? sql`${expression} > ${bound}` : sql`1 = 0`;
+    case "less-than":
+    case "lt":
+    case "is_before": return finite ? sql`${expression} < ${bound}` : sql`1 = 0`;
+    case "gteq": return finite ? sql`${expression} >= ${bound}` : sql`1 = 0`;
+    case "lteq": return finite ? sql`${expression} <= ${bound}` : sql`1 = 0`;
+    default: return undefined;
+  }
+}
+
+function aggregateTextPredicate(operator: string, expression: SQL, value: string): SQL | undefined {
+  switch (operator) {
+    case "contains": return sql`CAST(${expression} AS TEXT) LIKE ${`%${value}%`}`;
+    case "does not contain": return sql`CAST(${expression} AS TEXT) NOT LIKE ${`%${value}%`}`;
+    case "is-null":
+    case "is_empty": return sql`(${expression} IS NULL OR CAST(${expression} AS TEXT) = '')`;
+    case "is-not-null":
+    case "is_not_empty": return sql`(${expression} IS NOT NULL AND CAST(${expression} AS TEXT) <> '')`;
+    default: return undefined;
+  }
+}
+
 function aggregateFilter(expression: SQL, filter: ExplorerFilter): SQL {
   const values = filter.value.length === 0 ? [""] : filter.value;
   const make = (value: string): SQL => {
     const numeric = Number(value);
     const bound = Number.isFinite(numeric) ? numeric : Number.NaN;
-    switch (filter.operator) {
-      case "is": return Number.isFinite(bound) ? sql`${expression} = ${bound}` : sql`1 = 0`;
-      case "not-is":
-      case "is_not": return Number.isFinite(bound) ? sql`${expression} <> ${bound}` : sql`1 = 1`;
-      case "greater-than":
-      case "gt":
-      case "is_after": return Number.isFinite(bound) ? sql`${expression} > ${bound}` : sql`1 = 0`;
-      case "less-than":
-      case "lt":
-      case "is_before": return Number.isFinite(bound) ? sql`${expression} < ${bound}` : sql`1 = 0`;
-      case "gteq": return Number.isFinite(bound) ? sql`${expression} >= ${bound}` : sql`1 = 0`;
-      case "lteq": return Number.isFinite(bound) ? sql`${expression} <= ${bound}` : sql`1 = 0`;
-      case "contains": return sql`CAST(${expression} AS TEXT) LIKE ${`%${value}%`}`;
-      case "does not contain": return sql`CAST(${expression} AS TEXT) NOT LIKE ${`%${value}%`}`;
-      case "is-null":
-      case "is_empty": return sql`(${expression} IS NULL OR CAST(${expression} AS TEXT) = '')`;
-      case "is-not-null":
-      case "is_not_empty": return sql`(${expression} IS NOT NULL AND CAST(${expression} AS TEXT) <> '')`;
-      default: return sql`1 = 1`;
-    }
+    return aggregateEqualityPredicate(filter.operator, expression, bound)
+      ?? aggregateOrderingPredicate(filter.operator, expression, bound)
+      ?? aggregateTextPredicate(filter.operator, expression, value)
+      ?? sql`1 = 1`;
   };
   return values.length === 1 ? make(values[0] ?? "") : sql`(${sql.join(values.map(make), negativeFilterOperators.has(filter.operator) ? sql` AND ` : sql` OR `)})`;
 }
@@ -753,104 +989,13 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
       || !(await checkOrganizationPermission(organization.id, user?.id, tokenOrgId, tokenTeamId, "manage-workspaces"))
     ) return explorerBulkActionError(set, 404, "Not Found");
 
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"];
-    const dataObject = data !== null && typeof data === "object" ? data as Record<string, unknown> : {};
-    const attributes = dataObject["attributes"] !== null && typeof dataObject["attributes"] === "object"
-      ? dataObject["attributes"] as Record<string, unknown>
-      : {};
-    const inputs = attributes["action_inputs"] !== null && typeof attributes["action_inputs"] === "object"
-      ? attributes["action_inputs"] as Record<string, unknown>
-      : {};
-    const subject = typeof inputs["subject"] === "string" ? inputs["subject"].trim() : "";
-    const message = typeof inputs["message"] === "string" ? inputs["message"].trim() : "";
-    const actionType = attributes["action_type"];
-    const targetIds = attributes["target_ids"];
-    const query = attributes["query"];
-    if (
-      dataObject["type"] !== "bulk_actions"
-      || (actionType !== "change_request" && actionType !== "change_requests")
-      || subject === ""
-      || message === ""
-      || (targetIds === undefined) === (query === undefined)
-    ) return explorerBulkActionError(set, 422, "Unprocessable Entity", "Valid bulk-action inputs and exactly one target selector are required");
+    const parsed = parseBulkActionInputs(body, set);
+    if ("error" in parsed) return parsed.error;
 
-    let selectedIds: string[] | undefined;
-    let selectedTotal: number | undefined;
-    if (targetIds !== undefined) {
-      if (
-        !Array.isArray(targetIds)
-        || targetIds.length === 0
-        || targetIds.length > MAX_EXPLORER_BULK_ACTION_TARGETS
-        || targetIds.some((id): boolean => typeof id !== "string")
-      ) {
-        return explorerBulkActionError(set, 422, "Unprocessable Entity", `target_ids must contain between 1 and ${MAX_EXPLORER_BULK_ACTION_TARGETS} workspace IDs`);
-      }
-      const requestedIds = [...new Set(targetIds as string[])];
-      const candidates = await db.query.workspaces.findMany({
-        columns: { id: true },
-        where: and(eq(workspaces.orgId, organization.id), inArray(workspaces.id, requestedIds)),
-      });
-      const candidateIds = new Set(candidates.map((workspace): string => workspace.id));
-      selectedIds = requestedIds;
-      if (selectedIds.some((id): boolean => !candidateIds.has(id))) selectedIds = undefined;
-    } else {
-      let selection: ExplorerWorkspaceSelection | undefined;
-      try {
-        selection = await queryWorkspaceIds(organization.id, organization.name, query, request.signal);
-      } catch (cause: unknown) {
-        const response = queryBudgetError(set, cause);
-        if (response !== undefined) return response;
-        throw cause;
-      }
-      selectedIds = selection?.ids;
-      selectedTotal = selection?.total;
-    }
-    if (selectedIds === undefined || selectedIds.length === 0) {
-      return explorerBulkActionError(set, 422, "Unprocessable Entity", "The target selector did not resolve to workspaces");
-    }
-    if (
-      selectedIds.length > MAX_EXPLORER_BULK_ACTION_TARGETS
-      || (selectedTotal !== undefined && selectedTotal > MAX_EXPLORER_BULK_ACTION_TARGETS)
-    ) {
-      return explorerBulkActionError(set, 422, "Unprocessable Entity", `The target selector matches more than ${MAX_EXPLORER_BULK_ACTION_TARGETS} workspaces`);
-    }
+    const resolved = await resolveBulkActionTargetIds(organization, parsed.targetIds, parsed.query, request, set);
+    if ("error" in resolved) return resolved.error;
 
-    const now = Date.now();
-    const records = selectedIds.map((workspaceId): ExplorerBulkActionRecord =>
-      explorerBulkActionRecordValues(workspaceId, subject, message, user?.id ?? null, now));
-    await db.transaction(async (tx): Promise<void> => {
-      await tx.insert(explorerBulkActionRecords).values(records);
-      await tx.insert(auditLogs).values(records.map((record) => auditLogValues({
-        orgId: organization.id,
-        userId: user?.id ?? null,
-        action: "create",
-        resourceType: "explorer-bulk-action-records",
-        resourceId: record.id,
-        details: {
-          workspaceId: record.workspaceId,
-          toStatus: "pending",
-        },
-        createdAt: now,
-      }) as typeof auditLogs.$inferInsert));
-    });
-    // Notifications reread the committed Explorer bulk-action rows. Dispatching only
-    // after commit prevents a failed transaction from producing a notification
-    // for a row that never became durable.
-    for (let i = 0; i < records.length; i += EXPLORER_NOTIFICATION_CONCURRENCY) {
-      await Promise.all(records
-        .slice(i, i + EXPLORER_NOTIFICATION_CONCURRENCY)
-        .map((record): Promise<void> => queueExplorerBulkActionNotification(record.id)));
-    }
-    (set as { status: number }).status = 201;
-    return {
-      data: explorerBulkActionResource(records[0]!, organization.id),
-      meta: {
-        "action-type": "change-requests",
-        "action-inputs": { subject, message },
-        "created-count": records.length,
-      },
-    };
+    return createBulkActionRecords(organization, resolved.selectedIds, parsed.subject, parsed.message, user?.id ?? null, set);
   })
   .get("/api/v2/organizations/:org_name/explorer", async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
@@ -906,17 +1051,9 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))) {
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    if (data !== undefined && data["type"] !== undefined && data["type"] !== "explorer-views") {
-      (set as { status: number }).status = 422;
-      return error("422", "Unprocessable Entity", "Invalid type");
-    }
-    const name = typeof data?.["name"] === "string" ? data["name"].trim() : "";
-    if (name.length > 255) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "Name too long"); }
-    const query = queryObject(data?.["query"], data?.["query_type"] ?? data?.["query-type"]);
-    if (name === "" || query === undefined) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "name, query_type, and query are required"); }
-    const saved: typeof explorerSavedQueries.$inferInsert = { id: newResourceId("sq"), orgId: org.id, name, queryType: query.type, query: { type: query.type, filter: query.filter, fields: query.fields, sort: query.sort }, createdAt: Date.now() };
+    const parsed = parseSavedViewCreate(body, set);
+    if ("error" in parsed) return parsed.error;
+    const saved: typeof explorerSavedQueries.$inferInsert = { id: newResourceId("sq"), orgId: org.id, name: parsed.name, queryType: parsed.query.type, query: { type: parsed.query.type, filter: parsed.query.filter, fields: parsed.query.fields, sort: parsed.query.sort }, createdAt: Date.now() };
     await db.insert(explorerSavedQueries).values(saved);
     (set as { status: number }).status = 201;
     return { data: savedQueryResource(saved as typeof explorerSavedQueries.$inferSelect) };
@@ -940,13 +1077,10 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
     if (org === undefined || view === undefined || view.orgId !== org.id || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))) {
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const name = typeof data?.["name"] === "string" ? data["name"].trim() : "";
-    const query = queryObject(data?.["query"], data?.["query_type"] ?? data?.["query-type"] ?? view.queryType);
-    if (name === "" || query === undefined) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "name and query are required"); }
-    await db.update(explorerSavedQueries).set({ name, queryType: query.type, query: { type: query.type, filter: query.filter, fields: query.fields, sort: query.sort } }).where(eq(explorerSavedQueries.id, view.id));
-    const updated = { ...view, name, queryType: query.type, query: { type: query.type, filter: query.filter, fields: query.fields, sort: query.sort } };
+    const parsed = parseSavedViewUpdate(body, view.queryType, set);
+    if ("error" in parsed) return parsed.error;
+    await db.update(explorerSavedQueries).set({ name: parsed.name, queryType: parsed.query.type, query: { type: parsed.query.type, filter: parsed.query.filter, fields: parsed.query.fields, sort: parsed.query.sort } }).where(eq(explorerSavedQueries.id, view.id));
+    const updated = { ...view, name: parsed.name, queryType: parsed.query.type, query: { type: parsed.query.type, filter: parsed.query.filter, fields: parsed.query.fields, sort: parsed.query.sort } };
     return { data: savedQueryResource(updated) };
   })
   .delete("/api/v2/organizations/:org_name/explorer/views/:view_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {

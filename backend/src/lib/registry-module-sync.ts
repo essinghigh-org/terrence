@@ -35,37 +35,46 @@ export type RegistryModuleCandidate = Readonly<{ version: string; ref: string; s
 export const REGISTRY_VERSION_IMPORT_BATCH_SIZE = 100;
 
 
-async function credentialsFor(mod: RegistryModuleSource): Promise<Credentials> {
-  if (mod.vcsConnectionType === "github-app" && mod.vcsConnectionId !== null) {
-    const installation = await db.query.githubAppInstallations.findFirst({
-      where: and(
-        eq(githubAppInstallations.id, mod.vcsConnectionId),
-        eq(githubAppInstallations.orgId, mod.orgId),
-      ),
-    });
-    if (installation === undefined) throw new Error("The selected VCS connection is unavailable");
-    const token = await getGitHubAppAccessToken(installation.installationId);
-    if (token === null) throw new Error("The selected VCS connection could not authenticate");
-    const apiUrl = (await getGitHubAppRuntimeConfiguration())?.apiUrl;
-    if (apiUrl === undefined) throw new Error("The VCS connection API URL is invalid");
-    return { apiUrl, token };
+async function githubAppCredentials(mod: RegistryModuleSource, connectionId: string): Promise<Credentials> {
+  const installation = await db.query.githubAppInstallations.findFirst({
+    where: and(
+      eq(githubAppInstallations.id, connectionId),
+      eq(githubAppInstallations.orgId, mod.orgId),
+    ),
+  });
+  if (installation === undefined) throw new Error("The selected VCS connection is unavailable");
+  const token = await getGitHubAppAccessToken(installation.installationId);
+  if (token === null) throw new Error("The selected VCS connection could not authenticate");
+  const apiUrl = (await getGitHubAppRuntimeConfiguration())?.apiUrl;
+  if (apiUrl === undefined) throw new Error("The VCS connection API URL is invalid");
+  return { apiUrl, token };
+}
+
+async function oauthTokenCredentials(mod: RegistryModuleSource, connectionId: string): Promise<Credentials> {
+  const tokenRow = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, connectionId) });
+  if (tokenRow === undefined) throw new Error("The selected VCS connection is unavailable");
+  const client = await db.query.oauthClients.findFirst({
+    where: and(eq(oauthClients.id, tokenRow.oauthClientId), eq(oauthClients.orgId, mod.orgId)),
+  });
+  if (client === undefined || !["github", "github_enterprise"].includes(client.serviceProvider)) {
+    throw new Error("This VCS provider is not yet supported for registry module ingestion");
   }
-  if (mod.vcsConnectionType === "oauth-token" && mod.vcsConnectionId !== null) {
-    const tokenRow = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, mod.vcsConnectionId) });
-    if (tokenRow === undefined) throw new Error("The selected VCS connection is unavailable");
-    const client = await db.query.oauthClients.findFirst({
-      where: and(eq(oauthClients.id, tokenRow.oauthClientId), eq(oauthClients.orgId, mod.orgId)),
-    });
-    if (client === undefined || !["github", "github_enterprise"].includes(client.serviceProvider)) {
-      throw new Error("This VCS provider is not yet supported for registry module ingestion");
-    }
-    const apiUrl = normalizeGithubApiBase(
-      client.apiUrl?.trim() === "" || client.apiUrl === null || client.apiUrl === undefined
-        ? "https://api.github.com"
-        : client.apiUrl,
-    );
-    if (apiUrl === undefined) throw new Error("The VCS connection API URL is invalid");
-    return { apiUrl, token: await decryptSecret(tokenRow.token) };
+  const apiUrl = normalizeGithubApiBase(
+    client.apiUrl?.trim() === "" || client.apiUrl === null || client.apiUrl === undefined
+      ? "https://api.github.com"
+      : client.apiUrl,
+  );
+  if (apiUrl === undefined) throw new Error("The VCS connection API URL is invalid");
+  return { apiUrl, token: await decryptSecret(tokenRow.token) };
+}
+
+async function credentialsFor(mod: RegistryModuleSource): Promise<Credentials> {
+  const connectionId = mod.vcsConnectionId;
+  if (mod.vcsConnectionType === "github-app" && connectionId !== null) {
+    return githubAppCredentials(mod, connectionId);
+  }
+  if (mod.vcsConnectionType === "oauth-token" && connectionId !== null) {
+    return oauthTokenCredentials(mod, connectionId);
   }
   throw new Error("The registry module has no valid VCS connection");
 }

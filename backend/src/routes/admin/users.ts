@@ -15,6 +15,220 @@ import { type UserItem, adminUserResource } from "./helpers";
 import { publish } from "../../lib/event-bus";
 import { normalizeEmail, normalizeUsername } from "../../lib/identity";
 import { IMPERSONATION_TOKEN_PREFIX, isImpersonationTokenId } from "../../lib/impersonation";
+function parseAdminUserCreate(
+  body: unknown,
+  set: ParamCtx["set"],
+): { username: string; email: string | null; password: string; isSiteAdmin: boolean } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  const username = typeof attrs["username"] === "string" ? normalizeUsername(attrs["username"]) : null;
+  const rawEmail = typeof attrs["email"] === "string" ? attrs["email"].trim() : null;
+  const email = rawEmail === null || rawEmail === "" ? null : normalizeEmail(rawEmail);
+  const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
+  const isSiteAdmin = attrs["is-site-admin"] === true;
+  if (username === null) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username is required" }] } };
+  }
+  if (rawEmail !== null && rawEmail !== "" && email === null) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email" }] } };
+  }
+  return { username, email, password, isSiteAdmin };
+}
+
+async function checkAdminUserCreate(
+  username: string,
+  email: string | null,
+  password: string,
+  set: ParamCtx["set"],
+): Promise<{ ok: true } | { error: unknown }> {
+  const adminPolicy = checkPasswordPolicy(loadPasswordPolicy(), password, username);
+  if (!adminPolicy.ok) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: adminPolicy.errors.join(" ") }] } };
+  }
+  const existing = await db.query.users.findFirst({ where: or(eq(users.username, username), ...(email === null ? [] : [eq(users.email, email)])) });
+  if (existing !== undefined) {
+    (set as { status: number }).status = 409;
+    return { error: { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] } };
+  }
+  return { ok: true };
+}
+
+async function insertAdminUser(
+  username: string,
+  email: string | null,
+  password: string,
+  isSiteAdmin: boolean,
+  set: ParamCtx["set"],
+): Promise<{ created: typeof users.$inferSelect } | { error: unknown }> {
+  const passwordHash = await hashPassword(password);
+  const id = newResourceId("user");
+  try {
+    await db.insert(users).values({ id, username, email, passwordHash, isSiteAdmin });
+  } catch (e: unknown) {
+    if (isUniqueConstraintError(e)) {
+      (set as { status: number }).status = 409;
+      return { error: { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] } };
+    }
+    throw e;
+  }
+  const created = await db.query.users.findFirst({ where: eq(users.id, id) });
+  if (created === undefined) { (set as { status: number }).status = 500; return { error: { errors: [{ status: "500", title: "Internal Server Error" }] } }; }
+  return { created };
+}
+
+async function findAdminUserTarget(
+  userId: string,
+  set: ParamCtx["set"],
+): Promise<{ target: typeof users.$inferSelect } | { error: unknown }> {
+  const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
+  if (targetUser === undefined) { (set as { status: number }).status = 404; return { error: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  if ((targetUser as unknown as { deletedAt?: unknown }).deletedAt != null) { (set as { status: number }).status = 404; return { error: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  return { target: targetUser };
+}
+
+function adminUserAttributes(body: unknown): Record<string, unknown> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  return typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+}
+
+async function parseAdminUsernameUpdate(
+  attributes: Record<string, unknown>,
+  userId: string,
+  set: ParamCtx["set"],
+): Promise<{ username: string | null } | { error: unknown }> {
+  if (typeof attributes["username"] !== "string") return { username: null };
+  const username = normalizeUsername(attributes["username"]);
+  if (username === null) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid username" }] } };
+  }
+  const claimant = await db.query.users.findFirst({ where: eq(users.username, username), columns: { id: true } });
+  if (claimant !== undefined && claimant.id !== userId) {
+    (set as { status: number }).status = 409;
+    return { error: { errors: [{ status: "409", title: "Conflict", detail: "That username is already in use" }] } };
+  }
+  return { username };
+}
+
+async function parseAdminEmailUpdate(
+  attributes: Record<string, unknown>,
+  userId: string,
+  currentEmail: string | null,
+  set: ParamCtx["set"],
+): Promise<{ email: string | null; changed: boolean } | { skipped: true } | { error: unknown }> {
+  if (attributes["email"] !== null && typeof attributes["email"] !== "string") return { skipped: true };
+  const raw = attributes["email"] === null ? "" : attributes["email"].trim();
+  const email = raw === "" ? null : normalizeEmail(raw);
+  if (email === null && raw !== "") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email" }] } };
+  }
+  if (email !== null) {
+    const claimant = await db.query.users.findFirst({ where: eq(users.email, email), columns: { id: true } });
+    if (claimant !== undefined && claimant.id !== userId) {
+      (set as { status: number }).status = 409;
+      return { error: { errors: [{ status: "409", title: "Conflict", detail: "That email address is already in use" }] } };
+    }
+  }
+  return { email, changed: email !== currentEmail };
+}
+
+async function persistAdminUserUpdates(
+  userId: string,
+  updates: Partial<typeof users.$inferInsert>,
+  set: ParamCtx["set"],
+): Promise<{ persisted: true } | { error: unknown }> {
+  if (Object.keys(updates).length === 0) return { persisted: true };
+  try {
+    await db.update(users).set(updates).where(eq(users.id, userId));
+  } catch (e: unknown) {
+    if (isUniqueConstraintError(e)) {
+      (set as { status: number }).status = 409;
+      return { error: { errors: [{ status: "409", title: "Conflict", detail: "That identity is already in use" }] } };
+    }
+    throw e;
+  }
+  return { persisted: true };
+}
+
+function checkResetEligibility(
+  target: typeof users.$inferSelect,
+  userId: string,
+  set: ParamCtx["set"],
+): { ok: true } | { error: unknown } {
+  if (target.id === userId || target.ssoProvider !== null || target.passwordHash.startsWith("$disabled$")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: target.id === userId
+      ? "Change your own password in account settings."
+      : "Reset this user's password through their identity provider." }] } };
+  }
+  return { ok: true };
+}
+
+function checkResetPasswordInput(
+  body: unknown,
+  username: string,
+  set: ParamCtx["set"],
+): { password: string } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
+  const policy = checkPasswordPolicy(loadPasswordPolicy(), password, username);
+  if (!policy.ok || password !== attrs["password-confirmation"]) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: !policy.ok ? policy.errors.join(" ") : "Passwords do not match." }] } };
+  }
+  return { password };
+}
+
+async function applyPasswordReset(
+  userId: string,
+  targetPasswordHash: string,
+  passwordHash: string,
+): Promise<UserItem | undefined> {
+  return db.transaction(async (tx: unknown): Promise<UserItem | undefined> => {
+    const t = tx as typeof db;
+    const [changed] = await t.update(users).set({ passwordHash, mustChangePassword: true })
+      .where(and(eq(users.id, userId), eq(users.passwordHash, targetPasswordHash), isNull(users.deletedAt)))
+      .returning();
+    if (changed === undefined) return undefined;
+    await t.delete(apiTokens).where(eq(apiTokens.userId, userId));
+    await t.update(refreshSessions).set({ revokedAt: Date.now() })
+      .where(and(eq(refreshSessions.userId, userId), isNull(refreshSessions.revokedAt)));
+    return changed;
+  });
+}
+
+async function endImpersonationSession(
+  token: ParamCtx["token"],
+  set: ParamCtx["set"],
+): Promise<{ ended: true } | { error: unknown }> {
+  const tokenId = token?.id;
+  const impersonationToken = tokenId !== undefined && isImpersonationTokenId(tokenId)
+    ? await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) })
+    : undefined;
+  if (impersonationToken === undefined) { (set as { status: number }).status = 404; return { error: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  const impersonatorName = /^Impersonation by (.+)$/.exec(impersonationToken.description ?? "")?.[1];
+  const impersonator = impersonatorName === undefined
+    ? undefined
+    : await db.query.users.findFirst({ where: eq(users.username, impersonatorName), columns: { id: true } });
+  await db.delete(apiTokens).where(eq(apiTokens.id, impersonationToken.id));
+  await auditLog("unimpersonate", "users", impersonationToken.userId, impersonationToken.userId, null, {
+    targetUserId: impersonationToken.userId,
+    impersonatorUserId: impersonator?.id ?? null,
+    effectiveUserId: impersonationToken.userId,
+    impersonationTokenId: impersonationToken.id,
+  }, { effectiveUserId: impersonationToken.userId });
+  (set as { status: number }).status = 204;
+  return { ended: true };
+}
+
 export const usersRoutes = new Elysia({ name: "admin-users" })
   .use(authPlugin)
   .get("/api/v2/admin/users", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
@@ -31,7 +245,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     if (filterSuspended === "false") conditions.push(eq(users.isSuspended, false));
     if (q !== "") {
       const pattern = `%${q}%`;
-      conditions.push(or(caseInsensitiveLike(users.username, pattern), caseInsensitiveLike(users.email, pattern)) as SQL);
+      conditions.push(or(caseInsensitiveLike(users.username, pattern), caseInsensitiveLike(users.email, pattern))!);
     }
     const where = conditions.length === 0 ? undefined : conditions.length === 1 ? conditions[0] : and(...conditions);
     const [allUsers, countRows] = await Promise.all([
@@ -43,47 +257,14 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   })
   .post("/api/v2/admin/users", async ({ body, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const username = typeof attrs["username"] === "string" ? normalizeUsername(attrs["username"]) : null;
-    const rawEmail = typeof attrs["email"] === "string" ? attrs["email"].trim() : null;
-    const email = rawEmail === null || rawEmail === "" ? null : normalizeEmail(rawEmail);
-    const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
-    const isSiteAdmin = attrs["is-site-admin"] === true;
-    if (username === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username is required" }] };
-    }
-    if (rawEmail !== null && rawEmail !== "" && email === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email" }] };
-    }
-    const adminPolicy = checkPasswordPolicy(loadPasswordPolicy(), password, username);
-    if (!adminPolicy.ok) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: adminPolicy.errors.join(" ") }] };
-    }
-    const existing = await db.query.users.findFirst({ where: or(eq(users.username, username), ...(email === null ? [] : [eq(users.email, email)])) });
-    if (existing !== undefined) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
-    }
-    const passwordHash = await hashPassword(password);
-    const id = newResourceId("user");
-    try {
-      await db.insert(users).values({ id, username, email, passwordHash, isSiteAdmin });
-    } catch (e: unknown) {
-      if (isUniqueConstraintError(e)) {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
-      }
-      throw e;
-    }
-    const created = await db.query.users.findFirst({ where: eq(users.id, id) });
-    if (created === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    const parsed = parseAdminUserCreate(body, set);
+    if ("error" in parsed) return parsed.error;
+    const checked = await checkAdminUserCreate(parsed.username, parsed.email, parsed.password, set);
+    if ("error" in checked) return checked.error;
+    const inserted = await insertAdminUser(parsed.username, parsed.email, parsed.password, parsed.isSiteAdmin, set);
+    if ("error" in inserted) return inserted.error;
     (set as { status: number }).status = 201;
-    return { data: adminUserResource(created) };
+    return { data: adminUserResource(inserted.created) };
   })
   .get("/api/v2/admin/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const userId = params["user_id"] ?? "";
@@ -96,54 +277,22 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   .patch("/api/v2/admin/users/:user_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
     const userId = params["user_id"] ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    if (targetUser === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if ((targetUser as unknown as { deletedAt?: unknown }).deletedAt != null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const found = await findAdminUserTarget(userId, set);
+    if ("error" in found) return found.error;
+    const targetUser = found.target;
+    const attributes = adminUserAttributes(body);
     const updates: Partial<typeof users.$inferInsert> = {};
-    if (typeof attributes["username"] === "string") {
-      const username = normalizeUsername(attributes["username"]);
-      if (username === null) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid username" }] };
-      }
-      const claimant = await db.query.users.findFirst({ where: eq(users.username, username), columns: { id: true } });
-      if (claimant !== undefined && claimant.id !== userId) {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "That username is already in use" }] };
-      }
-      updates.username = username;
+    const nameParsed = await parseAdminUsernameUpdate(attributes, userId, set);
+    if ("error" in nameParsed) return nameParsed.error;
+    if (nameParsed.username !== null) updates.username = nameParsed.username;
+    const emailParsed = await parseAdminEmailUpdate(attributes, userId, targetUser.email, set);
+    if ("error" in emailParsed) return emailParsed.error;
+    if (!("skipped" in emailParsed)) {
+      updates.email = emailParsed.email;
+      if (emailParsed.changed) updates.emailVerifiedAt = null;
     }
-    if (attributes["email"] === null || typeof attributes["email"] === "string") {
-      const raw = attributes["email"] === null ? "" : attributes["email"].trim();
-      const email = raw === "" ? null : normalizeEmail(raw);
-      if (email === null && raw !== "") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email" }] };
-      }
-      if (email !== null) {
-        const claimant = await db.query.users.findFirst({ where: eq(users.email, email), columns: { id: true } });
-        if (claimant !== undefined && claimant.id !== userId) {
-          (set as { status: number }).status = 409;
-          return { errors: [{ status: "409", title: "Conflict", detail: "That email address is already in use" }] };
-        }
-      }
-      updates.email = email;
-      if (email !== targetUser.email) updates.emailVerifiedAt = null;
-    }
-    if (Object.keys(updates).length > 0) {
-      try {
-        await db.update(users).set(updates).where(eq(users.id, userId));
-      } catch (e: unknown) {
-        if (isUniqueConstraintError(e)) {
-          (set as { status: number }).status = 409;
-          return { errors: [{ status: "409", title: "Conflict", detail: "That identity is already in use" }] };
-        }
-        throw e;
-      }
-    }
+    const persisted = await persistAdminUserUpdates(userId, updates, set);
+    if ("error" in persisted) return persisted.error;
     if (Object.keys(updates).length > 0) {
       await auditLog("update", "users", userId, user.id, null, { fields: Object.keys(updates) });
       publish("authz.changed", { "user-id": userId });
@@ -241,33 +390,12 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     const userId = params["user_id"] ?? "";
     const target = await db.query.users.findFirst({ where: and(eq(users.id, userId), isNull(users.deletedAt)) });
     if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (target.id === user.id || target.ssoProvider !== null || target.passwordHash.startsWith("$disabled$")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: target.id === user.id
-        ? "Change your own password in account settings."
-        : "Reset this user's password through their identity provider." }] };
-    }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
-    const policy = checkPasswordPolicy(loadPasswordPolicy(), password, target.username);
-    if (!policy.ok || password !== attrs["password-confirmation"]) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: !policy.ok ? policy.errors.join(" ") : "Passwords do not match." }] };
-    }
-    const passwordHash = await hashPassword(password);
-    const updated = await db.transaction(async (tx: unknown): Promise<UserItem | undefined> => {
-      const t = tx as typeof db;
-      const [changed] = await t.update(users).set({ passwordHash, mustChangePassword: true })
-        .where(and(eq(users.id, userId), eq(users.passwordHash, target.passwordHash), isNull(users.deletedAt)))
-        .returning();
-      if (changed === undefined) return undefined;
-      await t.delete(apiTokens).where(eq(apiTokens.userId, userId));
-      await t.update(refreshSessions).set({ revokedAt: Date.now() })
-        .where(and(eq(refreshSessions.userId, userId), isNull(refreshSessions.revokedAt)));
-      return changed;
-    });
+    const eligible = checkResetEligibility(target, user.id, set);
+    if ("error" in eligible) return eligible.error;
+    const input = checkResetPasswordInput(body, target.username, set);
+    if ("error" in input) return input.error;
+    const passwordHash = await hashPassword(input.password);
+    const updated = await applyPasswordReset(userId, target.passwordHash, passwordHash);
     if (updated === undefined) {
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "This account changed while resetting its password. Reload and try again." }] };
@@ -417,23 +545,8 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   })
   .post("/api/v2/admin/users/actions/unimpersonate", async ({ user, token, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) {
-      const tokenId = token?.id;
-      const impersonationToken = tokenId !== undefined && isImpersonationTokenId(tokenId)
-        ? await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) })
-        : undefined;
-      if (impersonationToken === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-      const impersonatorName = /^Impersonation by (.+)$/.exec(impersonationToken.description ?? "")?.[1];
-      const impersonator = impersonatorName === undefined
-        ? undefined
-        : await db.query.users.findFirst({ where: eq(users.username, impersonatorName), columns: { id: true } });
-      await db.delete(apiTokens).where(eq(apiTokens.id, impersonationToken.id));
-      await auditLog("unimpersonate", "users", impersonationToken.userId, impersonationToken.userId, null, {
-        targetUserId: impersonationToken.userId,
-        impersonatorUserId: impersonator?.id ?? null,
-        effectiveUserId: impersonationToken.userId,
-        impersonationTokenId: impersonationToken.id,
-      }, { effectiveUserId: impersonationToken.userId });
-      (set as { status: number }).status = 204;
+      const ended = await endImpersonationSession(token, set);
+      if ("error" in ended) return ended.error;
       return {};
     }
     await auditLog("unimpersonate", "users", user?.id ?? null, user?.id ?? null, null, { reason: "not-an-impersonation-session" }, { result: "denied", immutable: true });

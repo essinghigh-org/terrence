@@ -63,6 +63,27 @@ function paramSafeKey(key: string): string {
 const MAX_FLATTEN_DEPTH = 5;
 const MAX_FLATTEN_PARAMS = 128;
 
+function pushScalarMetaParam(key: string, value: unknown, out: (readonly [string, string])[]): boolean {
+  if (typeof value === "string") {
+    out.push([key, value]);
+    return true;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    out.push([key, String(value)]);
+    return true;
+  }
+  return false;
+}
+
+function pushJsonMetaParam(key: string, value: unknown, out: (readonly [string, string])[]): void {
+  try {
+    const json = JSON.stringify(value) ?? NIL;
+    out.push([key, json]);
+  } catch {
+    out.push([key, "[unserializable]"]);
+  }
+}
+
 /** Flatten one meta value into dotted SD-PARAM entries. Objects recurse
  * (`http: {status}` -> `http.status`), arrays use numeric segments
  * (`tags: ["a"]` -> `tags.0`), scalars stringify, and null/undefined are
@@ -74,24 +95,12 @@ function flattenMetaParam(
   value: unknown,
   depth: number,
   ancestors: ReadonlySet<object>,
-  out: Array<readonly [string, string]>,
+  out: (readonly [string, string])[],
 ): void {
   if (out.length >= MAX_FLATTEN_PARAMS || value === null || value === undefined) return;
-  if (typeof value === "string") {
-    out.push([key, value]);
-    return;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    out.push([key, String(value)]);
-    return;
-  }
+  if (pushScalarMetaParam(key, value, out)) return;
   if (typeof value !== "object" || depth >= MAX_FLATTEN_DEPTH || ancestors.has(value)) {
-    try {
-      const json = JSON.stringify(value) ?? NIL;
-      out.push([key, json]);
-    } catch {
-      out.push([key, "[unserializable]"]);
-    }
+    pushJsonMetaParam(key, value, out);
     return;
   }
   const nested = ancestors instanceof Set ? ancestors : new Set(ancestors);
@@ -180,7 +189,7 @@ function stringifySyslogBody(value: Record<string, unknown>): string {
 
 /** Byte length of a JSON-encoded string value including its quotes. */
 function jsonStringBytes(value: string): number {
-  return Buffer.byteLength(JSON.stringify(value) as string, "utf8");
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
 
 /** Return the smallest useful JSON value that fits an unusually small cap.
@@ -223,7 +232,7 @@ function fitJsonBody(body: Record<string, unknown>, maxBytes: number): string {
   if (baseBytes > maxBytes) return fallbackJsonBody(maxBytes);
   const budget = maxBytes - baseBytes;
   // 2. Binary-search the longest message prefix (plus marker) that fits.
-  const message = typeof shortened["message"] === "string" ? (shortened["message"] as string) : "";
+  const message = typeof shortened["message"] === "string" ? (shortened["message"]) : "";
   let lo = 0;
   let hi = message.length;
   while (lo < hi) {
@@ -269,6 +278,46 @@ export type SyslogFormatOptions = Readonly<{
   format?: SyslogFormat;
 }>;
 
+function syslogHeader(entry: SyslogEntryInput, identity: SyslogIdentity): string {
+  const severity = severityForLevel(entry.level);
+  return `<${pri(1, severity)}>1 ${rfc3339Timestamp(entry.timestamp)} ${
+    identity.hostname || NIL
+  } ${identity.appName || NIL} ${identity.procId || NIL} ${NIL}`;
+}
+
+function jsonSyslogBody(entry: SyslogEntryInput, identity: SyslogIdentity): Record<string, unknown> {
+  // Envelope keys come first so last-resort transport truncation keeps
+  // timestamp/level/message; colliding meta keys are dropped so the
+  // envelope always wins (same precedence as before, just ordered).
+  const extra: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(entry.meta ?? {})) {
+    if (!["timestamp", "level", "message", "hostname", "app"].includes(key)) extra[key] = value;
+  }
+  return {
+    timestamp: rfc3339Timestamp(entry.timestamp),
+    level: entry.level,
+    message: entry.message,
+    hostname: identity.hostname || NIL,
+    app: identity.appName || NIL,
+    ...extra,
+  };
+}
+
+function rfc5424SyslogMessage(entry: SyslogEntryInput, header: string): string {
+  const meta = entry.meta;
+  if (meta === undefined || Object.keys(meta).length === 0) {
+    return `${header} ${NIL} ${entry.message}`;
+  }
+  const params: (readonly [string, string])[] = [];
+  for (const [rawKey, rawValue] of Object.entries(meta)) {
+    flattenMetaParam(paramSafeKey(rawKey), rawValue, 0, new Set(), params);
+  }
+  const sd = `[terrence@${ENTERPRISE_ID}${params
+    .map(([key, value]): string => ` ${key}="${sdEscape(value)}"`)
+    .join("")}]`;
+  return `${header} ${sd} ${entry.message}`;
+}
+
 /** Build one wire message (no framing, no trailing newline). Format "json"
  * returns the bare JSON object with no syslog envelope so collectors with
  * content-based JSON detection auto-extract every field; "rfc5424" (the
@@ -278,43 +327,15 @@ export function formatSyslogMessage(
   identity: SyslogIdentity,
   options?: SyslogFormatOptions,
 ): string {
-  const severity = severityForLevel(entry.level);
-  const header = `<${pri(1, severity)}>1 ${rfc3339Timestamp(entry.timestamp)} ${
-    identity.hostname || NIL
-  } ${identity.appName || NIL} ${identity.procId || NIL} ${NIL}`;
+  const header = syslogHeader(entry, identity);
   if ((options?.format ?? "rfc5424") === "json") {
-    // Envelope keys come first so last-resort transport truncation keeps
-    // timestamp/level/message; colliding meta keys are dropped so the
-    // envelope always wins (same precedence as before, just ordered).
-    const extra: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(entry.meta ?? {})) {
-      if (!["timestamp", "level", "message", "hostname", "app"].includes(key)) extra[key] = value;
-    }
-    const body: Record<string, unknown> = {
-      timestamp: rfc3339Timestamp(entry.timestamp),
-      level: entry.level,
-      message: entry.message,
-      hostname: identity.hostname || NIL,
-      app: identity.appName || NIL,
-      ...extra,
-    };
+    const body = jsonSyslogBody(entry, identity);
     const maxBytes = options?.maxBodyBytes;
     // Bare JSON on the wire: no RFC 5424 envelope, so JSON-detecting
     // collectors parse the datagram with no extra configuration.
     return maxBytes === undefined ? stringifySyslogBody(body) : fitJsonBody(body, maxBytes);
   }
-  const meta = entry.meta;
-  if (meta === undefined || Object.keys(meta).length === 0) {
-    return `${header} ${NIL} ${entry.message}`;
-  }
-  const params: Array<readonly [string, string]> = [];
-  for (const [rawKey, rawValue] of Object.entries(meta)) {
-    flattenMetaParam(paramSafeKey(rawKey), rawValue, 0, new Set(), params);
-  }
-  const sd = `[terrence@${ENTERPRISE_ID}${params
-    .map(([key, value]): string => ` ${key}="${sdEscape(value)}"`)
-    .join("")}]`;
-  return `${header} ${sd} ${entry.message}`;
+  return rfc5424SyslogMessage(entry, header);
 }
 
 /** Deterministic default hostname: container id hash when /etc/hostname is

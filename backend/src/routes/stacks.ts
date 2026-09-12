@@ -92,6 +92,15 @@ type StackVcsAttributes = Readonly<{
   triggerDisabled: boolean;
 }>;
 
+function vcsRepoString(repo: Record<string, unknown>, key: string): string {
+  const value = repo[key];
+  return typeof value === "string" ? value : "";
+}
+
+function nullIfEmpty(value: string): string | null {
+  return value === "" ? null : value;
+}
+
 function stackVcsRepoAttributes(attributes: Record<string, unknown>): StackVcsAttributes {
   const vcs = attributes["vcs-repo"];
   if (vcs === null || typeof vcs !== "object" || Array.isArray(vcs)) {
@@ -102,43 +111,45 @@ function stackVcsRepoAttributes(attributes: Record<string, unknown>): StackVcsAt
     };
   }
   const repo = vcs as Record<string, unknown>;
-  const identifier = typeof repo["identifier"] === "string" ? repo["identifier"].trim() : "";
-  const branch = typeof repo["branch"] === "string" ? repo["branch"] : "";
+  const identifier = vcsRepoString(repo, "identifier").trim();
+  const branch = vcsRepoString(repo, "branch");
   const serviceProvider = typeof repo["service-provider"] === "string"
     ? repo["service-provider"]
-    : typeof attributes["service-provider"] === "string" ? attributes["service-provider"] : "";
-  const tagsRegex = typeof repo["tags-regex"] === "string" ? repo["tags-regex"] : "";
-  const displayIdentifier = typeof repo["display-identifier"] === "string" ? repo["display-identifier"] : "";
-  const repositoryHttpUrl = typeof repo["repository-http-url"] === "string" ? repo["repository-http-url"] : "";
-  const sparseCheckoutPattern = typeof repo["sparse-checkout-pattern"] === "string" ? repo["sparse-checkout-pattern"] : "";
-  const oauthTokenId = typeof repo["oauth-token-id"] === "string" ? repo["oauth-token-id"] : "";
-  const ghaId = typeof repo["github-app-installation-id"] === "string" ? repo["github-app-installation-id"] : "";
+    : vcsRepoString(attributes, "service-provider");
+  const tagsRegex = vcsRepoString(repo, "tags-regex");
+  const displayIdentifier = vcsRepoString(repo, "display-identifier");
+  const repositoryHttpUrl = vcsRepoString(repo, "repository-http-url");
+  const sparseCheckoutPattern = vcsRepoString(repo, "sparse-checkout-pattern");
+  const oauthTokenId = vcsRepoString(repo, "oauth-token-id");
+  const ghaId = vcsRepoString(repo, "github-app-installation-id");
   return {
-    vcsIdentifier: identifier === "" ? null : identifier,
-    vcsServiceProvider: serviceProvider === "" ? null : serviceProvider,
-    vcsBranch: branch === "" ? null : branch,
-    vcsTagsRegex: tagsRegex === "" ? null : tagsRegex,
-    vcsDisplayIdentifier: displayIdentifier === "" ? null : displayIdentifier,
-    vcsRepositoryHttpUrl: repositoryHttpUrl === "" ? null : repositoryHttpUrl,
-    vcsSparseCheckoutPattern: sparseCheckoutPattern === "" ? null : sparseCheckoutPattern,
-    vcsOAuthTokenId: oauthTokenId === "" ? null : oauthTokenId,
-    vcsGhaInstallationId: ghaId === "" ? null : ghaId,
+    vcsIdentifier: nullIfEmpty(identifier),
+    vcsServiceProvider: nullIfEmpty(serviceProvider),
+    vcsBranch: nullIfEmpty(branch),
+    vcsTagsRegex: nullIfEmpty(tagsRegex),
+    vcsDisplayIdentifier: nullIfEmpty(displayIdentifier),
+    vcsRepositoryHttpUrl: nullIfEmpty(repositoryHttpUrl),
+    vcsSparseCheckoutPattern: nullIfEmpty(sparseCheckoutPattern),
+    vcsOAuthTokenId: nullIfEmpty(oauthTokenId),
+    vcsGhaInstallationId: nullIfEmpty(ghaId),
     triggerDisabled: repo["trigger-disabled"] === true || attributes["trigger-disabled"] === true,
   };
 }
 
 const stackServiceProviders = new Set(["github", "github_enterprise", "gitlab_hosted", "gitlab_community_edition", "gitlab_enterprise_edition", "ado_server"]);
 
+function validRepositoryHttpUrl(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 async function validStackVcs(vcs: StackVcsAttributes, orgId: string): Promise<string | null> {
   if (vcs.vcsServiceProvider !== null && !stackServiceProviders.has(vcs.vcsServiceProvider)) return "Invalid Stack VCS service provider";
-  if (vcs.vcsRepositoryHttpUrl !== null) {
-    try {
-      const protocol = new URL(vcs.vcsRepositoryHttpUrl).protocol;
-      if (protocol !== "http:" && protocol !== "https:") return "Invalid Stack repository-http-url";
-    } catch {
-      return "Invalid Stack repository-http-url";
-    }
-  }
+  if (vcs.vcsRepositoryHttpUrl !== null && !validRepositoryHttpUrl(vcs.vcsRepositoryHttpUrl)) return "Invalid Stack repository-http-url";
   if (vcs.vcsTagsRegex !== null) {
     if (!isValidTagsRegex(vcs.vcsTagsRegex)) return "Invalid Stack VCS tags-regex";
   }
@@ -189,6 +200,107 @@ function recordDate(value: unknown): string | null {
   return typeof value === "number" ? new Date(value).toISOString() : null;
 }
 
+type StackRecordTimestamps = Readonly<{ "created-at": string | null; "updated-at": string | null }>;
+type StackRecordApproval = { id: string; type: string } | null;
+
+function stackConfigurationResource(record: StackRecordItem, payload: Record<string, unknown>, timestamps: StackRecordTimestamps): Record<string, unknown> {
+  return {
+    id: record.id,
+    type: record.recordType,
+    attributes: {
+      status: record.status,
+      "sequence-number": payload["sequence-number"] ?? 1,
+      ...timestamps,
+      speculative: payload["speculative"] === true,
+      components: Array.isArray(payload["components"]) ? payload["components"] : [],
+      deployments: Array.isArray(payload["deployments"]) ? payload["deployments"] : [],
+    },
+    relationships: {
+      stack: { data: { id: record.stackId, type: "stacks" } },
+      "stack-diagnostics": { links: { related: `/api/v2/stack-configurations/${record.id}/stack-diagnostics` } },
+      "stack-deployment-groups": { links: { related: `/api/v2/stack-configurations/${record.id}/stack-deployment-groups` } },
+    },
+    links: { self: `/api/v2/stack-configurations/${record.id}`, "json-schemas": `/api/v2/stack-configurations/${record.id}/json-schemas` },
+    meta: { beta: false },
+  };
+}
+
+function stackDeploymentGroupResource(record: StackRecordItem, payload: Record<string, unknown>, timestamps: StackRecordTimestamps, approval: StackRecordApproval): Record<string, unknown> {
+  return {
+    id: record.id,
+    type: record.recordType,
+    attributes: { status: record.status, ...timestamps, name: record.name, "deployment-group-config": payload["deployment-group-config"] ?? { "auto-approve-checks": [] } },
+    relationships: {
+      "stack-configuration": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-configurations" } },
+      "stack-approvals": { data: approval === null ? [] : [approval] },
+      "stack-deployment-runs": { links: { related: `/api/v2/stack-deployment-groups/${record.id}/stack-deployment-runs` } },
+    },
+    links: { self: `/api/v2/stack-deployment-groups/${record.id}`, "stack-deployment-group-summaries": record.parentId === null ? null : `/api/v2/stack-configurations/${record.parentId}/stack-deployment-group-summaries` },
+  };
+}
+
+function stackDeploymentRunResource(record: StackRecordItem, payload: Record<string, unknown>, timestamps: StackRecordTimestamps, approval: StackRecordApproval): Record<string, unknown> {
+  return {
+    id: record.id,
+    type: record.recordType,
+    attributes: { status: record.status, deployment: record.name, ...timestamps, "plan-mode": payload["plan-mode"] ?? "normal", component: payload["component"] ?? null, "component-index": payload["componentIndex"] ?? 0, cycle: payload["cycle"] ?? 0, destroy: payload["destroy"] === true, "lock-acquired": payload["lockAcquired"] === true, error: payload["error"] ?? null },
+    relationships: {
+      "stack-deployment-group": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-deployment-groups" } },
+      "stack-configuration": { data: typeof payload["configurationId"] === "string" ? { id: payload["configurationId"], type: "stack-configurations" } : null },
+      "stack-deployment-steps": { links: { related: `/api/v2/stack-deployment-runs/${record.id}/stack-deployment-steps` } },
+      "stack-approval": { data: approval },
+    },
+    links: { self: `/api/v2/stack-deployment-runs/${record.id}` },
+  };
+}
+
+function stackDeploymentStepResource(record: StackRecordItem, payload: Record<string, unknown>, timestamps: StackRecordTimestamps, approval: StackRecordApproval): Record<string, unknown> {
+  return {
+    id: record.id,
+    type: record.recordType,
+    attributes: { status: record.status, "operation-type": payload["operation-type"] ?? "plan", phase: payload["phase"] ?? null, "component-index": payload["componentIndex"] ?? 0, "requires-state-lock": payload["requires-state-lock"] === true, "has-changes": payload["has-changes"] === true || payload["hasChanges"] === true, "deferred-changes": payload["deferred-changes"] === true || payload["deferredChanges"] === true, output: payload["output"] ?? null, ...timestamps },
+    relationships: {
+      "stack-deployment-run": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-deployment-runs" } },
+      "stack-diagnostics": { links: { related: `/api/v2/stack-deployment-steps/${record.id}/stack-diagnostics` }, meta: { count: 0 } },
+      "stack-approval": { data: approval },
+    },
+    links: { self: `/api/v2/stack-deployment-steps/${record.id}`, "plan-description": `/api/v2/stack-deployment-steps/${record.id}/artifacts?name=plan-description` },
+  };
+}
+
+function stackStateResource(record: StackRecordItem, payload: Record<string, unknown>): Record<string, unknown> {
+  const isCurrent = isCurrentStackStateRecord(record);
+  const status = isCurrent ? "current" : record.status === "current" ? "superseded" : record.status;
+  return {
+    id: record.id,
+    type: record.recordType,
+    attributes: {
+      generation: payload["generation"] ?? 1,
+      status,
+      deployment: record.name,
+      components: Array.isArray(payload["components"]) ? payload["components"] : [],
+      "is-current": isCurrent,
+      "resource-instance-count": payload["resource-instance-count"] ?? 0,
+    },
+    relationships: { stack: { data: { id: record.stackId, type: "stacks" } }, "stack-deployment-run": { data: typeof payload["runId"] === "string" ? { id: payload["runId"], type: "stack-deployment-runs" } : null } },
+    links: { self: `/api/v2/stack-states/${record.id}`, description: `/api/v2/stack-states/${record.id}/description` },
+  };
+}
+
+function stackDiagnosticResource(record: StackRecordItem, payload: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: record.id,
+    type: record.recordType,
+    attributes: { severity: payload["severity"] ?? "error", summary: payload["summary"] ?? "", detail: payload["detail"] ?? "", diags: payload["diags"] ?? null, acknowledged: payload["acknowledged"] === true, "acknowledged-at": payload["acknowledged-at"] ?? null, "created-at": recordDate(record.createdAt) },
+    relationships: { "stack-configuration": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-configurations" } } },
+    links: { self: `/api/v2/stack-diagnostics/${record.id}` },
+  };
+}
+
+function stackApprovalResource(record: StackRecordItem, payload: Record<string, unknown>): Record<string, unknown> {
+  return { id: record.id, type: record.recordType, attributes: { reason: payload["reason"] ?? null, "created-at": recordDate(record.createdAt) }, relationships: { user: { data: typeof payload["userId"] === "string" ? { id: payload["userId"], type: "users" } : null } } };
+}
+
 function stackRecordResource(record: StackRecordItem): Record<string, unknown> {
   const payload = record.payload ?? {};
   const approval = typeof payload["approvalId"] === "string" ? { id: payload["approvalId"], type: "stack-approvals" } : null;
@@ -196,97 +308,13 @@ function stackRecordResource(record: StackRecordItem): Record<string, unknown> {
     "created-at": recordDate(record.createdAt),
     "updated-at": recordDate(record.updatedAt),
   };
-  if (record.recordType === "stack-configurations") {
-    return {
-      id: record.id,
-      type: record.recordType,
-      attributes: {
-        status: record.status,
-        "sequence-number": payload["sequence-number"] ?? 1,
-        ...timestamps,
-        speculative: payload["speculative"] === true,
-        components: Array.isArray(payload["components"]) ? payload["components"] : [],
-        deployments: Array.isArray(payload["deployments"]) ? payload["deployments"] : [],
-      },
-      relationships: {
-        stack: { data: { id: record.stackId, type: "stacks" } },
-        "stack-diagnostics": { links: { related: `/api/v2/stack-configurations/${record.id}/stack-diagnostics` } },
-        "stack-deployment-groups": { links: { related: `/api/v2/stack-configurations/${record.id}/stack-deployment-groups` } },
-      },
-      links: { self: `/api/v2/stack-configurations/${record.id}`, "json-schemas": `/api/v2/stack-configurations/${record.id}/json-schemas` },
-      meta: { beta: false },
-    };
-  }
-  if (record.recordType === "stack-deployment-groups") {
-    return {
-      id: record.id,
-      type: record.recordType,
-      attributes: { status: record.status, ...timestamps, name: record.name, "deployment-group-config": payload["deployment-group-config"] ?? { "auto-approve-checks": [] } },
-      relationships: {
-        "stack-configuration": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-configurations" } },
-        "stack-approvals": { data: approval === null ? [] : [approval] },
-        "stack-deployment-runs": { links: { related: `/api/v2/stack-deployment-groups/${record.id}/stack-deployment-runs` } },
-      },
-      links: { self: `/api/v2/stack-deployment-groups/${record.id}`, "stack-deployment-group-summaries": record.parentId === null ? null : `/api/v2/stack-configurations/${record.parentId}/stack-deployment-group-summaries` },
-    };
-  }
-  if (record.recordType === "stack-deployment-runs") {
-    return {
-      id: record.id,
-      type: record.recordType,
-      attributes: { status: record.status, deployment: record.name, ...timestamps, "plan-mode": payload["plan-mode"] ?? "normal", component: payload["component"] ?? null, "component-index": payload["componentIndex"] ?? 0, cycle: payload["cycle"] ?? 0, destroy: payload["destroy"] === true, "lock-acquired": payload["lockAcquired"] === true, error: payload["error"] ?? null },
-      relationships: {
-        "stack-deployment-group": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-deployment-groups" } },
-        "stack-configuration": { data: typeof payload["configurationId"] === "string" ? { id: payload["configurationId"], type: "stack-configurations" } : null },
-        "stack-deployment-steps": { links: { related: `/api/v2/stack-deployment-runs/${record.id}/stack-deployment-steps` } },
-        "stack-approval": { data: approval },
-      },
-      links: { self: `/api/v2/stack-deployment-runs/${record.id}` },
-    };
-  }
-  if (record.recordType === "stack-deployment-steps") {
-    return {
-      id: record.id,
-      type: record.recordType,
-      attributes: { status: record.status, "operation-type": payload["operation-type"] ?? "plan", phase: payload["phase"] ?? null, "component-index": payload["componentIndex"] ?? 0, "requires-state-lock": payload["requires-state-lock"] === true, "has-changes": payload["has-changes"] === true || payload["hasChanges"] === true, "deferred-changes": payload["deferred-changes"] === true || payload["deferredChanges"] === true, output: payload["output"] ?? null, ...timestamps },
-      relationships: {
-        "stack-deployment-run": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-deployment-runs" } },
-        "stack-diagnostics": { links: { related: `/api/v2/stack-deployment-steps/${record.id}/stack-diagnostics` }, meta: { count: 0 } },
-        "stack-approval": { data: approval },
-      },
-      links: { self: `/api/v2/stack-deployment-steps/${record.id}`, "plan-description": `/api/v2/stack-deployment-steps/${record.id}/artifacts?name=plan-description` },
-    };
-  }
-  if (record.recordType === "stack-states") {
-    const isCurrent = isCurrentStackStateRecord(record);
-    const status = isCurrent ? "current" : record.status === "current" ? "superseded" : record.status;
-    return {
-      id: record.id,
-      type: record.recordType,
-      attributes: {
-        generation: payload["generation"] ?? 1,
-        status,
-        deployment: record.name,
-        components: Array.isArray(payload["components"]) ? payload["components"] : [],
-        "is-current": isCurrent,
-        "resource-instance-count": payload["resource-instance-count"] ?? 0,
-      },
-      relationships: { stack: { data: { id: record.stackId, type: "stacks" } }, "stack-deployment-run": { data: typeof payload["runId"] === "string" ? { id: payload["runId"], type: "stack-deployment-runs" } : null } },
-      links: { self: `/api/v2/stack-states/${record.id}`, description: `/api/v2/stack-states/${record.id}/description` },
-    };
-  }
-  if (record.recordType === "stack-diagnostics") {
-    return {
-      id: record.id,
-      type: record.recordType,
-      attributes: { severity: payload["severity"] ?? "error", summary: payload["summary"] ?? "", detail: payload["detail"] ?? "", diags: payload["diags"] ?? null, acknowledged: payload["acknowledged"] === true, "acknowledged-at": payload["acknowledged-at"] ?? null, "created-at": recordDate(record.createdAt) },
-      relationships: { "stack-configuration": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-configurations" } } },
-      links: { self: `/api/v2/stack-diagnostics/${record.id}` },
-    };
-  }
-  if (record.recordType === "stack-approvals") {
-    return { id: record.id, type: record.recordType, attributes: { reason: payload["reason"] ?? null, "created-at": recordDate(record.createdAt) }, relationships: { user: { data: typeof payload["userId"] === "string" ? { id: payload["userId"], type: "users" } : null } } };
-  }
+  if (record.recordType === "stack-configurations") return stackConfigurationResource(record, payload, timestamps);
+  if (record.recordType === "stack-deployment-groups") return stackDeploymentGroupResource(record, payload, timestamps, approval);
+  if (record.recordType === "stack-deployment-runs") return stackDeploymentRunResource(record, payload, timestamps, approval);
+  if (record.recordType === "stack-deployment-steps") return stackDeploymentStepResource(record, payload, timestamps, approval);
+  if (record.recordType === "stack-states") return stackStateResource(record, payload);
+  if (record.recordType === "stack-diagnostics") return stackDiagnosticResource(record, payload);
+  if (record.recordType === "stack-approvals") return stackApprovalResource(record, payload);
   return { id: record.id, type: record.recordType, attributes: { ...payload, ...timestamps } };
 }
 
@@ -369,54 +397,270 @@ async function createStackConfigurationRecord(stack: StackItem, source: string, 
   });
 }
 
+function parseStackPatchDocument(body: unknown): { attributes: Record<string, unknown>; relationships: Record<string, unknown> } {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"];
+  const attrs = (data !== null && typeof data === "object" ? (data as Record<string, unknown>)["attributes"] : null);
+  const attributes = attrs !== null && typeof attrs === "object" ? attrs as Record<string, unknown> : {};
+  const relationships = data !== null && typeof data === "object" && (data as Record<string, unknown>)["relationships"] !== null && typeof (data as Record<string, unknown>)["relationships"] === "object"
+    ? (data as Record<string, unknown>)["relationships"] as Record<string, unknown>
+    : {};
+  return { attributes, relationships };
+}
+
+function applyStackScalarUpdates(attributes: Record<string, unknown>, updates: Partial<typeof stacks.$inferInsert>): void {
+  if (typeof attributes["name"] === "string" && attributes["name"].trim() !== "") updates.name = attributes["name"].trim();
+  if (typeof attributes["description"] === "string") updates.description = attributes["description"];
+  if (typeof attributes["speculative-enabled"] === "boolean") updates.speculativeEnabled = attributes["speculative-enabled"];
+  if (typeof attributes["working-directory"] === "string") updates.workingDirectory = attributes["working-directory"];
+  if (Array.isArray(attributes["trigger-patterns"])) updates.triggerPatterns = (attributes["trigger-patterns"] as unknown[]).filter((item): item is string => typeof item === "string");
+  if (typeof attributes["trigger-disabled"] === "boolean") updates.triggerDisabled = attributes["trigger-disabled"];
+  if (typeof attributes["debugging-mode"] === "boolean") updates.debuggingMode = attributes["debugging-mode"];
+}
+
+async function applyStackVcsUpdate(
+  attributes: Record<string, unknown>,
+  orgId: string,
+  updates: Partial<typeof stacks.$inferInsert>,
+): Promise<string | null> {
+  // vcs-repo updates replace the stored VCS attributes (empty/null clears).
+  // A present-but-malformed vcs-repo is a client error, not a silent clear.
+  if (attributes["vcs-repo"] === undefined) return null;
+  const vcs = attributes["vcs-repo"];
+  if (vcs !== null && (typeof vcs !== "object" || Array.isArray(vcs))) {
+    return "vcs-repo must be an object or null";
+  }
+  const v = stackVcsRepoAttributes(attributes);
+  const vcsError = await validStackVcs(v, orgId);
+  if (vcsError !== null) return vcsError;
+  updates.vcsIdentifier = v.vcsIdentifier;
+  updates.vcsServiceProvider = v.vcsServiceProvider;
+  updates.vcsBranch = v.vcsBranch;
+  updates.vcsTagsRegex = v.vcsTagsRegex;
+  updates.vcsDisplayIdentifier = v.vcsDisplayIdentifier;
+  updates.vcsRepositoryHttpUrl = v.vcsRepositoryHttpUrl;
+  updates.vcsSparseCheckoutPattern = v.vcsSparseCheckoutPattern;
+  updates.vcsOAuthTokenId = v.vcsOAuthTokenId;
+  updates.vcsGhaInstallationId = v.vcsGhaInstallationId;
+  updates.triggerDisabled = v.triggerDisabled;
+  return null;
+}
+
+function applyStackPoolRelationship(
+  poolData: { id?: unknown } | null | undefined,
+  updates: Partial<typeof stacks.$inferInsert>,
+): string | null {
+  if (poolData === undefined) return null;
+  if (poolData === null) {
+    updates.agentPoolId = null;
+    return null;
+  }
+  if (typeof poolData.id !== "string") return "agent-pool must reference an agent pool";
+  updates.agentPoolId = poolData.id;
+  return null;
+}
+
+async function validateStackAgentPool(nextPoolId: string | null, orgId: string): Promise<string | null> {
+  if (nextPoolId === null) return null;
+  const pool = await db.query.agentPools.findFirst({ where: and(eq(agentPools.id, nextPoolId), eq(agentPools.orgId, orgId)) });
+  if (pool === undefined) return "agent-pool must belong to the Stack organization";
+  return null;
+}
+
+async function applyStackExecutionUpdates(
+  attributes: Record<string, unknown>,
+  relationships: Record<string, unknown>,
+  stack: StackItem,
+  orgId: string,
+  updates: Partial<typeof stacks.$inferInsert>,
+): Promise<string | null> {
+  if (attributes["execution-mode"] !== undefined && attributes["execution-mode"] !== "remote" && attributes["execution-mode"] !== "agent") {
+    return "execution-mode must be remote or agent";
+  }
+  const poolData = (relationships["agent-pool"] as { data?: { id?: unknown } } | undefined)?.data;
+  const poolError = applyStackPoolRelationship(poolData, updates);
+  if (poolError !== null) return poolError;
+  const nextPoolId = updates.agentPoolId !== undefined ? updates.agentPoolId : stack.agentPoolId;
+  const nextMode = typeof attributes["execution-mode"] === "string"
+    ? attributes["execution-mode"]
+    : poolData !== undefined
+      ? nextPoolId === null ? "remote" : "agent"
+      : stack.executionMode;
+  if (nextMode === "agent" && nextPoolId === null) return "agent execution requires an agent-pool relationship";
+  const orgError = await validateStackAgentPool(nextPoolId, orgId);
+  if (orgError !== null) return orgError;
+  if (typeof attributes["execution-mode"] === "string") updates.executionMode = attributes["execution-mode"];
+  return null;
+}
+
+function stackRelationId(rels: Record<string, unknown>, key: string): string | undefined {
+  const relData = (rels[key] as { data?: { id?: unknown } } | undefined)?.data;
+  return typeof relData?.id === "string" ? relData.id : undefined;
+}
+
+type StackCreateFields = Readonly<{
+  attrs: Record<string, unknown>;
+  name: string;
+  description: string;
+  projectId: string;
+  agentPoolId: string | undefined;
+  workingDirectory: string | undefined;
+  executionMode: unknown;
+  speculative: boolean;
+  triggerPatterns: string[];
+}>;
+
+function parseStackCreateFields(data: Record<string, unknown>): StackCreateFields {
+  const attributes = data["attributes"];
+  const attrs = attributes !== null && typeof attributes === "object" ? attributes as Record<string, unknown> : {};
+  const relationships = data["relationships"];
+  const rels = relationships !== null && typeof relationships === "object" ? relationships as Record<string, unknown> : {};
+  const agentPoolId = stackRelationId(rels, "agent-pool");
+  return {
+    attrs,
+    name: typeof attrs["name"] === "string" ? attrs["name"].trim() : "",
+    description: typeof attrs["description"] === "string" ? attrs["description"] : "",
+    projectId: stackRelationId(rels, "project") ?? "",
+    agentPoolId,
+    workingDirectory: typeof attrs["working-directory"] === "string" ? attrs["working-directory"] : undefined,
+    executionMode: attrs["execution-mode"] === undefined ? (agentPoolId === undefined ? "remote" : "agent") : attrs["execution-mode"],
+    speculative: attrs["speculative-enabled"] === true,
+    triggerPatterns: Array.isArray(attrs["trigger-patterns"]) ? (attrs["trigger-patterns"] as unknown[]).filter((item): item is string => typeof item === "string") : [],
+  };
+}
+
+async function authorizeStackProject(
+  projectId: string,
+  agentPoolId: string | undefined,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  teamId: string | null,
+): Promise<{ project: typeof projects.$inferSelect } | { status: 404 }> {
+  const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
+  if (project === undefined || !(await checkOrganizationPermission(project.orgId, userId, tokenOrgId, teamId, "manage-projects"))) {
+    return { status: 404 };
+  }
+  if (agentPoolId !== undefined) {
+    const pool = await db.query.agentPools.findFirst({
+      where: and(eq(agentPools.id, agentPoolId), eq(agentPools.orgId, project.orgId)),
+    });
+    if (pool === undefined) return { status: 404 };
+  }
+  return { project };
+}
+
+function buildStackInsert(
+  id: string,
+  orgId: string,
+  fields: StackCreateFields,
+  executionMode: string,
+  vcs: StackVcsAttributes,
+  now: number,
+): typeof stacks.$inferInsert {
+  return {
+    id, orgId, projectId: fields.projectId, agentPoolId: fields.agentPoolId ?? null, executionMode, name: fields.name,
+    description: fields.description === "" ? null : fields.description,
+    speculativeEnabled: fields.speculative, triggerDisabled: vcs.triggerDisabled, debuggingMode: fields.attrs["debugging-mode"] === true,
+    workingDirectory: fields.workingDirectory ?? null, triggerPatterns: fields.triggerPatterns,
+    vcsIdentifier: vcs.vcsIdentifier, vcsServiceProvider: vcs.vcsServiceProvider, vcsBranch: vcs.vcsBranch,
+    vcsTagsRegex: vcs.vcsTagsRegex, vcsDisplayIdentifier: vcs.vcsDisplayIdentifier,
+    vcsRepositoryHttpUrl: vcs.vcsRepositoryHttpUrl, vcsSparseCheckoutPattern: vcs.vcsSparseCheckoutPattern,
+    vcsOAuthTokenId: vcs.vcsOAuthTokenId, vcsGhaInstallationId: vcs.vcsGhaInstallationId,
+    createdAt: now, updatedAt: now,
+  };
+}
+
+function stackExecutionModeError(executionMode: unknown, agentPoolId: string | undefined): string | null {
+  if (executionMode !== "remote" && executionMode !== "agent") return "execution-mode must be remote or agent";
+  if (executionMode === "agent" && agentPoolId === undefined) return "agent execution requires an agent-pool relationship";
+  return null;
+}
+
+function stackConfigurationSourceError(source: string, vcsIdentifier: string | null): string | null {
+  if (!(source === "manual" || source === "fetch" || source === "reuse")) {
+    return "source must be manual, fetch, or reuse";
+  }
+  if (source === "fetch" && vcsIdentifier === null) {
+    return "fetch requires a VCS-backed stack";
+  }
+  return null;
+}
+
+function stackConfigurationAttributes(body: unknown): Record<string, unknown> {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"];
+  return data !== null && typeof data === "object" && (data as Record<string, unknown>)["attributes"] !== null && typeof (data as Record<string, unknown>)["attributes"] === "object"
+    ? (data as Record<string, unknown>)["attributes"] as Record<string, unknown>
+    : {};
+}
+
+function stackConfigurationFlagError(attrs: Record<string, unknown>): string | null {
+  for (const key of ["speculative", "destroy-all"] as const) {
+    if (attrs[key] !== undefined && typeof attrs[key] !== "boolean") {
+      return `${key} must be a boolean`;
+    }
+  }
+  return null;
+}
+
+function validateStackConfigurationRequest(source: string, vcsIdentifier: string | null, attrs: Record<string, unknown>): string | null {
+  const sourceError = stackConfigurationSourceError(source, vcsIdentifier);
+  if (sourceError !== null) return sourceError;
+  const flagError = stackConfigurationFlagError(attrs);
+  if (flagError !== null) return flagError;
+  if (source === "manual" && vcsIdentifier !== null && attrs["speculative"] !== true) {
+    return "manual configurations for VCS-backed stacks must be speculative";
+  }
+  return null;
+}
+
+async function loadUploadableRecord(
+  recordId: string,
+  user: ParamCtx["user"],
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
+  request: ParamCtx["request"],
+): Promise<{ record: StackRecordItem; recordPayload: Record<string, unknown> } | { error: { status: 404 | 409 } }> {
+  const authorized = await authorizedStackRecord(recordId, user, tokenOrgId, teamId, "stack-configurations");
+  if (authorized === undefined && !validSignedApiURL(request, `/api/v2/stack-configurations/${recordId}/upload`, "PUT")) {
+    return { error: { status: 404 } };
+  }
+  const record = authorized?.record ?? await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, recordId), eq(stackRecords.recordType, "stack-configurations")) });
+  if (record === undefined) return { error: { status: 404 } };
+  const recordPayload = record.payload ?? {};
+  const existingPath = typeof recordPayload["archivePath"] === "string" ? recordPayload["archivePath"] : null;
+  if (record.status !== "pending" || existingPath !== null) return { error: { status: 409 } };
+  return { record, recordPayload };
+}
+
+async function readUploadBytes(body: unknown, request: ParamCtx["request"]): Promise<Uint8Array> {
+  if (body instanceof ArrayBuffer) return new Uint8Array(body);
+  if (body instanceof Blob) return new Uint8Array(await body.arrayBuffer());
+  return new Uint8Array(await request.arrayBuffer());
+}
+
 export const stackRoutes = new Elysia({ name: "stacks" })
   .use(authPlugin)
   .post("/api/v2/stacks", async ({ body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
     const data = payload["data"];
     if (data === null || typeof data !== "object") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data is required" }] }; }
-    const attributes = (data as Record<string, unknown>)["attributes"];
-    const attrs = attributes !== null && typeof attributes === "object" ? attributes as Record<string, unknown> : {};
-    const relationships = (data as Record<string, unknown>)["relationships"];
-    const rels = relationships !== null && typeof relationships === "object" ? relationships as Record<string, unknown> : {};
-    const name = typeof attrs["name"] === "string" ? attrs["name"].trim() : "";
-    const description = typeof attrs["description"] === "string" ? attrs["description"] : "";
-    const projectData = (rels["project"] as { data?: { id?: unknown } } | undefined)?.data;
-    const projectId = typeof projectData?.id === "string" ? projectData.id : "";
-    const agentPoolData = (rels["agent-pool"] as { data?: { id?: unknown } } | undefined)?.data;
-    const agentPoolId = typeof agentPoolData?.id === "string" ? agentPoolData.id : undefined;
-    const workingDirectory = typeof attrs["working-directory"] === "string" ? attrs["working-directory"] : undefined;
-    const executionMode = attrs["execution-mode"] === undefined ? (agentPoolId === undefined ? "remote" : "agent") : attrs["execution-mode"];
-    const speculative = attrs["speculative-enabled"] === true;
-    const triggerPatterns = Array.isArray(attrs["trigger-patterns"]) ? (attrs["trigger-patterns"] as unknown[]).filter((item): item is string => typeof item === "string") : [];
-    if (name === "" || projectId === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "name and project are required" }] }; }
-    if (executionMode !== "remote" && executionMode !== "agent") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "execution-mode must be remote or agent" }] }; }
-    if (executionMode === "agent" && agentPoolId === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "agent execution requires an agent-pool relationship" }] }; }
-    const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
-    if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) {
+    const fields = parseStackCreateFields(data as Record<string, unknown>);
+    const { projectId, agentPoolId, executionMode } = fields;
+    if (fields.name === "" || projectId === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "name and project are required" }] }; }
+    const modeError = stackExecutionModeError(executionMode, agentPoolId);
+    if (modeError !== null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: modeError }] }; }
+    const authorized = await authorizeStackProject(projectId, agentPoolId, user?.id, tokenOrgId ?? null, teamId ?? null);
+    if ("status" in authorized) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    if (agentPoolId !== undefined) {
-      const pool = await db.query.agentPools.findFirst({
-        where: and(eq(agentPools.id, agentPoolId), eq(agentPools.orgId, project.orgId)),
-      });
-      if (pool === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    }
-    const vcs = stackVcsRepoAttributes(attrs);
+    const project = authorized.project;
+    const vcs = stackVcsRepoAttributes(fields.attrs);
     const vcsError = await validStackVcs(vcs, project.orgId);
     if (vcsError !== null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: vcsError }] }; }
     const id = newResourceId("st");
     const now = Date.now();
-    const row: typeof stacks.$inferInsert = {
-      id, orgId: project.orgId, projectId, agentPoolId: agentPoolId ?? null, executionMode, name, description: description === "" ? null : description,
-      speculativeEnabled: speculative, triggerDisabled: vcs.triggerDisabled, debuggingMode: attrs["debugging-mode"] === true,
-      workingDirectory: workingDirectory ?? null, triggerPatterns,
-      vcsIdentifier: vcs.vcsIdentifier, vcsServiceProvider: vcs.vcsServiceProvider, vcsBranch: vcs.vcsBranch,
-      vcsTagsRegex: vcs.vcsTagsRegex, vcsDisplayIdentifier: vcs.vcsDisplayIdentifier,
-      vcsRepositoryHttpUrl: vcs.vcsRepositoryHttpUrl, vcsSparseCheckoutPattern: vcs.vcsSparseCheckoutPattern,
-      vcsOAuthTokenId: vcs.vcsOAuthTokenId, vcsGhaInstallationId: vcs.vcsGhaInstallationId,
-      createdAt: now, updatedAt: now,
-    };
+    const row = buildStackInsert(id, project.orgId, fields, executionMode as string, vcs, now);
     await db.insert(stacks).values(row);
     (set as { status: number }).status = 201;
     return { data: stackResource(row as StackItem, project.name) };
@@ -458,26 +702,10 @@ export const stackRoutes = new Elysia({ name: "stacks" })
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const source = new URL(request.url).searchParams.get("source") ?? "manual";
-    if (!(source === "manual" || source === "fetch" || source === "reuse")) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "source must be manual, fetch, or reuse" }] };
-    }
-    if (source === "fetch" && details.stack.vcsIdentifier === null) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "fetch requires a VCS-backed stack" }] };
-    }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"];
-    const attrs = data !== null && typeof data === "object" && (data as Record<string, unknown>)["attributes"] !== null && typeof (data as Record<string, unknown>)["attributes"] === "object"
-      ? (data as Record<string, unknown>)["attributes"] as Record<string, unknown>
-      : {};
-    for (const key of ["speculative", "destroy-all"] as const) {
-      if (attrs[key] !== undefined && typeof attrs[key] !== "boolean") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a boolean` }] };
-      }
-    }
-    if (source === "manual" && details.stack.vcsIdentifier !== null && attrs["speculative"] !== true) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "manual configurations for VCS-backed stacks must be speculative" }] };
+    const attrs = stackConfigurationAttributes(body);
+    const requestError = validateStackConfigurationRequest(source, details.stack.vcsIdentifier, attrs);
+    if (requestError !== null) {
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: requestError }] };
     }
     const configuration = await createStackConfigurationRecord(details.stack, source, attrs);
     if (configuration === undefined) {
@@ -523,21 +751,18 @@ export const stackRoutes = new Elysia({ name: "stacks" })
   })
   .put("/api/v2/stack-configurations/:stack_configuration_id/upload", async ({ params, body, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const recordId = params["stack_configuration_id"] ?? "";
-    const authorized = await authorizedStackRecord(recordId, user, tokenOrgId, teamId, "stack-configurations");
-    if (authorized === undefined && !validSignedApiURL(request, `/api/v2/stack-configurations/${recordId}/upload`, "PUT")) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    const loaded = await loadUploadableRecord(recordId, user, tokenOrgId, teamId, request);
+    if ("error" in loaded) {
+      (set as { status: number }).status = loaded.error.status;
+      return { errors: [{ status: String(loaded.error.status), title: loaded.error.status === 404 ? "Not Found" : "Conflict" }] };
     }
-    const record = authorized?.record ?? await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, recordId), eq(stackRecords.recordType, "stack-configurations")) });
-    if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const recordPayload = record.payload ?? {};
-    const existingPath = typeof recordPayload["archivePath"] === "string" ? recordPayload["archivePath"] : null;
-    if (record.status !== "pending" || existingPath !== null) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict" }] }; }
+    const { record, recordPayload } = loaded;
     const contentLength = Number(request.headers.get("content-length"));
     if (Number.isFinite(contentLength) && contentLength > 100 * 1024 * 1024) {
       (set as { status: number }).status = 413;
       return { errors: [{ status: "413", title: "Payload Too Large" }] };
     }
-    const bytes = body instanceof ArrayBuffer ? new Uint8Array(body) : body instanceof Blob ? new Uint8Array(await body.arrayBuffer()) : new Uint8Array(await request.arrayBuffer());
+    const bytes = await readUploadBytes(body, request);
     if (bytes.byteLength === 0) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Configuration archive is empty" }] }; }
     if (bytes.byteLength > 100 * 1024 * 1024) { (set as { status: number }).status = 413; return { errors: [{ status: "413", title: "Payload Too Large" }] }; }
     const claimed = await db.update(stackRecords).set({ status: "uploading", updatedAt: Date.now() }).where(and(eq(stackRecords.id, record.id), eq(stackRecords.status, "pending"))).returning({ id: stackRecords.id });
@@ -778,66 +1003,13 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     if (details === undefined || !(await checkOrganizationPermission(details.stack.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const raw = body;
-    const payload = raw !== null && typeof raw === "object" ? raw as Record<string, unknown> : {};
-    const data = payload["data"];
-    const attrs = (data !== null && typeof data === "object" ? (data as Record<string, unknown>)["attributes"] : null);
-    const attributes = attrs !== null && typeof attrs === "object" ? attrs as Record<string, unknown> : {};
-    const relationships = data !== null && typeof data === "object" && (data as Record<string, unknown>)["relationships"] !== null && typeof (data as Record<string, unknown>)["relationships"] === "object"
-      ? (data as Record<string, unknown>)["relationships"] as Record<string, unknown>
-      : {};
+    const { attributes, relationships } = parseStackPatchDocument(body);
     const updates: Partial<typeof stacks.$inferInsert> = { updatedAt: Date.now() };
-    if (typeof attributes["name"] === "string" && attributes["name"].trim() !== "") updates.name = attributes["name"].trim();
-    if (typeof attributes["description"] === "string") updates.description = attributes["description"];
-    if (typeof attributes["speculative-enabled"] === "boolean") updates.speculativeEnabled = attributes["speculative-enabled"];
-    if (typeof attributes["working-directory"] === "string") updates.workingDirectory = attributes["working-directory"];
-    if (Array.isArray(attributes["trigger-patterns"])) updates.triggerPatterns = (attributes["trigger-patterns"] as unknown[]).filter((item): item is string => typeof item === "string");
-    // vcs-repo updates replace the stored VCS attributes (empty/null clears).
-    // A present-but-malformed vcs-repo is a client error, not a silent clear.
-    if (attributes["vcs-repo"] !== undefined) {
-      const vcs = attributes["vcs-repo"];
-      if (vcs !== null && (typeof vcs !== "object" || Array.isArray(vcs))) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "vcs-repo must be an object or null" }] };
-      }
-      const v = stackVcsRepoAttributes(attributes);
-      const vcsError = await validStackVcs(v, details.stack.orgId);
-      if (vcsError !== null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: vcsError }] }; }
-      updates.vcsIdentifier = v.vcsIdentifier;
-      updates.vcsServiceProvider = v.vcsServiceProvider;
-      updates.vcsBranch = v.vcsBranch;
-      updates.vcsTagsRegex = v.vcsTagsRegex;
-      updates.vcsDisplayIdentifier = v.vcsDisplayIdentifier;
-      updates.vcsRepositoryHttpUrl = v.vcsRepositoryHttpUrl;
-      updates.vcsSparseCheckoutPattern = v.vcsSparseCheckoutPattern;
-      updates.vcsOAuthTokenId = v.vcsOAuthTokenId;
-      updates.vcsGhaInstallationId = v.vcsGhaInstallationId;
-      updates.triggerDisabled = v.triggerDisabled;
-    }
-    if (typeof attributes["trigger-disabled"] === "boolean") updates.triggerDisabled = attributes["trigger-disabled"];
-    if (typeof attributes["debugging-mode"] === "boolean") updates.debuggingMode = attributes["debugging-mode"];
-    if (attributes["execution-mode"] !== undefined && attributes["execution-mode"] !== "remote" && attributes["execution-mode"] !== "agent") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "execution-mode must be remote or agent" }] };
-    }
-    const poolData = (relationships["agent-pool"] as { data?: { id?: unknown } } | undefined)?.data;
-    if (poolData !== undefined) {
-      if (poolData === null) updates.agentPoolId = null;
-      else if (typeof poolData.id === "string") updates.agentPoolId = poolData.id;
-      else { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "agent-pool must reference an agent pool" }] }; }
-    }
-    const nextPoolId = updates.agentPoolId !== undefined ? updates.agentPoolId : details.stack.agentPoolId;
-    const nextMode = typeof attributes["execution-mode"] === "string"
-      ? attributes["execution-mode"]
-      : poolData !== undefined
-        ? nextPoolId === null ? "remote" : "agent"
-        : details.stack.executionMode;
-    if (nextMode === "agent" && nextPoolId === null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "agent execution requires an agent-pool relationship" }] }; }
-    if (nextPoolId !== null) {
-      const pool = await db.query.agentPools.findFirst({ where: and(eq(agentPools.id, nextPoolId), eq(agentPools.orgId, details.stack.orgId)) });
-      if (pool === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "agent-pool must belong to the Stack organization" }] }; }
-    }
-    if (typeof attributes["execution-mode"] === "string") updates.executionMode = attributes["execution-mode"];
+    applyStackScalarUpdates(attributes, updates);
+    const vcsError = await applyStackVcsUpdate(attributes, details.stack.orgId, updates);
+    if (vcsError !== null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: vcsError }] }; }
+    const executionError = await applyStackExecutionUpdates(attributes, relationships, details.stack, details.stack.orgId, updates);
+    if (executionError !== null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: executionError }] }; }
     await db.update(stacks).set(updates).where(eq(stacks.id, details.stack.id));
     const updated = await db.query.stacks.findFirst({ where: eq(stacks.id, params["stack_id"] ?? "") });
     return { data: updated === undefined ? undefined : stackResource(updated, details.projectName) };

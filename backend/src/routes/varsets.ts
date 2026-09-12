@@ -35,6 +35,205 @@ type ResItem = Readonly<{
 }>;
 
 
+function varsetListParams(request: ParamCtx["request"]): { search: string; projectFilter: string } {
+  const url = new URL(request.url);
+  return {
+    search: url.searchParams.get("q")?.trim() ?? "",
+    projectFilter: url.searchParams.get("filter[project][id]")?.trim() ?? "",
+  };
+}
+
+function varsetScopeDenied(scopes: ReturnType<typeof currentTokenScopes>, orgId: string): boolean {
+  return scopes !== null && (!scopeCoversOrg(scopes, orgId) || !scopeGrants(scopes, "varsets:read"));
+}
+
+async function scopedVarsetIds(
+  scopes: NonNullable<ReturnType<typeof currentTokenScopes>>,
+  orgId: string,
+): Promise<string[] | null> {
+  const workspaceIds = await scopeWorkspaceIdsForOrg(scopes, orgId);
+  if (workspaceIds === null) return null;
+  const scopedProjects = new Set<string>(scopes.projects ?? []);
+  if (workspaceIds.length > 0) {
+    const workspaceRows = await db.query.workspaces.findMany({
+      where: inArray(workspaces.id, [...workspaceIds]),
+      columns: { projectId: true },
+    });
+    for (const workspace of workspaceRows) {
+      if (workspace.projectId !== null) scopedProjects.add(workspace.projectId);
+    }
+  }
+  const [workspaceLinks, projectLinks, ownedSets, globalSets] = await Promise.all([
+    workspaceIds.length === 0 ? [] : db.query.variableSetWorkspaces.findMany({
+      where: inArray(variableSetWorkspaces.workspaceId, [...workspaceIds]),
+      columns: { variableSetId: true },
+    }),
+    scopedProjects.size === 0 ? [] : db.query.variableSetProjects.findMany({
+      where: inArray(variableSetProjects.projectId, [...scopedProjects]),
+      columns: { variableSetId: true },
+    }),
+    scopedProjects.size === 0 ? [] : db.query.variableSets.findMany({
+      where: and(eq(variableSets.orgId, orgId), inArray(variableSets.parentProjectId, [...scopedProjects])),
+      columns: { id: true },
+    }),
+    db.query.variableSets.findMany({
+      where: and(eq(variableSets.orgId, orgId), eq(variableSets.global, true)),
+      columns: { id: true },
+    }),
+  ]);
+  return [...new Set<string>([
+    ...workspaceLinks.map((row): string => row.variableSetId),
+    ...projectLinks.map((row): string => row.variableSetId),
+    ...ownedSets.map((row): string => row.id),
+    ...globalSets.map((row): string => row.id),
+  ])];
+}
+
+async function projectVarsetIds(projectFilter: string): Promise<string[] | null> {
+  // Project-scoped variable sets: those owned by the project
+  // (parent_project_id) plus org-owned sets explicitly applied to it.
+  const owned = await db.query.variableSets.findMany({
+    where: eq(variableSets.parentProjectId, projectFilter),
+    columns: { id: true },
+  });
+  const applied = await db.query.variableSetProjects.findMany({
+    where: eq(variableSetProjects.projectId, projectFilter),
+    columns: { variableSetId: true },
+  });
+  const ids = new Set<string>([
+    ...owned.map((v): string => v.id),
+    ...applied.map((l): string => l.variableSetId),
+  ]);
+  if (ids.size === 0) return null;
+  return [...ids];
+}
+
+async function hydrateVarsetRecords(
+  records: VarSetItem[],
+  orgName: string,
+): Promise<Record<string, unknown>[]> {
+  // Batch the per-row N+1 (workspace/project/variable links + org name):
+  // three queries for the whole page instead of three per variable set.
+  const setIds = records.map((r: VarSetItem): string => r.id);
+  const [workspaceLinkRows, projectLinkRows, variableRows] = setIds.length === 0
+    ? [[], [], []]
+    : await Promise.all([
+      db.query.variableSetWorkspaces.findMany({ where: inArray(variableSetWorkspaces.variableSetId, setIds) }),
+      db.query.variableSetProjects.findMany({ where: inArray(variableSetProjects.variableSetId, setIds) }),
+      db.query.variableSetVariables.findMany({ where: inArray(variableSetVariables.variableSetId, setIds) }),
+    ]);
+  const groupBySetId = <T extends { variableSetId: string }>(rows: readonly T[]): Map<string, T[]> => {
+    const grouped = new Map<string, T[]>();
+    for (const row of rows) {
+      const list = grouped.get(row.variableSetId) ?? [];
+      list.push(row);
+      grouped.set(row.variableSetId, list);
+    }
+    return grouped;
+  };
+  const workspaceLinksBySet = groupBySetId(workspaceLinkRows);
+  const projectLinksBySet = groupBySetId(projectLinkRows);
+  const variablesBySet = groupBySetId(variableRows);
+  return Promise.all(records.map(async (r: VarSetItem): Promise<Record<string, unknown>> =>
+    variableSetResource(r, {
+      orgName,
+      workspaceLinks: workspaceLinksBySet.get(r.id) ?? [],
+      projectLinks: projectLinksBySet.get(r.id) ?? [],
+      variables: variablesBySet.get(r.id) ?? [],
+    })));
+}
+
+function parseVarsetAttributes(
+  body: unknown,
+  set: SetObj,
+  partial = false,
+): { attributes: Record<string, unknown> } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
+  if (data?.["type"] !== "varsets" || attributes === undefined || attributes === null || !validVariableSetAttributes(attributes, partial)) {
+    (set as { status: number }).status = 422; return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable set attributes" }] } };
+  }
+  return { attributes };
+}
+
+async function checkVarsetParentProject(
+  orgId: string,
+  parentProjectId: string,
+  global: boolean,
+  set: SetObj,
+): Promise<unknown | null> {
+  const parent = await db.query.projects.findFirst({ where: eq(projects.id, parentProjectId) });
+  if (parent === undefined || parent.orgId !== orgId) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Parent project must belong to the organization" }] };
+  }
+  // the reference format: project-owned variable sets cannot be global.
+  if (global === true) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Project-owned variable sets cannot be global" }] };
+  }
+  return null;
+}
+
+function buildVarsetUpdate(
+  record: Readonly<{ name: string; description: string | null; global: boolean | null; priority: boolean | null }>,
+  attributes: Record<string, unknown>,
+): { name: string; description: string | null; global: boolean | null; priority: boolean | null } {
+  return {
+    name: typeof attributes["name"] === "string" ? attributes["name"].trim() : record.name,
+    description: attributes["description"] === undefined ? record.description : (typeof attributes["description"] === "string" ? attributes["description"] : null),
+    global: typeof attributes["global"] === "boolean" ? attributes["global"] : record.global,
+    priority: typeof attributes["priority"] === "boolean" ? attributes["priority"] : record.priority,
+  };
+}
+
+function parseVarsetVariableAttributes(
+  body: unknown,
+  set: SetObj,
+  partial = false,
+): { attributes: Record<string, unknown> | undefined } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
+  if (data?.["type"] !== "vars" || !validVariableSetVariableAttributes(attributes, partial)) {
+    (set as { status: number }).status = 422; return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] } };
+  }
+  return { attributes };
+}
+
+async function buildVarsetVariable(
+  attributes: Record<string, unknown> | undefined,
+  variableSetId: string,
+): Promise<{ id: string; variableSetId: string; key: string; value: string; valueEncrypted: string | null; category: string; sensitive: boolean; hcl: boolean; description: string | null }> {
+  const key = typeof attributes?.["key"] === "string" ? attributes["key"] : "";
+  const rawValue = typeof attributes?.["value"] === "string" ? attributes["value"] : "";
+  const category = typeof attributes?.["category"] === "string" ? attributes["category"] : "terraform";
+  const sensitive = typeof attributes?.["sensitive"] === "boolean" ? attributes["sensitive"] : false;
+  const hcl = typeof attributes?.["hcl"] === "boolean" ? attributes["hcl"] : false;
+  const description = typeof attributes?.["description"] === "string" ? attributes["description"] : null;
+  // Sensitive values are encrypted at rest (todo 167/168).
+  const stored = await variableValueForWrite(sensitive, rawValue);
+  return { id: newResourceId("var"), variableSetId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description };
+}
+
+async function refreshVarsetVariableEncryption(
+  values: Record<string, unknown>,
+  current: VarItem,
+): Promise<void> {
+  // Re-encrypt when the value or sensitive flag changed (todo 167-169).
+  const sensitiveNow = values["sensitive"] === true;
+  const valueChanged = values["value"] !== current.value;
+  const sensitiveChanged = sensitiveNow !== (current.sensitive === true);
+  if (valueChanged || sensitiveChanged) {
+    const stored = await variableValueForWrite(sensitiveNow, values["value"] as string);
+    values["value"] = stored.value;
+    values["valueEncrypted"] = stored.valueEncrypted;
+  } else {
+    values["valueEncrypted"] = current.valueEncrypted;
+  }
+}
+
 export const varsetRoutes = new Elysia({ name: "varsets" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/varsets", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -44,76 +243,27 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const { number, size } = pageRequest(request);
-    const url = new URL(request.url);
-    const search = url.searchParams.get("q")?.trim() ?? "";
-    const projectFilter = url.searchParams.get("filter[project][id]")?.trim() ?? "";
+    const { search, projectFilter } = varsetListParams(request);
     const scopes = currentTokenScopes();
-    if (scopes !== null && (!scopeCoversOrg(scopes, org.id) || !scopeGrants(scopes, "varsets:read"))) {
+    if (varsetScopeDenied(scopes, org.id)) {
       return { data: [], ...pagination(request, number, size, 0) };
     }
     const scope = eq(variableSets.orgId, org.id);
     const conditions: (typeof scope)[] = [scope];
     if (search !== "") conditions.push(caseInsensitiveLike(variableSets.name, `%${search}%`));
     if (scopes !== null) {
-      const workspaceIds = await scopeWorkspaceIdsForOrg(scopes, org.id);
-      if (workspaceIds !== null) {
-        const scopedProjects = new Set<string>(scopes.projects ?? []);
-        if (workspaceIds.length > 0) {
-          const workspaceRows = await db.query.workspaces.findMany({
-            where: inArray(workspaces.id, [...workspaceIds]),
-            columns: { projectId: true },
-          });
-          for (const workspace of workspaceRows) {
-            if (workspace.projectId !== null) scopedProjects.add(workspace.projectId);
-          }
-        }
-        const [workspaceLinks, projectLinks, ownedSets, globalSets] = await Promise.all([
-          workspaceIds.length === 0 ? [] : db.query.variableSetWorkspaces.findMany({
-            where: inArray(variableSetWorkspaces.workspaceId, [...workspaceIds]),
-            columns: { variableSetId: true },
-          }),
-          scopedProjects.size === 0 ? [] : db.query.variableSetProjects.findMany({
-            where: inArray(variableSetProjects.projectId, [...scopedProjects]),
-            columns: { variableSetId: true },
-          }),
-          scopedProjects.size === 0 ? [] : db.query.variableSets.findMany({
-            where: and(eq(variableSets.orgId, org.id), inArray(variableSets.parentProjectId, [...scopedProjects])),
-            columns: { id: true },
-          }),
-          db.query.variableSets.findMany({
-            where: and(eq(variableSets.orgId, org.id), eq(variableSets.global, true)),
-            columns: { id: true },
-          }),
-        ]);
-        const visibleIds = new Set<string>([
-          ...workspaceLinks.map((row): string => row.variableSetId),
-          ...projectLinks.map((row): string => row.variableSetId),
-          ...ownedSets.map((row): string => row.id),
-          ...globalSets.map((row): string => row.id),
-        ]);
-        if (visibleIds.size === 0) return { data: [], ...pagination(request, number, size, 0) };
-        conditions.push(inArray(variableSets.id, [...visibleIds]));
+      const scoped = await scopedVarsetIds(scopes, org.id);
+      if (scoped !== null) {
+        if (scoped.length === 0) return { data: [], ...pagination(request, number, size, 0) };
+        conditions.push(inArray(variableSets.id, scoped));
       }
     }
     if (projectFilter !== "") {
-      // Project-scoped variable sets: those owned by the project
-      // (parent_project_id) plus org-owned sets explicitly applied to it.
-      const owned = await db.query.variableSets.findMany({
-        where: eq(variableSets.parentProjectId, projectFilter),
-        columns: { id: true },
-      });
-      const applied = await db.query.variableSetProjects.findMany({
-        where: eq(variableSetProjects.projectId, projectFilter),
-        columns: { variableSetId: true },
-      });
-      const ids = new Set<string>([
-        ...owned.map((v): string => v.id),
-        ...applied.map((l): string => l.variableSetId),
-      ]);
-      if (ids.size === 0) {
+      const ids = await projectVarsetIds(projectFilter);
+      if (ids === null) {
         return { data: [], ...pagination(request, number, size, 0) };
       }
-      conditions.push(inArray(variableSets.id, [...ids]));
+      conditions.push(inArray(variableSets.id, ids));
     }
     const where = and(...conditions);
     const [records, countRows] = await Promise.all([
@@ -121,35 +271,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       db.select({ total: count() }).from(variableSets).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    // Batch the per-row N+1 (workspace/project/variable links + org name):
-    // three queries for the whole page instead of three per variable set.
-    const setIds = records.map((r: VarSetItem): string => r.id);
-    const [workspaceLinkRows, projectLinkRows, variableRows] = setIds.length === 0
-      ? [[], [], []]
-      : await Promise.all([
-        db.query.variableSetWorkspaces.findMany({ where: inArray(variableSetWorkspaces.variableSetId, setIds) }),
-        db.query.variableSetProjects.findMany({ where: inArray(variableSetProjects.variableSetId, setIds) }),
-        db.query.variableSetVariables.findMany({ where: inArray(variableSetVariables.variableSetId, setIds) }),
-      ]);
-    const groupBySetId = <T extends { variableSetId: string }>(rows: readonly T[]): Map<string, T[]> => {
-      const grouped = new Map<string, T[]>();
-      for (const row of rows) {
-        const list = grouped.get(row.variableSetId) ?? [];
-        list.push(row);
-        grouped.set(row.variableSetId, list);
-      }
-      return grouped;
-    };
-    const workspaceLinksBySet = groupBySetId(workspaceLinkRows);
-    const projectLinksBySet = groupBySetId(projectLinkRows);
-    const variablesBySet = groupBySetId(variableRows);
-    const data = await Promise.all(records.map(async (r: VarSetItem): Promise<Record<string, unknown>> =>
-      variableSetResource(r, {
-        orgName: org.name,
-        workspaceLinks: workspaceLinksBySet.get(r.id) ?? [],
-        projectLinks: projectLinksBySet.get(r.id) ?? [],
-        variables: variablesBySet.get(r.id) ?? [],
-      })));
+    const data = await hydrateVarsetRecords(records, org.name);
     return { data, ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/organizations/:org_name/varsets", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<unknown> => {
@@ -158,12 +280,9 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, orgId, teamId, "manage-varsets"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
-    if (data?.["type"] !== "varsets" || attributes === undefined || attributes === null || !validVariableSetAttributes(attributes)) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable set attributes" }] };
-    }
+    const parsed = parseVarsetAttributes(body, set);
+    if ("error" in parsed) return parsed.error;
+    const { attributes } = parsed;
     const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
     const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
     const global = typeof attributes["global"] === "boolean" ? attributes["global"] : false;
@@ -172,16 +291,8 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       ? attributes["parent-project-id"]
       : null;
     if (parentProjectId !== null) {
-      const parent = await db.query.projects.findFirst({ where: eq(projects.id, parentProjectId) });
-      if (parent === undefined || parent.orgId !== org.id) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Parent project must belong to the organization" }] };
-      }
-      // the reference format: project-owned variable sets cannot be global.
-      if (global === true) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Project-owned variable sets cannot be global" }] };
-      }
+      const parentError = await checkVarsetParentProject(org.id, parentProjectId, global, set);
+      if (parentError !== null) return parentError;
     }
     const record = {
       id: newResourceId("varset"),
@@ -206,22 +317,14 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
-    if (data?.["type"] !== "varsets" || !attributes || !validVariableSetAttributes(attributes, true)) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable set attributes" }] };
-    }
+    const parsed = parseVarsetAttributes(body, set, true);
+    if ("error" in parsed) return parsed.error;
+    const { attributes } = parsed;
     if (attributes["parent-project-id"] !== undefined) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The owning project of a variable set cannot be changed" }] };
     }
-    const updated = {
-      name: typeof attributes["name"] === "string" ? attributes["name"].trim() : record.name,
-      description: attributes["description"] === undefined ? record.description : (typeof attributes["description"] === "string" ? attributes["description"] : null),
-      global: typeof attributes["global"] === "boolean" ? attributes["global"] : record.global,
-      priority: typeof attributes["priority"] === "boolean" ? attributes["priority"] : record.priority,
-    };
+    const updated = buildVarsetUpdate(record, attributes);
     if (record.parentProjectId !== null && updated.global === true) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Project-owned variable sets cannot be global" }] };
@@ -360,21 +463,9 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
-    if (data?.["type"] !== "vars" || !validVariableSetVariableAttributes(attributes)) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
-    }
-    const key = typeof attributes?.["key"] === "string" ? attributes["key"] : "";
-    const rawValue = typeof attributes?.["value"] === "string" ? attributes["value"] : "";
-    const category = typeof attributes?.["category"] === "string" ? attributes["category"] : "terraform";
-    const sensitive = typeof attributes?.["sensitive"] === "boolean" ? attributes["sensitive"] : false;
-    const hcl = typeof attributes?.["hcl"] === "boolean" ? attributes["hcl"] : false;
-    const description = typeof attributes?.["description"] === "string" ? attributes["description"] : null;
-    // Sensitive values are encrypted at rest (todo 167/168).
-    const stored = await variableValueForWrite(sensitive, rawValue);
-    const variable = { id: newResourceId("var"), variableSetId: record.id, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description };
+    const parsed = parseVarsetVariableAttributes(body, set);
+    if ("error" in parsed) return parsed.error;
+    const variable = await buildVarsetVariable(parsed.attributes, record.id);
     try { await db.insert(variableSetVariables).values(variable); } catch (error: unknown) {
       if (isUniqueConstraintError(error)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this set" }] }; }
       throw error;
@@ -403,16 +494,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       const v = byId.get(item.id);
       if (v === undefined) throw new Error("Variable not found");
       const base = variableSetVariableUpdate(v, item.attributes as Parameters<typeof variableSetVariableUpdate>[1]);
-      const sensitiveNow = base["sensitive"] === true;
-      const valueChanged = base["value"] !== v.value;
-      const sensitiveChanged = sensitiveNow !== (v.sensitive === true);
-      if (valueChanged || sensitiveChanged) {
-        const stored = await variableValueForWrite(sensitiveNow, base["value"] as string);
-        base["value"] = stored.value;
-        (base)["valueEncrypted"] = stored.valueEncrypted;
-      } else {
-        (base)["valueEncrypted"] = v.valueEncrypted;
-      }
+      await refreshVarsetVariableEncryption(base, v);
       return { variable: v, values: base };
     }));
     try {
@@ -456,24 +538,10 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     const variable = record !== undefined ? await db.query.variableSetVariables.findFirst({ where: and(eq(variableSetVariables.id, varId), eq(variableSetVariables.variableSetId, record.id)) }) : undefined;
     if (record === undefined || variable === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
-    if (data?.["type"] !== "vars" || !validVariableSetVariableAttributes(attributes, true)) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
-    }
-    const updated = variableSetVariableUpdate(variable, attributes as Parameters<typeof variableSetVariableUpdate>[1]);
-    // Re-encrypt when the value or sensitive flag changed (todo 167-169).
-    const sensitiveNow = updated["sensitive"] === true;
-    const valueChanged = updated["value"] !== variable.value;
-    const sensitiveChanged = sensitiveNow !== (variable.sensitive === true);
-    if (valueChanged || sensitiveChanged) {
-      const stored = await variableValueForWrite(sensitiveNow, updated["value"] as string);
-      updated["value"] = stored.value;
-      updated["valueEncrypted"] = stored.valueEncrypted;
-    } else {
-      updated["valueEncrypted"] = variable.valueEncrypted;
-    }
+    const parsed = parseVarsetVariableAttributes(body, set, true);
+    if ("error" in parsed) return parsed.error;
+    const updated = variableSetVariableUpdate(variable, parsed.attributes as Parameters<typeof variableSetVariableUpdate>[1]);
+    await refreshVarsetVariableEncryption(updated, variable);
     try { await db.update(variableSetVariables).set(updated).where(eq(variableSetVariables.id, variable.id)); } catch (error: unknown) {
       if (isUniqueConstraintError(error)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this set" }] }; }
       throw error;

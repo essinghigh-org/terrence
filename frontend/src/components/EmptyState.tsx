@@ -15,6 +15,54 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "
  * registry pages) and views using this wrapper render the same thing — before,
  * the app had two unrelated empty-state treatments.
  */
+function EmptyStateHeading({ level, title }: Readonly<{
+  level: "h2" | "h3" | "h4";
+  title: string;
+}>): React.JSX.Element {
+  if (level === "h4") return <h4>{title}</h4>;
+  if (level === "h3") return <h3>{title}</h3>;
+  return <h2>{title}</h2>;
+}
+
+function EmptyStateAction({ actionLabel, onAction, actionHref }: Readonly<{
+  actionLabel: string;
+  onAction: (() => void) | undefined;
+  actionHref: string | undefined;
+}>): React.JSX.Element {
+  if (onAction !== undefined) return <Button onClick={onAction}>{actionLabel}</Button>;
+  return (
+    <Link to={actionHref ?? "#"} className={buttonVariants()}>
+      {actionLabel}
+    </Link>
+  );
+}
+
+function DocsLink({ docsHref }: Readonly<{
+  docsHref: string | undefined;
+}>): React.JSX.Element | null {
+  if (docsHref === undefined) return null;
+  if (docsHref.startsWith("/app/")) {
+    return (
+      <Link
+        to={docsHref}
+        className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+      >
+        Read the docs
+      </Link>
+    );
+  }
+  return (
+    <a
+      href={docsHref}
+      target="_blank"
+      rel="noreferrer"
+      className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+    >
+      Read the docs
+    </a>
+  );
+}
+
 export function EmptyState(props: Readonly<{
   illustration?: TerrencePose | undefined;
   title: string;
@@ -46,41 +94,16 @@ export function EmptyState(props: Readonly<{
         {/* EmptyTitle is a div; render a real heading inside it so empty
             states still land in the document outline. */}
         <EmptyTitle className="text-foreground">
-          {headingLevel === "h4"
-            ? <h4>{title}</h4>
-            : headingLevel === "h3"
-              ? <h3>{title}</h3>
-              : <h2>{title}</h2>}
+          <EmptyStateHeading level={headingLevel} title={title} />
         </EmptyTitle>
         {description !== undefined && <EmptyDescription>{description}</EmptyDescription>}
       </EmptyHeader>
       {footerVisible && (
         <EmptyContent className="max-w-none flex-row flex-wrap items-center justify-center gap-3">
-          {hasAction && (onAction !== undefined
-            ? <Button onClick={onAction}>{actionLabel}</Button>
-            : (
-              <Link to={actionHref ?? "#"} className={buttonVariants()}>
-                {actionLabel}
-              </Link>
-            ))}
-          {docsHref !== undefined &&
-            (docsHref.startsWith("/app/") ? (
-              <Link
-                to={docsHref}
-                className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-              >
-                Read the docs
-              </Link>
-            ) : (
-              <a
-                href={docsHref}
-                target="_blank"
-                rel="noreferrer"
-                className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-              >
-                Read the docs
-              </a>
-            ))}
+          {hasAction && (
+            <EmptyStateAction actionLabel={actionLabel} onAction={onAction} actionHref={actionHref} />
+          )}
+          <DocsLink docsHref={docsHref} />
         </EmptyContent>
       )}
     </Empty>

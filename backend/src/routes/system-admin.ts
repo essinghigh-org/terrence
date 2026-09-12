@@ -253,10 +253,10 @@ function requestedChecks(url: QueryUrl): ReadonlyMap<string, ReadonlySet<string>
   return selected;
 }
 
-async function diagnosticGroups(
-  selected: Readonly<ReadonlyMap<string, Readonly<ReadonlySet<string>>>>,
-): Promise<readonly DiagnosticGroup[]> {
-  const checks = new Map<string, Promise<DiagnosticCheck>>();
+type CheckSelection = Readonly<ReadonlyMap<string, Readonly<ReadonlySet<string>>>>;
+type CheckRegistry = Map<string, Promise<DiagnosticCheck>>;
+
+function addStorageChecks(selected: CheckSelection, checks: CheckRegistry): void {
   if (selected.get("database")?.has("connection") === true) {
     checks.set("database.connection", db.query.users.findFirst()
       .then((): DiagnosticCheck => ({ name: "connection", status: "OK" }))
@@ -272,6 +272,9 @@ async function diagnosticGroups(
       .then((): DiagnosticCheck => ({ name: "read_write", status: "OK" }))
       .catch((): DiagnosticCheck => ({ name: "read_write", status: "ERROR" })));
   }
+}
+
+function addDependencyChecks(selected: CheckSelection, checks: CheckRegistry): void {
   for (const dependency of ["archivist", "atlas", "vault", "redis"] as const) {
     if (selected.get(dependency)?.has("connection") !== true) continue;
     const endpoint = process.env[`TERRENCE_${dependency.toUpperCase()}_URL`];
@@ -281,6 +284,9 @@ async function diagnosticGroups(
         .then((response): DiagnosticCheck => ({ name: "connection", status: response.ok ? "OK" : "ERROR" }))
         .catch((): DiagnosticCheck => ({ name: "connection", status: "ERROR" })));
   }
+}
+
+function addWorkerChecks(selected: CheckSelection, checks: CheckRegistry): void {
   if (selected.get("task-worker")?.has("running") === true) {
     checks.set("task-worker.running", Promise.resolve({
       name: "running",
@@ -290,6 +296,9 @@ async function diagnosticGroups(
   if (selected.get("runtime")?.has("version") === true) {
     checks.set("runtime.version", Promise.resolve({ name: "version", status: "OK" }));
   }
+}
+
+function addSecurityChecks(selected: CheckSelection, checks: CheckRegistry): void {
   if (selected.get("security")?.has("run_sandbox") === true) {
     const abi = probeLandlockAbi();
     const flags = landlockAccessFlagsForAbi(abi);
@@ -321,7 +330,12 @@ async function diagnosticGroups(
       ...(enabled ? { data: { allowed: true } } : {}),
     }));
   }
+}
 
+async function resolveDiagnosticGroups(
+  selected: CheckSelection,
+  checks: CheckRegistry,
+): Promise<readonly DiagnosticGroup[]> {
   const resolved = new Map<string, DiagnosticCheck>(
     await Promise.all([...checks].map(async ([key, check]): Promise<[string, DiagnosticCheck]> => [key, await check])),
   );
@@ -331,6 +345,17 @@ async function diagnosticGroups(
       .filter((check): check is DiagnosticCheck => check !== undefined);
     return { group, status: worstStatus(groupChecks.map((check): Status => check.status)), checks: groupChecks };
   });
+}
+
+async function diagnosticGroups(
+  selected: Readonly<ReadonlyMap<string, Readonly<ReadonlySet<string>>>>,
+): Promise<readonly DiagnosticGroup[]> {
+  const checks: CheckRegistry = new Map();
+  addStorageChecks(selected, checks);
+  addDependencyChecks(selected, checks);
+  addWorkerChecks(selected, checks);
+  addSecurityChecks(selected, checks);
+  return resolveDiagnosticGroups(selected, checks);
 }
 
 async function runDiagnostics(
@@ -384,6 +409,62 @@ function diagnosticFailure(node: string, detail: string): DiagnosticResult {
   };
 }
 
+function parseNodeDiagnostic(nodeId: string, payload: unknown): DiagnosticResult {
+  const result: unknown = Array.isArray(payload) ? payload[0] : undefined;
+  if (result === null || typeof result !== "object") return diagnosticFailure(nodeId, "invalid_response");
+  const record = result as Record<string, unknown>;
+  return {
+    node: typeof record["node"] === "string" ? record["node"] : nodeId,
+    status: ["OK", "WARNING", "ERROR"].includes(String(record["status"])) ? record["status"] as Status : "ERROR",
+    createdAt: typeof record["created_at"] === "string" ? record["created_at"] : new Date().toISOString(),
+    duration: typeof record["duration"] === "number" ? record["duration"] : 0,
+    checks: Array.isArray(record["checks"]) ? record["checks"] as DiagnosticGroup[] : [],
+  };
+}
+
+async function collectNodeDiagnostics(
+  node: typeof controlPlaneNodes.$inferSelect,
+  selected: CheckSelection,
+  timeoutSeconds: number,
+  authorization: string | null,
+): Promise<DiagnosticResult> {
+  if (node.id === readinessNodeId()) return runDiagnostics(selected, timeoutSeconds);
+  if (node.address === null || authorization === null) return diagnosticFailure(node.id, "node_unreachable");
+  let nodeUrl: URL;
+  try {
+    nodeUrl = new URL("/api/v1/diagnostics", node.address);
+  } catch {
+    return diagnosticFailure(node.id, "node_unreachable");
+  }
+  // The caller's System API credential is forwarded to node.address, which
+  // lives in the control_plane_nodes table. Restrict the scheme and the
+  // network so a compromised or malformed row cannot redirect a valid
+  // credential to an arbitrary external host. IP literals must be
+  // loopback/private (where a control plane actually runs); public literals
+  // are rejected outright so node.address cannot be pointed at an external
+  // host to steal the credential. Non-IP hostnames remain admin-controlled
+  // (they need DNS resolution, which privateHostReason cannot classify).
+  const host = nodeUrl.hostname;
+  const isIpLiteral = host.includes(":") || /^[\d.]+$/.test(host);
+  if (nodeUrl.protocol !== "http:" && nodeUrl.protocol !== "https:") return diagnosticFailure(node.id, "node_unreachable");
+  if (isIpLiteral && privateHostReason(host) === null) return diagnosticFailure(node.id, "node_unreachable");
+  try {
+    const url = new URL("/api/v1/diagnostics", node.address);
+    url.searchParams.set("timeout", String(timeoutSeconds));
+    url.searchParams.append("nodes", node.id);
+    for (const [group, checks] of selected) {
+      for (const check of checks) url.searchParams.append("check", `${group}.${check}`);
+    }
+    const response = await fetch(url, {
+      headers: { accept: "application/json", authorization },
+      signal: AbortSignal.timeout(timeoutSeconds * 1000 + 2_000),
+    });
+    return parseNodeDiagnostic(node.id, await response.json());
+  } catch {
+    return diagnosticFailure(node.id, "node_unreachable");
+  }
+}
+
 async function collectDiagnostics(
   selected: Readonly<ReadonlyMap<string, Readonly<ReadonlySet<string>>>>,
   timeoutSeconds: number,
@@ -397,51 +478,7 @@ async function collectDiagnostics(
   if (targets.some((node): boolean => node === undefined)) throw new Error("Unknown or empty node identifier");
   return Promise.all(targets.map(async (node): Promise<DiagnosticResult> => {
     if (node === undefined) return diagnosticFailure("unknown", "node_not_found");
-    if (node.id === readinessNodeId()) return runDiagnostics(selected, timeoutSeconds);
-    if (node.address === null || authorization === null) return diagnosticFailure(node.id, "node_unreachable");
-    let nodeUrl: URL;
-    try {
-      nodeUrl = new URL("/api/v1/diagnostics", node.address);
-    } catch {
-      return diagnosticFailure(node.id, "node_unreachable");
-    }
-    // The caller's System API credential is forwarded to node.address, which
-    // lives in the control_plane_nodes table. Restrict the scheme and the
-    // network so a compromised or malformed row cannot redirect a valid
-    // credential to an arbitrary external host. IP literals must be
-    // loopback/private (where a control plane actually runs); public literals
-    // are rejected outright so node.address cannot be pointed at an external
-    // host to steal the credential. Non-IP hostnames remain admin-controlled
-    // (they need DNS resolution, which privateHostReason cannot classify).
-    const host = nodeUrl.hostname;
-    const isIpLiteral = host.includes(":") || /^[\d.]+$/.test(host);
-    if (nodeUrl.protocol !== "http:" && nodeUrl.protocol !== "https:") return diagnosticFailure(node.id, "node_unreachable");
-    if (isIpLiteral && privateHostReason(host) === null) return diagnosticFailure(node.id, "node_unreachable");
-    try {
-      const url = new URL("/api/v1/diagnostics", node.address);
-      url.searchParams.set("timeout", String(timeoutSeconds));
-      url.searchParams.append("nodes", node.id);
-      for (const [group, checks] of selected) {
-        for (const check of checks) url.searchParams.append("check", `${group}.${check}`);
-      }
-      const response = await fetch(url, {
-        headers: { accept: "application/json", authorization },
-        signal: AbortSignal.timeout(timeoutSeconds * 1000 + 2_000),
-      });
-      const payload: unknown = await response.json();
-      const result: unknown = Array.isArray(payload) ? payload[0] : undefined;
-      if (result === null || typeof result !== "object") return diagnosticFailure(node.id, "invalid_response");
-      const record = result as Record<string, unknown>;
-      return {
-        node: typeof record["node"] === "string" ? record["node"] : node.id,
-        status: ["OK", "WARNING", "ERROR"].includes(String(record["status"])) ? record["status"] as Status : "ERROR",
-        createdAt: typeof record["created_at"] === "string" ? record["created_at"] : new Date().toISOString(),
-        duration: typeof record["duration"] === "number" ? record["duration"] : 0,
-        checks: Array.isArray(record["checks"]) ? record["checks"] as DiagnosticGroup[] : [],
-      };
-    } catch {
-      return diagnosticFailure(node.id, "node_unreachable");
-    }
+    return collectNodeDiagnostics(node, selected, timeoutSeconds, authorization);
   }));
 }
 
@@ -610,6 +647,88 @@ function bundleResource(record: BundleRecord): Record<string, unknown> {
   };
 }
 
+function writeBundleEntries(
+  record: BundleRecord,
+  diagnostics: readonly DiagnosticResult[],
+  usage: Record<string, unknown>,
+  manifest: ReturnType<typeof bundleManifest>,
+): Record<string, string> {
+  const entries: Record<string, string> = {};
+  entries["_manifest.json"] = `${JSON.stringify(manifest, null, 2)}\n`;
+  entries["_effective-configuration.json"] = `${JSON.stringify(safeEffectiveConfiguration(readinessNodeId()), null, 2)}\n`;
+  // 457: stamp request/correlation identity into the bundle for trace continuity.
+  entries["_request-correlation.json"] = JSON.stringify({ bundleId: record.id, createdAt: record.createdAt, generatedAt: new Date().toISOString() }, null, 2) + "\n";
+  for (const diagnostic of diagnostics) {
+    const prefix = `${record.id}/${bundleNodePath(diagnostic.node)}`;
+    entries[`${prefix}/diagnostics.json`] = `${JSON.stringify([diagnosticResource(diagnostic)], null, 2)}\n`;
+    entries[`${prefix}/usage.json`] = `${JSON.stringify(usage, null, 2)}\n`;
+    entries[`${prefix}/instance.json`] = `${JSON.stringify({
+      version: process.env["BUILD_VERSION"] ?? "dev",
+      build: process.env["BUILD_SHA"] ?? "unknown",
+      node: diagnostic.node,
+      created_at: record.createdAt,
+    }, null, 2)}\n`;
+  }
+  return entries;
+}
+
+async function failOversizeBundle(current: BundleRecord, maxBytes: number): Promise<void> {
+  const completedAt = new Date().toISOString();
+  await saveBundle({
+    ...current,
+    status: "errored",
+    completedAt,
+    error: `Bundle exceeds the ${maxBytes} byte size limit`,
+    nodes: current.nodes.map((bundleNode): BundleNode => ({
+      ...bundleNode,
+      status: "errored",
+      error: "Bundle exceeds the configured size limit",
+      completedAt,
+    })),
+  });
+}
+
+async function finalizeFinishedBundle(
+  current: BundleRecord,
+  size: number,
+  manifest: ReturnType<typeof bundleManifest>,
+  diagnostics: readonly DiagnosticResult[],
+): Promise<void> {
+  const completedAt = new Date().toISOString();
+  await saveBundle({
+    ...current,
+    status: "finished",
+    completedAt,
+    sizeBytes: size,
+    manifest: { ...manifest, archiveSizeBytes: size },
+    nodes: current.nodes.map((bundleNode): BundleNode => ({
+      ...bundleNode,
+      status: diagnostics.find((result): boolean => result.node === bundleNode.node)?.status === "ERROR" ? "errored" : "finished",
+      sizeBytes: size,
+      error: diagnostics.find((result): boolean => result.node === bundleNode.node)?.status === "ERROR" ? "Diagnostics failed" : null,
+      completedAt,
+    })),
+  });
+}
+
+async function failBundleGeneration(record: BundleRecord): Promise<void> {
+  const completedAt = new Date().toISOString();
+  const current = await loadBundle(record.id);
+  if (current === undefined || current.status === "deleted") return;
+  await saveBundle({
+    ...current,
+    status: "errored",
+    completedAt,
+    error: "Bundle generation failed",
+    nodes: current.nodes.map((node): BundleNode => ({
+      ...node,
+      status: "errored",
+      error: "Bundle generation failed",
+      completedAt,
+    })),
+  });
+}
+
 async function generateSupportBundle(record: BundleRecord, authorization: string | null): Promise<void> {
   try {
     const initial = await loadBundle(record.id);
@@ -619,28 +738,13 @@ async function generateSupportBundle(record: BundleRecord, authorization: string
       collectDiagnostics(selected, 30, record.nodes.map((node): string => node.node), authorization),
       createUsageBundle(),
     ]);
-    const entries: Record<string, string> = {};
     const manifest = record.manifest ?? bundleManifest(
       record.id,
       record.createdAt,
       record.expiresAt ?? supportBundleExpiry(record.createdAt),
       record.nodes.map((node): string => node.node),
     );
-    entries["_manifest.json"] = `${JSON.stringify(manifest, null, 2)}\n`;
-    entries["_effective-configuration.json"] = `${JSON.stringify(safeEffectiveConfiguration(readinessNodeId()), null, 2)}\n`;
-    // 457: stamp request/correlation identity into the bundle for trace continuity.
-    entries["_request-correlation.json"] = JSON.stringify({ bundleId: record.id, createdAt: record.createdAt, generatedAt: new Date().toISOString() }, null, 2) + "\n";
-    for (const diagnostic of diagnostics) {
-      const prefix = `${record.id}/${bundleNodePath(diagnostic.node)}`;
-      entries[`${prefix}/diagnostics.json`] = `${JSON.stringify([diagnosticResource(diagnostic)], null, 2)}\n`;
-      entries[`${prefix}/usage.json`] = `${JSON.stringify(usage, null, 2)}\n`;
-      entries[`${prefix}/instance.json`] = `${JSON.stringify({
-        version: process.env["BUILD_VERSION"] ?? "dev",
-        build: process.env["BUILD_SHA"] ?? "unknown",
-        node: diagnostic.node,
-        created_at: record.createdAt,
-      }, null, 2)}\n`;
-    }
+    const entries = writeBundleEntries(record, diagnostics, usage, manifest);
     const bundlePath = join(supportBundleDirectory(), `${record.id}.tar.gz`);
     await Bun.Archive.write(bundlePath, entries, { compress: "gzip" });
     await chmod(bundlePath, 0o600);
@@ -652,52 +756,12 @@ async function generateSupportBundle(record: BundleRecord, authorization: string
     }
     if (bundleStat.size > manifest.maxBytes) {
       await unlink(bundlePath).catch((): undefined => undefined);
-      const completedAt = new Date().toISOString();
-      await saveBundle({
-        ...current,
-        status: "errored",
-        completedAt,
-        error: `Bundle exceeds the ${manifest.maxBytes} byte size limit`,
-        nodes: current.nodes.map((bundleNode): BundleNode => ({
-          ...bundleNode,
-          status: "errored",
-          error: "Bundle exceeds the configured size limit",
-          completedAt,
-        })),
-      });
+      await failOversizeBundle(current, manifest.maxBytes);
       return;
     }
-    const completedAt = new Date().toISOString();
-    await saveBundle({
-      ...current,
-      status: "finished",
-      completedAt,
-      sizeBytes: bundleStat.size,
-      manifest: { ...manifest, archiveSizeBytes: bundleStat.size },
-      nodes: current.nodes.map((bundleNode): BundleNode => ({
-        ...bundleNode,
-        status: diagnostics.find((result): boolean => result.node === bundleNode.node)?.status === "ERROR" ? "errored" : "finished",
-        sizeBytes: bundleStat.size,
-        error: diagnostics.find((result): boolean => result.node === bundleNode.node)?.status === "ERROR" ? "Diagnostics failed" : null,
-        completedAt,
-      })),
-    });
+    await finalizeFinishedBundle(current, bundleStat.size, manifest, diagnostics);
   } catch {
-    const completedAt = new Date().toISOString();
-    const current = await loadBundle(record.id);
-    if (current === undefined || current.status === "deleted") return;
-    await saveBundle({
-      ...current,
-      status: "errored",
-      completedAt,
-      error: "Bundle generation failed",
-      nodes: current.nodes.map((node): BundleNode => ({
-        ...node,
-        status: "errored",
-        error: "Bundle generation failed",
-        completedAt,
-      })),
-    });
+    await failBundleGeneration(record);
   }
 }
 
@@ -742,13 +806,39 @@ async function createSupportBundle({ body, request, set }: SystemContext): Promi
   return { data: bundleResource(withManifest) };
 }
 
+function validBundlePagination(pageNumber: number, pageSize: number): boolean {
+  return Number.isInteger(pageNumber) && pageNumber >= 1 && Number.isInteger(pageSize) && pageSize >= 1 && pageSize <= 100;
+}
+
+function validBundleDateFilters(createdAfter: string | null, createdBefore: string | null): boolean {
+  return (createdAfter === null || !Number.isNaN(Date.parse(createdAfter)))
+    && (createdBefore === null || !Number.isNaN(Date.parse(createdBefore)));
+}
+
+function bundleMatchesNodes(record: BundleRecord, nodeFilters: readonly string[]): boolean {
+  return nodeFilters.length === 0
+    || nodeFilters.every((node): boolean => record.nodes.some((item): boolean => item.node === node));
+}
+
+function filterBundleRecords(
+  records: readonly BundleRecord[],
+  filters: Readonly<{ statusFilter: string | null; createdAfter: string | null; createdBefore: string | null; nodeFilters: readonly string[] }>,
+): BundleRecord[] {
+  return records
+    .filter((record): boolean => filters.statusFilter === null || record.status === filters.statusFilter)
+    .filter((record): boolean => filters.createdAfter === null || Date.parse(record.createdAt) > Date.parse(filters.createdAfter))
+    .filter((record): boolean => filters.createdBefore === null || Date.parse(record.createdAt) < Date.parse(filters.createdBefore))
+    .filter((record): boolean => bundleMatchesNodes(record, filters.nodeFilters))
+    .sort((left, right): number => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+}
+
 async function listSupportBundles({ request, set }: SystemContext): Promise<unknown> {
   const url = new URL(request.url);
   const numberValue = url.searchParams.get("page[number]") ?? "1";
   const sizeValue = url.searchParams.get("page[size]") ?? "20";
   const pageNumber = Number(numberValue);
   const pageSize = Number(sizeValue);
-  if (!Number.isInteger(pageNumber) || pageNumber < 1 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+  if (!validBundlePagination(pageNumber, pageSize)) {
     return errorResponse(set, 400, "Bad Request", "Invalid pagination");
   }
   const statusFilter = url.searchParams.get("filter[status]");
@@ -757,18 +847,11 @@ async function listSupportBundles({ request, set }: SystemContext): Promise<unkn
   }
   const createdAfter = url.searchParams.get("filter[created_after]");
   const createdBefore = url.searchParams.get("filter[created_before]");
-  if ((createdAfter !== null && Number.isNaN(Date.parse(createdAfter)))
-    || (createdBefore !== null && Number.isNaN(Date.parse(createdBefore)))) {
+  if (!validBundleDateFilters(createdAfter, createdBefore)) {
     return errorResponse(set, 400, "Bad Request", "Invalid creation date filter");
   }
   const nodeFilters = url.searchParams.getAll("filter[nodes]");
-  const filtered = (await loadBundles())
-    .filter((record): boolean => statusFilter === null || record.status === statusFilter)
-    .filter((record): boolean => createdAfter === null || Date.parse(record.createdAt) > Date.parse(createdAfter))
-    .filter((record): boolean => createdBefore === null || Date.parse(record.createdAt) < Date.parse(createdBefore))
-    .filter((record): boolean => nodeFilters.length === 0
-      || nodeFilters.every((node): boolean => record.nodes.some((item): boolean => item.node === node)))
-    .sort((left, right): number => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+  const filtered = filterBundleRecords(await loadBundles(), { statusFilter, createdAfter, createdBefore, nodeFilters });
   const totalCount = filtered.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const page = filtered.slice((pageNumber - 1) * pageSize, pageNumber * pageSize);

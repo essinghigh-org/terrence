@@ -38,23 +38,32 @@ function v4ToNumber(parts: readonly string[]): number | null {
   return ((Number(parts[0]) << 24) | (Number(parts[1]) << 16) | (Number(parts[2]) << 8) | Number(parts[3])) >>> 0;
 }
 
+function inV4Cidr(n: number, base: number, bits: number): boolean {
+  const mask = bits === 0 ? 0 : ((~0 << (32 - bits)) >>> 0);
+  return ((n & mask) >>> 0) === base;
+}
+
+/** RFC1918 + loopback + link-local + CGNAT + cloud-metadata + multicast + reserved. */
+const PRIVATE_V4_CIDRS: readonly (readonly [base: number, bits: number])[] = [
+  [0x7F000000, 8], // loopback 127/8
+  [0x0A000000, 8], // RFC1918 10/8
+  [0xAC100000, 12], // RFC1918 172.16/12
+  [0xC0A80000, 16], // RFC1918 192.168/16
+  [0xA9FE0000, 16], // 169.254/16 link-local (incl. cloud metadata)
+  [0x64400000, 10], // 100.64/10 CGNAT
+  [0xC0000200, 24], // 192.0.2.0/24 TEST-NET-1
+  [0xC6120000, 15], // 198.18.0.0/15 benchmarking
+  [0xC6336400, 24], // 198.51.100.0/24 TEST-NET-2
+  [0xCB007100, 24], // 203.0.113.0/24 TEST-NET-3
+  [0xE0000000, 4], // 224/4 multicast
+  [0xF0000000, 4], // 240/4 reserved + broadcast
+  [0xC0000000, 24], // 192.0.0.0/24 reserved
+];
+
 /** RFC1918 + loopback + link-local + CGNAT + cloud-metadata + multicast + reserved. */
 function isPrivateV4(n: number): boolean {
   if (n === 0) return true; // 0.0.0.0/8 unspecified
-  if ((n >>> 24) === 127) return true; // loopback
-  if ((n >>> 24) === 10) return true; // RFC1918 10/8
-  if ((n >>> 20) === 0xac1 && ((n >>> 16) & 0xff) >= 0x10 && ((n >>> 16) & 0xff) <= 0x1f) return true; // 172.16/12
-  if ((n >>> 16) === 0xc0a8) return true; // 192.168/16
-  if ((n >>> 16) === 0xa9fe) return true; // 169.254/16 link-local (incl. cloud metadata)
-  if ((n >>> 22) === 0x191) return true; // 100.64/10 CGNAT
-  if ((n >>> 8) === 0xc00002) return true; // 192.0.2.0/24 TEST-NET-1
-  if ((n >>> 17) === 0x6309) return true; // 198.18.0.0/15 benchmarking
-  if ((n >>> 8) === 0xc63364) return true; // 198.51.100.0/24 TEST-NET-2
-  if ((n >>> 8) === 0xcb0071) return true; // 203.0.113.0/24 TEST-NET-3
-  if ((n >>> 28) === 0xe) return true; // 224/4 multicast
-  if ((n >>> 24) >= 240) return true; // 240/4 reserved + broadcast
-  if ((n >>> 24) === 192 && ((n >>> 16) & 0xff) === 0 && ((n >>> 8) & 0xff) === 0) return true; // 192.0.0.0/24 reserved
-  return false;
+  return PRIVATE_V4_CIDRS.some(([base, bits]): boolean => inV4Cidr(n, base, bits));
 }
 
 /** True when an IPv4 host is inside a CIDR (e.g. "10.0.0.0/24"). */

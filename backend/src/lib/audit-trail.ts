@@ -44,7 +44,7 @@ export function beginAuditRequest(requestId: string, method: string, path: strin
   });
 }
 
-export function setAuditPrincipal(input: Readonly<{
+type AuditPrincipalInput = Readonly<{
   userId: string | null;
   tokenId?: string | null;
   orgId?: string | null;
@@ -54,49 +54,51 @@ export function setAuditPrincipal(input: Readonly<{
   scopes?: TokenScopes | null;
   authenticated?: boolean;
   credentialClass?: AuditCredentialClass;
-}>): void {
+}>;
+
+function detectCredentialClass(input: AuditPrincipalInput): AuditCredentialClass {
+  if (input.systemTokenId !== undefined && input.systemTokenId !== null) return "system-token";
+  if (input.runId !== undefined && input.runId !== null) return "run-token";
+  if (input.teamId !== undefined && input.teamId !== null) return "team-token";
+  if (input.orgId !== undefined && input.orgId !== null) return "organization-token";
+  if (input.tokenId !== undefined && input.tokenId !== null) {
+    return isImpersonationTokenId(input.tokenId) ? "impersonation-token" : "user-token";
+  }
+  return input.authenticated === true || input.userId !== null ? "session" : "anonymous";
+}
+
+function identityScopeEntries(input: AuditPrincipalInput): Record<string, string> {
+  return {
+    ...(input.orgId === null || input.orgId === undefined ? {} : { orgId: input.orgId }),
+    ...(input.teamId === null || input.teamId === undefined ? {} : { teamId: input.teamId }),
+    ...(input.runId === null || input.runId === undefined ? {} : { runId: input.runId }),
+  };
+}
+
+function buildEffectiveScope(input: AuditPrincipalInput): Readonly<Record<string, unknown>> {
+  const scopes = input.scopes;
+  if (scopes === undefined || scopes === null) {
+    return Object.freeze({ kind: input.authenticated === true ? "legacy" : "none", ...identityScopeEntries(input) });
+  }
+  return Object.freeze({
+    kind: "fine-grained",
+    orgs: [...scopes.orgs].slice(0, 256),
+    projects: scopes.projects === null ? null : [...scopes.projects].slice(0, 256),
+    workspaces: scopes.workspaces === null ? null : [...scopes.workspaces].slice(0, 256),
+    permissions: Object.entries(scopes.permissions).filter(([, value]): boolean => value === true).map(([key]): string => key).sort().slice(0, 256),
+    ...identityScopeEntries(input),
+  });
+}
+
+export function setAuditPrincipal(input: AuditPrincipalInput): void {
   const current = auditContextStorage.getStore();
   if (current === undefined) return;
-  const detectedClass: AuditCredentialClass = input.systemTokenId !== undefined && input.systemTokenId !== null
-    ? "system-token"
-    : input.runId !== undefined && input.runId !== null
-      ? "run-token"
-      : input.teamId !== undefined && input.teamId !== null
-        ? "team-token"
-        : input.orgId !== undefined && input.orgId !== null
-          ? "organization-token"
-          : input.tokenId !== undefined && input.tokenId !== null && isImpersonationTokenId(input.tokenId)
-            ? "impersonation-token"
-            : input.tokenId !== undefined && input.tokenId !== null
-              ? "user-token"
-              : input.authenticated === true || input.userId !== null
-                ? "session"
-                : "anonymous";
-  const credentialClass = input.credentialClass ?? detectedClass;
-  const scopes = input.scopes;
-  const effectiveScope: Readonly<Record<string, unknown>> = scopes === undefined || scopes === null
-    ? Object.freeze({
-      kind: input.authenticated === true ? "legacy" : "none",
-      ...(input.orgId === null || input.orgId === undefined ? {} : { orgId: input.orgId }),
-      ...(input.teamId === null || input.teamId === undefined ? {} : { teamId: input.teamId }),
-      ...(input.runId === null || input.runId === undefined ? {} : { runId: input.runId }),
-    })
-    : Object.freeze({
-      kind: "fine-grained",
-      orgs: [...scopes.orgs].slice(0, 256),
-      projects: scopes.projects === null ? null : [...scopes.projects].slice(0, 256),
-      workspaces: scopes.workspaces === null ? null : [...scopes.workspaces].slice(0, 256),
-      permissions: Object.entries(scopes.permissions).filter(([, value]): boolean => value === true).map(([key]): string => key).sort().slice(0, 256),
-      ...(input.orgId === null || input.orgId === undefined ? {} : { orgId: input.orgId }),
-      ...(input.teamId === null || input.teamId === undefined ? {} : { teamId: input.teamId }),
-      ...(input.runId === null || input.runId === undefined ? {} : { runId: input.runId }),
-    });
   auditContextStorage.enterWith({
     ...current,
     userId: input.userId,
-    credentialClass,
+    credentialClass: input.credentialClass ?? detectCredentialClass(input),
     credentialId: input.systemTokenId ?? input.tokenId ?? null,
-    effectiveScope,
+    effectiveScope: buildEffectiveScope(input),
   });
 }
 
@@ -186,6 +188,36 @@ function lifecycleMetadata(details: Readonly<Record<string, unknown>>): Readonly
   };
 }
 
+function resolveAuditResult(result: AuditResult | undefined, source: Readonly<Record<string, unknown>>): AuditResult {
+  if (result !== undefined) return result;
+  if (source["result"] === "denied") return "denied";
+  return source["result"] === "failure" ? "failure" : "success";
+}
+
+function resolveEffectiveUserId(
+  explicit: string | null | undefined,
+  safeSource: Readonly<Record<string, unknown>>,
+  context: AuditRequestContext | null,
+  fallback: string | null,
+): string | null {
+  if (explicit !== undefined && explicit !== null) return explicit;
+  if (typeof safeSource["effectiveUserId"] === "string") return safeSource["effectiveUserId"];
+  return context === null ? fallback : context.userId ?? fallback;
+}
+
+function auditCredentialClass(context: AuditRequestContext | null): AuditCredentialClass {
+  return context === null ? "system-token" : context.credentialClass;
+}
+
+function auditEffectiveScope(context: AuditRequestContext | null): Readonly<Record<string, unknown>> {
+  return context === null ? { kind: "system" } : context.effectiveScope;
+}
+
+function auditIdentity(context: AuditRequestContext | null): { requestId: string | null; credentialId: string | null } {
+  if (context === null) return { requestId: null, credentialId: null };
+  return { requestId: context.requestId, credentialId: context.credentialId };
+}
+
 /** Build the stable envelope shared by every audit writer. */
 export function buildAuditDetails(input: Readonly<{
   action: string;
@@ -200,28 +232,29 @@ export function buildAuditDetails(input: Readonly<{
 }>): Readonly<Record<string, unknown>> {
   const source = input.details ?? {};
   const context = currentAuditContext();
-  const result: AuditResult = input.result
-    ?? (source["result"] === "denied" ? "denied" : source["result"] === "failure" ? "failure" : "success");
+  const result = resolveAuditResult(input.result, source);
   const immutable = input.immutable ?? IMMUTABLE_ACTIONS.has(input.action);
   const safeSource = sanitizeAuditValue(source) as Record<string, unknown>;
-  const effectiveUserId = input.effectiveUserId
-    ?? (typeof safeSource["effectiveUserId"] === "string" ? safeSource["effectiveUserId"] : context?.userId ?? input.userId);
+  const effectiveUserId = resolveEffectiveUserId(input.effectiveUserId, safeSource, context, input.userId);
+  const identity = auditIdentity(context);
+  const credentialClass = auditCredentialClass(context);
+  const effectiveScope = auditEffectiveScope(context);
   return {
     ...safeSource,
     schemaVersion: 1,
     action: input.action,
     result,
     immutable,
-    requestId: context?.requestId ?? null,
-    correlationId: context?.requestId ?? null,
-    credentialClass: context?.credentialClass ?? "system-token",
-    credentialId: context?.credentialId ?? null,
-    effectiveScope: context?.effectiveScope ?? { kind: "system" },
+    requestId: identity.requestId,
+    correlationId: identity.requestId,
+    credentialClass,
+    credentialId: identity.credentialId,
+    effectiveScope,
     actor: {
       userId: input.userId,
       effectiveUserId,
-      credentialClass: context?.credentialClass ?? "system-token",
-      effectiveScope: context?.effectiveScope ?? { kind: "system" },
+      credentialClass,
+      effectiveScope,
     },
     target: { orgId: input.orgId, resourceType: input.resourceType, resourceId: input.resourceId },
     ...lifecycleMetadata(safeSource),

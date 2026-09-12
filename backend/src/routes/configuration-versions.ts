@@ -107,6 +107,259 @@ export function configurationVersionIngressResource(
   };
 }
 
+function parseConfigVersionCreate(
+  body: unknown,
+  request: Request,
+  set: SetObj,
+): {
+  payload: Record<string, unknown>;
+  speculative: boolean;
+  provisional: boolean;
+  source: string;
+  autoQueueRuns: boolean;
+} | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  const speculative = typeof attributes["speculative"] === "boolean" ? attributes["speculative"] : false;
+  const provisional = typeof attributes["provisional"] === "boolean" ? attributes["provisional"] : false;
+  // The Terraform/OpenTofu CLI does not send a source attribute; detect it
+  // from the User-Agent so CLI-driven runs show "Triggered via CLI" like the reference format.
+  let source = typeof attributes["source"] === "string" ? attributes["source"] : "";
+  if (source === "") {
+    const agent = request.headers.get("user-agent") ?? "";
+    source = /^(?:terraform|tofu|terragrunt)\//i.test(agent.trim()) ? "tfe-cli" : "tfe-api";
+  }
+  const rawAutoQueueRuns = attributes["auto-queue-runs"];
+  if (rawAutoQueueRuns !== undefined && typeof rawAutoQueueRuns !== "boolean") {
+    (set as { status: number }).status = 400;
+    return { error: { errors: [{ status: "400", title: "Bad Request", detail: "auto-queue-runs must be boolean" }] } };
+  }
+  return { payload, speculative, provisional, source, autoQueueRuns: rawAutoQueueRuns ?? true };
+}
+
+async function beginConfigVersionIdempotency(
+  request: Request,
+  workspaceId: string,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+  payload: Record<string, unknown>,
+  set: SetObj,
+): Promise<{ begin: Awaited<ReturnType<typeof beginIdempotency>> } | { error: unknown }> {
+  const idempotency = idempotencyContext(
+    request,
+    `configuration-versions:${workspaceId}`,
+    idempotencyPrincipal({ userId, orgId, teamId }),
+    payload,
+    set,
+  );
+  if (idempotency === "invalid") {
+    return { error: { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] } };
+  }
+  const idempotencyBegin = await beginIdempotency(
+    idempotency,
+    "configuration-versions",
+    set,
+  );
+  if (idempotencyBegin.kind === "replay") {
+    const replayed = idempotencyBegin.resourceId === null
+      ? undefined
+      : await db.query.configurationVersions.findFirst({
+        where: and(eq(configurationVersions.id, idempotencyBegin.resourceId), eq(configurationVersions.workspaceId, workspaceId)),
+      });
+    if (replayed !== undefined) return { error: { data: configurationVersionResource(replayed, request, true) } };
+    return { error: idempotencyBegin.body };
+  }
+  if (idempotencyBegin.kind === "error") return { error: idempotencyError(idempotencyBegin) };
+  return { begin: idempotencyBegin };
+}
+
+async function createConfigVersionRecord(
+  workspaceId: string,
+  input: Readonly<{ speculative: boolean; provisional: boolean; source: string; autoQueueRuns: boolean }>,
+  idempotencyBegin: Awaited<ReturnType<typeof beginIdempotency>>,
+  request: Request,
+  set: SetObj,
+): Promise<unknown> {
+  const id = newResourceId("cv");
+  const createdAt = Date.now();
+  const cv: ConfigurationVersion = {
+    id,
+    workspaceId,
+    status: "pending",
+    autoQueueRuns: input.autoQueueRuns,
+    archivePath: null,
+    speculative: input.speculative,
+    provisional: input.provisional,
+    source: input.source,
+    ingressAttributes: null,
+    statusTimestamps: null,
+    statusMetadataSchemaVersion: 0,
+    uploadClaimExpiresAt: null,
+    uploadClaimToken: null,
+    error: null,
+    errorMessage: null,
+    softDeletedAt: null,
+    createdAt,
+  };
+  await db.insert(configurationVersions).values(cv);
+  const responseBody = { data: configurationVersionResource(cv, request, true) };
+  if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
+  (set as { status: number }).status = 201;
+  return responseBody;
+}
+
+async function authorizeConfigUpload(
+  cvId: string,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+  request: Request,
+  set: SetObj,
+): Promise<{ cv: ConfigurationVersion } | { error: unknown }> {
+  const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
+  const path = `/api/v2/configuration-versions/${cvId}/upload`;
+  if (cv === undefined) { (set as { status: number }).status = 404; return { error: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  const ws = await findAuthorizedWorkspace(cv.workspaceId, userId, orgId, teamId, "plan");
+  // The Terraform CLI uploads WITHOUT an Authorization header, using the
+  // signed upload URL from the configuration-version response instead.
+  const signedUpload = validSignedApiURL(request, path, "PUT");
+  if (request.headers.get("authorization") === null && !signedUpload) {
+    (set as { status: number }).status = 401; return { error: { errors: [{ status: "401", title: "Unauthorized" }] } };
+  }
+  if (ws === undefined && !signedUpload) {
+    (set as { status: number }).status = 404; return { error: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  if (cv.status !== "pending" || cv.archivePath !== null) {
+    (set as { status: number }).status = 409; return { error: { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] } };
+  }
+  return { cv };
+}
+
+async function claimConfigUpload(
+  cvId: string,
+  set: SetObj,
+): Promise<{ claimToken: string; tarPath: string; temporaryPath: string } | { error: unknown }> {
+  // Atomically claim the pending configuration-version BEFORE accepting the
+  // body (todo 278): two simultaneous signed PUTs must not both write the
+  // archive. The conditional UPDATE only succeeds for exactly one request;
+  // a stale claim from a crashed upload expires after 15 minutes.
+  const UPLOAD_CLAIM_TTL_MS = 15 * 60 * 1000;
+  const claimFilter = and(
+    eq(configurationVersions.id, cvId),
+    eq(configurationVersions.status, "pending"),
+    isNull(configurationVersions.archivePath),
+    or(
+      isNull(configurationVersions.uploadClaimExpiresAt),
+      lt(configurationVersions.uploadClaimExpiresAt, Date.now()),
+    ),
+  );
+  const claimToken = crypto.randomUUID();
+  const tarPath = join(CV_STORAGE_DIR, `config-${cvId}-${claimToken}.tar.gz`);
+  const temporaryPath = `${tarPath}.tmp`;
+  const claim = await db.update(configurationVersions)
+    .set({ uploadClaimExpiresAt: Date.now() + UPLOAD_CLAIM_TTL_MS, uploadClaimToken: claimToken })
+    .where(claimFilter)
+    .returning({ id: configurationVersions.id });
+  if (claim.length === 0) {
+    (set as { status: number }).status = 409;
+    return { error: { errors: [{ status: "409", title: "Conflict", detail: "An upload for this configuration version is already in progress" }] } };
+  }
+  return { claimToken, tarPath, temporaryPath };
+}
+
+async function releaseUploadClaim(cvId: string, claimToken: string): Promise<void> {
+  await db.update(configurationVersions).set({ uploadClaimExpiresAt: null, uploadClaimToken: null }).where(and(eq(configurationVersions.id, cvId), eq(configurationVersions.uploadClaimToken, claimToken)));
+}
+
+async function receiveUploadBody(
+  body: unknown,
+  request: Request,
+  cvId: string,
+  claimToken: string,
+  temporaryPath: string,
+  set: SetObj,
+): Promise<{ ok: true } | { error: unknown }> {
+  try {
+    await mkdir(CV_STORAGE_DIR, { recursive: true });
+    const size = await persistUploadBody(body, request, temporaryPath, 100 * 1024 * 1024);
+    if (size === 0) throw new Error("empty");
+  } catch (error: unknown) {
+    await rm(temporaryPath, { force: true });
+    await releaseUploadClaim(cvId, claimToken);
+    const tooLarge = (error instanceof Error && error.message === "too-large")
+      || Number(request.headers.get("content-length")) > 100 * 1024 * 1024;
+    (set as { status: number }).status = tooLarge ? 413 : 400;
+    return { error: { errors: [{ status: String(tooLarge ? 413 : 400), title: tooLarge ? "Payload Too Large" : "Bad Request", detail: tooLarge ? "Configuration archive exceeds 100 MiB maximum" : "Could not read configuration archive body" }] } };
+  }
+  return { ok: true };
+}
+
+async function validateUploadArchive(
+  temporaryPath: string,
+  cvId: string,
+  claimToken: string,
+  set: SetObj,
+): Promise<{ ok: true } | { error: unknown }> {
+  try {
+    await assertArchiveExpandedSize(temporaryPath);
+  } catch (error: unknown) {
+    await rm(temporaryPath, { force: true });
+    await releaseUploadClaim(cvId, claimToken);
+    const expanded = error instanceof Error && /expands beyond|contents exceed/i.test(error.message);
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: expanded ? "Configuration archive expands beyond the permitted size" : "Configuration archive is not a valid gzip tar archive" }] } };
+  }
+  return { ok: true };
+}
+
+async function finalizeConfigUpload(
+  cvId: string,
+  cv: ConfigurationVersion,
+  tarPath: string,
+  temporaryPath: string,
+  claimToken: string,
+  set: SetObj,
+): Promise<{ uploaded: true } | { error: unknown }> {
+  const claimStillActive = await db.query.configurationVersions.findFirst({
+    where: and(
+      eq(configurationVersions.id, cvId),
+      eq(configurationVersions.status, "pending"),
+      isNull(configurationVersions.archivePath),
+      eq(configurationVersions.uploadClaimToken, claimToken),
+    ),
+    columns: { id: true },
+  });
+  if (claimStillActive === undefined) {
+    await rm(temporaryPath, { force: true });
+    (set as { status: number }).status = 409;
+    return { error: { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] } };
+  }
+  await rename(temporaryPath, tarPath);
+  const uploadedAt = new Date().toISOString();
+  const finalized = await db.update(configurationVersions).set({
+    archivePath: tarPath,
+    status: "uploaded",
+    uploadClaimExpiresAt: null,
+    uploadClaimToken: null,
+    statusTimestamps: { ...(cv.statusTimestamps ?? {}), uploadedAt },
+  }).where(and(
+    eq(configurationVersions.id, cvId),
+    eq(configurationVersions.status, "pending"),
+    isNull(configurationVersions.archivePath),
+    eq(configurationVersions.uploadClaimToken, claimToken),
+  )).returning({ id: configurationVersions.id });
+  if (finalized.length === 0) {
+    // Another request finalized between our claim and write; ours loses.
+    await rm(tarPath, { force: true });
+    (set as { status: number }).status = 409;
+    return { error: { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] } };
+  }
+  (set as { status: number }).status = 200;
+  return { uploaded: true };
+}
+
 export const configurationVersionRoutes = new Elysia({ name: "configurationVersions" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/configuration-versions", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -128,77 +381,11 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "plan");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create configuration versions" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-
-    const idempotency = idempotencyContext(
-      request,
-      `configuration-versions:${workspaceId}`,
-      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
-      payload,
-      set as unknown as { status?: number | string; headers: Record<string, string | number> },
-    );
-    if (idempotency === "invalid") {
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
-    }
-    const speculative = typeof attributes["speculative"] === "boolean" ? attributes["speculative"] : false;
-    const provisional = typeof attributes["provisional"] === "boolean" ? attributes["provisional"] : false;
-    // The Terraform/OpenTofu CLI does not send a source attribute; detect it
-    // from the User-Agent so CLI-driven runs show "Triggered via CLI" like the reference format.
-    let source = typeof attributes["source"] === "string" ? attributes["source"] : "";
-    if (source === "") {
-      const agent = request.headers.get("user-agent") ?? "";
-      source = /^(?:terraform|tofu|terragrunt)\//i.test(agent.trim()) ? "tfe-cli" : "tfe-api";
-    }
-    const rawAutoQueueRuns = attributes["auto-queue-runs"];
-    if (rawAutoQueueRuns !== undefined && typeof rawAutoQueueRuns !== "boolean") {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "auto-queue-runs must be boolean" }] };
-    }
-    const idempotencyBegin = await beginIdempotency(
-      idempotency,
-      "configuration-versions",
-      set as unknown as { status?: number | string; headers: Record<string, string | number> },
-    );
-    if (idempotencyBegin.kind === "replay") {
-      const replayed = idempotencyBegin.resourceId === null
-        ? undefined
-        : await db.query.configurationVersions.findFirst({
-          where: and(eq(configurationVersions.id, idempotencyBegin.resourceId), eq(configurationVersions.workspaceId, workspaceId)),
-        });
-      if (replayed !== undefined) return { data: configurationVersionResource(replayed, request, true) };
-      return idempotencyBegin.body;
-    }
-    if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
-
-    const id = newResourceId("cv");
-    const autoQueueRuns = rawAutoQueueRuns ?? true;
-    const createdAt = Date.now();
-    const cv: ConfigurationVersion = {
-      id,
-      workspaceId,
-      status: "pending",
-      autoQueueRuns,
-      archivePath: null,
-      speculative,
-      provisional,
-      source,
-      ingressAttributes: null,
-      statusTimestamps: null,
-      statusMetadataSchemaVersion: 0,
-      uploadClaimExpiresAt: null,
-      uploadClaimToken: null,
-      error: null,
-      errorMessage: null,
-      softDeletedAt: null,
-      createdAt,
-    };
-    await db.insert(configurationVersions).values(cv);
-    const responseBody = { data: configurationVersionResource(cv, request, true) };
-    if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
-    (set as { status: number }).status = 201;
-    return responseBody;
+    const parsed = parseConfigVersionCreate(body, request, set);
+    if ("error" in parsed) return parsed.error;
+    const begun = await beginConfigVersionIdempotency(request, workspaceId, user?.id, orgId, teamId, parsed.payload, set);
+    if ("error" in begun) return begun.error;
+    return createConfigVersionRecord(workspaceId, parsed, begun.begin, request, set);
   })
   .get("/api/v2/configuration-versions/:cv_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const cvId = params["cv_id"] ?? "";
@@ -210,103 +397,17 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
   })
   .put("/api/v2/configuration-versions/:cv_id/upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const cvId = params["cv_id"] ?? "";
-    const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
-    const path = `/api/v2/configuration-versions/${cvId}/upload`;
-    if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, orgId, teamId, "plan");
-    // The Terraform CLI uploads WITHOUT an Authorization header, using the
-    // signed upload URL from the configuration-version response instead.
-    const signedUpload = validSignedApiURL(request, path, "PUT");
-    if (request.headers.get("authorization") === null && !signedUpload) {
-      (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-    if (ws === undefined && !signedUpload) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (cv.status !== "pending" || cv.archivePath !== null) {
-      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
-    }
-    // Atomically claim the pending configuration-version BEFORE accepting the
-    // body (todo 278): two simultaneous signed PUTs must not both write the
-    // archive. The conditional UPDATE only succeeds for exactly one request;
-    // a stale claim from a crashed upload expires after 15 minutes.
-    const UPLOAD_CLAIM_TTL_MS = 15 * 60 * 1000;
-    const claimFilter = and(
-      eq(configurationVersions.id, cvId),
-      eq(configurationVersions.status, "pending"),
-      isNull(configurationVersions.archivePath),
-      or(
-        isNull(configurationVersions.uploadClaimExpiresAt),
-        lt(configurationVersions.uploadClaimExpiresAt, Date.now()),
-      ),
-    );
-    const claimToken = crypto.randomUUID();
-    const tarPath = join(CV_STORAGE_DIR, `config-${cvId}-${claimToken}.tar.gz`);
-    const temporaryPath = `${tarPath}.tmp`;
-    const claim = await db.update(configurationVersions)
-      .set({ uploadClaimExpiresAt: Date.now() + UPLOAD_CLAIM_TTL_MS, uploadClaimToken: claimToken })
-      .where(claimFilter)
-      .returning({ id: configurationVersions.id });
-    if (claim.length === 0) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "An upload for this configuration version is already in progress" }] };
-    }
-    try {
-      await mkdir(CV_STORAGE_DIR, { recursive: true });
-      const size = await persistUploadBody(body, request, temporaryPath, 100 * 1024 * 1024);
-      if (size === 0) throw new Error("empty");
-    } catch (error: unknown) {
-      await rm(temporaryPath, { force: true });
-      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null, uploadClaimToken: null }).where(and(eq(configurationVersions.id, cvId), eq(configurationVersions.uploadClaimToken, claimToken)));
-      const tooLarge = (error instanceof Error && error.message === "too-large")
-        || Number(request.headers.get("content-length")) > 100 * 1024 * 1024;
-      (set as { status: number }).status = tooLarge ? 413 : 400;
-      return { errors: [{ status: String(tooLarge ? 413 : 400), title: tooLarge ? "Payload Too Large" : "Bad Request", detail: tooLarge ? "Configuration archive exceeds 100 MiB maximum" : "Could not read configuration archive body" }] };
-    }
-    try {
-      await assertArchiveExpandedSize(temporaryPath);
-    } catch (error: unknown) {
-      await rm(temporaryPath, { force: true });
-      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null, uploadClaimToken: null }).where(and(eq(configurationVersions.id, cvId), eq(configurationVersions.uploadClaimToken, claimToken)));
-      const expanded = error instanceof Error && /expands beyond|contents exceed/i.test(error.message);
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: expanded ? "Configuration archive expands beyond the permitted size" : "Configuration archive is not a valid gzip tar archive" }] };
-    }
-    const claimStillActive = await db.query.configurationVersions.findFirst({
-      where: and(
-        eq(configurationVersions.id, cvId),
-        eq(configurationVersions.status, "pending"),
-        isNull(configurationVersions.archivePath),
-        eq(configurationVersions.uploadClaimToken, claimToken),
-      ),
-      columns: { id: true },
-    });
-    if (claimStillActive === undefined) {
-      await rm(temporaryPath, { force: true });
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
-    }
-    await rename(temporaryPath, tarPath);
-    const uploadedAt = new Date().toISOString();
-    const finalized = await db.update(configurationVersions).set({
-      archivePath: tarPath,
-      status: "uploaded",
-      uploadClaimExpiresAt: null,
-      uploadClaimToken: null,
-      statusTimestamps: { ...(cv.statusTimestamps ?? {}), uploadedAt },
-    }).where(and(
-      eq(configurationVersions.id, cvId),
-      eq(configurationVersions.status, "pending"),
-      isNull(configurationVersions.archivePath),
-      eq(configurationVersions.uploadClaimToken, claimToken),
-    )).returning({ id: configurationVersions.id });
-    if (finalized.length === 0) {
-      // Another request finalized between our claim and write; ours loses.
-      await rm(tarPath, { force: true });
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
-    }
-    (set as { status: number }).status = 200;
+    const authorized = await authorizeConfigUpload(cvId, user?.id, orgId, teamId, request, set);
+    if ("error" in authorized) return authorized.error;
+    const { cv } = authorized;
+    const claimed = await claimConfigUpload(cvId, set);
+    if ("error" in claimed) return claimed.error;
+    const received = await receiveUploadBody(body, request, cvId, claimed.claimToken, claimed.temporaryPath, set);
+    if ("error" in received) return received.error;
+    const validated = await validateUploadArchive(claimed.temporaryPath, cvId, claimed.claimToken, set);
+    if ("error" in validated) return validated.error;
+    const finalized = await finalizeConfigUpload(cvId, cv, claimed.tarPath, claimed.temporaryPath, claimed.claimToken, set);
+    if ("error" in finalized) return finalized.error;
     return { data: { id: cvId, type: "configuration-versions", attributes: { status: "uploaded" } } };
   })
   .post("/api/v2/configuration-versions/:cv_id/actions/archive", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {

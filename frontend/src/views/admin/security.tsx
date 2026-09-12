@@ -72,6 +72,75 @@ function DatabaseStorageCard(): React.JSX.Element {
     </Card>
   );
 }
+
+function ExecutionIsolationCard({ summary }: Readonly<{ summary: SecuritySummary }>): React.JSX.Element {
+  return (
+    <Card>
+      <CardHeader variant="section">
+        <CardTitle className="text-base">Execution isolation</CardTitle>
+        <CardDescription>Whether Terraform runs are required and supported by the host.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+          <span>Sandbox required</span>
+          <span className={summary.sandboxEnabled ? "font-medium text-success" : "font-medium text-warning"}>
+            {summary.sandboxEnabled ? "Yes" : "No"}
+          </span>
+        </div>
+        <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+          <span>Sandbox available</span>
+          <span className={summary.sandboxAvailable ? "font-medium text-success" : "font-medium text-destructive"}>
+            {summary.sandboxAvailable ? "Available" : "Unavailable"}
+          </span>
+        </div>
+        <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+          <span>Run network policy</span>
+          <span className={summary.sandboxNetPolicy === "invalid" ? "font-medium text-destructive" : summary.sandboxNetPolicy === "deny" ? "font-medium text-success" : "text-muted-foreground"}>
+            {summary.sandboxNetPolicy === "deny" ? "Deny (TCP bind/connect only)" : summary.sandboxNetPolicy === "invalid" ? "Invalid" : "Allow"}
+          </span>
+        </div>
+        {summary.sandboxReason !== null && (
+          <p className="text-xs text-muted-foreground">{summary.sandboxReason}</p>
+        )}
+        {summary.sandboxExtraRwAllowed && (
+          <div className="rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-sm text-warning">
+            Warning: extra sandbox read-write paths are enabled (TERRENCE_SANDBOX_EXTRA_RW_ALLOWED). The sandbox allow-list is widened beyond the default.
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AuditEventsCard({
+  auditLogs,
+  onOpenAuditLog,
+}: Readonly<{
+  auditLogs: DataItem[];
+  onOpenAuditLog: () => void;
+}>): React.JSX.Element {
+  return (
+    <Card>
+      <CardHeader variant="section">
+        <CardTitle className="text-base">Latest audit events</CardTitle>
+        <CardDescription>Most recent administrative events returned by the instance.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-2xl font-semibold text-foreground">{auditLogs.length}</p>
+        <p className="text-sm text-muted-foreground">
+          {auditLogs.length === 0 ? "No recent events returned" : `Showing ${auditLogs.length} latest event${auditLogs.length === 1 ? "" : "s"}`}
+        </p>
+        {auditLogs[0]?.attributes.action !== undefined && (
+          <p className="truncate text-sm text-foreground/85">Latest: {auditLogs[0].attributes.action}</p>
+        )}
+        <Button variant="outline" size="sm" onClick={onOpenAuditLog}>
+          Open audit log
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function SecurityOverview(props: Readonly<{
   navigate: (path: string) => void;
   samlEnabled: boolean;
@@ -126,58 +195,8 @@ export function SecurityOverview(props: Readonly<{
             </div>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader variant="section">
-            <CardTitle className="text-base">Execution isolation</CardTitle>
-            <CardDescription>Whether Terraform runs are required and supported by the host.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-              <span>Sandbox required</span>
-              <span className={securitySummary.sandboxEnabled ? "font-medium text-success" : "font-medium text-warning"}>
-                {securitySummary.sandboxEnabled ? "Yes" : "No"}
-              </span>
-            </div>
-            <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-              <span>Sandbox available</span>
-              <span className={securitySummary.sandboxAvailable ? "font-medium text-success" : "font-medium text-destructive"}>
-                {securitySummary.sandboxAvailable ? "Available" : "Unavailable"}
-              </span>
-            </div>
-            <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-              <span>Run network policy</span>
-              <span className={securitySummary.sandboxNetPolicy === "invalid" ? "font-medium text-destructive" : securitySummary.sandboxNetPolicy === "deny" ? "font-medium text-success" : "text-muted-foreground"}>
-                {securitySummary.sandboxNetPolicy === "deny" ? "Deny (TCP bind/connect only)" : securitySummary.sandboxNetPolicy === "invalid" ? "Invalid" : "Allow"}
-              </span>
-            </div>
-            {securitySummary.sandboxReason !== null && (
-              <p className="text-xs text-muted-foreground">{securitySummary.sandboxReason}</p>
-            )}
-            {securitySummary.sandboxExtraRwAllowed && (
-              <div className="rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-sm text-warning">
-                Warning: extra sandbox read-write paths are enabled (TERRENCE_SANDBOX_EXTRA_RW_ALLOWED). The sandbox allow-list is widened beyond the default.
-              </div>
-            )}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader variant="section">
-            <CardTitle className="text-base">Latest audit events</CardTitle>
-            <CardDescription>Most recent administrative events returned by the instance.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-2xl font-semibold text-foreground">{auditLogs.length}</p>
-            <p className="text-sm text-muted-foreground">
-              {auditLogs.length === 0 ? "No recent events returned" : `Showing ${auditLogs.length} latest event${auditLogs.length === 1 ? "" : "s"}`}
-            </p>
-            {auditLogs[0]?.attributes.action !== undefined && (
-              <p className="truncate text-sm text-foreground/85">Latest: {auditLogs[0].attributes.action}</p>
-            )}
-            <Button variant="outline" size="sm" onClick={(): void => { navigate("/app/admin/audit"); }}>
-              Open audit log
-            </Button>
-          </CardContent>
-        </Card>
+        <ExecutionIsolationCard summary={securitySummary} />
+        <AuditEventsCard auditLogs={auditLogs} onOpenAuditLog={(): void => { navigate("/app/admin/audit"); }} />
       </div>
     </div>
   );

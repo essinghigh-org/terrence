@@ -90,6 +90,36 @@ function parseBoxedDiagnostic(
   return { diagnostic: { severity, title, body }, nextIndex: index };
 }
 
+function skipBlankLines(lines: readonly string[], index: number): number {
+  while (index < lines.length && (lines[index]?.trim() ?? "") === "") index += 1;
+  return index;
+}
+
+function isDiagnosticBoundary(firstTrimmed: string): boolean {
+  return isSeverityLabel(firstTrimmed) !== null
+    || firstTrimmed.startsWith(BLOCK_OPEN)
+    || SECTION_START_RE.test(firstTrimmed);
+}
+
+function consumeBodyParagraph(
+  lines: readonly string[],
+  index: number,
+  skippedBlanks: number,
+): Readonly<{ text: string; nextIndex: number; leadingBlank: boolean }> {
+  const paragraphStart = index;
+  while (index < lines.length && (lines[index]?.trim() ?? "") !== "") index += 1;
+  return {
+    text: lines.slice(paragraphStart, index).join("\n"),
+    nextIndex: index,
+    leadingBlank: skippedBlanks > 0,
+  };
+}
+
+function assembleDiagnosticBody(blankLineAfterHeader: boolean, bodyLines: readonly string[]): string {
+  const prefix = blankLineAfterHeader && bodyLines.length > 0 ? "\n" : "";
+  return prefix + bodyLines.join("\n").replace(/\s+$/, "");
+}
+
 /**
  * Parse one plain (no-color) diagnostic section. `start` points at the
  * "Warning:"/"Error:" header line. Consumes the indented location block
@@ -110,14 +140,12 @@ function parsePlainDiagnostic(
 
   let index = start + 1;
   const bodyLines: string[] = [];
-  let blankLineAfterHeader = false;
 
   // Skip the blank line(s) after the header, then take the indented
   // location/source block.
-  while (index < lines.length && (lines[index]?.trim() ?? "") === "") {
-    blankLineAfterHeader = true;
-    index += 1;
-  }
+  const afterHeaderBlanks = skipBlankLines(lines, index);
+  const blankLineAfterHeader = afterHeaderBlanks !== index;
+  index = afterHeaderBlanks;
   while (index < lines.length && (lines[index]?.startsWith(" ") ?? false)) {
     bodyLines.push(lines[index] ?? "");
     index += 1;
@@ -128,29 +156,23 @@ function parsePlainDiagnostic(
   // (which ends the diagnostic). A paragraph that starts with a box
   // opener is left unconsumed so the boxed parser can handle it.
   while (index < lines.length) {
-    let skippedBlanks = 0;
-    while (index < lines.length && (lines[index]?.trim() ?? "") === "") {
-      skippedBlanks += 1;
-      index += 1;
-    }
+    const paragraphTop = skipBlankLines(lines, index);
+    const skippedBlanks = paragraphTop - index;
+    index = paragraphTop;
     const first = lines[index];
     if (first === undefined) break;
     const firstTrimmed = first.trim();
-    if (
-      isSeverityLabel(firstTrimmed) !== null
-      || firstTrimmed.startsWith(BLOCK_OPEN)
-      || SECTION_START_RE.test(firstTrimmed)
-    ) break;
-    if (skippedBlanks > 0) bodyLines.push("");
-    const paragraphStart = index;
-    while (index < lines.length && (lines[index]?.trim() ?? "") !== "") index += 1;
-    bodyLines.push(lines.slice(paragraphStart, index).join("\n"));
+    if (isDiagnosticBoundary(firstTrimmed)) break;
+    const consumed = consumeBodyParagraph(lines, index, skippedBlanks);
+    if (consumed.leadingBlank) bodyLines.push("");
+    bodyLines.push(consumed.text);
+    index = consumed.nextIndex;
     if (DEDUP_NOTE_RE.test(firstTrimmed)) break;
   }
 
   // Mirror the boxed format: the blank line after the severity label is
   // part of the body.
-  const body = (blankLineAfterHeader && bodyLines.length > 0 ? "\n" : "") + bodyLines.join("\n").replace(/\s+$/, "");
+  const body = assembleDiagnosticBody(blankLineAfterHeader, bodyLines);
   return { diagnostic: { severity, title, body }, nextIndex: index };
 }
 

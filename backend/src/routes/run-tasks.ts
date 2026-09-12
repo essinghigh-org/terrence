@@ -191,27 +191,90 @@ const listOrgRunTasks = async ({ params, request, user, orgId: tokenOrgId, teamI
   };
 };
 
+function runTaskAttrs(body: unknown): Record<string, unknown> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  return typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+}
+
+async function resolveHmacKey(attrs: Record<string, unknown>): Promise<string | null> {
+  return typeof attrs["hmac-key"] === "string" && attrs["hmac-key"] !== ""
+    ? encryptSecret(attrs["hmac-key"], { force: true })
+    : null;
+}
+
+function checkGlobalTaskUrl(url: string, globalConfiguration: GlobalConfig | null, enabled: boolean, set: SetObj): { error: unknown } | null {
+  const globalUrlError = globalRunTaskUrlError(url, globalConfiguration, enabled);
+  if (globalUrlError === undefined) return null;
+  (set as { status: number }).status = 422;
+  return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: globalUrlError }] } };
+}
+
+type OrgTaskFields = {
+  name: string;
+  url: string;
+  description: string | null;
+  category: string;
+  enabled: boolean;
+};
+
+function parseOrgTaskFields(attrs: Record<string, unknown>): OrgTaskFields | { error: unknown } {
+  const name = typeof attrs["name"] === "string" ? attrs["name"] : "";
+  const url = typeof attrs["url"] === "string" ? attrs["url"] : "";
+  if (name === "" || url === "") {
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity" }] } };
+  }
+  return {
+    name,
+    url,
+    description: typeof attrs["description"] === "string" ? attrs["description"] : null,
+    category: typeof attrs["category"] === "string" && attrs["category"].trim() !== "" ? attrs["category"] : "general",
+    enabled: typeof attrs["enabled"] === "boolean" ? attrs["enabled"] : true,
+  };
+}
+
+async function parseOrgTaskUpdates(attrs: Record<string, unknown>, set: SetObj): Promise<{ updates: Partial<typeof runTasks.$inferInsert> } | { error: unknown }> {
+  const updates: Partial<typeof runTasks.$inferInsert> = {};
+  if (typeof attrs["name"] === "string") {
+    if (attrs["name"].trim() === "") {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] } };
+    }
+    updates.name = attrs["name"].trim();
+  }
+  if (attrs["description"] !== undefined) updates.description = typeof attrs["description"] === "string" ? attrs["description"] : null;
+  if (attrs["url"] !== undefined) {
+    if (typeof attrs["url"] !== "string" || attrs["url"].trim() === "") {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "URL is required" }] } };
+    }
+    updates.url = attrs["url"].trim();
+  }
+  if (typeof attrs["category"] === "string" && attrs["category"].trim() !== "") updates.category = attrs["category"];
+  if (attrs["hmac-key"] !== undefined) updates.hmacKey = await resolveHmacKey(attrs);
+  if (typeof attrs["enabled"] === "boolean") updates.enabled = attrs["enabled"];
+  if (attrs["global-configuration"] !== undefined) {
+    updates.globalConfiguration = parseGlobalConfig(attrs["global-configuration"]);
+  }
+  return { updates };
+}
+
 const createOrgRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
   const orgName = params["org_name"] ?? "";
   const org = await cachedOrgByName(orgName);
   if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const data = payload["data"] as Record<string, unknown> | undefined;
-  const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-  const name = typeof attrs["name"] === "string" ? attrs["name"] : "";
-  const url = typeof attrs["url"] === "string" ? attrs["url"] : "";
-  if (name === "" || url === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
+  const attrs = runTaskAttrs(body);
+  const fields = parseOrgTaskFields(attrs);
+  if ("error" in fields) {
+    (set as { status: number }).status = 422;
+    return fields.error;
+  }
   const id = newResourceId("task");
-  const description = typeof attrs["description"] === "string" ? attrs["description"] : null;
-  const category = typeof attrs["category"] === "string" && attrs["category"].trim() !== "" ? attrs["category"] : "general";
-  const enabled = typeof attrs["enabled"] === "boolean" ? attrs["enabled"] : true;
-  const hmacKey = typeof attrs["hmac-key"] === "string" && attrs["hmac-key"] !== ""
-    ? await encryptSecret(attrs["hmac-key"], { force: true })
-    : null;
+  const hmacKey = await resolveHmacKey(attrs);
   const globalConfiguration = parseGlobalConfig(attrs["global-configuration"]);
-  const globalUrlError = globalRunTaskUrlError(url, globalConfiguration, enabled);
-  if (globalUrlError !== undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: globalUrlError }] }; }
-  const rowData = { id, orgId: org.id, name, description, url, category, enabled, hmacKey, globalConfiguration, createdAt: Date.now() };
+  const urlError = checkGlobalTaskUrl(fields.url, globalConfiguration, fields.enabled, set);
+  if (urlError !== null) return urlError.error;
+  const rowData = { id, orgId: org.id, name: fields.name, description: fields.description, url: fields.url, category: fields.category, enabled: fields.enabled, hmacKey, globalConfiguration, createdAt: Date.now() };
   await db.insert(runTasks).values(rowData);
   (set as { status: number }).status = 201;
   return { data: await runTaskResource(rowData) };
@@ -228,33 +291,14 @@ const updateRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: to
   const taskId = params["task_id"] ?? "";
   const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
   if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const data = payload["data"] as Record<string, unknown> | undefined;
-  const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-  const updates: Partial<typeof runTasks.$inferInsert> = {};
-  if (typeof attrs["name"] === "string") {
-    if (attrs["name"].trim() === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
-    updates.name = attrs["name"].trim();
-  }
-  if (attrs["description"] !== undefined) updates.description = typeof attrs["description"] === "string" ? attrs["description"] : null;
-  if (attrs["url"] !== undefined) {
-    if (typeof attrs["url"] !== "string" || attrs["url"].trim() === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "URL is required" }] }; }
-    updates.url = attrs["url"].trim();
-  }
-  if (typeof attrs["category"] === "string" && attrs["category"].trim() !== "") updates.category = attrs["category"];
-  if (attrs["hmac-key"] !== undefined) {
-    updates.hmacKey = typeof attrs["hmac-key"] === "string" && attrs["hmac-key"] !== ""
-      ? await encryptSecret(attrs["hmac-key"], { force: true })
-      : null;
-  }
-  if (typeof attrs["enabled"] === "boolean") updates.enabled = attrs["enabled"];
-  if (attrs["global-configuration"] !== undefined) {
-    updates.globalConfiguration = parseGlobalConfig(attrs["global-configuration"]);
-  }
+  const attrs = runTaskAttrs(body);
+  const parsed = await parseOrgTaskUpdates(attrs, set);
+  if ("error" in parsed) return parsed.error;
+  const updates = parsed.updates;
   const nextGlobalConfiguration = updates.globalConfiguration !== undefined ? updates.globalConfiguration : task.globalConfiguration;
   const nextEnabled = updates.enabled !== undefined ? updates.enabled === true : task.enabled === true;
-  const globalUrlError = globalRunTaskUrlError(updates.url ?? task.url, nextGlobalConfiguration, nextEnabled);
-  if (globalUrlError !== undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: globalUrlError }] }; }
+  const urlError = checkGlobalTaskUrl(updates.url ?? task.url, nextGlobalConfiguration, nextEnabled, set);
+  if (urlError !== null) return urlError.error;
   if (Object.keys(updates).length > 0) await db.update(runTasks).set(updates).where(eq(runTasks.id, taskId));
   const updated = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
   if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -348,6 +392,131 @@ const getWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId: to
   };
 };
 
+function parseBindingUpdates(attrs: Record<string, unknown>, set: SetObj): { updates: Partial<typeof workspaceRunTasks.$inferInsert> } | { error: unknown } {
+  const updates: Partial<typeof workspaceRunTasks.$inferInsert> = {};
+  if (typeof attrs["enforcement-level"] === "string") {
+    const level = attrs["enforcement-level"];
+    if (!["advisory", "mandatory", "must_pass"].includes(level)) {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enforcement-level must be advisory, mandatory, or must_pass" }] } };
+    }
+    updates.enforcementLevel = level;
+  }
+  const rawStages = attrs["stages"];
+  if (Array.isArray(rawStages) && (rawStages as unknown[]).some((s): boolean => typeof s !== "string")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "stages must contain only strings" }] } };
+  }
+  // The provider sends either a singular `stage` or the `stages` array; honor
+  // whichever is present (single-stage binding, so >1 is rejected).
+  const requestedStages = Array.isArray(rawStages)
+    ? (rawStages as unknown[]).filter((s): s is string => typeof s === "string")
+    : typeof attrs["stage"] === "string" && attrs["stage"] !== ""
+      ? [attrs["stage"]]
+      : [];
+  if (requestedStages.length > 1) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "this binding stores a single stage; provide exactly one" }] } };
+  }
+  if (requestedStages.length === 1) {
+    const stage = requestedStages[0] ?? "";
+    if (!["pre_plan", "post_plan", "pre_apply", "post_apply"].includes(stage)) {
+      (set as { status: number }).status = 422;
+      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "stage must be one of pre_plan, post_plan, pre_apply, post_apply" }] } };
+    }
+    updates.stage = stage;
+  }
+  return { updates };
+}
+
+function parseAttachTaskId(body: unknown): { taskId: string; attrs: Record<string, unknown> } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+  const { task: taskRelationship } = rels;
+  const runTaskRel = typeof taskRelationship === "object" && taskRelationship !== null
+    ? (taskRelationship as Record<string, unknown>)
+    : typeof rels["run-task"] === "object" && rels["run-task"] !== null
+      ? (rels["run-task"] as Record<string, unknown>)
+      : {};
+  const runTaskData = typeof runTaskRel["data"] === "object" && runTaskRel["data"] !== null ? (runTaskRel["data"] as Record<string, unknown>) : {};
+  const attrs = runTaskAttrs(body);
+  const taskId = typeof runTaskData["id"] === "string" ? runTaskData["id"] : (typeof attrs["run-task-id"] === "string" ? attrs["run-task-id"] : "");
+  if (taskId === "") return { error: { errors: [{ status: "422", title: "Unprocessable Entity" }] } };
+  return { taskId, attrs };
+}
+
+function resolveAttachOptions(attrs: Record<string, unknown>): { stage: string; enforcementLevel: string } | { error: unknown } {
+  const requestedStages = Array.isArray(attrs["stages"]) ? (attrs["stages"] as unknown[]).filter((s): s is string => typeof s === "string") : [];
+  if (requestedStages.length > 1) {
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Only a single stage is supported" }] } };
+  }
+  const stage = typeof attrs["stage"] === "string" && attrs["stage"] !== "" ? attrs["stage"] : (requestedStages[0] ?? "post_plan");
+  const enforcementLevel = typeof attrs["enforcement-level"] === "string" && attrs["enforcement-level"] !== "" ? attrs["enforcement-level"] : "advisory";
+  return { stage, enforcementLevel };
+}
+
+async function insertWorkspaceBinding(
+  workspaceId: string,
+  taskId: string,
+  stage: string,
+  enforcementLevel: string,
+  set: SetObj,
+): Promise<{ id: string } | { error: unknown }> {
+  const id = newResourceId("wrt");
+  try {
+    await db.insert(workspaceRunTasks).values({ id, workspaceId, runTaskId: taskId, stage, enforcementLevel });
+  } catch (error: unknown) {
+    if (!isUniqueConstraintError(error)) throw error;
+    (set as { status: number }).status = 409;
+    return { error: { errors: [{ status: "409", title: "Conflict", detail: "Run task is already attached to this workspace" }] } };
+  }
+  return { id };
+}
+
+function parseCallbackUpdate(body: unknown): { attrs: Record<string, unknown>; status: unknown } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"];
+  const dataObject = data !== null && typeof data === "object" ? data as Record<string, unknown> : {};
+  const attributes = dataObject["attributes"];
+  const attrs = attributes !== null && typeof attributes === "object" ? attributes as Record<string, unknown> : {};
+  const status = attrs["status"];
+  if (dataObject["type"] !== "task-results" || !["running", "passed", "failed"].includes(String(status))) {
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity" }] } };
+  }
+  return { attrs, status };
+}
+
+function parseCallbackUrl(attrs: Record<string, unknown>, set: SetObj): { url: string | null | undefined } | { error: unknown } {
+  const invalid = { errors: [{ status: "422", title: "Unprocessable Entity", detail: "url must be a valid HTTP or HTTPS URL" }] };
+  if (attrs["url"] === undefined) return { url: undefined };
+  if (attrs["url"] === null) return { url: null };
+  if (typeof attrs["url"] !== "string" || attrs["url"].trim() === "") {
+    (set as { status: number }).status = 422;
+    return { error: invalid };
+  }
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(attrs["url"]);
+  } catch {
+    (set as { status: number }).status = 422;
+    return { error: invalid };
+  }
+  if (!["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username !== "" || parsedUrl.password !== "") {
+    (set as { status: number }).status = 422;
+    return { error: invalid };
+  }
+  return { url: attrs["url"].trim() };
+}
+
+async function persistBindingUpdates(
+  bindingId: string,
+  updates: Partial<typeof workspaceRunTasks.$inferInsert>,
+): Promise<typeof workspaceRunTasks.$inferSelect | undefined> {
+  if (Object.keys(updates).length > 0) await db.update(workspaceRunTasks).set(updates).where(eq(workspaceRunTasks.id, bindingId));
+  return db.query.workspaceRunTasks.findFirst({ where: eq(workspaceRunTasks.id, bindingId) });
+}
+
 const updateWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
   const workspaceId = params["workspace_id"] ?? "";
   const taskId = params["task_id"] ?? "";
@@ -362,44 +531,11 @@ const updateWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, t
     ),
   });
   if (binding === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const data = payload["data"] as Record<string, unknown> | undefined;
-  const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-  const updates: Partial<typeof workspaceRunTasks.$inferInsert> = {};
-  if (typeof attrs["enforcement-level"] === "string") {
-    const level = attrs["enforcement-level"];
-    if (!["advisory", "mandatory", "must_pass"].includes(level)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enforcement-level must be advisory, mandatory, or must_pass" }] };
-    }
-    updates.enforcementLevel = level;
-  }
-  const rawStages = attrs["stages"];
-  if (Array.isArray(rawStages) && (rawStages as unknown[]).some((s): boolean => typeof s !== "string")) {
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "stages must contain only strings" }] };
-  }
-  // The provider sends either a singular `stage` or the `stages` array; honor
-  // whichever is present (single-stage binding, so >1 is rejected).
-  const requestedStages = Array.isArray(rawStages)
-    ? (rawStages as unknown[]).filter((s): s is string => typeof s === "string")
-    : typeof attrs["stage"] === "string" && attrs["stage"] !== ""
-      ? [attrs["stage"]]
-      : [];
-  if (requestedStages.length > 1) {
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "this binding stores a single stage; provide exactly one" }] };
-  }
-  if (requestedStages.length === 1) {
-    const stage = requestedStages[0] ?? "";
-    if (!["pre_plan", "post_plan", "pre_apply", "post_apply"].includes(stage)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "stage must be one of pre_plan, post_plan, pre_apply, post_apply" }] };
-    }
-    updates.stage = stage;
-  }
-  if (Object.keys(updates).length > 0) await db.update(workspaceRunTasks).set(updates).where(eq(workspaceRunTasks.id, binding.id));
-  const updated = await db.query.workspaceRunTasks.findFirst({ where: eq(workspaceRunTasks.id, binding.id) });
+  const attrs = runTaskAttrs(body);
+  const parsed = parseBindingUpdates(attrs, set);
+  if ("error" in parsed) return parsed.error;
+  const updates = parsed.updates;
+  const updated = await persistBindingUpdates(binding.id, updates);
   if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
   const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, updated.runTaskId) });
   return {
@@ -426,46 +562,30 @@ const attachWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, t
   const workspaceId = params["workspace_id"] ?? "";
   const ws = await findManageableWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
   if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const data = payload["data"] as Record<string, unknown> | undefined;
-  const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-  const { task: taskRelationship } = rels;
-  const runTaskRel = typeof taskRelationship === "object" && taskRelationship !== null
-    ? (taskRelationship as Record<string, unknown>)
-    : typeof rels["run-task"] === "object" && rels["run-task"] !== null
-      ? (rels["run-task"] as Record<string, unknown>)
-      : {};
-  const runTaskData = typeof runTaskRel["data"] === "object" && runTaskRel["data"] !== null ? (runTaskRel["data"] as Record<string, unknown>) : {};
-  const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-  const taskId = typeof runTaskData["id"] === "string" ? runTaskData["id"] : (typeof attrs["run-task-id"] === "string" ? attrs["run-task-id"] : "");
-  if (taskId === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
-  const requestedStages = Array.isArray(attrs["stages"]) ? (attrs["stages"] as unknown[]).filter((s): s is string => typeof s === "string") : [];
-  if (requestedStages.length > 1) {
+  const parsed = parseAttachTaskId(body);
+  if ("error" in parsed) {
     (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Only a single stage is supported" }] };
+    return parsed.error;
   }
-  const stage = typeof attrs["stage"] === "string" && attrs["stage"] !== "" ? attrs["stage"] : (requestedStages[0] ?? "post_plan");
-  const enforcementLevel = typeof attrs["enforcement-level"] === "string" && attrs["enforcement-level"] !== "" ? attrs["enforcement-level"] : "advisory";
-  const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
+  const options = resolveAttachOptions(parsed.attrs);
+  if ("error" in options) {
+    (set as { status: number }).status = 422;
+    return options.error;
+  }
+  const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, parsed.taskId) });
   if (task?.orgId !== ws.orgId) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  if (!["pre_plan", "post_plan", "pre_apply", "post_apply"].includes(stage) || !["advisory", "mandatory", "must_pass"].includes(enforcementLevel)) {
+  if (!["pre_plan", "post_plan", "pre_apply", "post_apply"].includes(options.stage) || !["advisory", "mandatory", "must_pass"].includes(options.enforcementLevel)) {
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
   }
-  const id = newResourceId("wrt");
-  try {
-    await db.insert(workspaceRunTasks).values({ id, workspaceId, runTaskId: taskId, stage, enforcementLevel });
-  } catch (error: unknown) {
-    if (!isUniqueConstraintError(error)) throw error;
-    (set as { status: number }).status = 409;
-    return { errors: [{ status: "409", title: "Conflict", detail: "Run task is already attached to this workspace" }] };
-  }
+  const inserted = await insertWorkspaceBinding(workspaceId, parsed.taskId, options.stage, options.enforcementLevel, set);
+  if ("error" in inserted) return inserted.error;
   const persisted = await db.query.workspaceRunTasks.findFirst({
-    where: and(eq(workspaceRunTasks.workspaceId, workspaceId), eq(workspaceRunTasks.runTaskId, taskId)),
+    where: and(eq(workspaceRunTasks.workspaceId, workspaceId), eq(workspaceRunTasks.runTaskId, parsed.taskId)),
   });
   if (persisted === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
   (set as { status: number }).status = 201;
-  return { data: { id: persisted.id, type: "workspace-tasks", attributes: { stage: persisted.stage, stages: [persisted.stage], "enforcement-level": persisted.enforcementLevel }, relationships: { "task": { data: { id: taskId, type: "tasks" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };
+  return { data: { id: persisted.id, type: "workspace-tasks", attributes: { stage: persisted.stage, stages: [persisted.stage], "enforcement-level": persisted.enforcementLevel }, relationships: { "task": { data: { id: parsed.taskId, type: "tasks" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };
 };
 
 const detachWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -509,16 +629,12 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"];
-    const dataObject = data !== null && typeof data === "object" ? data as Record<string, unknown> : {};
-    const attributes = dataObject["attributes"];
-    const attrs = attributes !== null && typeof attributes === "object" ? attributes as Record<string, unknown> : {};
-    const status = attrs["status"];
-    if (dataObject["type"] !== "task-results" || !["running", "passed", "failed"].includes(String(status))) {
+    const parsed = parseCallbackUpdate(body);
+    if ("error" in parsed) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+      return parsed.error;
     }
+    const { attrs, status } = parsed;
     const result = await db.query.runTaskResults.findFirst({ where: eq(runTaskResults.id, resultId) });
     if (result === undefined) {
       (set as { status: number }).status = 404;
@@ -528,28 +644,9 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict" }] };
     }
-    let resultUrl: string | null | undefined;
-    if (attrs["url"] !== undefined) {
-      if (attrs["url"] === null) {
-        resultUrl = null;
-      } else if (typeof attrs["url"] !== "string" || attrs["url"].trim() === "") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "url must be a valid HTTP or HTTPS URL" }] };
-      } else {
-        let parsedUrl: URL;
-        try {
-          parsedUrl = new URL(attrs["url"]);
-        } catch {
-          (set as { status: number }).status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "url must be a valid HTTP or HTTPS URL" }] };
-        }
-        if (!["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username !== "" || parsedUrl.password !== "") {
-          (set as { status: number }).status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "url must be a valid HTTP or HTTPS URL" }] };
-        }
-        resultUrl = attrs["url"].trim();
-      }
-    }
+    const parsedUrl = parseCallbackUrl(attrs, set);
+    if ("error" in parsedUrl) return parsedUrl.error;
+    const resultUrl = parsedUrl.url;
     await db.update(runTaskResults).set({
       status: String(status),
       ...(typeof attrs["message"] === "string" ? { message: attrs["message"] } : {}),

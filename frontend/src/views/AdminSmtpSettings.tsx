@@ -32,6 +32,37 @@ const ENCRYPTION_OPTIONS: readonly Readonly<{ value: string; label: string }>[] 
   { value: "plain", label: "Plaintext (insecure)" },
 ];
 
+type ParsedSmtpSettings = Readonly<{
+  enabled: boolean;
+  host: string;
+  port: number;
+  senderEmail: string;
+  auth: string;
+  encryption: string;
+  username: string;
+}>;
+
+function resolveSmtpEncryption(loadedEncryption: unknown, loadedPort: number): string {
+  if (isString(loadedEncryption) && ENCRYPTION_OPTIONS.some((option): boolean => option.value === loadedEncryption)) {
+    return loadedEncryption;
+  }
+  return loadedPort === 465 ? "tls" : "starttls";
+}
+
+function parseSmtpAttributes(attrs: SmtpAttributes | undefined): ParsedSmtpSettings {
+  const loadedPort = attrs !== undefined && isNumber(attrs.port) ? attrs.port : 25;
+  const sender = attrs?.["sender-email"];
+  return {
+    enabled: attrs?.enabled === true,
+    host: isString(attrs?.host) ? attrs.host : "",
+    port: loadedPort,
+    senderEmail: isString(sender) ? sender : "",
+    auth: isString(attrs?.auth) && attrs.auth !== "" ? attrs.auth : "plain",
+    encryption: resolveSmtpEncryption(attrs?.encryption, loadedPort),
+    username: isString(attrs?.username) ? attrs.username : "",
+  };
+}
+
 export function AdminSmtpSettings(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -62,21 +93,14 @@ export function AdminSmtpSettings(): React.JSX.Element {
         data?: { attributes?: SmtpAttributes };
       };
       if (!mounted.current) return;
-      const attrs = response.data?.attributes;
-      setEnabled(attrs?.enabled === true);
-      setHost(isString(attrs?.host) ? attrs.host : "");
-      const loadedPort = attrs !== undefined && isNumber(attrs.port) ? attrs.port : 25;
-      setPort(String(loadedPort));
-      const senderEmail = attrs?.["sender-email"];
-      setSenderEmail(isString(senderEmail) ? senderEmail : "");
-      setAuth(isString(attrs?.auth) && attrs.auth !== "" ? attrs.auth : "plain");
-      const loadedEncryption = attrs?.encryption;
-      setEncryption(
-        isString(loadedEncryption) && ENCRYPTION_OPTIONS.some((option): boolean => option.value === loadedEncryption)
-          ? loadedEncryption
-          : loadedPort === 465 ? "tls" : "starttls",
-      );
-      setUsername(isString(attrs?.username) ? attrs.username : "");
+      const parsed = parseSmtpAttributes(response.data?.attributes);
+      setEnabled(parsed.enabled);
+      setHost(parsed.host);
+      setPort(String(parsed.port));
+      setSenderEmail(parsed.senderEmail);
+      setAuth(parsed.auth);
+      setEncryption(parsed.encryption);
+      setUsername(parsed.username);
       setPassword("");
       setTestEmail("");
     } catch (reason) {

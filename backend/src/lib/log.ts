@@ -171,42 +171,50 @@ function redactSensitiveString(value: string): string {
     .replace(KNOWN_TOKEN_PATTERN, "[REDACTED TOKEN]");
 }
 
+function redactErrorLogValue(value: Error): unknown {
+  try {
+    return serializeLogError(value);
+  } catch {
+    return { name: "Error", message: "[Error omitted]" };
+  }
+}
+
+function redactDateLogValue(value: Date): unknown {
+  try {
+    return value.toISOString();
+  } catch {
+    return "[Invalid date]";
+  }
+}
+
+function redactLogObject(value: Record<string, unknown>, ancestors: WeakSet<object>): unknown {
+  const output: Record<string, unknown> = {};
+  for (const [childKey, childValue] of Object.entries(value)) {
+    if (childKey === "toJSON") continue;
+    try {
+      output[childKey] = redactLogValue(childValue, childKey, ancestors);
+    } catch {
+      output[childKey] = "[Unserializable]";
+    }
+  }
+  return output;
+}
+
 /** Deeply redact metadata before it reaches either local or remote sinks. */
 function redactLogValue(value: unknown, key?: string, ancestors = new WeakSet<object>()): unknown {
   if (isSensitiveLogKey(key)) return REDACTED_LOG_VALUE;
   if (typeof value === "string") return redactSensitiveString(value);
   if (typeof value === "bigint") return value.toString();
   if (value === null || typeof value !== "object") return value;
-  if (value instanceof Error) {
-    try {
-      return serializeLogError(value);
-    } catch {
-      return { name: "Error", message: "[Error omitted]" };
-    }
-  }
-  if (value instanceof Date) {
-    try {
-      return value.toISOString();
-    } catch {
-      return "[Invalid date]";
-    }
-  }
+  if (value instanceof Error) return redactErrorLogValue(value);
+  if (value instanceof Date) return redactDateLogValue(value);
   if (ancestors.has(value)) return "[Circular]";
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {
       return value.map((entry: unknown): unknown => redactLogValue(entry, undefined, ancestors));
     }
-    const output: Record<string, unknown> = {};
-    for (const [childKey, childValue] of Object.entries(value)) {
-      if (childKey === "toJSON") continue;
-      try {
-        output[childKey] = redactLogValue(childValue, childKey, ancestors);
-      } catch {
-        output[childKey] = "[Unserializable]";
-      }
-    }
-    return output;
+    return redactLogObject(value as Record<string, unknown>, ancestors);
   } catch {
     return "[Unserializable]";
   } finally {
@@ -310,43 +318,41 @@ export function safeJsonStringify(value: unknown): string {
   }
 }
 
-function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<string, unknown>>): void {
-  const configuration = loggingConfiguration;
-  const safeMessage = redactSensitiveString(message);
-  const safeMeta = meta === undefined ? undefined : redactLogValue(meta) as Readonly<Record<string, unknown>>;
-  if (
-    configuration.enabled
-    && configuration.syslogTargets.length > 0
-    && isLogLevelEnabled(level, configuration.syslogLevel)
-  ) {
-    // Format per destination: datagram transports (UDP) need a byte-budgeted
-    // body so oversized entries stay valid JSON; streams take the full body.
-    // The "json" format ships the bare JSON object (no syslog envelope) so
-    // JSON-detecting collectors auto-extract every field.
-    for (const target of configuration.syslogTargets) {
+function sendSyslogEntry(
+  level: LogLevel,
+  safeMessage: string,
+  safeMeta: Readonly<Record<string, unknown>> | undefined,
+  configuration: typeof loggingConfiguration,
+): void {
+  // Format per destination: datagram transports (UDP) need a byte-budgeted
+  // body so oversized entries stay valid JSON; streams take the full body.
+  // The "json" format ships the bare JSON object (no syslog envelope) so
+  // JSON-detecting collectors auto-extract every field.
+  for (const target of configuration.syslogTargets) {
+    try {
+      const frame = formatSyslogMessage(
+        safeMeta !== undefined
+          ? { timestamp: new Date().toISOString(), level, message: safeMessage, meta: safeMeta }
+          : { timestamp: new Date().toISOString(), level, message: safeMessage },
+        {
+          hostname: resolveHostname(process.env, configuration.syslogHostname),
+          appName: configuration.syslogApp,
+          procId: String(process.pid),
+        },
+        target.transport === "udp" ? { maxBodyBytes: UDP_JSON_BODY_BUDGET, format: configuration.syslogFormat } : { format: configuration.syslogFormat },
+      );
       try {
-        const frame = formatSyslogMessage(
-          safeMeta !== undefined
-            ? { timestamp: new Date().toISOString(), level, message: safeMessage, meta: safeMeta }
-            : { timestamp: new Date().toISOString(), level, message: safeMessage },
-          {
-            hostname: resolveHostname(process.env, configuration.syslogHostname),
-            appName: configuration.syslogApp,
-            procId: String(process.pid),
-          },
-          target.transport === "udp" ? { maxBodyBytes: UDP_JSON_BODY_BUDGET, format: configuration.syslogFormat } : { format: configuration.syslogFormat },
-        );
-        try {
-          sendSyslogFrame(target, frame, { jsonBody: configuration.syslogFormat === "json" });
-        } catch {
-          // A single destination must never suppress the remaining fan-out.
-        }
+        sendSyslogFrame(target, frame, { jsonBody: configuration.syslogFormat === "json" });
       } catch {
-        // Formatting and transport are best-effort diagnostics.
+        // A single destination must never suppress the remaining fan-out.
       }
+    } catch {
+      // Formatting and transport are best-effort diagnostics.
     }
   }
-  if (!isLogLevelEnabled(level, configuration.logLevel)) return;
+}
+
+function writeConsoleEntry(level: LogLevel, safeMessage: string, safeMeta: Readonly<Record<string, unknown>> | undefined): void {
   try {
     const entry: Record<string, unknown> = {
       timestamp: new Date().toISOString(),
@@ -363,11 +369,26 @@ function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<
   }
 }
 
+function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<string, unknown>>): void {
+  const configuration = loggingConfiguration;
+  const safeMessage = redactSensitiveString(message);
+  const safeMeta = meta === undefined ? undefined : redactLogValue(meta) as Readonly<Record<string, unknown>>;
+  if (
+    configuration.enabled
+    && configuration.syslogTargets.length > 0
+    && isLogLevelEnabled(level, configuration.syslogLevel)
+  ) {
+    sendSyslogEntry(level, safeMessage, safeMeta, configuration);
+  }
+  if (!isLogLevelEnabled(level, configuration.logLevel)) return;
+  writeConsoleEntry(level, safeMessage, safeMeta);
+}
+
 export const log = {
-  error: (msg: string, meta?: Readonly<Record<string, unknown>>): void => structuredLog("error", msg, meta),
-  warn: (msg: string, meta?: Readonly<Record<string, unknown>>): void => structuredLog("warn", msg, meta),
-  info: (msg: string, meta?: Readonly<Record<string, unknown>>): void => structuredLog("info", msg, meta),
-  debug: (msg: string, meta?: Readonly<Record<string, unknown>>): void => structuredLog("debug", msg, meta),
+  error: (msg: string, meta?: Readonly<Record<string, unknown>>): void => { structuredLog("error", msg, meta); },
+  warn: (msg: string, meta?: Readonly<Record<string, unknown>>): void => { structuredLog("warn", msg, meta); },
+  info: (msg: string, meta?: Readonly<Record<string, unknown>>): void => { structuredLog("info", msg, meta); },
+  debug: (msg: string, meta?: Readonly<Record<string, unknown>>): void => { structuredLog("debug", msg, meta); },
 };
 
 /** Test/shutdown hook: close UDP socket and TCP connections. */

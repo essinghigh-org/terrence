@@ -20,6 +20,59 @@ type VcsRepoSelectorProps = {
   name?: string;
 };
 
+function dropdownVisibility(
+  open: boolean,
+  loading: boolean,
+  repoCount: number,
+  filteredCount: number,
+): Readonly<{ showDropdown: boolean; hasRepoList: boolean; showNoMatch: boolean }> {
+  const hasList = !loading && repoCount > 0 && filteredCount > 0;
+  return {
+    showDropdown: open && hasList,
+    hasRepoList: hasList,
+    showNoMatch: open && !loading && repoCount > 0 && filteredCount === 0,
+  };
+}
+
+function DropdownChevron({ loading, open }: Readonly<{
+  loading: boolean;
+  open: boolean;
+}>): React.JSX.Element {
+  if (loading) return <Spinner className="size-4" />;
+  return (
+    <svg
+      className={cn(
+        "size-4 text-muted-foreground transition-transform",
+        open && "rotate-180",
+      )}
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}
+
+function NoReposMatch({ visible, search }: Readonly<{
+  visible: boolean;
+  search: string;
+}>): React.JSX.Element | null {
+  if (!visible) return null;
+  return (
+    <div className="absolute z-50 mt-1 w-full rounded-lg border border-border bg-popover p-2 shadow-md">
+      <p className="text-sm text-muted-foreground">
+        No repositories match &ldquo;{search}&rdquo;
+      </p>
+    </div>
+  );
+}
+
 export function VcsRepoSelector({
   value,
   onValueChange,
@@ -159,8 +212,7 @@ export function VcsRepoSelector({
     [open, filteredRepos, highlightedIndex, handleSelect],
   );
 
-  const showDropdown = open && !loading && repositories.length > 0 && filteredRepos.length > 0;
-  const hasRepoList = !loading && repositories.length > 0 && filteredRepos.length > 0;
+  const { showDropdown, hasRepoList, showNoMatch } = dropdownVisibility(open, loading, repositories.length, filteredRepos.length);
 
   return (
     <div className="relative" ref={containerRef}>
@@ -201,26 +253,7 @@ export function VcsRepoSelector({
         />
         {/* Loading spinner or chevron indicator */}
         <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2">
-          {loading ? (
-            <Spinner className="size-4" />
-          ) : (
-            <svg
-              className={cn(
-                "size-4 text-muted-foreground transition-transform",
-                open && "rotate-180",
-              )}
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          )}
+          <DropdownChevron loading={loading} open={open} />
         </span>
       </div>
 
@@ -264,16 +297,7 @@ export function VcsRepoSelector({
       )}
 
       {/* No results state */}
-      {open &&
-        !loading &&
-        repositories.length > 0 &&
-        filteredRepos.length === 0 && (
-          <div className="absolute z-50 mt-1 w-full rounded-lg border border-border bg-popover p-2 shadow-md">
-            <p className="text-sm text-muted-foreground">
-              No repositories match &ldquo;{search}&rdquo;
-            </p>
-          </div>
-        )}
+      <NoReposMatch visible={showNoMatch} search={search} />
     </div>
   );
 }

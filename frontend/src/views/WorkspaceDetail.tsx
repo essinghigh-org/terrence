@@ -250,6 +250,721 @@ function lockFailureTitle(action: string, err: unknown): string {
   return detail !== "" ? `${action}: ${detail}` : action;
 }
 
+type WorkspacePermissions = Readonly<{
+  canQueueRun: boolean;
+  canStartRun: boolean;
+  canUpdate: boolean;
+  canReadStateVersions: boolean;
+  canWriteStateVersions: boolean;
+  canReadVariable: boolean;
+  canToggleLock: boolean;
+  canManageRunTasks: boolean;
+  canUpdateVariable: boolean;
+}>;
+
+function projectIdFor(workspace: Workspace | null): string | undefined {
+  return workspace?.relationships?.project?.data?.id;
+}
+
+function workspacePermissions(workspace: Workspace): WorkspacePermissions {
+  const permissions = workspace.attributes.permissions;
+  const canQueueRun = permissions?.["can-queue-run"] === true;
+  return {
+    canQueueRun,
+    canStartRun: canQueueRun && workspace.attributes.locked !== true,
+    canUpdate: permissions?.["can-update"] === true,
+    canReadStateVersions: permissions?.["can-read-state-versions"] === true,
+    canWriteStateVersions: permissions?.["can-write-state-versions"] === true,
+    canReadVariable: permissions?.["can-read-variable"] === true,
+    canToggleLock: workspace.attributes.locked === true
+      ? permissions?.["can-unlock"] === true
+      : permissions?.["can-lock"] === true,
+    canManageRunTasks: permissions?.["can-manage-run-tasks"] === true,
+    canUpdateVariable: permissions?.["can-update-variable"] === true,
+  };
+}
+
+// Issue #568: lock holder summary for the banner and unlock dialogs.
+// Owner type/id come from the lock principal (user/team/service); age
+// from locked-at. All three are nullable for legacy ownerless locks.
+function buildLockSummary(workspace: Workspace): string | null {
+  if (workspace.attributes.locked !== true) return null;
+  const lockedByType = workspace.attributes["locked-by-type"];
+  const lockedById = workspace.attributes["locked-by-id"];
+  const holderName = isString(lockedByType) && lockedByType !== ""
+    ? (isString(lockedById) && lockedById !== "" ? `${lockedByType} ${lockedById}` : lockedByType)
+    : null;
+  const reasonAttr = workspace.attributes["locked-reason"];
+  const reasonText = isString(reasonAttr) && reasonAttr !== "" ? reasonAttr : null;
+  const lockedAtAttr = workspace.attributes["locked-at"];
+  const ageText = isString(lockedAtAttr) && lockedAtAttr !== "" && !Number.isNaN(Date.parse(lockedAtAttr))
+    ? formatRelativeTime(lockedAtAttr)
+    : null;
+  return [
+    holderName !== null ? `Locked by ${holderName}` : "Locked",
+    reasonText,
+    ageText,
+  ].filter((part): part is string => part !== null).join(" · ");
+}
+
+function buildSectionCrumbs(orgPath: string, workspacePath: string, workspaceName: string, isSettingsSection: boolean, settingsTitle?: string): readonly BreadcrumbItem[] {
+  // Settings is a real level of the IA, not a label to collapse: the
+  // organization pages spell out "… / Settings / Agent pools" and the
+  // workspace trail reads the same way.
+  return [
+    { label: "Workspaces", to: `${orgPath}/workspaces` },
+    ...(isSettingsSection
+      ? [
+          { label: workspaceName, to: workspacePath },
+          { label: "Settings", to: `${workspacePath}/settings` },
+          { label: settingsTitle ?? "Settings" },
+        ]
+      : [{ label: workspaceName }]),
+  ];
+}
+
+function latestRunTitle(latestRun: RunSummary): string {
+  const message = latestRun.attributes.message;
+  return message?.trim() === "" ? (latestRun.id ?? "") : (message ?? latestRun.id ?? "");
+}
+
+function LoadErrorPanel({ loadError, onRetry }: Readonly<{
+  loadError: string;
+  onRetry: () => void;
+}>): React.JSX.Element {
+  return (
+    <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-5 text-sm text-destructive">
+      <p className="font-medium">Could not load workspace</p>
+      <p className="mt-1">{loadError !== "" ? loadError : "Workspace not found"}</p>
+      <Button className="mt-3" variant="outline" onClick={onRetry}>
+        Try again
+      </Button>
+    </div>
+  );
+}
+
+function UnlockDescription({ lockSummaryLine }: Readonly<{
+  lockSummaryLine: string | null;
+}>): React.JSX.Element {
+  return (
+    <>
+      {lockSummaryLine !== null && (
+        <span className="mb-2 block text-sm text-muted-foreground">{lockSummaryLine}</span>
+      )}
+      <span className="block">
+        Unlocking this workspace will allow other users to run Terraform. Be careful: if a remote Terraform run is still using the lock, this may lead to inconsistent state.
+      </span>
+      <span className="mt-4 block">
+        This operation <strong className="font-semibold text-foreground">cannot be undone</strong>. Are you sure?
+      </span>
+    </>
+  );
+}
+
+function ForceUnlockDescription({ lockSummaryLine }: Readonly<{
+  lockSummaryLine: string | null;
+}>): React.JSX.Element {
+  return (
+    <>
+      {lockSummaryLine !== null && (
+        <span className="mb-2 block text-sm text-muted-foreground">Current lock: {lockSummaryLine}</span>
+      )}
+      <span className="block">
+        This overrides a lock held by someone else (a CI run, a teammate, or a crashed run that can no longer
+        release it). Only force-unlock when you have confirmed nothing is actively writing state.
+      </span>
+      <span className="mt-4 block">
+        This operation <strong className="font-semibold text-foreground">cannot be undone</strong>. Are you sure?
+      </span>
+    </>
+  );
+}
+
+function LockToggleButtons({ workspace, canToggleLock, togglingLock, onLock, onForceUnlock }: Readonly<{
+  workspace: Workspace;
+  canToggleLock: boolean;
+  togglingLock: boolean;
+  onLock: () => void;
+  onForceUnlock: () => void;
+}>): React.JSX.Element {
+  return (
+    <>
+      {canToggleLock && (
+        <Button variant="outline" disabled={togglingLock} onClick={onLock}>
+          {workspace.attributes.locked === true ? (
+            <><LockOpen data-icon="inline-start" /> {togglingLock ? "Unlocking…" : "Unlock"}</>
+          ) : (
+            <><Lock data-icon="inline-start" /> {togglingLock ? "Locking…" : "Lock"}</>
+          )}
+        </Button>
+      )}
+      {workspace.attributes.locked === true
+        && workspace.attributes.permissions?.["can-force-unlock"] === true && (
+        <Button variant="outline" disabled={togglingLock} onClick={onForceUnlock}>
+          <ShieldAlert data-icon="inline-start" /> {togglingLock ? "Unlocking…" : "Force unlock"}
+        </Button>
+      )}
+    </>
+  );
+}
+
+function WorkspaceHeader({ workspace, workspacePath, crumbs, isSettingsSection, settingsSection, activeSection, canToggleLock, canStartRun, togglingLock, onLock, onForceUnlock, onCopyWorkspaceId }: Readonly<{
+  workspace: Workspace;
+  workspacePath: string;
+  crumbs: readonly BreadcrumbItem[];
+  isSettingsSection: boolean;
+  settingsSection: SettingsSectionMeta | undefined;
+  activeSection: WorkspaceSection;
+  canToggleLock: boolean;
+  canStartRun: boolean;
+  togglingLock: boolean;
+  onLock: () => void;
+  onForceUnlock: () => void;
+  onCopyWorkspaceId: (identifier: string) => void;
+}>): React.JSX.Element {
+  return (
+    <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-6">
+      <div className="min-w-0">
+        <Breadcrumbs items={crumbs} />
+        <div className="flex items-center gap-3">
+          <h1 className="truncate text-3xl font-bold tracking-tight text-foreground">
+            {isSettingsSection ? settingsSection?.title : workspace.attributes.name}
+          </h1>
+          {workspace.attributes.locked === true && (
+            <span className="flex items-center gap-1 rounded bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+              <Lock aria-hidden="true" className="size-3" /> Locked
+            </span>
+          )}
+        </div>
+        <p className="mt-1 max-w-3xl text-pretty text-sm text-muted-foreground">
+          {isSettingsSection
+            ? settingsSection?.description
+            : workspace.attributes.description ?? "No description provided."}
+        </p>
+        {!isSettingsSection && (
+          <>
+            <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
+              <span>Workspace ID:</span>
+              <code className="select-all font-mono">{workspace.id}</code>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Copy workspace ID"
+                onClick={(): void => {
+                  onCopyWorkspaceId(workspace.id);
+                }}
+              >
+                <Copy aria-hidden="true" />
+              </Button>
+            </div>
+            {((): React.JSX.Element | null => {
+              const ownedByType = workspace.attributes["owned-by-type"];
+              const ownedById = workspace.attributes["owned-by-id"];
+              const contactEmail = workspace.attributes["contact-email"];
+              if (ownedByType === null && ownedById === null && contactEmail === null) return null;
+              const ownerParts: string[] = [];
+              if (ownedByType !== null && ownedByType !== undefined) {
+                ownerParts.push(`${ownedByType} ${ownedById ?? ""}`.trim());
+              }
+              if (contactEmail !== null && contactEmail !== undefined) ownerParts.push(contactEmail);
+              if (ownerParts.length === 0) return null;
+              return (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">Owner:</span> {ownerParts.join(" · ")}
+                </div>
+              );
+            })()}
+          </>
+        )}
+      </div>
+
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <LockToggleButtons
+          workspace={workspace}
+          canToggleLock={canToggleLock}
+          togglingLock={togglingLock}
+          onLock={onLock}
+          onForceUnlock={onForceUnlock}
+        />
+        {activeSection !== "runs" && (
+          <Link
+            to={canStartRun && activeSection === "overview"
+              ? `${workspacePath}/runs?new-run=true`
+              : `${workspacePath}/runs`}
+            className={buttonVariants({
+              variant: isSettingsSection ? "outline" : "default",
+            })}
+          >
+            <Play data-icon="inline-start" />
+            {canStartRun && activeSection === "overview" ? "New run" : "View runs"}
+          </Link>
+        )}
+      </div>
+    </header>
+  );
+}
+
+function LockBanner({ workspace, activeSection, lockSummaryLine, togglingLock, onForceUnlock }: Readonly<{
+  workspace: Workspace;
+  activeSection: WorkspaceSection;
+  lockSummaryLine: string | null;
+  togglingLock: boolean;
+  onForceUnlock: () => void;
+}>): React.JSX.Element | null {
+  if (workspace.attributes.locked !== true) return null;
+  if (activeSection !== "overview" && activeSection !== "runs") return null;
+  if (lockSummaryLine === null) return null;
+  return (
+    <div role="status" className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+      <Lock aria-hidden="true" className="size-4" />
+      <span>{lockSummaryLine}</span>
+      {workspace.attributes.permissions?.["can-force-unlock"] === true && (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={togglingLock}
+          className="ml-auto"
+          onClick={onForceUnlock}
+        >
+          {togglingLock ? "Unlocking…" : "Force unlock"}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function LatestRunMeta({ latestRun, workspacePath, latestRunPath, latestRunError }: Readonly<{
+  latestRun: RunSummary;
+  workspacePath: string;
+  latestRunPath: string | null;
+  latestRunError: boolean;
+}>): React.JSX.Element {
+  const createdAt = latestRun.attributes["created-at"];
+  const source = latestRun.attributes.source;
+  const triggerReason = latestRun.attributes["trigger-reason"];
+  const counts = latestRun.attributes;
+  return (
+    <>
+      <div aria-live="polite" aria-atomic="true" className="flex flex-wrap items-center justify-between gap-3">
+        <Link to={latestRunPath ?? `${workspacePath}/runs`} className="font-semibold text-primary hover:underline">
+          {latestRunTitle(latestRun)}
+        </Link>
+        <StatusBadge status={latestRun.attributes.status} />
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+        {isString(createdAt) && createdAt !== "" && (
+          <time dateTime={createdAt} title={formatDateTime(createdAt)}>
+            {formatRelativeTime(createdAt)}
+          </time>
+        )}
+        {source !== undefined && (
+          <span>via {formatRunSource(source, triggerReason)}</span>
+        )}
+        {isNumber(counts["resource-additions"])
+          && isNumber(counts["resource-changes"])
+          && isNumber(counts["resource-destructions"]) && (
+          <span className="flex items-center gap-3 font-medium">
+            <span className="text-success">+{counts["resource-additions"]}</span>
+            <span className="text-primary">~{counts["resource-changes"]}</span>
+            <span className="text-destructive">−{counts["resource-destructions"]}</span>
+          </span>
+        )}
+        <code className="font-mono">{latestRun.id}</code>
+      </div>
+      {latestRunError && (
+        <p role="status" className="mt-2 text-xs text-warning">Run status may be out of date.</p>
+      )}
+    </>
+  );
+}
+
+function LatestRunPanel({ workspace, orgName, workspacePath, latestRun, latestRunLoading, latestRunError, canStartRun, canUpdate, canReadVariable }: Readonly<{
+  workspace: Workspace;
+  orgName: string;
+  workspacePath: string;
+  latestRun: RunSummary | null;
+  latestRunLoading: boolean;
+  latestRunError: boolean;
+  canStartRun: boolean;
+  canUpdate: boolean;
+  canReadVariable: boolean;
+}>): React.JSX.Element {
+  const statusValue = latestRun?.attributes.status;
+  const succeeded = statusValue === "applied" || statusValue === "planned_and_finished";
+  const runPath = latestRun?.id === undefined
+    ? null
+    : `${workspacePath}/runs/${encodeURIComponent(latestRun.id)}`;
+  return (
+    <section aria-labelledby="latest-run-heading" className="overflow-hidden rounded-md border border-border bg-card shadow-sm">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
+        <div className="flex items-center gap-2">
+          {succeeded
+            ? <CheckCircle2 className="size-5 text-success" aria-hidden="true" />
+            : <Info className="size-5 text-primary" aria-hidden="true" />}
+          <h2 id="latest-run-heading" className="text-sm font-semibold text-foreground">Latest run</h2>
+        </div>
+        <Link to={`${workspacePath}/runs`} className="text-xs font-medium text-primary hover:underline">
+          View all runs
+        </Link>
+      </div>
+      <div className="px-5 py-4">
+        {latestRunLoading ? (
+          <p className="text-sm text-muted-foreground">Loading run history…</p>
+        ) : latestRun === null ? (
+          <div className="py-4">
+            {latestRunError ? (
+              <>
+                <p className="font-medium text-foreground">Run history unavailable</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Could not refresh this workspace’s run history. It will retry automatically.
+                </p>
+              </>
+            ) : (
+              <WorkspaceGettingStarted
+                workspaceId={workspace.id}
+                orgName={orgName}
+                workspaceName={workspace.attributes.name}
+                engine={workspace.attributes["iac-binary"] ?? "terraform"}
+                source={workspace.attributes.source}
+                executionMode={workspace.attributes["execution-mode"]}
+                agentPoolConfigured={isString(workspace.attributes["agent-pool-id"]) && workspace.attributes["agent-pool-id"] !== ""}
+                hasRepository={Boolean(workspace.attributes["vcs-repo"]?.identifier)}
+                localExecution={workspace.attributes["execution-mode"] === "local"}
+                canQueueRun={canStartRun}
+                canUpdate={canUpdate}
+                canReadVariable={canReadVariable}
+                locked={workspace.attributes.locked === true}
+              />
+            )}
+          </div>
+        ) : (
+          <LatestRunMeta latestRun={latestRun} workspacePath={workspacePath} latestRunPath={runPath} latestRunError={latestRunError} />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function WorkspaceDetailsCard({ workspace, orgPath, projectId, projectName }: Readonly<{
+  workspace: Workspace;
+  orgPath: string;
+  projectId: string | undefined;
+  projectName: string | null;
+}>): React.JSX.Element {
+  const workingDirectory = workspace.attributes["working-directory"];
+  const displayedWorkingDirectory = isString(workingDirectory) && workingDirectory.trim() !== ""
+    ? workingDirectory.trim()
+    : "Repository root";
+  const executionMode = workspace.attributes["execution-mode"] ?? "remote";
+  const iacBinary = workspace.attributes["iac-binary"] ?? "terraform";
+  const iacBinaryLabel = iacBinary === "tofu" ? "OpenTofu" : iacBinary;
+  const engineVersion = workspace.attributes["terraform-version"] ?? "latest";
+  const createdAt = workspace.attributes["created-at"];
+  return (
+    <div className="bg-card border border-border rounded-md shadow-sm">
+      <div className="px-4 py-3 border-b border-border">
+        <h2 className="text-sm font-semibold text-foreground">Workspace details</h2>
+      </div>
+      <div className="p-4 space-y-4">
+        <div>
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Project</div>
+          <div className="text-sm text-foreground font-medium">
+            {projectId === undefined
+              ? "No project"
+              : projectName === null
+                ? "Loading project…"
+                : projectName === ""
+                  ? "Project unavailable"
+                  : (
+                    <Link to={`${orgPath}/projects/${encodeURIComponent(projectId)}`} className="text-primary hover:underline">
+                      {projectName}
+                    </Link>
+                  )}
+          </div>
+        </div>
+        <div>
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Repository</div>
+          <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
+            <WorkspaceRepositoryLink repo={workspace.attributes["vcs-repo"]} />
+          </div>
+        </div>
+        <div>
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Working directory</div>
+          <div className="break-all font-mono text-sm text-foreground">{displayedWorkingDirectory}</div>
+        </div>
+        <div>
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1">
+            Execution mode
+            <HelpTooltip icon="info" content="Remote runs execute on the built-in Terrence server worker, agent runs execute in an agent pool, and local runs execute on your CLI." />
+          </div>
+          <div className="text-sm text-foreground flex items-center gap-1.5">
+             <span className="capitalize">{executionMode}</span>
+          </div>
+        </div>
+        <div>
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1">
+            Execution engine
+            <HelpTooltip icon="info" content="The Infrastructure-as-Code tool (Terraform or OpenTofu) and version constraint configured for this workspace." />
+          </div>
+          <div className="text-sm text-foreground flex items-center gap-1.5">
+             <span>{iacBinaryLabel}</span> {engineVersion}
+             {engineVersion === "latest" && (
+               <span className="text-xs bg-muted text-foreground px-1.5 py-0.5 rounded border border-border">Latest</span>
+             )}
+          </div>
+        </div>
+        <div>
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Auto-apply</div>
+          <div className="text-sm text-foreground">
+             {workspace.attributes["auto-apply"] === true ? "Enabled" : "Disabled"}
+          </div>
+        </div>
+        <div>
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Created</div>
+          <div className="text-sm text-foreground">
+             {formatDate(createdAt)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OverviewSection({ activeSection, workspace, orgName, orgPath, workspacePath, latestRun, latestRunLoading, latestRunError, canStartRun, canUpdate, canReadVariable, canReadStateVersions, projectId, projectName }: Readonly<{
+  activeSection: WorkspaceSection;
+  workspace: Workspace;
+  orgName: string;
+  orgPath: string;
+  workspacePath: string;
+  latestRun: RunSummary | null;
+  latestRunLoading: boolean;
+  latestRunError: boolean;
+  canStartRun: boolean;
+  canUpdate: boolean;
+  canReadVariable: boolean;
+  canReadStateVersions: boolean;
+  projectId: string | undefined;
+  projectName: string | null;
+}>): React.JSX.Element | null {
+  if (activeSection !== "overview") return null;
+  return (
+    <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+      <div className="flex flex-col gap-6 xl:col-span-2">
+        <LatestRunPanel
+          workspace={workspace}
+          orgName={orgName}
+          workspacePath={workspacePath}
+          latestRun={latestRun}
+          latestRunLoading={latestRunLoading}
+          latestRunError={latestRunError}
+          canStartRun={canStartRun}
+          canUpdate={canUpdate}
+          canReadVariable={canReadVariable}
+        />
+        {canReadStateVersions && <WorkspaceResources workspaceId={workspace.id} />}
+      </div>
+
+      <div className="flex flex-col gap-6 xl:col-span-1">
+        {/* Details Card */}
+        <WorkspaceDetailsCard workspace={workspace} orgPath={orgPath} projectId={projectId} projectName={projectName} />
+      </div>
+    </div>
+  );
+}
+
+function AccessSections({ activeSection, workspace, orgName, canReadStateVersions, canWriteStateVersions, canReadVariable }: Readonly<{
+  activeSection: WorkspaceSection;
+  workspace: Workspace;
+  orgName: string;
+  canReadStateVersions: boolean;
+  canWriteStateVersions: boolean;
+  canReadVariable: boolean;
+}>): React.JSX.Element {
+  const inaccessibleDataSection =
+    (activeSection === "states" && !canReadStateVersions)
+    || (activeSection === "variables" && !canReadVariable);
+  return (
+    <>
+      {inaccessibleDataSection && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Workspace data access required</CardTitle>
+            <CardDescription>
+              You do not have permission to view this workspace data.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+      {activeSection === "states" && canReadStateVersions && (
+        <StateHistory
+          workspaceId={workspace.id}
+          orgName={orgName}
+          workspaceName={workspace.attributes.name}
+          canUpload={canWriteStateVersions}
+          canRollback={canWriteStateVersions}
+        />
+      )}
+      {activeSection === "variables" && canReadVariable && (
+        <WorkspaceVariables
+          workspaceId={workspace.id}
+          orgName={orgName}
+          canUpdate={workspace.attributes.permissions?.["can-update-variable"] === true}
+        />
+      )}
+    </>
+  );
+}
+
+function CollabSections({ activeSection, updateOnlySection, canUpdate, workspace, orgName }: Readonly<{
+  activeSection: WorkspaceSection;
+  updateOnlySection: boolean;
+  canUpdate: boolean;
+  workspace: Workspace;
+  orgName: string;
+}>): React.JSX.Element {
+  return (
+    <>
+      {updateOnlySection && !canUpdate && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Workspace administrator access required</CardTitle>
+            <CardDescription>
+              You do not have permission to manage this workspace setting.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+      {activeSection === "team-access" && canUpdate && (
+        <WorkspaceTeamAccess orgName={orgName} workspaceId={workspace.id} />
+      )}
+      {activeSection === "notifications" && canUpdate && (
+        <WorkspaceNotifications workspaceId={workspace.id} />
+      )}
+      {activeSection === "webhooks" && canUpdate && (
+        <WorkspaceNotifications mode="webhooks" workspaceId={workspace.id} />
+      )}
+      {activeSection === "policy-sets" && <WorkspacePolicySets workspaceId={workspace.id} />}
+      {activeSection === "run-tasks" && (
+        <WorkspaceRunTasks
+          orgName={orgName}
+          workspaceId={workspace.id}
+          canManage={workspace.attributes.permissions?.["can-manage-run-tasks"] === true}
+        />
+      )}
+    </>
+  );
+}
+
+function OpsSections({ activeSection, canUpdate, workspace, orgName, onWorkspaceSaved }: Readonly<{
+  activeSection: WorkspaceSection;
+  canUpdate: boolean;
+  workspace: Workspace;
+  orgName: string;
+  onWorkspaceSaved: (saved: Workspace) => void;
+}>): React.JSX.Element {
+  return (
+    <>
+      {activeSection === "run-triggers" && canUpdate && (
+        <WorkspaceRunTriggers orgName={orgName} workspaceId={workspace.id} />
+      )}
+      {activeSection === "configuration-versions" && canUpdate && (
+        <WorkspaceConfigurationVersions workspaceId={workspace.id} />
+      )}
+      {activeSection === "ssh-key" && canUpdate && (
+        <WorkspaceSshKey
+          key={workspace.id}
+          orgName={orgName}
+          workspaceId={workspace.id}
+          initialSshKeyId={workspace.relationships?.["ssh-key"]?.data?.id ?? null}
+        />
+      )}
+      {activeSection === "health" && (
+        <WorkspaceHealth
+          key={workspace.id}
+          workspace={workspace}
+          onSaved={(saved: Workspace): void => { onWorkspaceSaved(saved); }}
+        />
+      )}
+      {activeSection === "retention" && canUpdate && <WorkspaceRetention workspaceId={workspace.id} />}
+    </>
+  );
+}
+
+function SystemSections({ activeSection, workspace, orgName, onWorkspaceSaved, onDeleted }: Readonly<{
+  activeSection: WorkspaceSection;
+  workspace: Workspace;
+  orgName: string;
+  onWorkspaceSaved: (saved: Workspace) => void;
+  onDeleted: () => void;
+}>): React.JSX.Element {
+  return (
+    <>
+      {activeSection === "runs" && (
+        <RunList key={workspace.id} workspaceId={workspace.id} canStartRun={workspace.attributes.permissions?.["can-queue-run"] === true} />
+      )}
+      {activeSection === "vcs" && (
+        <WorkspaceVcs
+          key={workspace.id}
+          workspace={workspace}
+          onSaved={(saved: Workspace): void => { onWorkspaceSaved(saved); }}
+        />
+      )}
+      {activeSection === "settings" && (
+        <WorkspaceSettings
+          key={workspace.id}
+          orgName={orgName}
+          workspace={workspace}
+          onSaved={(saved: Workspace): void => {
+            onWorkspaceSaved(saved);
+          }}
+        />
+      )}
+      {activeSection === "destruction" && (
+        <WorkspaceDestruction
+          workspace={workspace}
+          onDeleted={onDeleted}
+        />
+      )}
+    </>
+  );
+}
+
+function LockingSection({ activeSection, workspace, canToggleLock, togglingLock, onLock }: Readonly<{
+  activeSection: WorkspaceSection;
+  workspace: Workspace;
+  canToggleLock: boolean;
+  togglingLock: boolean;
+  onLock: () => void;
+}>): React.JSX.Element | null {
+  if (activeSection !== "locking") return null;
+  return (
+    <SettingsSection
+      title="Workspace lock"
+      description="While locked, no plan or apply can start. Existing runs finish normally."
+      footer={canToggleLock && (
+        <Button variant="outline" disabled={togglingLock} onClick={onLock}>
+          {workspace.attributes.locked === true ? (
+            <><LockOpen data-icon="inline-start" /> {togglingLock ? "Unlocking…" : "Unlock workspace"}</>
+          ) : (
+            <><Lock data-icon="inline-start" /> {togglingLock ? "Locking…" : "Lock workspace"}</>
+          )}
+        </Button>
+      )}
+    >
+      <p className="text-sm text-foreground">
+        This workspace is currently {workspace.attributes.locked === true ? "locked" : "unlocked"}.
+      </p>
+      {workspace.attributes.locked === true && isString(workspace.attributes["locked-reason"]) && (
+        <p className="mt-2 text-sm text-muted-foreground">
+          Reason: {workspace.attributes["locked-reason"]}
+        </p>
+      )}
+    </SettingsSection>
+  );
+}
+
 export function WorkspaceDetail({
   section,
 }: Readonly<{ readonly section?: WorkspaceSection }>): React.JSX.Element {
@@ -279,7 +994,7 @@ export function WorkspaceDetail({
   const latestRunRequest = useRef<AbortController | null>(null);
   const latestRunRequestGeneration = useRef(0);
   const latestRunRefreshRef = useRef<() => void>(noop);
-  const projectId = workspace?.relationships?.project?.data?.id;
+  const projectId = projectIdFor(workspace);
 
   const loadLatestRun = useCallback(async (
     workspaceId: string,
@@ -492,6 +1207,21 @@ export function WorkspaceDetail({
     toast.add({ title: "Could not copy workspace ID", type: "error" });
   }
 
+  function handleWorkspaceSaved(saved: Workspace): void {
+    setWorkspace(saved);
+    if (saved.attributes.name === workspace?.attributes.name) return;
+    const renamedWorkspacePath =
+      `${orgPath}/workspaces/${encodeURIComponent(saved.attributes.name)}`;
+    const pathname =
+      location.pathname === workspacePath || location.pathname.startsWith(`${workspacePath}/`)
+        ? `${renamedWorkspacePath}${location.pathname.slice(workspacePath.length)}`
+        : renamedWorkspacePath;
+    void navigate(
+      { pathname, search: location.search, hash: location.hash },
+      { replace: true },
+    );
+  };
+
   // A run page is a page in its own right: RunDetail already renders its own
   // breadcrumb, heading and actions, so wrapping it in the workspace header
   // just stacked two headers on top of each other. It also loads its own run
@@ -519,44 +1249,14 @@ export function WorkspaceDetail({
     </div>
   );
   if (workspace == null) {
-    return (
-      <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-5 text-sm text-destructive">
-        <p className="font-medium">Could not load workspace</p>
-        <p className="mt-1">{loadError !== "" ? loadError : "Workspace not found"}</p>
-        <Button className="mt-3" variant="outline" onClick={(): void => { void loadWorkspace(); }}>
-          Try again
-        </Button>
-      </div>
-    );
+    return <LoadErrorPanel loadError={loadError} onRetry={(): void => { void loadWorkspace(); }} />;
   }
 
-  const createdAt = workspace.attributes["created-at"];
-  const latestRunStatusValue = latestRun?.attributes.status;
-  const latestRunSucceeded = latestRunStatusValue === "applied" || latestRunStatusValue === "planned_and_finished";
-  const latestRunCreatedAt = latestRun?.attributes["created-at"];
-  const latestRunCounts = latestRun?.attributes;
-  const latestRunSource = latestRun?.attributes.source;
-  const latestRunTriggerReason = latestRun?.attributes["trigger-reason"];
-  const workingDirectory = workspace.attributes["working-directory"];
-  const displayedWorkingDirectory = isString(workingDirectory) && workingDirectory.trim() !== ""
-    ? workingDirectory.trim()
-    : "Repository root";
+  const safeOrgName = orgName ?? "";
+  const permissions = workspacePermissions(workspace);
+  const lockSummaryLine = buildLockSummary(workspace);
   const orgPath = `/app/${encodeURIComponent(orgName ?? "")}`;
   const workspacePath = `${orgPath}/workspaces/${encodeURIComponent(workspaceName ?? "")}`;
-  const latestRunPath = latestRun?.id === undefined
-    ? null
-    : `${workspacePath}/runs/${encodeURIComponent(latestRun.id)}`;
-  const canQueueRun = workspace.attributes.permissions?.["can-queue-run"] === true;
-  const canStartRun = canQueueRun && workspace.attributes.locked !== true;
-  const canUpdate = workspace.attributes.permissions?.["can-update"] === true;
-  const canReadStateVersions =
-    workspace.attributes.permissions?.["can-read-state-versions"] === true;
-  const canWriteStateVersions =
-    workspace.attributes.permissions?.["can-write-state-versions"] === true;
-  const canReadVariable = workspace.attributes.permissions?.["can-read-variable"] === true;
-  const inaccessibleDataSection =
-    (activeSection === "states" && !canReadStateVersions)
-    || (activeSection === "variables" && !canReadVariable);
   const updateOnlySection = [
     "notifications",
     "run-triggers",
@@ -564,162 +1264,39 @@ export function WorkspaceDetail({
     "ssh-key",
     "team-access",
   ].includes(activeSection);
-  const canToggleLock = workspace.attributes.locked === true
-    ? workspace.attributes.permissions?.["can-unlock"] === true
-    : workspace.attributes.permissions?.["can-lock"] === true;
-  // Issue #568: lock holder summary for the banner and unlock dialogs.
-  // Owner type/id come from the lock principal (user/team/service); age
-  // from locked-at. All three are nullable for legacy ownerless locks.
-  const lockByType = workspace.attributes["locked-by-type"];
-  const lockById = workspace.attributes["locked-by-id"];
-  const lockHolderName = isString(lockByType) && lockByType !== ""
-    ? (isString(lockById) && lockById !== "" ? `${lockByType} ${lockById}` : lockByType)
-    : null;
-  const lockReasonAttr = workspace.attributes["locked-reason"];
-  const lockReasonText = isString(lockReasonAttr) && lockReasonAttr !== "" ? lockReasonAttr : null;
-  const lockedAtAttr = workspace.attributes["locked-at"];
-  const lockAgeText = isString(lockedAtAttr) && lockedAtAttr !== "" && !Number.isNaN(Date.parse(lockedAtAttr))
-    ? formatRelativeTime(lockedAtAttr)
-    : null;
-  const lockSummaryLine = workspace.attributes.locked === true
-    ? [
-      lockHolderName !== null ? `Locked by ${lockHolderName}` : "Locked",
-      lockReasonText,
-      lockAgeText,
-    ].filter((part): part is string => part !== null).join(" · ")
-    : null;
-  const executionMode = workspace.attributes["execution-mode"] ?? "remote";
-  const iacBinary = workspace.attributes["iac-binary"] ?? "terraform";
-  const iacBinaryLabel = iacBinary === "tofu" ? "OpenTofu" : iacBinary;
-  const engineVersion = workspace.attributes["terraform-version"] ?? "latest";
   const settingsSection = SETTINGS_SECTIONS[activeSection];
   const isSettingsSection = settingsSection !== undefined;
 
   // Settings is a real level of the IA, not a label to collapse: the
   // organization pages spell out "… / Settings / Agent pools" and the
   // workspace trail reads the same way.
-  const sectionCrumbs: readonly BreadcrumbItem[] = [
-    { label: "Workspaces", to: `${orgPath}/workspaces` },
-    ...(isSettingsSection
-      ? [
-          { label: workspace.attributes.name, to: workspacePath },
-          { label: "Settings", to: `${workspacePath}/settings` },
-          { label: settingsSection.title },
-        ]
-      : [{ label: workspace.attributes.name }]),
-  ];
+  const sectionCrumbs: readonly BreadcrumbItem[] = buildSectionCrumbs(orgPath, workspacePath, workspace.attributes.name, isSettingsSection, settingsSection?.title);
 
   return (
     <PageShell variant={settingsSection?.layout ?? "wide"}>
       <LegacyUrlNotice />
-      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-6">
-        <div className="min-w-0">
-          <Breadcrumbs items={sectionCrumbs} />
-          <div className="flex items-center gap-3">
-            <h1 className="truncate text-3xl font-bold tracking-tight text-foreground">
-              {isSettingsSection ? settingsSection.title : workspace.attributes.name}
-            </h1>
-            {workspace.attributes.locked === true && (
-              <span className="flex items-center gap-1 rounded bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-                <Lock aria-hidden="true" className="size-3" /> Locked
-              </span>
-            )}
-          </div>
-          <p className="mt-1 max-w-3xl text-pretty text-sm text-muted-foreground">
-            {isSettingsSection
-              ? settingsSection.description
-              : workspace.attributes.description ?? "No description provided."}
-          </p>
-          {!isSettingsSection && (
-            <>
-              <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
-                <span>Workspace ID:</span>
-                <code className="select-all font-mono">{workspace.id}</code>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Copy workspace ID"
-                  onClick={(): void => {
-                    void handleCopyWorkspaceId(workspace.id);
-                  }}
-                >
-                  <Copy aria-hidden="true" />
-                </Button>
-              </div>
-              {((): React.JSX.Element | null => {
-                const ownedByType = workspace.attributes["owned-by-type"];
-                const ownedById = workspace.attributes["owned-by-id"];
-                const contactEmail = workspace.attributes["contact-email"];
-                if (ownedByType === null && ownedById === null && contactEmail === null) return null;
-                const ownerParts: string[] = [];
-                if (ownedByType !== null && ownedByType !== undefined) {
-                  ownerParts.push(`${ownedByType} ${ownedById ?? ""}`.trim());
-                }
-                if (contactEmail !== null && contactEmail !== undefined) ownerParts.push(contactEmail);
-                if (ownerParts.length === 0) return null;
-                return (
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    <span className="font-medium text-foreground">Owner:</span> {ownerParts.join(" · ")}
-                  </div>
-                );
-              })()}
-            </>
-          )}
-        </div>
+      <WorkspaceHeader
+        workspace={workspace}
+        workspacePath={workspacePath}
+        crumbs={sectionCrumbs}
+        isSettingsSection={isSettingsSection}
+        settingsSection={settingsSection}
+        activeSection={activeSection}
+        canToggleLock={permissions.canToggleLock}
+        canStartRun={permissions.canStartRun}
+        togglingLock={togglingLock}
+        onLock={handleLock}
+        onForceUnlock={(): void => { setForceUnlockDialogOpen(true); }}
+        onCopyWorkspaceId={(identifier): void => { void handleCopyWorkspaceId(identifier); }}
+      />
 
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
-          {canToggleLock && (
-            <Button variant="outline" disabled={togglingLock} onClick={handleLock}>
-              {workspace.attributes.locked === true ? (
-                <><LockOpen data-icon="inline-start" /> {togglingLock ? "Unlocking…" : "Unlock"}</>
-              ) : (
-                <><Lock data-icon="inline-start" /> {togglingLock ? "Locking…" : "Lock"}</>
-              )}
-            </Button>
-          )}
-          {workspace.attributes.locked === true
-            && workspace.attributes.permissions?.["can-force-unlock"] === true && (
-            <Button variant="outline" disabled={togglingLock} onClick={(): void => { setForceUnlockDialogOpen(true); }}>
-              <ShieldAlert data-icon="inline-start" /> {togglingLock ? "Unlocking…" : "Force unlock"}
-            </Button>
-          )}
-          {activeSection !== "runs" && (
-            <Link
-              to={canStartRun && activeSection === "overview"
-                ? `${workspacePath}/runs?new-run=true`
-                : `${workspacePath}/runs`}
-              className={buttonVariants({
-                variant: isSettingsSection ? "outline" : "default",
-              })}
-            >
-              <Play data-icon="inline-start" />
-              {canStartRun && activeSection === "overview" ? "New run" : "View runs"}
-            </Link>
-          )}
-        </div>
-      </header>
-
-      {workspace.attributes.locked === true
-        && (activeSection === "overview" || activeSection === "runs")
-        && lockSummaryLine !== null && (
-        <div role="status" className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
-          <Lock aria-hidden="true" className="size-4" />
-          <span>{lockSummaryLine}</span>
-          {workspace.attributes.permissions?.["can-force-unlock"] === true && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={togglingLock}
-              className="ml-auto"
-              onClick={(): void => { setForceUnlockDialogOpen(true); }}
-            >
-              {togglingLock ? "Unlocking…" : "Force unlock"}
-            </Button>
-          )}
-        </div>
-      )}
+      <LockBanner
+        workspace={workspace}
+        activeSection={activeSection}
+        lockSummaryLine={lockSummaryLine}
+        togglingLock={togglingLock}
+        onForceUnlock={(): void => { setForceUnlockDialogOpen(true); }}
+      />
 
       <Dialog
         open={lockDialogOpen}
@@ -779,19 +1356,7 @@ export function WorkspaceDetail({
           if (!open && !togglingLock) setUnlockDialogOpen(false);
         }}
         title={`Unlock workspace ${workspace.attributes.name}`}
-        description={(
-          <>
-            {lockSummaryLine !== null && (
-              <span className="mb-2 block text-sm text-muted-foreground">{lockSummaryLine}</span>
-            )}
-            <span className="block">
-              Unlocking this workspace will allow other users to run Terraform. Be careful: if a remote Terraform run is still using the lock, this may lead to inconsistent state.
-            </span>
-            <span className="mt-4 block">
-              This operation <strong className="font-semibold text-foreground">cannot be undone</strong>. Are you sure?
-            </span>
-          </>
-        )}
+        description={<UnlockDescription lockSummaryLine={lockSummaryLine} />}
         confirmText="Yes, unlock workspace"
         cancelText="Cancel"
         confirmVariant="destructive"
@@ -805,20 +1370,7 @@ export function WorkspaceDetail({
           if (!open && !togglingLock) setForceUnlockDialogOpen(false);
         }}
         title={`Force unlock workspace ${workspace.attributes.name}`}
-        description={(
-          <>
-            {lockSummaryLine !== null && (
-              <span className="mb-2 block text-sm text-muted-foreground">Current lock: {lockSummaryLine}</span>
-            )}
-            <span className="block">
-              This overrides a lock held by someone else (a CI run, a teammate, or a crashed run that can no longer
-              release it). Only force-unlock when you have confirmed nothing is actively writing state.
-            </span>
-            <span className="mt-4 block">
-              This operation <strong className="font-semibold text-foreground">cannot be undone</strong>. Are you sure?
-            </span>
-          </>
-        )}
+        description={<ForceUnlockDescription lockSummaryLine={lockSummaryLine} />}
         confirmText="Yes, force unlock"
         cancelText="Cancel"
         confirmVariant="destructive"
@@ -828,300 +1380,59 @@ export function WorkspaceDetail({
 
       {/* Section content */}
       <div>
-        {activeSection === "overview" && (
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-            <div className="flex flex-col gap-6 xl:col-span-2">
-              <section aria-labelledby="latest-run-heading" className="overflow-hidden rounded-md border border-border bg-card shadow-sm">
-                <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
-                  <div className="flex items-center gap-2">
-                    {latestRunSucceeded
-                      ? <CheckCircle2 className="size-5 text-success" aria-hidden="true" />
-                      : <Info className="size-5 text-primary" aria-hidden="true" />}
-                    <h2 id="latest-run-heading" className="text-sm font-semibold text-foreground">Latest run</h2>
-                  </div>
-                  <Link to={`${workspacePath}/runs`} className="text-xs font-medium text-primary hover:underline">
-                    View all runs
-                  </Link>
-                </div>
-                <div className="px-5 py-4">
-                  {latestRunLoading ? (
-                    <p className="text-sm text-muted-foreground">Loading run history…</p>
-                  ) : latestRun === null ? (
-                    <div className="py-4">
-                      {latestRunError ? (
-                        <>
-                          <p className="font-medium text-foreground">Run history unavailable</p>
-                          <p className="mt-1 text-sm text-muted-foreground">
-                            Could not refresh this workspace’s run history. It will retry automatically.
-                          </p>
-                        </>
-                      ) : (
-                        <WorkspaceGettingStarted
-                          workspaceId={workspace.id}
-                          orgName={orgName ?? ""}
-                          workspaceName={workspace.attributes.name}
-                          engine={workspace.attributes["iac-binary"] ?? "terraform"}
-                          source={workspace.attributes.source}
-                          executionMode={workspace.attributes["execution-mode"]}
-                          agentPoolConfigured={isString(workspace.attributes["agent-pool-id"]) && workspace.attributes["agent-pool-id"] !== ""}
-                          hasRepository={Boolean(workspace.attributes["vcs-repo"]?.identifier)}
-                          localExecution={workspace.attributes["execution-mode"] === "local"}
-                          canQueueRun={canStartRun}
-                          canUpdate={canUpdate}
-                          canReadVariable={canReadVariable}
-                          locked={workspace.attributes.locked === true}
-                        />
-                      )}
-                    </div>
-                  ) : (
-                    <>
-                      <div aria-live="polite" aria-atomic="true" className="flex flex-wrap items-center justify-between gap-3">
-                        <Link to={latestRunPath ?? `${workspacePath}/runs`} className="font-semibold text-primary hover:underline">
-                          {latestRun.attributes.message?.trim() === "" ? latestRun.id : latestRun.attributes.message ?? latestRun.id}
-                        </Link>
-                        <StatusBadge status={latestRun.attributes.status} />
-                      </div>
-                      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
-                        {isString(latestRunCreatedAt) && latestRunCreatedAt !== "" && (
-                          <time dateTime={latestRunCreatedAt} title={formatDateTime(latestRunCreatedAt)}>
-                            {formatRelativeTime(latestRunCreatedAt)}
-                          </time>
-                        )}
-                        {latestRunSource !== undefined && (
-                          <span>via {formatRunSource(latestRunSource, latestRunTriggerReason)}</span>
-                        )}
-                        {isNumber(latestRunCounts?.["resource-additions"])
-                          && isNumber(latestRunCounts["resource-changes"])
-                          && isNumber(latestRunCounts["resource-destructions"]) && (
-                          <span className="flex items-center gap-3 font-medium">
-                            <span className="text-success">+{latestRunCounts["resource-additions"]}</span>
-                            <span className="text-primary">~{latestRunCounts["resource-changes"]}</span>
-                            <span className="text-destructive">−{latestRunCounts["resource-destructions"]}</span>
-                          </span>
-                        )}
-                        <code className="font-mono">{latestRun.id}</code>
-                      </div>
-                      {latestRunError && (
-                        <p role="status" className="mt-2 text-xs text-warning">Run status may be out of date.</p>
-                      )}
-                    </>
-                  )}
-                </div>
-              </section>
+        <OverviewSection
+          activeSection={activeSection}
+          workspace={workspace}
+          orgName={safeOrgName}
+          orgPath={orgPath}
+          workspacePath={workspacePath}
+          latestRun={latestRun}
+          latestRunLoading={latestRunLoading}
+          latestRunError={latestRunError}
+          canStartRun={permissions.canStartRun}
+          canUpdate={permissions.canUpdate}
+          canReadVariable={permissions.canReadVariable}
+          canReadStateVersions={permissions.canReadStateVersions}
+          projectId={projectId}
+          projectName={projectName}
+        />
 
-              {canReadStateVersions && <WorkspaceResources workspaceId={workspace.id} />}
-            </div>
-
-            <div className="flex flex-col gap-6 xl:col-span-1">
-              {/* Details Card */}
-              <div className="bg-card border border-border rounded-md shadow-sm">
-                <div className="px-4 py-3 border-b border-border">
-                  <h2 className="text-sm font-semibold text-foreground">Workspace details</h2>
-                </div>
-                <div className="p-4 space-y-4">
-                  <div>
-                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Project</div>
-                    <div className="text-sm text-foreground font-medium">
-                      {projectId === undefined
-                        ? "No project"
-                        : projectName === null
-                          ? "Loading project…"
-                          : projectName === ""
-                            ? "Project unavailable"
-                            : (
-                              <Link to={`${orgPath}/projects/${encodeURIComponent(projectId)}`} className="text-primary hover:underline">
-                                {projectName}
-                              </Link>
-                            )}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Repository</div>
-                    <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
-                      <WorkspaceRepositoryLink repo={workspace.attributes["vcs-repo"]} />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Working directory</div>
-                    <div className="break-all font-mono text-sm text-foreground">{displayedWorkingDirectory}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1">
-                      Execution mode
-                      <HelpTooltip icon="info" content="Remote runs execute on the built-in Terrence server worker, agent runs execute in an agent pool, and local runs execute on your CLI." />
-                    </div>
-                    <div className="text-sm text-foreground flex items-center gap-1.5">
-                       <span className="capitalize">{executionMode}</span>
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1">
-                      Execution engine
-                      <HelpTooltip icon="info" content="The Infrastructure-as-Code tool (Terraform or OpenTofu) and version constraint configured for this workspace." />
-                    </div>
-                    <div className="text-sm text-foreground flex items-center gap-1.5">
-                       <span>{iacBinaryLabel}</span> {engineVersion}
-                       {engineVersion === "latest" && (
-                         <span className="text-xs bg-muted text-foreground px-1.5 py-0.5 rounded border border-border">Latest</span>
-                       )}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Auto-apply</div>
-                    <div className="text-sm text-foreground">
-                       {workspace.attributes["auto-apply"] === true ? "Enabled" : "Disabled"}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Created</div>
-                    <div className="text-sm text-foreground">
-                       {formatDate(createdAt)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeSection === "runs" && (
-          <RunList key={workspace.id} workspaceId={workspace.id} canStartRun={canQueueRun} />
-        )}
-        {inaccessibleDataSection && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Workspace data access required</CardTitle>
-              <CardDescription>
-                You do not have permission to view this workspace data.
-              </CardDescription>
-            </CardHeader>
-          </Card>
-        )}
-        {activeSection === "states" && canReadStateVersions && (
-          <StateHistory
-            workspaceId={workspace.id}
-            orgName={orgName ?? ""}
-            workspaceName={workspace.attributes.name}
-            canUpload={canWriteStateVersions}
-            canRollback={canWriteStateVersions}
-          />
-        )}
-        {activeSection === "variables" && canReadVariable && (
-          <WorkspaceVariables
-            workspaceId={workspace.id}
-            orgName={orgName ?? ""}
-            canUpdate={workspace.attributes.permissions?.["can-update-variable"] === true}
-          />
-        )}
-        {updateOnlySection && !canUpdate && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Workspace administrator access required</CardTitle>
-              <CardDescription>
-                You do not have permission to manage this workspace setting.
-              </CardDescription>
-            </CardHeader>
-          </Card>
-        )}
-        {activeSection === "team-access" && canUpdate && (
-          <WorkspaceTeamAccess orgName={orgName ?? ""} workspaceId={workspace.id} />
-        )}
-        {activeSection === "notifications" && canUpdate && (
-          <WorkspaceNotifications workspaceId={workspace.id} />
-        )}
-        {activeSection === "webhooks" && canUpdate && (
-          <WorkspaceNotifications mode="webhooks" workspaceId={workspace.id} />
-        )}
-        {activeSection === "policy-sets" && <WorkspacePolicySets workspaceId={workspace.id} />}
-        {activeSection === "run-tasks" && (
-          <WorkspaceRunTasks
-            orgName={orgName ?? ""}
-            workspaceId={workspace.id}
-            canManage={workspace.attributes.permissions?.["can-manage-run-tasks"] === true}
-          />
-        )}
-        {activeSection === "run-triggers" && canUpdate && (
-          <WorkspaceRunTriggers orgName={orgName ?? ""} workspaceId={workspace.id} />
-        )}
-        {activeSection === "configuration-versions" && canUpdate && (
-          <WorkspaceConfigurationVersions workspaceId={workspace.id} />
-        )}
-        {activeSection === "ssh-key" && canUpdate && (
-          <WorkspaceSshKey
-            key={workspace.id}
-            orgName={orgName ?? ""}
-            workspaceId={workspace.id}
-            initialSshKeyId={workspace.relationships?.["ssh-key"]?.data?.id ?? null}
-          />
-        )}
-        {activeSection === "health" && (
-          <WorkspaceHealth
-            key={workspace.id}
-            workspace={workspace}
-            onSaved={(saved: Workspace): void => { setWorkspace(saved); }}
-          />
-        )}
-        {activeSection === "retention" && canUpdate && <WorkspaceRetention workspaceId={workspace.id} />}
-        {activeSection === "vcs" && (
-          <WorkspaceVcs
-            key={workspace.id}
-            workspace={workspace}
-            onSaved={(saved): void => { setWorkspace(saved); }}
-          />
-        )}
-        {activeSection === "settings" && (
-          <WorkspaceSettings
-            key={workspace.id}
-            orgName={orgName ?? ""}
-            workspace={workspace}
-            onSaved={(saved: Workspace): void => {
-              setWorkspace(saved);
-              if (saved.attributes.name === workspace.attributes.name) return;
-              const renamedWorkspacePath =
-                `${orgPath}/workspaces/${encodeURIComponent(saved.attributes.name)}`;
-              const pathname =
-                location.pathname === workspacePath || location.pathname.startsWith(`${workspacePath}/`)
-                  ? `${renamedWorkspacePath}${location.pathname.slice(workspacePath.length)}`
-                  : renamedWorkspacePath;
-              void navigate(
-                { pathname, search: location.search, hash: location.hash },
-                { replace: true },
-              );
-            }}
-          />
-        )}
-        {activeSection === "locking" && (
-          <SettingsSection
-            title="Workspace lock"
-            description="While locked, no plan or apply can start. Existing runs finish normally."
-            footer={canToggleLock && (
-              <Button variant="outline" disabled={togglingLock} onClick={handleLock}>
-                {workspace.attributes.locked === true ? (
-                  <><LockOpen data-icon="inline-start" /> {togglingLock ? "Unlocking…" : "Unlock workspace"}</>
-                ) : (
-                  <><Lock data-icon="inline-start" /> {togglingLock ? "Locking…" : "Lock workspace"}</>
-                )}
-              </Button>
-            )}
-          >
-            <p className="text-sm text-foreground">
-              This workspace is currently {workspace.attributes.locked === true ? "locked" : "unlocked"}.
-            </p>
-            {workspace.attributes.locked === true && isString(workspace.attributes["locked-reason"]) && (
-              <p className="mt-2 text-sm text-muted-foreground">
-                Reason: {workspace.attributes["locked-reason"]}
-              </p>
-            )}
-          </SettingsSection>
-        )}
-        {activeSection === "destruction" && (
-          <WorkspaceDestruction
-            workspace={workspace}
-            onDeleted={(): void => {
-              void navigate(`${orgPath}/workspaces`, { replace: true });
-            }}
-          />
-        )}
+        <AccessSections
+          activeSection={activeSection}
+          workspace={workspace}
+          orgName={safeOrgName}
+          canReadStateVersions={permissions.canReadStateVersions}
+          canWriteStateVersions={permissions.canWriteStateVersions}
+          canReadVariable={permissions.canReadVariable}
+        />
+        <CollabSections
+          activeSection={activeSection}
+          updateOnlySection={updateOnlySection}
+          canUpdate={permissions.canUpdate}
+          workspace={workspace}
+          orgName={safeOrgName}
+        />
+        <OpsSections
+          activeSection={activeSection}
+          canUpdate={permissions.canUpdate}
+          workspace={workspace}
+          orgName={safeOrgName}
+          onWorkspaceSaved={handleWorkspaceSaved}
+        />
+        <SystemSections
+          activeSection={activeSection}
+          workspace={workspace}
+          orgName={safeOrgName}
+          onWorkspaceSaved={handleWorkspaceSaved}
+          onDeleted={(): void => { void navigate(`${orgPath}/workspaces`, { replace: true }); }}
+        />
+        <LockingSection
+          activeSection={activeSection}
+          workspace={workspace}
+          canToggleLock={permissions.canToggleLock}
+          togglingLock={togglingLock}
+          onLock={handleLock}
+        />
 
       </div>
     </PageShell>

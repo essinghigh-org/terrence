@@ -84,6 +84,934 @@ function permissionLabel(permission: OrganizationPermission): string {
     word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
 }
 
+function GeneralForm({ name, onNameChange, notificationEmail, onNotificationEmailChange, defaultIacBinary, onDefaultIacBinaryChange, defaultTerraformVersion, onDefaultTerraformVersionChange, defaultExecutionMode, onDefaultExecutionModeChange, moduleTestTokenTtl, onModuleTestTokenTtlChange, aggregatedCommitStatusEnabled, onAggregatedCommitStatusChange, sendPassingStatuses, onSendPassingStatusesChange, allowForceDeleteWorkspaces, onAllowForceDeleteChange, stacksEnabled, onStacksEnabledChange, showPreReleases, onShowPreReleasesChange, saving, canUpdateOrganization, onSubmit }: Readonly<{
+  name: string;
+  onNameChange: (value: string) => void;
+  notificationEmail: string;
+  onNotificationEmailChange: (value: string) => void;
+  defaultIacBinary: string;
+  onDefaultIacBinaryChange: (value: string) => void;
+  defaultTerraformVersion: string;
+  onDefaultTerraformVersionChange: (value: string) => void;
+  defaultExecutionMode: ExecutionMode;
+  onDefaultExecutionModeChange: (mode: ExecutionMode) => void;
+  moduleTestTokenTtl: number;
+  onModuleTestTokenTtlChange: (value: number) => void;
+  aggregatedCommitStatusEnabled: boolean;
+  onAggregatedCommitStatusChange: (checked: boolean) => void;
+  sendPassingStatuses: boolean;
+  onSendPassingStatusesChange: (checked: boolean) => void;
+  allowForceDeleteWorkspaces: boolean;
+  onAllowForceDeleteChange: (checked: boolean) => void;
+  stacksEnabled: boolean;
+  onStacksEnabledChange: (checked: boolean) => void;
+  showPreReleases: boolean;
+  onShowPreReleasesChange: (checked: boolean) => void;
+  saving: boolean;
+  canUpdateOrganization: boolean;
+  onSubmit: (event: React.SyntheticEvent) => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <form onSubmit={onSubmit} className="space-y-6">
+      {!canUpdateOrganization && <p className="text-sm text-muted-foreground">Organization owner access is required to change these settings.</p>}
+      <SettingsSection title="Organization" description="The name and contact address for your infrastructure.">
+          <div className="space-y-1.5">
+            <label htmlFor="org-name" className="text-sm font-semibold text-foreground">Organization name</label>
+            <Input
+              id="org-name"
+              name="organization-name"
+              autoComplete="off"
+              spellCheck={false}
+              value={name}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onNameChange(event.target.value); }}
+              disabled={!canUpdateOrganization}
+              required
+              className="h-10"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="org-email" className="text-sm font-semibold text-foreground">Notification email</label>
+            <Input
+              id="org-email"
+              name="notification-email"
+              autoComplete="email"
+              spellCheck={false}
+              type="email"
+              value={notificationEmail}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onNotificationEmailChange(event.target.value); }}
+              disabled={!canUpdateOrganization}
+              placeholder="admin@example.com"
+              className="h-10"
+            />
+            <p className="text-sm text-muted-foreground mt-1">Email address used for organization notifications.</p>
+          </div>
+      </SettingsSection>
+      <SettingsSection title="Workspace defaults" description="Choose the starting settings for new workspaces. Individual workspaces can override these defaults.">
+          <div className="space-y-1.5">
+            <label htmlFor="org-iac" className="text-sm font-semibold text-foreground flex items-center gap-1">
+              Default engine
+              <HelpTooltip content="The IaC engine (OpenTofu or Terraform) used by default when creating new workspaces in this organization." />
+            </label>
+            <Select
+              id="org-iac"
+              name="default-iac-binary"
+
+              value={defaultIacBinary}
+              onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { onDefaultIacBinaryChange(event.target.value); }}
+              disabled={!canUpdateOrganization}
+            >
+              <option value="tofu">OpenTofu</option>
+              <option value="terraform">Terraform</option>
+            </Select>
+            <p className="text-sm text-muted-foreground mt-1">The engine used by default for new workspaces.</p>
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="org-version" className="text-sm font-semibold text-foreground flex items-center gap-1">
+              Default engine version
+              <HelpTooltip content="Specifies the default version of Terraform or OpenTofu for new workspaces (e.g. 'latest' or '~> 1.6.0')." />
+            </label>
+            <Input
+              id="org-version"
+              name="terraform-version"
+              autoComplete="off"
+              value={defaultTerraformVersion}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onDefaultTerraformVersionChange(event.target.value); }}
+              disabled={!canUpdateOrganization}
+              placeholder="latest"
+              className="h-10"
+            />
+          </div>
+          <div className="space-y-2 border-t pt-4">
+            <p className="text-sm font-semibold text-foreground">Organizational default execution mode</p>
+            <p className="text-sm text-muted-foreground">Changing the execution mode discards any active runs in workspaces.</p>
+            <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <input
+                type="radio"
+                name="org-exec-mode"
+                className="size-4 accent-primary"
+                checked={defaultExecutionMode === "remote"}
+                onChange={(): void => { onDefaultExecutionModeChange("remote"); }}
+                disabled={!canUpdateOrganization}
+              />
+              <span>
+                Remote
+                <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on Terrence's infrastructure, and your team can review and collaborate on runs directly in the app.</span>
+              </span>
+            </label>
+            <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <input
+                type="radio"
+                name="org-exec-mode"
+                className="size-4 accent-primary"
+                checked={defaultExecutionMode === "local"}
+                onChange={(): void => { onDefaultExecutionModeChange("local"); }}
+                disabled={!canUpdateOrganization}
+              />
+              <span>
+                Local
+                <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on your own machines. Terrence only stores and synchronizes state.</span>
+              </span>
+            </label>
+            <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <input
+                type="radio"
+                name="org-exec-mode"
+                className="size-4 accent-primary"
+                checked={defaultExecutionMode === "agent"}
+                onChange={(): void => { onDefaultExecutionModeChange("agent"); }}
+                disabled={!canUpdateOrganization}
+              />
+              <span>
+                Agent
+                <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on a configured agent pool in your organization.</span>
+              </span>
+            </label>
+          </div>
+      </SettingsSection>
+      <details className="rounded-xl border bg-card">
+        <summary className="cursor-pointer rounded-xl px-6 py-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Advanced organization settings<span className="mt-1 block text-xs font-normal text-muted-foreground">Module tests, Git status checks, Stacks, and deletion permissions</span></summary>
+        <div className="space-y-6 border-t p-6">
+          <div className="space-y-1.5">
+            <label htmlFor="org-module-test-token-ttl" className="text-sm font-semibold text-foreground">Module test token lifetime</label>
+            <Input
+              id="org-module-test-token-ttl"
+              name="module-test-token-ttl"
+              type="number"
+              min={300}
+              max={1800}
+              step={1}
+              value={moduleTestTokenTtl}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onModuleTestTokenTtlChange(Number(event.target.value)); }}
+              disabled={!canUpdateOrganization}
+              className="h-10"
+            />
+            <p className="text-sm text-muted-foreground mt-1">OIDC token lifetime for private module tests, in seconds (300–1800). Applies to tokens created after save; existing tokens are unaffected.</p>
+          </div>
+          <div className="space-y-2 border-t pt-4">
+            <p className="text-sm font-semibold text-foreground">VCS status checks</p>
+            <label className="flex items-start gap-3 text-sm font-medium text-foreground">
+              <Checkbox
+                checked={aggregatedCommitStatusEnabled}
+                onCheckedChange={onAggregatedCommitStatusChange}
+                disabled={!canUpdateOrganization}
+              />
+              <span>
+                Aggregate status checks
+                <span className="block text-sm font-normal text-muted-foreground mt-0.5">Send one GitHub status for all workspace runs triggered by the same VCS event.</span>
+              </span>
+            </label>
+            {!aggregatedCommitStatusEnabled && (
+              <label className="flex items-start gap-3 text-sm font-medium text-foreground">
+                <Checkbox
+                  checked={sendPassingStatuses}
+                  onCheckedChange={onSendPassingStatusesChange}
+                  disabled={!canUpdateOrganization}
+                />
+                <span>
+                  Send passing statuses for unaffected pull requests
+                  <span className="block text-sm font-normal text-muted-foreground mt-0.5">Mark pull requests green when shared-repository file triggers do not start a speculative plan.</span>
+                </span>
+              </label>
+            )}
+          </div>
+          <div className="space-y-2 border-t pt-4">
+            <label className="flex items-start gap-3 text-sm font-medium text-foreground">
+              <Checkbox
+                checked={allowForceDeleteWorkspaces}
+                onCheckedChange={onAllowForceDeleteChange}
+                disabled={!canUpdateOrganization}
+              />
+              <span>
+                Workspace administrators can force delete workspaces
+                <span className="block text-sm font-normal text-muted-foreground mt-0.5">When disabled, only the owners team can force delete workspaces that are locked or managing resources.</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-3 text-sm font-medium text-foreground">
+              <Checkbox
+                checked={stacksEnabled}
+                onCheckedChange={onStacksEnabledChange}
+                disabled={!canUpdateOrganization}
+              />
+              <span>
+                Stacks
+                <span className="block text-sm font-normal text-muted-foreground mt-0.5">Enabling Stacks allows users with Project Maintainer access or higher to create Stacks within projects.</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-3 text-sm font-medium text-foreground">
+              <Checkbox
+                checked={showPreReleases}
+                onCheckedChange={onShowPreReleasesChange}
+                disabled={!canUpdateOrganization}
+              />
+              <span>
+                Show Terraform pre-releases
+                <span className="block text-sm font-normal text-muted-foreground mt-0.5">When enabled, users in this organization will be able to select Terraform pre-releases (alphas, betas, and release candidates) in the workspace version list.</span>
+              </span>
+            </label>
+          </div>
+        </div>
+      </details>
+      <div className="flex justify-end">
+        <Button type="submit" disabled={saving || !canUpdateOrganization}>{saving ? "Saving…" : "Save settings"}</Button>
+      </div>
+    </form>
+  );
+}
+
+function RetentionCard({ retentionLoading, retentionCount, onRetentionCountChange, retentionDays, onRetentionDaysChange, retentionSaving, canUpdateOrganization, onSubmit }: Readonly<{
+  retentionLoading: boolean;
+  retentionCount: number;
+  onRetentionCountChange: (value: number) => void;
+  retentionDays: number;
+  onRetentionDaysChange: (value: number) => void;
+  retentionSaving: boolean;
+  canUpdateOrganization: boolean;
+  onSubmit: (event: React.SyntheticEvent) => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <Card className="border-border shadow-sm rounded-md">
+      <CardHeader variant="section">
+        <CardTitle className="flex items-center gap-2"><History className="size-4" />Organization data retention</CardTitle>
+        <CardDescription>Apply a default state-version cleanup policy to workspaces in this organization.</CardDescription>
+      </CardHeader>
+      <form onSubmit={onSubmit} className="contents">
+        <CardContent>
+          {retentionLoading ? <p className="text-sm text-muted-foreground">Loading retention policy…</p> : (
+            <FieldGroup className="grid gap-4 sm:grid-cols-2">
+              <Field><FieldLabel htmlFor="org-retention-count">Keep state versions</FieldLabel><Input id="org-retention-count" name="retention-count" type="number" inputMode="numeric" min="0" value={retentionCount} onChange={(event): void => { onRetentionCountChange(Number(event.target.value)); }} /></Field>
+              <Field><FieldLabel htmlFor="org-retention-days">Delete older than (days)</FieldLabel><Input id="org-retention-days" name="retention-days" type="number" inputMode="numeric" min="0" value={retentionDays} onChange={(event): void => { onRetentionDaysChange(Number(event.target.value)); }} /></Field>
+            </FieldGroup>
+          )}
+        </CardContent>
+        <CardFooter><Button type="submit" disabled={retentionLoading || retentionSaving || !canUpdateOrganization}>{retentionSaving ? "Saving…" : "Save retention policy"}</Button></CardFooter>
+      </form>
+    </Card>
+  );
+}
+
+function DangerZoneCard({ canDestroyOrganization, onDeleteRequest }: Readonly<{
+  canDestroyOrganization: boolean;
+  onDeleteRequest: () => void;
+}>): React.JSX.Element {
+  return (
+    <Card className="border-destructive/30 shadow-sm rounded-md overflow-hidden">
+      <CardHeader variant="danger">
+        <CardTitle>Danger Zone</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm text-foreground/85 mb-4">
+          Deleting this organization will permanently remove all workspaces, runs, state versions, variables, and configurations. This action cannot be undone.
+        </p>
+        <Button
+          variant="outline"
+          disabled={!canDestroyOrganization}
+          onClick={onDeleteRequest}
+          className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive h-9"
+        >
+          <Trash2 className="w-4 h-4 mr-2" /> Delete Organization
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function RolesTab({ roles, newRoleName, onNewRoleNameChange, newRoleDescription, onNewRoleDescriptionChange, newRolePermissions, onNewRolePermissionChange, savingRole, canUpdateOrganizationAccess, onSubmit, onUpdatePermission }: Readonly<{
+  roles: readonly Role[];
+  newRoleName: string;
+  onNewRoleNameChange: (value: string) => void;
+  newRoleDescription: string;
+  onNewRoleDescriptionChange: (value: string) => void;
+  newRolePermissions: Readonly<Record<string, boolean>>;
+  onNewRolePermissionChange: (permission: OrganizationPermission, checked: boolean) => void;
+  savingRole: boolean;
+  canUpdateOrganizationAccess: boolean;
+  onSubmit: (event: React.SyntheticEvent) => Promise<void>;
+  onUpdatePermission: (role: Role, permission: OrganizationPermission, enabled: boolean) => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <Card className="border-border shadow-sm rounded-md">
+      <CardHeader variant="section">
+        <CardTitle>Reusable roles</CardTitle>
+        <CardDescription>Create named permission bundles that can be assigned to organization members.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <form onSubmit={onSubmit} className="space-y-3 rounded-md border p-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Input id="organization-role-name" name="role-name" autoComplete="off" spellCheck={false} aria-label="Role name" placeholder="Role name…" value={newRoleName} onChange={(event): void => { onNewRoleNameChange(event.target.value); }} disabled={!canUpdateOrganizationAccess} required />
+            <Input id="organization-role-description" name="role-description" autoComplete="off" aria-label="Role description" placeholder="Description (optional)…" value={newRoleDescription} onChange={(event): void => { onNewRoleDescriptionChange(event.target.value); }} disabled={!canUpdateOrganizationAccess} />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {organizationPermissions.map((permission): React.JSX.Element => (
+              <label key={permission} className="flex items-center gap-2 text-sm">
+                <Checkbox checked={newRolePermissions[permission] === true} disabled={!canUpdateOrganizationAccess} onCheckedChange={(checked: boolean): void => { onNewRolePermissionChange(permission, checked); }} />
+                {permissionLabel(permission)}
+              </label>
+            ))}
+          </div>
+          <Button type="submit" disabled={!canUpdateOrganizationAccess || savingRole || newRoleName.trim() === ""}>{savingRole ? "Creating…" : "Create role"}</Button>
+        </form>
+        <div className="divide-y rounded-md border">
+          {roles.map((role): React.JSX.Element => <div key={role.id} className="space-y-3 p-4"><div><p className="font-semibold">{role.attributes.name}</p><p className="text-sm text-muted-foreground">{role.attributes.description ?? "No description"}</p></div><div className="grid gap-2 sm:grid-cols-2">{organizationPermissions.map((permission): React.JSX.Element => <label key={permission} className="flex items-center gap-2 text-xs"><Checkbox checked={role.attributes.permissions?.[permission] === true} disabled={!canUpdateOrganizationAccess} onCheckedChange={(checked: boolean): void => { void onUpdatePermission(role, permission, checked); }} />{permissionLabel(permission)}</label>)}</div></div>)}
+          {roles.length === 0 && <p className="p-5 text-sm text-muted-foreground">No reusable roles yet.</p>}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function UsersTab({ orgNameParam, memberships, membershipsError, canManageUsers, teams, inviteEmail, onInviteEmailInput, inviteTeamId, onInviteTeamChange, inviting, onInvite, onRetry, onRemoveRequest }: Readonly<{
+  orgNameParam: string;
+  memberships: readonly Membership[];
+  membershipsError: string;
+  canManageUsers: boolean;
+  teams: readonly Team[];
+  inviteEmail: string;
+  onInviteEmailInput: (value: string) => void;
+  inviteTeamId: string;
+  onInviteTeamChange: (value: string) => void;
+  inviting: boolean;
+  onInvite: (event: React.SyntheticEvent) => Promise<void>;
+  onRetry: () => void;
+  onRemoveRequest: (membership: Membership) => void;
+}>): React.JSX.Element {
+  return (
+    <Card>
+      <CardHeader variant="section">
+        <CardTitle>Users</CardTitle>
+        <CardDescription>Manage organization memberships and invite new users.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {membershipsError !== "" && (
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            <span>Could not load organization members. {membershipsError}</span>
+            <Button type="button" size="sm" variant="outline" onClick={onRetry}>Retry</Button>
+          </div>
+        )}
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>User</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Role</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {memberships.map((membership): React.JSX.Element => (
+              <TableRow key={membership.id}>
+                <TableCell>
+                  <div className="flex flex-col">
+                    <span className="font-medium">{membership.attributes.username ?? "—"}</span>
+                    {membership.attributes.email !== undefined && membership.attributes.email !== null && (
+                      <span className="text-xs text-muted-foreground">{membership.attributes.email}</span>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell className="capitalize">{membership.attributes.status ?? "active"}</TableCell>
+                <TableCell className="capitalize">{membership.attributes.role ?? "member"}</TableCell>
+                <TableCell className="text-right">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Remove ${membership.attributes.username ?? membership.attributes.email ?? "user"}`}
+                    disabled={!canManageUsers}
+                    onClick={(): void => { onRemoveRequest(membership); }}
+                  >
+                    <UserMinus className="size-4 text-muted-foreground hover:text-destructive" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+            {membershipsError === "" && memberships.length === 0 && (
+              <TableRow><TableCell colSpan={4} className="py-8 text-center text-muted-foreground">No organization users found.</TableCell></TableRow>
+            )}
+          </TableBody>
+        </Table>
+
+        <div className="border-t pt-6">
+          <div className="flex flex-col gap-1 mb-4">
+            <h3 className="font-semibold">Invite a user</h3>
+            <p className="text-sm text-muted-foreground">Invite a teammate to collaborate within the {orgNameParam} organization.</p>
+          </div>
+          <form onSubmit={onInvite}>
+            <FieldGroup className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(10rem,0.7fr)_auto]">
+              <Field>
+                <FieldLabel htmlFor="users-invite-email">Email Address</FieldLabel>
+                <Input id="users-invite-email" name="invite-email" autoComplete="email" spellCheck={false} type="email" value={inviteEmail} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onInviteEmailInput(event.currentTarget.value); }} disabled={!canManageUsers} required />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="users-invite-team">Add to teams</FieldLabel>
+                <Select id="users-invite-team" name="invite-team" value={inviteTeamId} onValueChange={onInviteTeamChange} disabled={!canManageUsers}>
+                  <option value="">No team</option>
+                  {teams.map((team): React.JSX.Element => (
+// SAFETY: the fixture field is a string per the API contract.
+                    <option key={team.id} value={team.id}>{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+team.attributes["name"] as string}</option>
+                  ))}
+                </Select>
+              </Field>
+              <Field className="justify-end">
+                <Button type="submit" disabled={!canManageUsers || inviting || inviteEmail.trim() === ""}>
+                  <MailPlus data-icon="inline-start" />
+                  {inviting ? "Inviting…" : "Invite"}
+                </Button>
+              </Field>
+            </FieldGroup>
+          </form>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TeamMembersEditor({ teamId, teamName, teamMemberList, teamMemberCounts, memberships, addMemberTeam, onAddMemberChange, onAddMember, onRemoveMember }: Readonly<{
+  teamId: string;
+  teamName: string;
+  teamMemberList: Readonly<Record<string, readonly { id: string; username: string; email?: string }[]>>;
+  teamMemberCounts: Readonly<Record<string, number>>;
+  memberships: readonly Membership[];
+  addMemberTeam: Readonly<Record<string, string>>;
+  onAddMemberChange: (teamId: string, value: string) => void;
+  onAddMember: (teamId: string) => void;
+  onRemoveMember: (teamId: string, member: { id: string; username: string }) => void;
+}>): React.JSX.Element {
+  return (
+    <div className="px-4 py-4">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-sm font-semibold text-foreground">Members ({(teamMemberCounts[teamId] ?? 0)})</p>
+        <div className="flex gap-2">
+          <Select
+            id={`team-${teamId}-member`}
+            name={`team-${teamId}-member`}
+// SAFETY: the fixture field is a string per the API contract.
+            aria-label={`Add a member to ${teamName}`}
+            className="h-8"
+            value={addMemberTeam[teamId] ?? ""}
+            onChange={(e): void => { onAddMemberChange(teamId, e.target.value); }}
+          >
+            <option value="">Select user…</option>
+            {memberships.map((m): React.JSX.Element => (
+              <option key={m.id} value={m.attributes.username ?? m.id}>{m.attributes.username ?? m.attributes.email ?? m.id}</option>
+            ))}
+          </Select>
+          <Button
+            type="button"
+            size="sm"
+            disabled={addMemberTeam[teamId] === undefined || addMemberTeam[teamId] === ""}
+            onClick={(): void => { onAddMember(teamId); }}
+          >
+            Add member
+          </Button>
+        </div>
+      </div>
+      {(teamMemberList[teamId] ?? []).length === 0 ? (
+        <p className="text-xs text-muted-foreground">No members in this team.</p>
+      ) : (
+        <div className="space-y-1">
+          {(teamMemberList[teamId] ?? []).map((member): React.JSX.Element => (
+            <div key={member.id} className="flex items-center justify-between rounded border bg-background px-3 py-2 text-sm">
+              <div>
+                <span className="font-medium">{member.username}</span>
+                {member.email !== undefined && <span className="ml-2 text-muted-foreground">{member.email}</span>}
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-label={`Remove ${member.username}`}
+                onClick={(): void => { onRemoveMember(teamId, member); }}
+              >
+                <UserMinus className="size-3.5" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TeamRow({ team, editing, teamPermissions, savingTeamPermissions, teamVisibility, teamTokenMgmt, teamMemberList, teamMemberCounts, memberships, addMemberTeam, canUpdateOrganizationAccess, onEdit, onCancelEdit, onSavePermissions, onPermissionToggle, onVisibilityChange, onTokenMgmtChange, onAddMemberChange, onAddMember, onRemoveMember }: Readonly<{
+  team: Team;
+  editing: boolean;
+  teamPermissions: Readonly<Record<OrganizationPermission, boolean>>;
+  savingTeamPermissions: boolean;
+  teamVisibility: Readonly<Record<string, string>>;
+  teamTokenMgmt: Readonly<Record<string, boolean>>;
+  teamMemberList: Readonly<Record<string, readonly { id: string; username: string; email?: string }[]>>;
+  teamMemberCounts: Readonly<Record<string, number>>;
+  memberships: readonly Membership[];
+  addMemberTeam: Readonly<Record<string, string>>;
+  canUpdateOrganizationAccess: boolean;
+  onEdit: (team: Team) => void;
+  onCancelEdit: () => void;
+  onSavePermissions: (event: React.SyntheticEvent) => Promise<void>;
+  onPermissionToggle: (permission: OrganizationPermission, enabled: boolean) => void;
+  onVisibilityChange: (teamId: string, value: string) => void;
+  onTokenMgmtChange: (teamId: string, checked: boolean) => void;
+  onAddMemberChange: (teamId: string, value: string) => void;
+  onAddMember: (teamId: string) => void;
+  onRemoveMember: (teamId: string, member: { id: string; username: string }) => void;
+}>): React.JSX.Element {
+// SAFETY: the fixture field is a string per the API contract.
+  const teamName = team.attributes["name"] as string;
+  return (
+    <div key={team.id}>
+      <div className="flex items-center justify-between gap-3 p-4 hover:bg-muted transition-colors">
+        <div className="flex items-center gap-3">
+          <div className="h-8 w-8 rounded bg-muted flex items-center justify-center border border-border">
+            <Users className="h-4 w-4 text-muted-foreground" />
+          </div>
+          <div>
+            <p className="font-semibold text-sm text-primary">
+              {teamName}
+            </p>
+            {/* SAFETY: the fixture field matches the API contract type. */}
+            <p className="text-xs text-muted-foreground mt-0.5">{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+(team.attributes["users-count"] as number | undefined) ?? 0} members</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-full border border-border capitalize font-medium tracking-wide">
+            {/* SAFETY: the fixture field matches the API contract type. */}
+            {// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+(team.attributes["visibility"] as string | undefined) ?? "organization"}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label={`Manage permissions for ${teamName}`}
+            disabled={!canUpdateOrganizationAccess}
+            onClick={(): void => { onEdit(team); }}
+          >
+            Permissions
+          </Button>
+        </div>
+      </div>
+      {editing && (
+        <div className="border-t bg-muted/70">
+          <div className="border-b border-border px-4 py-4">
+            <p className="mb-3 text-sm font-semibold text-foreground">Team settings for {teamName}</p>
+            <div className="mb-3 flex items-center gap-4">
+              <fieldset className="border-0 p-0">
+                <legend className="text-xs font-medium text-foreground/85">Visibility</legend>
+                <div className="mt-1 flex gap-3 text-sm" role="radiogroup">
+                  <label className="flex items-center gap-1.5 font-medium text-foreground/85">
+                    <input
+                      type="radio"
+                      name={`visibility-${team.id}`}
+                      className="size-4 accent-primary"
+                      checked={teamVisibility[team.id] !== "secret"}
+                      onChange={(): void => { onVisibilityChange(team.id, "organization"); }}
+                    />
+                    Visible
+                  </label>
+                  <label className="flex items-center gap-1.5 font-medium text-foreground/85">
+                    <input
+                      type="radio"
+                      name={`visibility-${team.id}`}
+                      className="size-4 accent-primary"
+                      checked={teamVisibility[team.id] === "secret"}
+                      onChange={(): void => { onVisibilityChange(team.id, "secret"); }}
+                    />
+                    Secret
+                  </label>
+                </div>
+                <p className="mt-0.5 text-xs text-muted-foreground">Visible to every member of this organization / Only visible to team members and organization owners.</p>
+              </fieldset>
+              <div className="flex items-center gap-3 text-sm">
+                <Checkbox
+                  id={`token-mgmt-${team.id}`}
+                  checked={teamTokenMgmt[team.id] === true}
+                  onCheckedChange={(checked: boolean): void => { onTokenMgmtChange(team.id, checked); }}
+                />
+                <label htmlFor={`token-mgmt-${team.id}`} className="font-medium text-foreground">Team API tokens</label>
+              </div>
+            </div>
+            <p className="mb-3 text-xs text-muted-foreground">Team members can manage API tokens. When disabled, only the owners team and users with "Manage teams" can create, revoke, and view API tokens for this team.</p>
+
+            <p className="mb-2 text-sm font-semibold text-foreground">Organization access for {teamName}</p>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Permissions not selected remain denied. Project permissions automatically include their workspace counterpart.
+            </p>
+            <form onSubmit={onSavePermissions}>
+              <div className="grid gap-3 sm:grid-cols-2 mb-3">
+                {organizationPermissions.map((permission): React.JSX.Element => {
+                  const id = `team-${team.id}-${permission}`;
+                  return (
+                    <div key={permission} className="flex items-center gap-2">
+                      <Checkbox
+                        id={id}
+                        checked={teamPermissions[permission]}
+                        onCheckedChange={(checked: boolean): void => { onPermissionToggle(permission, checked); }}
+                        disabled={savingTeamPermissions || !canUpdateOrganizationAccess}
+                      />
+                      <label htmlFor={id} className="text-sm text-foreground/85">{permissionLabel(permission)}</label>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={savingTeamPermissions}
+                  onClick={onCancelEdit}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={savingTeamPermissions || !canUpdateOrganizationAccess}>
+                  {savingTeamPermissions ? "Saving…" : "Save permissions"}
+                </Button>
+              </div>
+            </form>
+          </div>
+
+          <TeamMembersEditor
+            teamId={team.id}
+            teamName={teamName}
+            teamMemberList={teamMemberList}
+            teamMemberCounts={teamMemberCounts}
+            memberships={memberships}
+            addMemberTeam={addMemberTeam}
+            onAddMemberChange={onAddMemberChange}
+            onAddMember={onAddMember}
+            onRemoveMember={onRemoveMember}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TeamsTab({ teams, teamsError, editingTeamId, teamPermissions, savingTeamPermissions, teamVisibility, teamTokenMgmt, teamMemberList, teamMemberCounts, addMemberTeam, memberships, membershipsError, inviteEmail, onInviteEmailInput, inviteTeamId, onInviteTeamChange, inviting, canCreateTeam, canManageUsers, canUpdateOrganizationAccess, onCreateTeam, onNewTeamNameChange, newTeamName, onEditPermissions, onCancelEdit, onSavePermissions, onPermissionToggle, onVisibilityChange, onTokenMgmtChange, onAddMemberChange, onAddMember, onRemoveMember, onInvite, onRetryTeams, onRetryMembers, onRemoveRequest }: Readonly<{
+  teams: readonly Team[];
+  teamsError: string;
+  editingTeamId: string;
+  teamPermissions: Readonly<Record<OrganizationPermission, boolean>>;
+  savingTeamPermissions: boolean;
+  teamVisibility: Readonly<Record<string, string>>;
+  teamTokenMgmt: Readonly<Record<string, boolean>>;
+  teamMemberList: Readonly<Record<string, readonly { id: string; username: string; email?: string }[]>>;
+  teamMemberCounts: Readonly<Record<string, number>>;
+  addMemberTeam: Readonly<Record<string, string>>;
+  memberships: readonly Membership[];
+  membershipsError: string;
+  inviteEmail: string;
+  onInviteEmailInput: (value: string) => void;
+  inviteTeamId: string;
+  onInviteTeamChange: (value: string) => void;
+  inviting: boolean;
+  canCreateTeam: boolean;
+  canManageUsers: boolean;
+  canUpdateOrganizationAccess: boolean;
+  onCreateTeam: (event: React.SyntheticEvent) => Promise<void>;
+  onNewTeamNameChange: (value: string) => void;
+  newTeamName: string;
+  onEditPermissions: (team: Team) => void;
+  onCancelEdit: () => void;
+  onSavePermissions: (event: React.SyntheticEvent) => Promise<void>;
+  onPermissionToggle: (permission: OrganizationPermission, enabled: boolean) => void;
+  onVisibilityChange: (teamId: string, value: string) => void;
+  onTokenMgmtChange: (teamId: string, checked: boolean) => void;
+  onAddMemberChange: (teamId: string, value: string) => void;
+  onAddMember: (teamId: string) => void;
+  onRemoveMember: (teamId: string, member: { id: string; username: string }) => void;
+  onInvite: (event: React.SyntheticEvent) => Promise<void>;
+  onRetryTeams: () => void;
+  onRetryMembers: () => void;
+  onRemoveRequest: (membership: Membership) => void;
+}>): React.JSX.Element {
+  return (
+    <Card className="border-border shadow-sm rounded-md">
+      <CardHeader variant="section">
+        <CardTitle>Teams</CardTitle>
+        <CardDescription>Manage access across the organization.</CardDescription>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="p-5 border-b border-border">
+          <form onSubmit={onCreateTeam} className="flex gap-2 max-w-md">
+            <Input
+              id="organization-team-name"
+              name="team-name"
+              autoComplete="off"
+              spellCheck={false}
+              aria-label="New team name"
+              placeholder="New team name"
+              value={newTeamName}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onNewTeamNameChange(event.target.value); }}
+              disabled={!canCreateTeam}
+              className="h-10"
+            />
+            <Button
+              type="submit"
+              disabled={!canCreateTeam || newTeamName.trim() === ""}
+              className="bg-background text-foreground/85 border border-border hover:bg-muted h-9 shadow-sm"
+            >
+              Create team
+            </Button>
+          </form>
+        </div>
+        <div className="divide-y divide-border">
+          {teamsError !== "" && (
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 bg-destructive/10 p-4 text-sm text-destructive">
+              <span>Could not load teams. {teamsError}</span>
+              <Button type="button" size="sm" variant="outline" onClick={onRetryTeams}>
+                Retry teams
+              </Button>
+            </div>
+          )}
+          {teams.map((team): React.JSX.Element => (
+            <TeamRow
+              key={team.id}
+              team={team}
+              editing={editingTeamId === team.id}
+              teamPermissions={teamPermissions}
+              savingTeamPermissions={savingTeamPermissions}
+              teamVisibility={teamVisibility}
+              teamTokenMgmt={teamTokenMgmt}
+              teamMemberList={teamMemberList}
+              teamMemberCounts={teamMemberCounts}
+              memberships={memberships}
+              addMemberTeam={addMemberTeam}
+              canUpdateOrganizationAccess={canUpdateOrganizationAccess}
+              onEdit={onEditPermissions}
+              onCancelEdit={onCancelEdit}
+              onSavePermissions={onSavePermissions}
+              onPermissionToggle={onPermissionToggle}
+              onVisibilityChange={onVisibilityChange}
+              onTokenMgmtChange={onTokenMgmtChange}
+              onAddMemberChange={onAddMemberChange}
+              onAddMember={onAddMember}
+              onRemoveMember={onRemoveMember}
+            />
+          ))}
+          {teamsError === "" && teams.length === 0 && (
+            <p className="p-8 text-sm text-muted-foreground text-center">No teams created yet.</p>
+          )}
+        </div>
+        <div className="flex flex-col gap-5 border-t p-5">
+          <div className="flex flex-col gap-1">
+            <h3 className="font-semibold">Organization members</h3>
+            <p className="text-sm text-muted-foreground">
+              Invite a user and optionally add them to a team.
+            </p>
+          </div>
+          <form onSubmit={onInvite}>
+            <FieldGroup className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(10rem,0.7fr)_auto]">
+              <Field>
+                <FieldLabel htmlFor="member-email">Email</FieldLabel>
+                <Input
+                  id="member-email"
+                  name="member-email"
+                  autoComplete="email"
+                  spellCheck={false}
+                  type="email"
+                  value={inviteEmail}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onInviteEmailInput(event.currentTarget.value); }}
+                  disabled={!canManageUsers}
+                  required
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="member-team">Team</FieldLabel>
+                <Select id="member-team" name="member-team" value={inviteTeamId} onValueChange={onInviteTeamChange} disabled={!canManageUsers}>
+                  <option value="">No team</option>
+                  {teams.map((team): React.JSX.Element => (
+// SAFETY: the fixture field is a string per the API contract.
+                    <option key={team.id} value={team.id}>{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+team.attributes["name"] as string}</option>
+                  ))}
+                </Select>
+              </Field>
+              <Field className="justify-end">
+                <Button type="submit" disabled={!canManageUsers || inviting || inviteEmail.trim() === ""}>
+                  <MailPlus data-icon="inline-start" />
+                  {inviting ? "Inviting…" : "Invite"}
+                </Button>
+              </Field>
+            </FieldGroup>
+          </form>
+          {membershipsError !== "" && (
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+              <span>Could not load organization members. {membershipsError}</span>
+              <Button type="button" size="sm" variant="outline" onClick={onRetryMembers}>
+                Retry members
+              </Button>
+            </div>
+          )}
+          <Table>
+            <TableHeader>
+              <TableRow><TableHead>Email</TableHead><TableHead>Status</TableHead><TableHead>Role</TableHead><TableHead className="text-right">Actions</TableHead></TableRow>
+            </TableHeader>
+            <TableBody>
+              {memberships.map((membership): React.JSX.Element => (
+                <TableRow key={membership.id}>
+                  <TableCell className="font-medium">{membership.attributes.email ?? "Local user"}</TableCell>
+                  <TableCell className="capitalize">{membership.attributes.status ?? "active"}</TableCell>
+                  <TableCell className="capitalize">{membership.attributes.role ?? "member"}</TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Remove ${membership.attributes.email ?? membership.attributes.username ?? "user"}`}
+                      disabled={!canManageUsers}
+                      onClick={(): void => { onRemoveRequest(membership); }}
+                    >
+                      <UserMinus className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {membershipsError === "" && memberships.length === 0 && (
+                <TableRow><TableCell colSpan={4} className="py-8 text-center text-muted-foreground">No organization members found.</TableCell></TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function OrgConfirmDialogs({ orgNameParam, confirmDeleteOrgOpen, onDeleteOpenChange, deletingOrg, onConfirmDelete, memberToRemove, onClearMember, onConfirmRemove }: Readonly<{
+  orgNameParam: string;
+  confirmDeleteOrgOpen: boolean;
+  onDeleteOpenChange: (open: boolean) => void;
+  deletingOrg: boolean;
+  onConfirmDelete: () => void;
+  memberToRemove: Membership | null;
+  onClearMember: () => void;
+  onConfirmRemove: (membership: Membership) => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <>
+      <ConfirmDialog
+        open={confirmDeleteOrgOpen}
+        onOpenChange={onDeleteOpenChange}
+        title="Delete Organization"
+        description={
+          <>
+            This action <strong className="text-foreground">cannot be undone</strong>. This will permanently delete the organization <strong className="text-foreground">{orgNameParam}</strong>, all associated workspaces, state files, runs, variables, and team memberships.
+          </>
+        }
+        confirmText="Delete Organization"
+        confirmVariant="destructive"
+        requireCheckbox="I understand this permanently deletes the organization and all of its data."
+        requireText={orgNameParam}
+        loading={deletingOrg}
+        onConfirm={onConfirmDelete}
+      />
+
+      <ConfirmDialog
+        open={memberToRemove !== null}
+        onOpenChange={(open): void => { if (!open) onClearMember(); }}
+        title="Remove Organization Member"
+        description={`Are you sure you want to remove ${memberToRemove?.attributes.email ?? memberToRemove?.attributes.username ?? "this member"} from ${orgNameParam}?`}
+        confirmText="Remove Member"
+        confirmVariant="destructive"
+        onConfirm={async (): Promise<void> => {
+          if (memberToRemove !== null) {
+            await onConfirmRemove(memberToRemove);
+          }
+        }}
+      />
+    </>
+  );
+}
+
+type SettingsTab = "general" | "teams" | "roles" | "cidr" | "tags" | "users" | "ssh-keys";
+
+function parseSettingsTab(requestedTab: string | null): SettingsTab {
+  return requestedTab === "teams" || requestedTab === "roles" || requestedTab === "cidr" || requestedTab === "tags" || requestedTab === "users" || requestedTab === "ssh-keys" ? requestedTab : "general";
+}
+
+type OrgCapabilityFlags = {
+  canUpdateOrganization: boolean;
+  canDestroyOrganization: boolean;
+  canCreateTeam: boolean;
+  canManageUsers: boolean;
+  canUpdateOrganizationAccess: boolean;
+};
+
+function orgCapabilityFlags(org: Organization | null, orgNameParam: string): OrgCapabilityFlags {
+  const permissions = org !== null && org.attributes["name"] === orgNameParam ? org.attributes.permissions : undefined;
+  return {
+    canUpdateOrganization: permissions?.["can-update"] === true,
+    canDestroyOrganization: permissions?.["can-destroy"] === true,
+    canCreateTeam: permissions?.["can-create-team"] === true,
+    canManageUsers: permissions?.["can-manage-users"] === true,
+    canUpdateOrganizationAccess: permissions?.["can-update-organization-access"] === true,
+  };
+}
+
+function OrgLoadErrorMessage({ loadError }: Readonly<{ loadError: string }>): string {
+  return loadError !== "" ? loadError : "The organization could not be loaded.";
+}
+
 export function OrganizationSettings(): React.JSX.Element {
   const { orgName } = useParams<{ orgName: string }>();
   const navigate = useNavigate();
@@ -139,15 +1067,15 @@ export function OrganizationSettings(): React.JSX.Element {
   const [retentionSaving, setRetentionSaving] = useState(false);
   const activeOrganizationName = useRef(orgNameParam);
   activeOrganizationName.current = orgNameParam;
-  const requestedTab = searchParams.get("tab");
-  const activeTab = requestedTab === "teams" || requestedTab === "roles" || requestedTab === "cidr" || requestedTab === "tags" || requestedTab === "users" || requestedTab === "ssh-keys" ? requestedTab : "general";
+  const activeTab = parseSettingsTab(searchParams.get("tab"));
   const orgIsCurrent = org !== null && org.attributes["name"] === orgNameParam;
-  const permissions = orgIsCurrent ? org.attributes.permissions : undefined;
-  const canUpdateOrganization = permissions?.["can-update"] === true;
-  const canDestroyOrganization = permissions?.["can-destroy"] === true;
-  const canCreateTeam = permissions?.["can-create-team"] === true;
-  const canManageUsers = permissions?.["can-manage-users"] === true;
-  const canUpdateOrganizationAccess = permissions?.["can-update-organization-access"] === true;
+  const {
+    canUpdateOrganization,
+    canDestroyOrganization,
+    canCreateTeam,
+    canManageUsers,
+    canUpdateOrganizationAccess,
+  } = orgCapabilityFlags(org, orgNameParam);
 
   useEffect((): void => {
     setTeams([]);
@@ -568,6 +1496,15 @@ export function OrganizationSettings(): React.JSX.Element {
     }
   };
 
+  const handleMemberRemoveRequest = (membership: Membership): void => {
+    const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+    if (isTestEnv) {
+      void removeMembership(membership);
+    } else {
+      setMemberToRemove(membership);
+    }
+  };
+
   if (loading || (org !== null && !orgIsCurrent)) {
     return (
       <PageShell role="status" aria-label="Loading organization settings" variant="form">
@@ -583,7 +1520,7 @@ export function OrganizationSettings(): React.JSX.Element {
         <div role="alert" className="mx-auto flex max-w-lg flex-col items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-5 text-destructive">
         <div>
           <h1 className="text-lg font-semibold">Could not load organization settings</h1>
-          <p className="mt-1 text-sm">{loadError !== "" ? loadError : "The organization could not be loaded."}</p>
+          <p className="mt-1 text-sm"><OrgLoadErrorMessage loadError={loadError} /></p>
         </div>
         <Button type="button" variant="outline" onClick={(): void => { void loadOrg(); }}>
           Try again
@@ -611,279 +1548,67 @@ export function OrganizationSettings(): React.JSX.Element {
       <div className="space-y-6">
           {activeTab === "general" && (
             <>
-              <form onSubmit={saveSettings} className="space-y-6">
-                {!canUpdateOrganization && <p className="text-sm text-muted-foreground">Organization owner access is required to change these settings.</p>}
-                <SettingsSection title="Organization" description="The name and contact address for your infrastructure.">
-                    <div className="space-y-1.5">
-                      <label htmlFor="org-name" className="text-sm font-semibold text-foreground">Organization name</label>
-                      <Input
-                        id="org-name"
-                        name="organization-name"
-                        autoComplete="off"
-                        spellCheck={false}
-                        value={name}
-                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }}
-                        disabled={!canUpdateOrganization}
-                        required
-                        className="h-10"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label htmlFor="org-email" className="text-sm font-semibold text-foreground">Notification email</label>
-                      <Input
-                        id="org-email"
-                        name="notification-email"
-                        autoComplete="email"
-                        spellCheck={false}
-                        type="email"
-                        value={notificationEmail}
-                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNotificationEmail(event.target.value); }}
-                        disabled={!canUpdateOrganization}
-                        placeholder="admin@example.com"
-                        className="h-10"
-                      />
-                      <p className="text-sm text-muted-foreground mt-1">Email address used for organization notifications.</p>
-                    </div>
-                </SettingsSection>
-                <SettingsSection title="Workspace defaults" description="Choose the starting settings for new workspaces. Individual workspaces can override these defaults.">
-                    <div className="space-y-1.5">
-                      <label htmlFor="org-iac" className="text-sm font-semibold text-foreground flex items-center gap-1">
-                        Default engine
-                        <HelpTooltip content="The IaC engine (OpenTofu or Terraform) used by default when creating new workspaces in this organization." />
-                      </label>
-                      <Select
-                        id="org-iac"
-                        name="default-iac-binary"
+              <GeneralForm
+                name={name}
+                onNameChange={setName}
+                notificationEmail={notificationEmail}
+                onNotificationEmailChange={setNotificationEmail}
+                defaultIacBinary={defaultIacBinary}
+                onDefaultIacBinaryChange={setDefaultIacBinary}
+                defaultTerraformVersion={defaultTerraformVersion}
+                onDefaultTerraformVersionChange={setDefaultTerraformVersion}
+                defaultExecutionMode={defaultExecutionMode}
+                onDefaultExecutionModeChange={setDefaultExecutionMode}
+                moduleTestTokenTtl={moduleTestTokenTtl}
+                onModuleTestTokenTtlChange={setModuleTestTokenTtl}
+                aggregatedCommitStatusEnabled={aggregatedCommitStatusEnabled}
+                onAggregatedCommitStatusChange={setAggregatedCommitStatusEnabled}
+                sendPassingStatuses={sendPassingStatusesForUntriggeredSpeculativePlans}
+                onSendPassingStatusesChange={setSendPassingStatusesForUntriggeredSpeculativePlans}
+                allowForceDeleteWorkspaces={allowForceDeleteWorkspaces}
+                onAllowForceDeleteChange={setAllowForceDeleteWorkspaces}
+                stacksEnabled={stacksEnabled}
+                onStacksEnabledChange={setStacksEnabled}
+                showPreReleases={showPreReleases}
+                onShowPreReleasesChange={setShowPreReleases}
+                saving={saving}
+                canUpdateOrganization={canUpdateOrganization}
+                onSubmit={saveSettings}
+              />
 
-                        value={defaultIacBinary}
-                        onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setDefaultIacBinary(event.target.value); }}
-                        disabled={!canUpdateOrganization}
-                      >
-                        <option value="tofu">OpenTofu</option>
-                        <option value="terraform">Terraform</option>
-                      </Select>
-                      <p className="text-sm text-muted-foreground mt-1">The engine used by default for new workspaces.</p>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label htmlFor="org-version" className="text-sm font-semibold text-foreground flex items-center gap-1">
-                        Default engine version
-                        <HelpTooltip content="Specifies the default version of Terraform or OpenTofu for new workspaces (e.g. 'latest' or '~> 1.6.0')." />
-                      </label>
-                      <Input
-                        id="org-version"
-                        name="terraform-version"
-                        autoComplete="off"
-                        value={defaultTerraformVersion}
-                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDefaultTerraformVersion(event.target.value); }}
-                        disabled={!canUpdateOrganization}
-                        placeholder="latest"
-                        className="h-10"
-                      />
-                    </div>
-                    <div className="space-y-2 border-t pt-4">
-                      <p className="text-sm font-semibold text-foreground">Organizational default execution mode</p>
-                      <p className="text-sm text-muted-foreground">Changing the execution mode discards any active runs in workspaces.</p>
-                      <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-                        <input
-                          type="radio"
-                          name="org-exec-mode"
-                          className="size-4 accent-primary"
-                          checked={defaultExecutionMode === "remote"}
-                          onChange={(): void => { setDefaultExecutionMode("remote"); }}
-                          disabled={!canUpdateOrganization}
-                        />
-                        <span>
-                          Remote
-                          <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on Terrence's infrastructure, and your team can review and collaborate on runs directly in the app.</span>
-                        </span>
-                      </label>
-                      <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-                        <input
-                          type="radio"
-                          name="org-exec-mode"
-                          className="size-4 accent-primary"
-                          checked={defaultExecutionMode === "local"}
-                          onChange={(): void => { setDefaultExecutionMode("local"); }}
-                          disabled={!canUpdateOrganization}
-                        />
-                        <span>
-                          Local
-                          <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on your own machines. Terrence only stores and synchronizes state.</span>
-                        </span>
-                      </label>
-                      <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-                        <input
-                          type="radio"
-                          name="org-exec-mode"
-                          className="size-4 accent-primary"
-                          checked={defaultExecutionMode === "agent"}
-                          onChange={(): void => { setDefaultExecutionMode("agent"); }}
-                          disabled={!canUpdateOrganization}
-                        />
-                        <span>
-                          Agent
-                          <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on a configured agent pool in your organization.</span>
-                        </span>
-                      </label>
-                    </div>
-                </SettingsSection>
-                <details className="rounded-xl border bg-card">
-                  <summary className="cursor-pointer rounded-xl px-6 py-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Advanced organization settings<span className="mt-1 block text-xs font-normal text-muted-foreground">Module tests, Git status checks, Stacks, and deletion permissions</span></summary>
-                  <div className="space-y-6 border-t p-6">
-                    <div className="space-y-1.5">
-                      <label htmlFor="org-module-test-token-ttl" className="text-sm font-semibold text-foreground">Module test token lifetime</label>
-                      <Input
-                        id="org-module-test-token-ttl"
-                        name="module-test-token-ttl"
-                        type="number"
-                        min={300}
-                        max={1800}
-                        step={1}
-                        value={moduleTestTokenTtl}
-                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setModuleTestTokenTtl(Number(event.target.value)); }}
-                        disabled={!canUpdateOrganization}
-                        className="h-10"
-                      />
-                      <p className="text-sm text-muted-foreground mt-1">OIDC token lifetime for private module tests, in seconds (300–1800). Applies to tokens created after save; existing tokens are unaffected.</p>
-                    </div>
-                    <div className="space-y-2 border-t pt-4">
-                      <p className="text-sm font-semibold text-foreground">VCS status checks</p>
-                      <label className="flex items-start gap-3 text-sm font-medium text-foreground">
-                        <Checkbox
-                          checked={aggregatedCommitStatusEnabled}
-                          onCheckedChange={(checked: boolean): void => { setAggregatedCommitStatusEnabled(checked); }}
-                          disabled={!canUpdateOrganization}
-                        />
-                        <span>
-                          Aggregate status checks
-                          <span className="block text-sm font-normal text-muted-foreground mt-0.5">Send one GitHub status for all workspace runs triggered by the same VCS event.</span>
-                        </span>
-                      </label>
-                      {!aggregatedCommitStatusEnabled && (
-                        <label className="flex items-start gap-3 text-sm font-medium text-foreground">
-                          <Checkbox
-                            checked={sendPassingStatusesForUntriggeredSpeculativePlans}
-                            onCheckedChange={(checked: boolean): void => { setSendPassingStatusesForUntriggeredSpeculativePlans(checked); }}
-                            disabled={!canUpdateOrganization}
-                          />
-                          <span>
-                            Send passing statuses for unaffected pull requests
-                            <span className="block text-sm font-normal text-muted-foreground mt-0.5">Mark pull requests green when shared-repository file triggers do not start a speculative plan.</span>
-                          </span>
-                        </label>
-                      )}
-                    </div>
-                    <div className="space-y-2 border-t pt-4">
-                      <label className="flex items-start gap-3 text-sm font-medium text-foreground">
-                        <Checkbox
-                          checked={allowForceDeleteWorkspaces}
-                          onCheckedChange={(checked: boolean): void => { setAllowForceDeleteWorkspaces(checked); }}
-                          disabled={!canUpdateOrganization}
-                        />
-                        <span>
-                          Workspace administrators can force delete workspaces
-                          <span className="block text-sm font-normal text-muted-foreground mt-0.5">When disabled, only the owners team can force delete workspaces that are locked or managing resources.</span>
-                        </span>
-                      </label>
-                      <label className="flex items-start gap-3 text-sm font-medium text-foreground">
-                        <Checkbox
-                          checked={stacksEnabled}
-                          onCheckedChange={(checked: boolean): void => { setStacksEnabled(checked); }}
-                          disabled={!canUpdateOrganization}
-                        />
-                        <span>
-                          Stacks
-                          <span className="block text-sm font-normal text-muted-foreground mt-0.5">Enabling Stacks allows users with Project Maintainer access or higher to create Stacks within projects.</span>
-                        </span>
-                      </label>
-                      <label className="flex items-start gap-3 text-sm font-medium text-foreground">
-                        <Checkbox
-                          checked={showPreReleases}
-                          onCheckedChange={(checked: boolean): void => { setShowPreReleases(checked); }}
-                          disabled={!canUpdateOrganization}
-                        />
-                        <span>
-                          Show Terraform pre-releases
-                          <span className="block text-sm font-normal text-muted-foreground mt-0.5">When enabled, users in this organization will be able to select Terraform pre-releases (alphas, betas, and release candidates) in the workspace version list.</span>
-                        </span>
-                      </label>
-                    </div>
-                  </div>
-                </details>
-                <div className="flex justify-end">
-                  <Button type="submit" disabled={saving || !canUpdateOrganization}>{saving ? "Saving…" : "Save settings"}</Button>
-                </div>
-              </form>
-
-
-
-              <Card className="border-border shadow-sm rounded-md">
-                <CardHeader variant="section">
-                  <CardTitle className="flex items-center gap-2"><History className="size-4" />Organization data retention</CardTitle>
-                  <CardDescription>Apply a default state-version cleanup policy to workspaces in this organization.</CardDescription>
-                </CardHeader>
-                <form onSubmit={saveRetention} className="contents">
-                  <CardContent>
-                    {retentionLoading ? <p className="text-sm text-muted-foreground">Loading retention policy…</p> : (
-                      <FieldGroup className="grid gap-4 sm:grid-cols-2">
-                        <Field><FieldLabel htmlFor="org-retention-count">Keep state versions</FieldLabel><Input id="org-retention-count" name="retention-count" type="number" inputMode="numeric" min="0" value={retentionCount} onChange={(event): void => { setRetentionCount(Number(event.target.value)); }} /></Field>
-                        <Field><FieldLabel htmlFor="org-retention-days">Delete older than (days)</FieldLabel><Input id="org-retention-days" name="retention-days" type="number" inputMode="numeric" min="0" value={retentionDays} onChange={(event): void => { setRetentionDays(Number(event.target.value)); }} /></Field>
-                      </FieldGroup>
-                    )}
-                  </CardContent>
-                  <CardFooter><Button type="submit" disabled={retentionLoading || retentionSaving || !canUpdateOrganization}>{retentionSaving ? "Saving…" : "Save retention policy"}</Button></CardFooter>
-                </form>
-              </Card>
-              {/* Danger Zone */}
-              <Card className="border-destructive/30 shadow-sm rounded-md overflow-hidden">
-                <CardHeader variant="danger">
-                  <CardTitle>Danger Zone</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-foreground/85 mb-4">
-                    Deleting this organization will permanently remove all workspaces, runs, state versions, variables, and configurations. This action cannot be undone.
-                  </p>
-                  <Button
-                    variant="outline"
-                    disabled={!canDestroyOrganization}
-                    onClick={(): void => { setConfirmDeleteOrgOpen(true); }}
-                    className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive h-9"
-                  >
-                    <Trash2 className="w-4 h-4 mr-2" /> Delete Organization
-                  </Button>
-                </CardContent>
-              </Card>
+              <RetentionCard
+                retentionLoading={retentionLoading}
+                retentionCount={retentionCount}
+                onRetentionCountChange={setRetentionCount}
+                retentionDays={retentionDays}
+                onRetentionDaysChange={setRetentionDays}
+                retentionSaving={retentionSaving}
+                canUpdateOrganization={canUpdateOrganization}
+                onSubmit={saveRetention}
+              />
+              <DangerZoneCard
+                canDestroyOrganization={canDestroyOrganization}
+                onDeleteRequest={(): void => { setConfirmDeleteOrgOpen(true); }}
+              />
             </>
           )}
 
           {activeTab === "roles" && (
-            <Card className="border-border shadow-sm rounded-md">
-              <CardHeader variant="section">
-                <CardTitle>Reusable roles</CardTitle>
-                <CardDescription>Create named permission bundles that can be assigned to organization members.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <form onSubmit={saveRole} className="space-y-3 rounded-md border p-4">
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <Input id="organization-role-name" name="role-name" autoComplete="off" spellCheck={false} aria-label="Role name" placeholder="Role name…" value={newRoleName} onChange={(event): void => { setNewRoleName(event.target.value); }} disabled={!canUpdateOrganizationAccess} required />
-                    <Input id="organization-role-description" name="role-description" autoComplete="off" aria-label="Role description" placeholder="Description (optional)…" value={newRoleDescription} onChange={(event): void => { setNewRoleDescription(event.target.value); }} disabled={!canUpdateOrganizationAccess} />
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {organizationPermissions.map((permission): React.JSX.Element => (
-                      <label key={permission} className="flex items-center gap-2 text-sm">
-                        <Checkbox checked={newRolePermissions[permission] === true} disabled={!canUpdateOrganizationAccess} onCheckedChange={(checked: boolean): void => { setNewRolePermissions((current) => ({ ...current, [permission]: checked })); }} />
-                        {permissionLabel(permission)}
-                      </label>
-                    ))}
-                  </div>
-                  <Button type="submit" disabled={!canUpdateOrganizationAccess || savingRole || newRoleName.trim() === ""}>{savingRole ? "Creating…" : "Create role"}</Button>
-                </form>
-                <div className="divide-y rounded-md border">
-                  {roles.map((role): React.JSX.Element => <div key={role.id} className="space-y-3 p-4"><div><p className="font-semibold">{role.attributes.name}</p><p className="text-sm text-muted-foreground">{role.attributes.description ?? "No description"}</p></div><div className="grid gap-2 sm:grid-cols-2">{organizationPermissions.map((permission): React.JSX.Element => <label key={permission} className="flex items-center gap-2 text-xs"><Checkbox checked={role.attributes.permissions?.[permission] === true} disabled={!canUpdateOrganizationAccess} onCheckedChange={(checked: boolean): void => { void updateRolePermission(role, permission, checked); }} />{permissionLabel(permission)}</label>)}</div></div>)}
-                  {roles.length === 0 && <p className="p-5 text-sm text-muted-foreground">No reusable roles yet.</p>}
-                </div>
-              </CardContent>
-            </Card>
+            <RolesTab
+              roles={roles}
+              newRoleName={newRoleName}
+              onNewRoleNameChange={setNewRoleName}
+              newRoleDescription={newRoleDescription}
+              onNewRoleDescriptionChange={setNewRoleDescription}
+              newRolePermissions={newRolePermissions}
+              onNewRolePermissionChange={(permission: OrganizationPermission, checked: boolean): void => {
+                setNewRolePermissions((current) => ({ ...current, [permission]: checked }));
+              }}
+              savingRole={savingRole}
+              canUpdateOrganizationAccess={canUpdateOrganizationAccess}
+              onSubmit={saveRole}
+              onUpdatePermission={updateRolePermission}
+            />
           )}
 
           {activeTab === "cidr" && <OrganizationCidrRanges orgName={orgNameParam} />}
@@ -893,441 +1618,74 @@ export function OrganizationSettings(): React.JSX.Element {
           {activeTab === "ssh-keys" && <OrganizationSshKeys orgName={orgNameParam} />}
 
           {activeTab === "users" && (
-            <Card>
-              <CardHeader variant="section">
-                <CardTitle>Users</CardTitle>
-                <CardDescription>Manage organization memberships and invite new users.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                {membershipsError !== "" && (
-                  <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                    <span>Could not load organization members. {membershipsError}</span>
-                    <Button type="button" size="sm" variant="outline" onClick={(): void => { void loadMemberships(); }}>Retry</Button>
-                  </div>
-                )}
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>User</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Role</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {memberships.map((membership): React.JSX.Element => (
-                      <TableRow key={membership.id}>
-                        <TableCell>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{membership.attributes.username ?? "—"}</span>
-                            {membership.attributes.email !== undefined && membership.attributes.email !== null && (
-                              <span className="text-xs text-muted-foreground">{membership.attributes.email}</span>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="capitalize">{membership.attributes.status ?? "active"}</TableCell>
-                        <TableCell className="capitalize">{membership.attributes.role ?? "member"}</TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            aria-label={`Remove ${membership.attributes.username ?? membership.attributes.email ?? "user"}`}
-                            disabled={!canManageUsers}
-                            onClick={(): void => {
-                              const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
-                              if (isTestEnv) { void removeMembership(membership); }
-                              else { setMemberToRemove(membership); }
-                            }}
-                          >
-                            <UserMinus className="size-4 text-muted-foreground hover:text-destructive" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    {membershipsError === "" && memberships.length === 0 && (
-                      <TableRow><TableCell colSpan={4} className="py-8 text-center text-muted-foreground">No organization users found.</TableCell></TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-
-                {/* Invite form */}
-                <div className="border-t pt-6">
-                  <div className="flex flex-col gap-1 mb-4">
-                    <h3 className="font-semibold">Invite a user</h3>
-                    <p className="text-sm text-muted-foreground">Invite a teammate to collaborate within the {orgNameParam} organization.</p>
-                  </div>
-                  <form onSubmit={inviteMember}>
-                    <FieldGroup className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(10rem,0.7fr)_auto]">
-                      <Field>
-                        <FieldLabel htmlFor="users-invite-email">Email Address</FieldLabel>
-                        <Input id="users-invite-email" name="invite-email" autoComplete="email" spellCheck={false} type="email" value={inviteEmail} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setInviteEmail(event.currentTarget.value); }} disabled={!canManageUsers} required />
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor="users-invite-team">Add to teams</FieldLabel>
-                        <Select id="users-invite-team" name="invite-team" value={inviteTeamId} onValueChange={setInviteTeamId} disabled={!canManageUsers}>
-                          <option value="">No team</option>
-                          {teams.map((team): React.JSX.Element => (
-// SAFETY: the fixture field is a string per the API contract.
-                            <option key={team.id} value={team.id}>{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
-team.attributes["name"] as string}</option>
-                          ))}
-                        </Select>
-                      </Field>
-                      <Field className="justify-end">
-                        <Button type="submit" disabled={!canManageUsers || inviting || inviteEmail.trim() === ""}>
-                          <MailPlus data-icon="inline-start" />
-                          {inviting ? "Inviting…" : "Invite"}
-                        </Button>
-                      </Field>
-                    </FieldGroup>
-                  </form>
-                </div>
-              </CardContent>
-            </Card>
+            <UsersTab
+              orgNameParam={orgNameParam}
+              memberships={memberships}
+              membershipsError={membershipsError}
+              canManageUsers={canManageUsers}
+              teams={teams}
+              inviteEmail={inviteEmail}
+              onInviteEmailInput={setInviteEmail}
+              inviteTeamId={inviteTeamId}
+              onInviteTeamChange={setInviteTeamId}
+              inviting={inviting}
+              onInvite={inviteMember}
+              onRetry={(): void => { void loadMemberships(); }}
+              onRemoveRequest={handleMemberRemoveRequest}
+            />
           )}
 
           {activeTab === "teams" && (
-            <Card className="border-border shadow-sm rounded-md">
-              <CardHeader variant="section">
-                <CardTitle>Teams</CardTitle>
-                <CardDescription>Manage access across the organization.</CardDescription>
-              </CardHeader>
-              <CardContent className="p-0">
-                <div className="p-5 border-b border-border">
-                  <form onSubmit={createTeam} className="flex gap-2 max-w-md">
-                    <Input
-                      id="organization-team-name"
-                      name="team-name"
-                      autoComplete="off"
-                      spellCheck={false}
-                      aria-label="New team name"
-                      placeholder="New team name"
-                      value={newTeamName}
-                      onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewTeamName(event.target.value); }}
-                      disabled={!canCreateTeam}
-                      className="h-10"
-                    />
-                    <Button
-                      type="submit"
-                      disabled={!canCreateTeam || newTeamName.trim() === ""}
-                      className="bg-background text-foreground/85 border border-border hover:bg-muted h-9 shadow-sm"
-                    >
-                      Create team
-                    </Button>
-                  </form>
-                </div>
-                <div className="divide-y divide-border">
-                  {teamsError !== "" && (
-                    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 bg-destructive/10 p-4 text-sm text-destructive">
-                      <span>Could not load teams. {teamsError}</span>
-                      <Button type="button" size="sm" variant="outline" onClick={(): void => { void loadTeams(); }}>
-                        Retry teams
-                      </Button>
-                    </div>
-                  )}
-                  {teams.map((team): React.JSX.Element => {
-// SAFETY: the fixture field is a string per the API contract.
-                    const teamName = team.attributes["name"] as string;
-                    return (
-                      <div key={team.id}>
-                        <div className="flex items-center justify-between gap-3 p-4 hover:bg-muted transition-colors">
-                          <div className="flex items-center gap-3">
-                            <div className="h-8 w-8 rounded bg-muted flex items-center justify-center border border-border">
-                              <Users className="h-4 w-4 text-muted-foreground" />
-                            </div>
-                            <div>
-                              <p className="font-semibold text-sm text-primary">
-                                {teamName}
-                              </p>
-                              {/* SAFETY: the fixture field matches the API contract type. */}
-                              <p className="text-xs text-muted-foreground mt-0.5">{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
-(team.attributes["users-count"] as number | undefined) ?? 0} members</p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-full border border-border capitalize font-medium tracking-wide">
-                              {/* SAFETY: the fixture field matches the API contract type. */}
-                              {// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
-(team.attributes["visibility"] as string | undefined) ?? "organization"}
-                            </span>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              aria-label={`Manage permissions for ${teamName}`}
-                              disabled={!canUpdateOrganizationAccess}
-                              onClick={(): void => { editTeamPermissions(team); }}
-                            >
-                              Permissions
-                            </Button>
-                          </div>
-                        </div>
-                        {editingTeamId === team.id && (
-                          <div className="border-t bg-muted/70">
-                            {/* Team settings: visibility + token management */}
-                            <div className="border-b border-border px-4 py-4">
-                              <p className="mb-3 text-sm font-semibold text-foreground">Team settings for {teamName}</p>
-                              <div className="mb-3 flex items-center gap-4">
-                                <fieldset className="border-0 p-0">
-                                  <legend className="text-xs font-medium text-foreground/85">Visibility</legend>
-                                  <div className="mt-1 flex gap-3 text-sm" role="radiogroup">
-                                    <label className="flex items-center gap-1.5 font-medium text-foreground/85">
-                                      <input
-                                        type="radio"
-                                        name={`visibility-${team.id}`}
-                                        className="size-4 accent-primary"
-                                        checked={teamVisibility[team.id] !== "secret"}
-                                        onChange={(): void => { void updateTeamSetting(team.id, "visibility", "organization"); }}
-                                      />
-                                      Visible
-                                    </label>
-                                    <label className="flex items-center gap-1.5 font-medium text-foreground/85">
-                                      <input
-                                        type="radio"
-                                        name={`visibility-${team.id}`}
-                                        className="size-4 accent-primary"
-                                        checked={teamVisibility[team.id] === "secret"}
-                                        onChange={(): void => { void updateTeamSetting(team.id, "visibility", "secret"); }}
-                                      />
-                                      Secret
-                                    </label>
-                                  </div>
-                                  <p className="mt-0.5 text-xs text-muted-foreground">Visible to every member of this organization / Only visible to team members and organization owners.</p>
-                                </fieldset>
-                                <div className="flex items-center gap-3 text-sm">
-                                  <Checkbox
-                                    id={`token-mgmt-${team.id}`}
-                                    checked={teamTokenMgmt[team.id] === true}
-                                    onCheckedChange={(checked: boolean): void => { void updateTeamSetting(team.id, "allow-member-token-management", checked); }}
-                                  />
-                                  <label htmlFor={`token-mgmt-${team.id}`} className="font-medium text-foreground">Team API tokens</label>
-                                </div>
-                              </div>
-                              <p className="mb-3 text-xs text-muted-foreground">Team members can manage API tokens. When disabled, only the owners team and users with "Manage teams" can create, revoke, and view API tokens for this team.</p>
-
-                              {/* Organization access permissions */}
-                              <p className="mb-2 text-sm font-semibold text-foreground">Organization access for {teamName}</p>
-                              <p className="mb-3 text-xs text-muted-foreground">
-                                Permissions not selected remain denied. Project permissions automatically include their workspace counterpart.
-                              </p>
-                              <form onSubmit={saveTeamPermissions}>
-                                <div className="grid gap-3 sm:grid-cols-2 mb-3">
-                                  {organizationPermissions.map((permission): React.JSX.Element => {
-                                    const id = `team-${team.id}-${permission}`;
-                                    return (
-                                      <div key={permission} className="flex items-center gap-2">
-                                        <Checkbox
-                                          id={id}
-                                          checked={teamPermissions[permission]}
-                                          onCheckedChange={(checked: boolean): void => { setTeamPermission(permission, checked); }}
-                                          disabled={savingTeamPermissions || !canUpdateOrganizationAccess}
-                                        />
-                                        <label htmlFor={id} className="text-sm text-foreground/85">{permissionLabel(permission)}</label>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                                <div className="flex justify-end gap-2">
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    disabled={savingTeamPermissions}
-                                    onClick={(): void => { setEditingTeamId(""); }}
-                                  >
-                                    Cancel
-                                  </Button>
-                                  <Button type="submit" disabled={savingTeamPermissions || !canUpdateOrganizationAccess}>
-                                    {savingTeamPermissions ? "Saving…" : "Save permissions"}
-                                  </Button>
-                                </div>
-                              </form>
-                            </div>
-
-                            {/* Team members */}
-                            <div className="px-4 py-4">
-                              <div className="flex items-center justify-between mb-3">
-                                <p className="text-sm font-semibold text-foreground">Members ({(teamMemberCounts[team.id] ?? 0)})</p>
-                                <div className="flex gap-2">
-                                  <Select
-                                    id={`team-${team.id}-member`}
-                                    name={`team-${team.id}-member`}
-// SAFETY: the fixture field is a string per the API contract.
-                                    aria-label={// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
-`Add a member to ${team.attributes["name"] as string}`}
-                                    className="h-8"
-                                    value={addMemberTeam[team.id] ?? ""}
-                                    onChange={(e): void => { setAddMemberTeam((prev) => ({ ...prev, [team.id]: e.target.value })); }}
-                                  >
-                                    <option value="">Select user…</option>
-                                    {memberships.map((m): React.JSX.Element => (
-                                      <option key={m.id} value={m.attributes.username ?? m.id}>{m.attributes.username ?? m.attributes.email ?? m.id}</option>
-                                    ))}
-                                  </Select>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    disabled={addMemberTeam[team.id] === undefined || addMemberTeam[team.id] === ""}
-                                    onClick={(): void => { void addTeamMember(team.id); }}
-                                  >
-                                    Add member
-                                  </Button>
-                                </div>
-                              </div>
-                              {(teamMemberList[team.id] ?? []).length === 0 ? (
-                                <p className="text-xs text-muted-foreground">No members in this team.</p>
-                              ) : (
-                                <div className="space-y-1">
-                                  {(teamMemberList[team.id] ?? []).map((member): React.JSX.Element => (
-                                    <div key={member.id} className="flex items-center justify-between rounded border bg-background px-3 py-2 text-sm">
-                                      <div>
-                                        <span className="font-medium">{member.username}</span>
-                                        {member.email !== undefined && <span className="ml-2 text-muted-foreground">{member.email}</span>}
-                                      </div>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        aria-label={`Remove ${member.username}`}
-                                        onClick={(): void => { void removeTeamMember(team.id, member); }}
-                                      >
-                                        <UserMinus className="size-3.5" />
-                                      </Button>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                  {teamsError === "" && teams.length === 0 && (
-                    <p className="p-8 text-sm text-muted-foreground text-center">No teams created yet.</p>
-                  )}
-                </div>
-                <div className="flex flex-col gap-5 border-t p-5">
-                  <div className="flex flex-col gap-1">
-                    <h3 className="font-semibold">Organization members</h3>
-                    <p className="text-sm text-muted-foreground">
-                      Invite a user and optionally add them to a team.
-                    </p>
-                  </div>
-                  <form onSubmit={inviteMember}>
-                    <FieldGroup className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(10rem,0.7fr)_auto]">
-                      <Field>
-                        <FieldLabel htmlFor="member-email">Email</FieldLabel>
-                        <Input
-                          id="member-email"
-                          name="member-email"
-                          autoComplete="email"
-                          spellCheck={false}
-                          type="email"
-                          value={inviteEmail}
-                          onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setInviteEmail(event.currentTarget.value); }}
-                          disabled={!canManageUsers}
-                          required
-                        />
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor="member-team">Team</FieldLabel>
-                        <Select id="member-team" name="member-team" value={inviteTeamId} onValueChange={setInviteTeamId} disabled={!canManageUsers}>
-                          <option value="">No team</option>
-                          {teams.map((team): React.JSX.Element => (
-// SAFETY: the fixture field is a string per the API contract.
-                            <option key={team.id} value={team.id}>{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
-team.attributes["name"] as string}</option>
-                          ))}
-                        </Select>
-                      </Field>
-                      <Field className="justify-end">
-                        <Button type="submit" disabled={!canManageUsers || inviting || inviteEmail.trim() === ""}>
-                          <MailPlus data-icon="inline-start" />
-                          {inviting ? "Inviting…" : "Invite"}
-                        </Button>
-                      </Field>
-                    </FieldGroup>
-                  </form>
-                  {membershipsError !== "" && (
-                    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                      <span>Could not load organization members. {membershipsError}</span>
-                      <Button type="button" size="sm" variant="outline" onClick={(): void => { void loadMemberships(); }}>
-                        Retry members
-                      </Button>
-                    </div>
-                  )}
-                  <Table>
-                    <TableHeader>
-                      <TableRow><TableHead>Email</TableHead><TableHead>Status</TableHead><TableHead>Role</TableHead><TableHead className="text-right">Actions</TableHead></TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {memberships.map((membership): React.JSX.Element => (
-                        <TableRow key={membership.id}>
-                          <TableCell className="font-medium">{membership.attributes.email ?? "Local user"}</TableCell>
-                          <TableCell className="capitalize">{membership.attributes.status ?? "active"}</TableCell>
-                          <TableCell className="capitalize">{membership.attributes.role ?? "member"}</TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              aria-label={`Remove ${membership.attributes.email ?? membership.attributes.username ?? "user"}`}
-                              disabled={!canManageUsers}
-                              onClick={(): void => {
-                                const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
-                                if (isTestEnv) {
-                                  void removeMembership(membership);
-                                } else {
-                                  setMemberToRemove(membership);
-                                }
-                              }}
-                            >
-                              <UserMinus className="h-4 w-4 text-muted-foreground hover:text-destructive" />
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                      {membershipsError === "" && memberships.length === 0 && (
-                        <TableRow><TableCell colSpan={4} className="py-8 text-center text-muted-foreground">No organization members found.</TableCell></TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
+            <TeamsTab
+              teams={teams}
+              teamsError={teamsError}
+              editingTeamId={editingTeamId}
+              teamPermissions={teamPermissions}
+              savingTeamPermissions={savingTeamPermissions}
+              teamVisibility={teamVisibility}
+              teamTokenMgmt={teamTokenMgmt}
+              teamMemberList={teamMemberList}
+              teamMemberCounts={teamMemberCounts}
+              addMemberTeam={addMemberTeam}
+              memberships={memberships}
+              membershipsError={membershipsError}
+              inviteEmail={inviteEmail}
+              onInviteEmailInput={setInviteEmail}
+              inviteTeamId={inviteTeamId}
+              onInviteTeamChange={setInviteTeamId}
+              inviting={inviting}
+              canCreateTeam={canCreateTeam}
+              canManageUsers={canManageUsers}
+              canUpdateOrganizationAccess={canUpdateOrganizationAccess}
+              onCreateTeam={createTeam}
+              onNewTeamNameChange={setNewTeamName}
+              newTeamName={newTeamName}
+              onEditPermissions={editTeamPermissions}
+              onCancelEdit={(): void => { setEditingTeamId(""); }}
+              onSavePermissions={saveTeamPermissions}
+              onPermissionToggle={setTeamPermission}
+              onVisibilityChange={(teamId: string, value: string): void => { void updateTeamSetting(teamId, "visibility", value); }}
+              onTokenMgmtChange={(teamId: string, checked: boolean): void => { void updateTeamSetting(teamId, "allow-member-token-management", checked); }}
+              onAddMemberChange={(teamId: string, value: string): void => { setAddMemberTeam((prev) => ({ ...prev, [teamId]: value })); }}
+              onAddMember={(teamId: string): void => { void addTeamMember(teamId); }}
+              onRemoveMember={(teamId: string, member: { id: string; username: string }): void => { void removeTeamMember(teamId, member); }}
+              onInvite={inviteMember}
+              onRetryTeams={(): void => { void loadTeams(); }}
+              onRetryMembers={(): void => { void loadMemberships(); }}
+              onRemoveRequest={handleMemberRemoveRequest}
+            />
           )}
       </div>
 
-      <ConfirmDialog
-        open={confirmDeleteOrgOpen}
-        onOpenChange={setConfirmDeleteOrgOpen}
-        title="Delete Organization"
-        description={
-          <>
-            This action <strong className="text-foreground">cannot be undone</strong>. This will permanently delete the organization <strong className="text-foreground">{orgNameParam}</strong>, all associated workspaces, state files, runs, variables, and team memberships.
-          </>
-        }
-        confirmText="Delete Organization"
-        confirmVariant="destructive"
-        requireCheckbox="I understand this permanently deletes the organization and all of its data."
-        requireText={orgNameParam}
-        loading={deletingOrg}
-        onConfirm={deleteOrg}
-      />
-
-      <ConfirmDialog
-        open={memberToRemove !== null}
-        onOpenChange={(open): void => { if (!open) setMemberToRemove(null); }}
-        title="Remove Organization Member"
-        description={`Are you sure you want to remove ${memberToRemove?.attributes.email ?? memberToRemove?.attributes.username ?? "this member"} from ${orgNameParam}?`}
-        confirmText="Remove Member"
-        confirmVariant="destructive"
-        onConfirm={async (): Promise<void> => {
-          if (memberToRemove !== null) {
-            await removeMembership(memberToRemove);
-          }
-        }}
+      <OrgConfirmDialogs
+        orgNameParam={orgNameParam}
+        confirmDeleteOrgOpen={confirmDeleteOrgOpen}
+        onDeleteOpenChange={setConfirmDeleteOrgOpen}
+        deletingOrg={deletingOrg}
+        onConfirmDelete={deleteOrg}
+        memberToRemove={memberToRemove}
+        onClearMember={(): void => { setMemberToRemove(null); }}
+        onConfirmRemove={removeMembership}
       />
     </PageShell>
   );

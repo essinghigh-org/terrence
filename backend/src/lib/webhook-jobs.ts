@@ -70,6 +70,15 @@ function gitlabEventIdentity(eventName: string, payload: Readonly<Record<string,
     : null;
 }
 
+function bitbucketChangeHashes(
+  next: Readonly<Record<string, unknown>> | undefined,
+  previous: Readonly<Record<string, unknown>> | undefined,
+): { before: string | undefined; after: string | undefined } {
+  const before = nonEmptyString(objectValue(previous?.["target"])?.["hash"]);
+  const after = nonEmptyString(objectValue(next?.["target"])?.["hash"]);
+  return { before, after };
+}
+
 function bitbucketChangeIdentity(value: unknown): string | undefined {
   const change = objectValue(value);
   const next = objectValue(change?.["new"]);
@@ -77,10 +86,7 @@ function bitbucketChangeIdentity(value: unknown): string | undefined {
   const reference = next ?? previous;
   const type = nonEmptyString(reference?.["type"]);
   const name = nonEmptyString(reference?.["name"]);
-  const nextTarget = objectValue(next?.["target"]);
-  const previousTarget = objectValue(previous?.["target"]);
-  const before = nonEmptyString(previousTarget?.["hash"]);
-  const after = nonEmptyString(nextTarget?.["hash"]);
+  const { before, after } = bitbucketChangeHashes(next, previous);
   if (type === undefined || name === undefined || (before === undefined && after === undefined)) return undefined;
   return encodedEventIdentity([type, name, before ?? "", after ?? ""]);
 }

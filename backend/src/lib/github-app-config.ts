@@ -162,66 +162,77 @@ function storedConfiguration(values: Readonly<MutableConfiguration>): JsonRecord
   };
 }
 
+function parseStoredSource(value: unknown): GitHubAppSource | null {
+  return value === "manifest" || value === "manual" || value === "legacy_environment_import" ? value : null;
+}
+
+function parseStoredStatus(value: unknown): GitHubAppStatus {
+  return value === "active" || value === "disconnected" || value === "invalid" ? value : "invalid";
+}
+
+function malformedRecord(updatedAt: number): GitHubAppRecord {
+  return {
+    status: "invalid",
+    source: null,
+    bootstrapConsumed: true,
+    configuration: null,
+    pending: null,
+    invalidReason: "The stored GitHub App configuration is malformed",
+    updatedAt,
+  };
+}
+
+function parseRequiredOwners(pendingValue: JsonRecord): string[] {
+  if (!Array.isArray(pendingValue["requiredOwners"])) return [];
+  return pendingValue["requiredOwners"].filter((owner): owner is string => typeof owner === "string" && owner.trim() !== "");
+}
+
+function parsePendingInstallations(pendingValue: JsonRecord): GitHubAppInstallationSummary[] {
+  if (!Array.isArray(pendingValue["installations"])) return [];
+  return pendingValue["installations"].flatMap((candidate): GitHubAppInstallationSummary[] => {
+    const record = asRecord(candidate);
+    const installationId = positiveInteger(record?.["installationId"]);
+    const owner = nonEmptyString(record?.["owner"]);
+    const ownerType = record?.["ownerType"];
+    return installationId !== null && owner !== null && (ownerType === "Organization" || ownerType === "User")
+      ? [{ installationId, owner, ownerType }]
+      : [];
+  });
+}
+
+async function readPendingConfiguration(values: JsonRecord, source: GitHubAppSource | null, updatedAt: number): Promise<GitHubAppPendingConfiguration | null> {
+  const pendingValue = asRecord(values["pending"]);
+  if (pendingValue === null) return null;
+  const pendingSource = parseStoredSource(pendingValue["source"]) ?? source;
+  if (pendingSource === null) return null;
+  const pendingConfiguration = asRecord(pendingValue["configuration"]);
+  if (pendingConfiguration === null) return null;
+  const decoded = await readConfiguration(pendingConfiguration, pendingSource);
+  if (decoded === null) return null;
+  const createdAt = positiveInteger(pendingValue["createdAt"]) ?? updatedAt;
+  return {
+    flowId: nonEmptyString(pendingValue["flowId"]) ?? `legacy-${String(createdAt)}`,
+    configuration: decoded,
+    requiredOwners: parseRequiredOwners(pendingValue),
+    installations: parsePendingInstallations(pendingValue),
+    createdAt,
+  };
+}
+
 async function loadRecord(): Promise<GitHubAppRecord | null> {
   const row = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, GITHUB_APP_SETTINGS_ID) });
   if (row === undefined) return null;
   const values = asRecord(row.values);
-  if (values === null) {
-    return {
-      status: "invalid",
-      source: null,
-      bootstrapConsumed: true,
-      configuration: null,
-      pending: null,
-      invalidReason: "The stored GitHub App configuration is malformed",
-      updatedAt: row.updatedAt,
-    };
-  }
-  const sourceValue = values["source"];
-  const source: GitHubAppSource | null = sourceValue === "manifest" || sourceValue === "manual" || sourceValue === "legacy_environment_import"
-    ? sourceValue
-    : null;
-  const statusValue = values["status"];
-  const status: GitHubAppStatus = statusValue === "active" || statusValue === "disconnected" || statusValue === "invalid"
-    ? statusValue
-    : "invalid";
+  if (values === null) return malformedRecord(row.updatedAt);
+  const source = parseStoredSource(values["source"]);
+  const status = parseStoredStatus(values["status"]);
   const bootstrapConsumed = values["bootstrapConsumed"] === true || values["bootstrap-consumed"] === true;
   const configurationValues = asRecord(values["configuration"]);
   const configuration = status !== "disconnected" && source !== null && configurationValues !== null
     ? await readConfiguration(configurationValues, source)
     : null;
   const resolvedStatus: GitHubAppStatus = status === "active" && configuration === null ? "invalid" : status;
-
-  let pending: GitHubAppPendingConfiguration | null = null;
-  const pendingValue = asRecord(values["pending"]);
-  const pendingSourceValue = pendingValue?.["source"];
-  const pendingSource: GitHubAppSource | null = pendingSourceValue === "manifest" || pendingSourceValue === "manual" || pendingSourceValue === "legacy_environment_import"
-    ? pendingSourceValue
-    : source;
-  if (pendingValue !== null && pendingSource !== null) {
-    const pendingConfiguration = asRecord(pendingValue["configuration"]);
-    const requiredOwners = Array.isArray(pendingValue["requiredOwners"])
-      ? pendingValue["requiredOwners"].filter((owner): owner is string => typeof owner === "string" && owner.trim() !== "")
-      : [];
-    const installations = Array.isArray(pendingValue["installations"])
-      ? pendingValue["installations"].flatMap((candidate): GitHubAppInstallationSummary[] => {
-        const record = asRecord(candidate);
-        const installationId = positiveInteger(record?.["installationId"]);
-        const owner = nonEmptyString(record?.["owner"]);
-        const ownerType = record?.["ownerType"];
-        return installationId !== null && owner !== null && (ownerType === "Organization" || ownerType === "User")
-          ? [{ installationId, owner, ownerType }]
-          : [];
-      })
-      : [];
-    if (pendingConfiguration !== null) {
-      const decoded = await readConfiguration(pendingConfiguration, pendingSource);
-      const createdAt = positiveInteger(pendingValue["createdAt"]) ?? row.updatedAt;
-      const flowId = nonEmptyString(pendingValue["flowId"]) ?? `legacy-${String(createdAt)}`;
-      if (decoded !== null) pending = { flowId, configuration: decoded, requiredOwners, installations, createdAt };
-    }
-  }
-
+  const pending = await readPendingConfiguration(values, source, row.updatedAt);
   const reason = nonEmptyString(values["invalidReason"]);
   return {
     status: resolvedStatus,
@@ -396,46 +407,65 @@ export async function markGitHubAppInvalid(reason: string): Promise<void> {
   await saveValues(values);
 }
 
-export async function validateGitHubAppConfiguration(configuration: GitHubAppConfiguration): Promise<Readonly<{ ok: boolean; status: number | null; detail: string; credentialError: boolean; appId?: number; slug?: string; name?: string | null; owner?: string | null }>> {
-  let token: string;
+function signAppToken(configuration: GitHubAppConfiguration): string | null {
   try {
-    token = jwt.sign({
+    return jwt.sign({
       iat: Math.floor(Date.now() / 1000) - 60,
       exp: Math.floor(Date.now() / 1000) + (9 * 60),
       iss: configuration.appIdText,
     }, configuration.privateKey, { algorithm: "RS256" });
   } catch {
+    return null;
+  }
+}
+
+async function fetchAppIdentity(configuration: GitHubAppConfiguration, token: string, signal: AbortSignal): Promise<{ response: Response; body: unknown }> {
+  const response = await fetch(`${configuration.apiUrl.replace(/\/$/u, "")}/app`, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "User-Agent": "Terrence",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    signal,
+  });
+  const body: unknown = await response.json().catch((): unknown => ({}));
+  return { response, body };
+}
+
+function checkedAppIdentity(
+  response: Response,
+  body: unknown,
+  configuration: GitHubAppConfiguration,
+): Readonly<{ ok: boolean; status: number | null; detail: string; credentialError: boolean; appId?: number; slug?: string; name?: string | null; owner?: string | null }> {
+  if (!response.ok) return {
+    ok: false,
+    status: response.status,
+    detail: `GitHub returned HTTP ${response.status}`,
+    credentialError: response.status >= 400 && response.status < 500,
+  };
+  const record = asRecord(body);
+  const returnedId = positiveInteger(record?.["id"]);
+  const returnedSlug = nonEmptyString(record?.["slug"]);
+  const returnedName = nonEmptyString(record?.["name"]);
+  if (returnedId !== configuration.appId || (returnedSlug !== null && returnedSlug !== configuration.slug)) {
+    return { ok: false, status: 502, detail: "GitHub returned an App that does not match the configured credentials", credentialError: true };
+  }
+  const ownerValue = asRecord(record?.["owner"]);
+  const owner = nonEmptyString(ownerValue?.["login"] ?? ownerValue?.["name"]);
+  return { ok: true, status: response.status, detail: "GitHub App credentials are valid", appId: returnedId, slug: returnedSlug ?? configuration.slug, name: returnedName, owner, credentialError: false };
+}
+
+export async function validateGitHubAppConfiguration(configuration: GitHubAppConfiguration): Promise<Readonly<{ ok: boolean; status: number | null; detail: string; credentialError: boolean; appId?: number; slug?: string; name?: string | null; owner?: string | null }>> {
+  const token = signAppToken(configuration);
+  if (token === null) {
     return { ok: false, status: null, detail: "The GitHub App private key is invalid", credentialError: true };
   }
   const controller = new AbortController();
   const timer = setTimeout((): void => { controller.abort(); }, 10_000);
   try {
-    const response = await fetch(`${configuration.apiUrl.replace(/\/$/u, "")}/app`, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${token}`,
-        "User-Agent": "Terrence",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-      signal: controller.signal,
-    });
-    const body: unknown = await response.json().catch((): unknown => ({}));
-    if (!response.ok) return {
-      ok: false,
-      status: response.status,
-      detail: `GitHub returned HTTP ${response.status}`,
-      credentialError: response.status >= 400 && response.status < 500,
-    };
-    const record = asRecord(body);
-    const returnedId = positiveInteger(record?.["id"]);
-    const returnedSlug = nonEmptyString(record?.["slug"]);
-    const returnedName = nonEmptyString(record?.["name"]);
-    if (returnedId !== configuration.appId || (returnedSlug !== null && returnedSlug !== configuration.slug)) {
-      return { ok: false, status: 502, detail: "GitHub returned an App that does not match the configured credentials", credentialError: true };
-    }
-    const ownerValue = asRecord(record?.["owner"]);
-    const owner = nonEmptyString(ownerValue?.["login"] ?? ownerValue?.["name"]);
-    return { ok: true, status: response.status, detail: "GitHub App credentials are valid", appId: returnedId, slug: returnedSlug ?? configuration.slug, name: returnedName, owner, credentialError: false };
+    const { response, body } = await fetchAppIdentity(configuration, token, controller.signal);
+    return checkedAppIdentity(response, body, configuration);
   } catch {
     return { ok: false, status: null, detail: "GitHub App validation could not reach GitHub", credentialError: false };
   } finally {

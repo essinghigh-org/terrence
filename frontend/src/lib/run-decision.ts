@@ -175,6 +175,100 @@ function inFlightHeadline(action: string): string {
   return `${name} sent — waiting for the run to update`;
 }
 
+function inFlightDecision(attributes: RunAttributes, fresh: boolean, awaitingAction: string): RunDecision {
+  // Keep the stop-it-now offers available. A cancel the worker never
+  // acknowledges would otherwise park the panel on "Cancel sent — waiting
+  // for the run to update" with force cancel hidden, which is precisely the
+  // situation force cancel exists for. The action just sent is excluded so
+  // it cannot be re-sent.
+  const escapes = stopOffers(attributes, fresh)
+    .filter((item: RunActionOffer): boolean => item.kind !== awaitingAction);
+  return {
+    kind: "waiting",
+    headline: inFlightHeadline(awaitingAction),
+    detail: escapes.length > 0 && awaitingAction === "cancel"
+      ? "If it stays here, the process is not responding and can be force canceled."
+      : "",
+    offers: escapes,
+    showProgress: true,
+  };
+}
+
+function terminalDecision(status: string): RunDecision {
+  return {
+    kind: "settled",
+    headline: SETTLED_HEADLINES[status] ?? "Run finished",
+    detail: "",
+    offers: [],
+    showProgress: false,
+  };
+}
+
+function planOnlyDecision(speculative: boolean): RunDecision {
+  return {
+    kind: "settled",
+    headline: speculative
+      ? "Speculative plan — this run never applies"
+      : "Plan-only run — this run never applies",
+    detail: "It exists to show what would change. Start a normal run to apply.",
+    offers: [],
+    showProgress: false,
+  };
+}
+
+function policyDecision(attributes: RunAttributes, fresh: boolean): RunDecision {
+  const { permissions } = attributes;
+  const canOverride = fresh && permissions?.["can-override-policy-check"] === true;
+  // Overrides require a recorded justification comment (enforced by the
+  // API): without comment permission the offer must stay blocked, or the
+  // panel would invite an action that can never carry its justification.
+  const canJustify = fresh && permissions?.["can-comment"] === true;
+  return {
+    kind: "decide",
+    headline: "A policy check needs an override before this run can apply",
+    detail: canOverride
+      ? (canJustify
+        ? "Overrides are recorded with your comment. Explain why the finding is acceptable."
+        : "Overrides are recorded with a justification comment, which needs comment permission on this run.")
+      : "Someone with override permission has to accept the finding, or the run can be discarded.",
+    offers: [
+      offer(
+        "override-policy",
+        "Override policy check",
+        "primary",
+        !canOverride
+          ? permissionBlocker(fresh, false, "You do not have permission to override policy checks.")
+          : (!canJustify ? "Overriding requires a written justification, and you cannot comment on this run." : null),
+      ),
+      ...discardOffer(attributes, fresh, "Discard run"),
+    ],
+    showProgress: false,
+  };
+}
+
+function confirmableDecision(attributes: RunAttributes, fresh: boolean): RunDecision {
+  return {
+    kind: "decide",
+    headline: "Needs confirmation",
+    detail: "Review the plan, then apply or discard it.",
+    offers: [
+      offer("apply", "Apply changes", "primary", applyBlocker(attributes, fresh)),
+      ...discardOffer(attributes, fresh, "Discard plan"),
+    ],
+    showProgress: false,
+  };
+}
+
+function finishedPlanDecision(attributes: RunAttributes, fresh: boolean): RunDecision {
+  return {
+    kind: "settled",
+    headline: "Plan finished",
+    detail: "",
+    offers: discardOffer(attributes, fresh, "Discard plan"),
+    showProgress: false,
+  };
+}
+
 /**
  * Resolve the run's single pending decision.
  *
@@ -199,37 +293,12 @@ export function resolveRunDecision(
     awaitingAction: string | null;
   }>,
 ): RunDecision {
-  const { status, actions, permissions } = attributes;
+  const { status, actions } = attributes;
   const { fresh, speculative, awaitingAction } = options;
 
-  if (awaitingAction !== null) {
-    // Keep the stop-it-now offers available. A cancel the worker never
-    // acknowledges would otherwise park the panel on "Cancel sent — waiting
-    // for the run to update" with force cancel hidden, which is precisely the
-    // situation force cancel exists for. The action just sent is excluded so
-    // it cannot be re-sent.
-    const escapes = stopOffers(attributes, fresh)
-      .filter((item: RunActionOffer): boolean => item.kind !== awaitingAction);
-    return {
-      kind: "waiting",
-      headline: inFlightHeadline(awaitingAction),
-      detail: escapes.length > 0 && awaitingAction === "cancel"
-        ? "If it stays here, the process is not responding and can be force canceled."
-        : "",
-      offers: escapes,
-      showProgress: true,
-    };
-  }
+  if (awaitingAction !== null) return inFlightDecision(attributes, fresh, awaitingAction);
 
-  if (TERMINAL_STATUSES.has(status)) {
-    return {
-      kind: "settled",
-      headline: SETTLED_HEADLINES[status] ?? "Run finished",
-      detail: "",
-      offers: [],
-      showProgress: false,
-    };
-  }
+  if (TERMINAL_STATUSES.has(status)) return terminalDecision(status);
 
   // Speculative and plan-only runs stop at a finished plan by design. This is
   // checked before the confirmable branch, because such a run reaches
@@ -240,71 +309,19 @@ export function resolveRunDecision(
   // "Run in progress" branch whenever the API omitted `actions`.
   const planFinished = ["planned", "planned_and_saved", "needs_confirmation"].includes(status);
   if ((speculative || attributes["plan-only"] === true) && planFinished) {
-    return {
-      kind: "settled",
-      headline: speculative
-        ? "Speculative plan — this run never applies"
-        : "Plan-only run — this run never applies",
-      detail: "It exists to show what would change. Start a normal run to apply.",
-      offers: [],
-      showProgress: false,
-    };
+    return planOnlyDecision(speculative);
   }
 
   if (status === "policy_soft_failed" || status === "policy_override") {
-    const canOverride = fresh && permissions?.["can-override-policy-check"] === true;
-    // Overrides require a recorded justification comment (enforced by the
-    // API): without comment permission the offer must stay blocked, or the
-    // panel would invite an action that can never carry its justification.
-    const canJustify = fresh && permissions?.["can-comment"] === true;
-    return {
-      kind: "decide",
-      headline: "A policy check needs an override before this run can apply",
-      detail: canOverride
-        ? (canJustify
-          ? "Overrides are recorded with your comment. Explain why the finding is acceptable."
-          : "Overrides are recorded with a justification comment, which needs comment permission on this run.")
-        : "Someone with override permission has to accept the finding, or the run can be discarded.",
-      offers: [
-        offer(
-          "override-policy",
-          "Override policy check",
-          "primary",
-          !canOverride
-            ? permissionBlocker(fresh, false, "You do not have permission to override policy checks.")
-            : (!canJustify ? "Overriding requires a written justification, and you cannot comment on this run." : null),
-        ),
-        ...discardOffer(attributes, fresh, "Discard run"),
-      ],
-      showProgress: false,
-    };
+    return policyDecision(attributes, fresh);
   }
 
-  if (actions?.["is-confirmable"] === true) {
-    return {
-      kind: "decide",
-      headline: "Needs confirmation",
-      detail: "Review the plan, then apply or discard it.",
-      offers: [
-        offer("apply", "Apply changes", "primary", applyBlocker(attributes, fresh)),
-        ...discardOffer(attributes, fresh, "Discard plan"),
-      ],
-      showProgress: false,
-    };
-  }
+  if (actions?.["is-confirmable"] === true) return confirmableDecision(attributes, fresh);
 
   // Planned, but the API says it cannot be confirmed — usually because a newer
   // run has superseded it. Nothing is asked, so say the plan is done and stop;
   // the phase sections below report the outcome.
-  if (planFinished) {
-    return {
-      kind: "settled",
-      headline: "Plan finished",
-      detail: "",
-      offers: discardOffer(attributes, fresh, "Discard plan"),
-      showProgress: false,
-    };
-  }
+  if (planFinished) return finishedPlanDecision(attributes, fresh);
 
   return {
     kind: "waiting",

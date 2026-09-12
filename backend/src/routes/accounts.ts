@@ -354,55 +354,87 @@ export async function issueLoginSession(
   return accessTokenDocument(tokenId, tokenStr, user, accessExpiresAt);
 }
 
+type SessionFamily = {
+  active: boolean;
+  createdAt: number;
+  current: boolean;
+  expiresAt: number;
+  ipAddress: string | null;
+  lastRotatedAt: number | null;
+  userAgent: string | null;
+};
+
+function isFamilyActive(existing: SessionFamily | undefined, rotatedAt: number | null): boolean {
+  return (existing?.active ?? false) || rotatedAt === null;
+}
+
+function isCurrentFamily(
+  existing: SessionFamily | undefined,
+  session: Readonly<{ accessTokenId: string; familyId: string }>,
+  currentAccessTokenId: string | null,
+  currentFamilyId: string | null,
+): boolean {
+  return (existing?.current ?? false) || session.accessTokenId === currentAccessTokenId || session.familyId === currentFamilyId;
+}
+
+function familyLastRotatedAt(existing: SessionFamily | undefined, rotatedAt: number | null): number | null {
+  if (rotatedAt === null) return existing?.lastRotatedAt ?? null;
+  return Math.max(existing?.lastRotatedAt ?? rotatedAt, rotatedAt);
+}
+
+function mergeSessionFamily(
+  existing: SessionFamily | undefined,
+  session: Readonly<typeof refreshSessions.$inferSelect>,
+  currentAccessTokenId: string | null,
+  currentFamilyId: string | null,
+): SessionFamily {
+  return {
+    active: isFamilyActive(existing, session.rotatedAt),
+    createdAt: Math.min(existing?.createdAt ?? session.createdAt, session.createdAt),
+    current: isCurrentFamily(existing, session, currentAccessTokenId, currentFamilyId),
+    expiresAt: Math.max(existing?.expiresAt ?? session.expiresAt, session.expiresAt),
+    ipAddress: existing?.ipAddress ?? session.ipAddress ?? null,
+    lastRotatedAt: familyLastRotatedAt(existing, session.rotatedAt),
+    userAgent: existing?.userAgent ?? session.userAgent ?? null,
+  };
+}
+
+function compareSessionFamilies(left: SessionFamily, right: SessionFamily): number {
+  if (left.current !== right.current) return right.current ? 1 : -1;
+  return (right.lastRotatedAt ?? right.createdAt) - (left.lastRotatedAt ?? left.createdAt);
+}
+
+function sessionFamilyResource(familyId: string, family: SessionFamily): Record<string, unknown> {
+  return {
+    id: familyId,
+    type: "browser-sessions",
+    attributes: {
+      "created-at": new Date(family.createdAt).toISOString(),
+      "last-rotated-at": family.lastRotatedAt === null
+        ? null
+        : new Date(family.lastRotatedAt).toISOString(),
+      "expires-at": new Date(family.expiresAt).toISOString(),
+      "ip-address": family.ipAddress,
+      "user-agent": family.userAgent,
+      current: family.current,
+    },
+  };
+}
+
 function browserSessionResources(
   sessions: readonly Readonly<typeof refreshSessions.$inferSelect>[],
   currentAccessTokenId: string | null,
   currentFamilyId: string | null,
 ): Record<string, unknown>[] {
-  const families = new Map<string, {
-    active: boolean;
-    createdAt: number;
-    current: boolean;
-    expiresAt: number;
-    ipAddress: string | null;
-    lastRotatedAt: number | null;
-    userAgent: string | null;
-  }>();
+  const families = new Map<string, SessionFamily>();
   for (const session of sessions) {
-    const existing = families.get(session.familyId);
-    families.set(session.familyId, {
-      active: (existing?.active ?? false) || session.rotatedAt === null,
-      createdAt: Math.min(existing?.createdAt ?? session.createdAt, session.createdAt),
-      current: (existing?.current ?? false) || session.accessTokenId === currentAccessTokenId || session.familyId === currentFamilyId,
-      expiresAt: Math.max(existing?.expiresAt ?? session.expiresAt, session.expiresAt),
-      ipAddress: existing?.ipAddress ?? session.ipAddress ?? null,
-      lastRotatedAt: session.rotatedAt === null
-        ? existing?.lastRotatedAt ?? null
-        : Math.max(existing?.lastRotatedAt ?? session.rotatedAt, session.rotatedAt),
-      userAgent: existing?.userAgent ?? session.userAgent ?? null,
-    });
+    families.set(session.familyId, mergeSessionFamily(families.get(session.familyId), session, currentAccessTokenId, currentFamilyId));
   }
 
   return [...families.entries()]
     .filter(([, family]): boolean => family.active)
-    .sort(([, left], [, right]): number => {
-      if (left.current !== right.current) return right.current ? 1 : -1;
-      return (right.lastRotatedAt ?? right.createdAt) - (left.lastRotatedAt ?? left.createdAt);
-    })
-    .map(([familyId, family]): Record<string, unknown> => ({
-      id: familyId,
-      type: "browser-sessions",
-      attributes: {
-        "created-at": new Date(family.createdAt).toISOString(),
-        "last-rotated-at": family.lastRotatedAt === null
-          ? null
-          : new Date(family.lastRotatedAt).toISOString(),
-        "expires-at": new Date(family.expiresAt).toISOString(),
-        "ip-address": family.ipAddress,
-        "user-agent": family.userAgent,
-        current: family.current,
-      },
-    }));
+    .sort(([, left], [, right]): number => compareSessionFamilies(left, right))
+    .map(([familyId, family]): Record<string, unknown> => sessionFamilyResource(familyId, family));
 }
 
 function refreshUnauthorized(
@@ -482,45 +514,615 @@ async function requireCurrentPassword(
   return null;
 }
 
+function resolveIactToken(request: RequestInfo | undefined): string | null {
+  // the reference format's installer passes the token as a query parameter.
+  // Query-token compatibility is OPT-IN (todo 142: the default is the
+  // safer header-only flow) — set IACT_QUERY_TOKEN_ENABLED=1 to restore the
+  // reference installer behavior. The header alternative keeps the secret
+  // out of proxy logs, browser history, and traces entirely.
+  const queryEnabled = envFlag("IACT_QUERY_TOKEN_ENABLED");
+  const queryToken = request === undefined || !queryEnabled ? null : new URL(request.url).searchParams.get("token");
+  const headerToken = request === undefined ? null
+    : request.headers.get("x-iact-token")
+      ?? (() => {
+        const authorization = request.headers.get("authorization") ?? "";
+        return authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : null;
+      })();
+  return queryToken ?? headerToken;
+}
+
+async function verifyIactElection(configuredToken: string | undefined, suppliedToken: string | null): Promise<boolean> {
+  const configured = Buffer.from(configuredToken ?? "");
+  const supplied = Buffer.from(suppliedToken ?? "");
+  if (
+    configuredToken === undefined
+    || configuredToken === ""
+    || suppliedToken === null
+    || configured.length !== supplied.length
+    || !timingSafeEqual(configured, supplied)
+    || (await db.select({ value: count() }).from(users))[0]?.value !== 0
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function parseInitialAdminPayload(body: unknown): { username: string; email: string; password: string } | null {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const username = typeof payload["username"] === "string" ? normalizeUsername(payload["username"]) ?? "" : "";
+  const email = typeof payload["email"] === "string" ? normalizeEmail(payload["email"]) ?? "" : "";
+  const password = typeof payload["password"] === "string" ? payload["password"] : "";
+  if (username === "" || email === "" || password === "") return null;
+  return { username, email, password };
+}
+
+function parseLoginCredentials(
+  body: unknown,
+  set: SetObj,
+): { username: string; password: string; browserSession: boolean } | { error: unknown } {
+  let payload: DataPayload | undefined;
+  if (typeof body === "string") {
+    try {
+      payload = JSON.parse(body) as DataPayload;
+    } catch {
+      (set as { status: number }).status = 400;
+      return { error: { errors: [{ status: "400", title: "Bad Request", detail: "Invalid JSON string" }] } };
+    }
+  } else if (body !== null && typeof body === "object") {
+    payload = body;
+  }
+
+  const attrs = payload?.data?.attributes ?? {};
+  const username = typeof attrs["username"] === "string" ? attrs["username"] : "";
+  const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
+  const browserSession = attrs["browser-session"] === true;
+
+  if (username === "" || password === "") {
+    (set as { status: number }).status = 400;
+    return { error: { errors: [{ status: "400", title: "Bad Request", detail: "Missing credentials" }] } };
+  }
+  return { username, password, browserSession };
+}
+
+type LdapLoginUser = NonNullable<Awaited<ReturnType<typeof authenticateLdapWithCircuitBreaker>>["user"]>;
+
+async function attemptLdapAuthentication(
+  ldap: Parameters<typeof authenticateLdapWithCircuitBreaker>[0],
+  username: string,
+  password: string,
+): Promise<{ user: LdapLoginUser | null; unavailable: boolean }> {
+  try {
+    const ldapResult = await authenticateLdapWithCircuitBreaker(ldap, username, password);
+    return { user: ldapResult.user, unavailable: ldapResult.unavailable };
+  } catch (error: unknown) {
+    log.warn("LDAP authentication probe failed; continuing with local authentication", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { user: null, unavailable: true };
+  }
+}
+
+async function provisionLdapUser(
+  ldapUser: LdapLoginUser,
+  allowEmailLinking: boolean,
+  username: string,
+  set: SetObj,
+): Promise<{ user: typeof users.$inferSelect } | { error: unknown }> {
+  try {
+    const provisioned = await provisionSsoUser({
+      provider: "ldap",
+      subject: ldapUser.dn,
+      username: ldapUser.username,
+      email: ldapUser.email,
+      // Directory attributes are operator-controlled; the bind against
+      // the user DN already authenticated the caller.
+      emailVerified: true,
+      allowEmailLinking,
+    });
+    return { user: provisioned.user };
+  } catch (error: unknown) {
+    if (error instanceof SsoConflictError) {
+      // Do not reveal whether a local account owns the username; log
+      // the specifics server-side only.
+      log.warn("LDAP provisioning conflict", { username });
+      (set as { status: number }).status = 401;
+      return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "This account cannot be provisioned from the directory" }] } };
+    }
+    throw error;
+  }
+}
+
+async function authenticateLocalLogin(
+  username: string,
+  password: string,
+  localAuthEnabled: boolean,
+  ldapUnavailable: boolean,
+  set: SetObj,
+): Promise<{ user: typeof users.$inferSelect } | { error: unknown }> {
+  if (ldapUnavailable && !localAuthEnabled) {
+    (set as { status: number }).status = 503;
+    return { error: { errors: [{ status: "503", title: "Service Unavailable", detail: "The LDAP directory is temporarily unavailable." }] } };
+  }
+  if (!localAuthEnabled) {
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] } };
+  }
+  const loginEmail = normalizeEmail(username);
+  const found = await db.query.users.findFirst({
+    where: loginEmail === null
+      ? eq(users.username, username)
+      : or(eq(users.username, username), eq(users.email, loginEmail)),
+  });
+  if (found !== undefined && isLoginLocked(found)) {
+    // Preserve the dummy-hash timing path without changing lockout behavior.
+    await passwordMatches(password, found.passwordHash);
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] } };
+  }
+  const passwordValid = found === undefined
+    ? await passwordMatches(password)
+    : await verifyAndUpgradePassword(found.id, password, found.passwordHash);
+  if (found === undefined || !passwordValid) {
+    if (found !== undefined && !isUserLoginBlocked(found)) {
+      const failure = await recordFailedLogin(found.id);
+      if (failure.lockedUntil !== null) {
+        log.warn("Account locked after repeated failed login attempts", {
+          userId: found.id,
+          failedAttempts: failure.failedAttempts,
+          lockedUntil: failure.lockedUntil,
+        });
+      }
+    }
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] } };
+  }
+  return { user: found };
+}
+
+async function checkPostLoginState(
+  user: typeof users.$inferSelect,
+  localPasswordAuthenticated: boolean,
+  set: SetObj,
+): Promise<unknown | null> {
+  if (localPasswordAuthenticated && isLoginLocked(user)) {
+    (set as { status: number }).status = 401;
+    return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+  }
+  if (user.isProvisional === true) {
+    (set as { status: number }).status = 401;
+    return { errors: [{ status: "401", title: "Unauthorized", detail: "This invitation has not been accepted yet" }] };
+  }
+  if (isUserLoginBlocked(user)) {
+    (set as { status: number }).status = 401;
+    return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+  }
+  // Keep the compare-and-clear even when the stale user row appears clean:
+  // a failed login can set a lock while password verification is in flight.
+  if (localPasswordAuthenticated && !(await clearLoginFailures(user.id))) {
+    (set as { status: number }).status = 401;
+    return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+  }
+  return null;
+}
+
+async function mfaChallengeResponse(
+  user: Readonly<typeof users.$inferSelect>,
+): Promise<unknown | null> {
+  // If MFA is enabled for this account, issue a short-lived challenge token
+  // instead of an access token. The client completes login via
+  // POST /users/login/mfa with a valid TOTP code.
+  const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
+  if (mfa !== undefined && mfa.enabled === true) {
+    const challengeToken = await issueMfaChallenge(user.id);
+    return {
+      data: {
+        type: "users",
+        attributes: {
+          "mfa-required": true,
+          "mfa-challenge-token": challengeToken,
+        },
+      },
+    };
+  }
+  return null;
+}
+
+function parseMfaChallengeRequest(
+  body: unknown,
+  set: SetObj,
+): { challengeToken: string; code: string; browserSession: boolean } | { error: unknown } {
+  let payload: DataPayload | undefined;
+  if (typeof body === "string") {
+    try {
+      payload = JSON.parse(body) as DataPayload;
+    } catch {
+      payload = undefined;
+    }
+  } else if (body !== null && typeof body === "object") {
+    payload = body;
+  }
+  const attrs = payload?.data?.attributes ?? {};
+  const challengeToken = typeof attrs["challenge-token"] === "string" ? attrs["challenge-token"] : "";
+  const code = typeof attrs["code"] === "string" ? attrs["code"] : "";
+  const browserSession = attrs["browser-session"] === true;
+
+  if (challengeToken === "" || code === "") {
+    (set as { status: number }).status = 400;
+    return { error: { errors: [{ status: "400", title: "Bad Request", detail: "Missing MFA challenge token or code" }] } };
+  }
+  return { challengeToken, code, browserSession };
+}
+
+async function validateMfaChallenge(
+  challengeToken: string,
+  code: string,
+  set: SetObj,
+): Promise<{ userId: string } | { error: unknown }> {
+  const challenge = await consumeMfaChallenge(challengeToken);
+  if (challenge === null) {
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "MFA challenge has expired or is invalid" }] } };
+  }
+
+  const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, challenge.userId) });
+  if (mfa === undefined || mfa.enabled !== true) {
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] } };
+  }
+  if (!(await acceptTotpCode(challenge.userId, mfa, code))) {
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] } };
+  }
+  return { userId: challenge.userId };
+}
+
+async function issueGraceAccessToken(
+  successorUser: typeof users.$inferSelect,
+  successorFamilyId: string,
+  now: number,
+): Promise<unknown> {
+  const graceAccess = opaqueToken("user");
+  const graceAccessId = crypto.randomUUID();
+  const graceExpiresAt = now + ACCESS_TOKEN_TTL_MS;
+  await db.insert(apiTokens).values({
+    id: graceAccessId,
+    token: tokenHash(graceAccess),
+    userId: successorUser.id,
+    refreshFamilyId: successorFamilyId,
+    description: "Browser session access token",
+    expiresAt: graceExpiresAt,
+    createdAt: now,
+  });
+  // The browser already holds the successor refresh cookie from the
+  // winning response; only the access-token document is re-issued.
+  return accessTokenDocument(graceAccessId, graceAccess, successorUser, graceExpiresAt);
+}
+
+async function resolveGraceSuccessor(
+  rotatedAtMs: number | null,
+  successorHash: string | null,
+  now: number,
+): Promise<{ successor: typeof refreshSessions.$inferSelect; successorUser: typeof users.$inferSelect } | null> {
+  if (rotatedAtMs === null || successorHash === null || now - rotatedAtMs > REFRESH_GRACE_MS) return null;
+  const successor = await db.query.refreshSessions.findFirst({
+    where: eq(refreshSessions.tokenHash, successorHash),
+  });
+  const successorUser = successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
+    ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
+    : undefined;
+  if (successor !== undefined && successorUser !== undefined && !isUserLoginBlocked(successorUser)) {
+    return { successor, successorUser };
+  }
+  return null;
+}
+
+async function loadRefreshCandidate(
+  seen: Map<string, typeof refreshSessions.$inferSelect>,
+  presentedToken: string,
+): Promise<{ current: typeof refreshSessions.$inferSelect } | { stale: true }> {
+  const key = tokenHash(presentedToken);
+  const cached = seen.get(key) ?? null;
+  if (cached !== null) return { current: cached };
+  const row = await refreshSessionForToken(presentedToken);
+  if (row === undefined) return { stale: true };
+  seen.set(key, row);
+  return { current: row };
+}
+
+async function processRefreshCandidate(
+  current: typeof refreshSessions.$inferSelect,
+  currentUser: typeof users.$inferSelect,
+  liveFamilyId: string | null,
+  now: number,
+  set: SetObj,
+  request: RequestInfo | undefined,
+  server: unknown,
+): Promise<{ response: unknown } | { familyId: string | null }> {
+  // Two-tab concurrency grace (todo 125-127): this request serialized
+  // behind the winning tab (in-process rotation lock) and is presenting
+  // a token the winner just rotated. Within the grace window that is
+  // the legitimate second tab, not replay: re-issue an access token
+  // against the successor session WITHOUT rotating again. Outside the
+  // window the normal reuse handling below applies.
+  if (current.rotatedAt !== null) {
+    const grace = await resolveGraceSuccessor(current.rotatedAtMs, current.successorHash, now);
+    if (grace !== null) {
+      return { response: await issueGraceAccessToken(grace.successorUser, grace.successor.familyId, now) };
+    }
+  }
+  // Rotated tokens are normally reuse, but the pre-2026-08-19
+  // Path=/api/v2/users ghost cookie is a rotated token that shares
+  // the same family as the live token the browser also sends.
+  // Only relax reuse when the rotated token is from the same family
+  // as the live candidate we will successfully rotate.
+  // TODO(remove after 2027-02-19): legacy ghost-cookie relaxation.
+  if (current.rotatedAt !== null) {
+    if (liveFamilyId !== null && current.familyId !== liveFamilyId) {
+      await revokeRefreshFamily(current.familyId, current.userId, now);
+      return { response: refreshUnauthorized(set, request, "Refresh token reuse detected", server) };
+    }
+    // We don't know the live family yet or this ghost shares it —
+    // stash and re-evaluate after we find a live candidate.
+    return { familyId: liveFamilyId };
+  }
+  // This is a live candidate — its family is the live family, so earlier
+  // rotated ghosts from the same family stay forgiven (already skipped).
+  // (Live processing always returns a response below, so there is no
+  // later iteration to propagate to; the caller retains liveFamilyId.)
+
+  const accessToken = opaqueToken("user");
+  const accessTokenId = crypto.randomUUID();
+  const refreshToken = opaqueToken("refresh");
+  const accessExpiresAt = now + ACCESS_TOKEN_TTL_MS;
+  // Two-tab concurrency grace (todo 125-127): the rotation records the
+  // successor hash so an immediately-duplicated refresh presenting the
+  // same old token resolves to the successor instead of revoking the
+  // family. Only rotations within REFRESH_GRACE_MS are forgiven.
+  const rotated = await db.transaction(async (tx: unknown): Promise<boolean> => {
+    const t = tx as typeof db;
+    const claimed = await t.update(refreshSessions)
+      .set({ rotatedAt: now, rotatedAtMs: now, successorHash: tokenHash(refreshToken) })
+      .where(and(
+        eq(refreshSessions.id, current.id),
+        isNull(refreshSessions.rotatedAt),
+        isNull(refreshSessions.revokedAt),
+        gt(refreshSessions.expiresAt, now),
+      ))
+      .returning({ id: refreshSessions.id });
+    if (claimed.length === 0) return false;
+    await t.delete(apiTokens).where(eq(apiTokens.id, current.accessTokenId));
+    await t.insert(apiTokens).values({
+      id: accessTokenId,
+      token: tokenHash(accessToken),
+      userId: currentUser.id,
+      refreshFamilyId: current.familyId,
+      description: "Browser session access token",
+      expiresAt: accessExpiresAt,
+      createdAt: now,
+    });
+    await t.insert(refreshSessions).values({
+      id: crypto.randomUUID(),
+      familyId: current.familyId,
+      tokenHash: tokenHash(refreshToken),
+      userId: currentUser.id,
+      accessTokenId,
+      expiresAt: current.expiresAt,
+      createdAt: now,
+      mfaVerified: current.mfaVerified ?? false,
+    });
+    return true;
+  });
+  if (!rotated) {
+    // Re-read the row: the concurrent winner may have populated
+    // successorHash/rotatedAtMs that our stale snapshot lacks.
+    const fresh = await db.query.refreshSessions.findFirst({
+      where: eq(refreshSessions.id, current.id),
+    });
+    const effective = fresh ?? current;
+    // The claim failed: the token was already rotated (two-tab race or
+    // replay) or revoked/expired. The in-process rotation lock means a
+    // concurrent same-process tab serialized behind us and re-read the
+    // row; a genuine cross-process replay arrives later than the grace
+    // window. Inside the window, treat the duplicate as the legitimate
+    // second tab: hand back the successor session's access token
+    // WITHOUT rotating again (todo 125-126). Outside the window this
+    // stays a family-revocation reuse event (todo 127).
+    const grace = await resolveGraceSuccessor(effective.rotatedAtMs, effective.successorHash, now);
+    if (grace !== null) {
+      // Keep the successor's refresh cookie value as-is: the browser
+      // already holds it from the first response. Only the access
+      // token document is re-issued here.
+      return { response: await issueGraceAccessToken(grace.successorUser, grace.successor.familyId, now) };
+    }
+    await revokeRefreshFamily(current.familyId, current.userId, now);
+    return { response: refreshUnauthorized(set, request, "Refresh token reuse detected", server) };
+  }
+
+  setRefreshCookie(set, request, refreshToken, current.expiresAt, server);
+  return { response: accessTokenDocument(accessTokenId, accessToken, currentUser, accessExpiresAt) };
+}
+
+async function classifyRefreshFailure(
+  seen: Map<string, typeof refreshSessions.$inferSelect>,
+  candidates: readonly string[],
+  now: number,
+  set: SetObj,
+  request: RequestInfo | undefined,
+  server: unknown,
+): Promise<unknown> {
+  // No candidate matched a live session. If any candidate was a
+  // rotated token, treat it as reuse (revoke the family). Otherwise
+  // the session is simply invalid/expired.
+  const reuse = [...seen.values()].find((row): boolean => row.rotatedAt !== null) ?? null;
+  if (reuse !== null) {
+    await revokeRefreshFamily(reuse.familyId, reuse.userId, now);
+    return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
+  }
+  if ([...seen.values()].some((row): boolean => row.revokedAt !== null || row.expiresAt <= now)) {
+    return refreshUnauthorized(set, request, "Refresh session expired", server);
+  }
+  // Tokens not found in DB (seen miss) — fill the map for them too
+  // so the error classification above could consider them; otherwise
+  // treat as invalid.
+  for (const token of candidates) {
+    const key = tokenHash(token);
+    if (seen.has(key)) continue;
+    const row = await refreshSessionForToken(token);
+    if (row === undefined) continue;
+    seen.set(key, row);
+    if (row.rotatedAt !== null) {
+      await revokeRefreshFamily(row.familyId, row.userId, now);
+      return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
+    }
+    if (row.revokedAt !== null || row.expiresAt <= now) {
+      return refreshUnauthorized(set, request, "Refresh session expired", server);
+    }
+  }
+  return refreshUnauthorized(set, request, "Refresh session is invalid", server);
+}
+
+function parseSignupCredentials(
+  body: unknown,
+  set: SetObj,
+): { username: string; password: string; email: unknown } | { error: unknown } {
+  const attrs = extractAttrs(body) ?? {};
+  const username = typeof attrs["username"] === "string" ? normalizeUsername(attrs["username"]) ?? "" : "";
+  const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
+
+  if (username === "" || password === "") {
+    (set as { status: number }).status = 400;
+    return { error: { errors: [{ status: "400", title: "Bad Request", detail: "Missing username or password" }] } };
+  }
+
+  const policyCheck = checkPasswordPolicy(loadPasswordPolicy(), password, username);
+  if (!policyCheck.ok) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyCheck.errors.join(" ") }] } };
+  }
+  return { username, password, email: attrs["email"] };
+}
+
+function resolveSignupEmail(email: unknown, username: string, set: SetObj): { email: string } | { error: unknown } {
+  // Bounded email matcher. The full RFC-5322 grammar embeds nested
+  // quantifiers that admit catastrophic backtracking (ReDoS); this
+  // pragmatic pattern scans in linear time and is sufficient for signup.
+  const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+
+  const emailStr = typeof email === "string" && email.trim() !== "" ? normalizeEmail(email) ?? "" : `${username}@example.com`;
+  if (!EMAIL_REGEX.test(emailStr)) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email address is required" }] } };
+  }
+  return { email: emailStr };
+}
+
+async function createLocalSignupUser(
+  id: string,
+  username: string,
+  normalizedEmail: string,
+  passwordHash: string,
+  set: SetObj,
+): Promise<unknown> {
+  // Local signup NEVER elects a site admin. The first user on a fresh
+  // instance must come from the ADMIN_PASSWORD (or installer IACT)
+  // bootstrap, whose count-then-insert runs under a serialized first-user
+  // lock. Letting signup elect admins from a plain count raced two
+  // concurrent signups into two site admins on PostgreSQL.
+  try {
+    await db.insert(users).values({ id, username, email: normalizedEmail, passwordHash, isSiteAdmin: false });
+    await auditLog("create", "users", id, null, null, { username });
+    (set as { status: number }).status = 201;
+    return localSignupAcknowledgement(id, username, normalizedEmail);
+  } catch (e: unknown) {
+    if (isUniqueConstraintError(e)) {
+      // A concurrent request may win the unique-key race after the lookup;
+      // answer with the same idempotent acknowledgement rather than exposing
+      // a distinct conflict response.
+      const raced = await db.query.users.findFirst({
+        where: or(eq(users.username, username), eq(users.email, normalizedEmail)),
+      });
+      (set as { status: number }).status = 201;
+      if (raced !== undefined && raced.username === username && raced.email === normalizedEmail) {
+        return localSignupAcknowledgement(raced.id, raced.username, raced.email);
+      }
+      return localSignupAcknowledgement(id, username, normalizedEmail);
+    }
+    throw e;
+  }
+}
+
+type AccountChanges = { username?: string; email?: string | null; emailVerifiedAt?: number | null; theme?: string };
+
+function parseUsernameChange(
+  attrs: Attrs,
+  changes: AccountChanges,
+  set: SetObj,
+): unknown | null {
+  if (!Object.hasOwn(attrs, "username")) return null;
+  if (typeof attrs["username"] !== "string" || attrs["username"].trim() === "") {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username cannot be empty" }] };
+  }
+  const normalizedUsername = normalizeUsername(attrs["username"]);
+  if (normalizedUsername === null) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username contains invalid characters" }] };
+  }
+  changes.username = normalizedUsername;
+  return null;
+}
+
+function parseEmailChange(
+  attrs: Attrs,
+  currentEmail: string | null,
+  changes: AccountChanges,
+  set: SetObj,
+): unknown | null {
+  if (!Object.hasOwn(attrs, "email")) return null;
+  const emailVal = attrs["email"];
+  if (emailVal !== null && (typeof emailVal !== "string" || emailVal.trim() === "")) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Email must be a string or null" }] };
+  }
+  const normalizedEmail = emailVal === null ? null : normalizeEmail(emailVal.trim());
+  if (emailVal !== null && normalizedEmail === null) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email address is required" }] };
+  }
+  changes.email = normalizedEmail;
+  if (normalizedEmail !== currentEmail) changes.emailVerifiedAt = null;
+  return null;
+}
+
+function parseThemeChange(
+  attrs: Attrs,
+  changes: AccountChanges,
+  set: SetObj,
+): unknown | null {
+  if (!Object.hasOwn(attrs, "theme")) return null;
+  if (typeof attrs["theme"] !== "string" || attrs["theme"].length > 64 || !THEME_ID_PATTERN.test(attrs["theme"])) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Theme must be a valid theme id" }] };
+  }
+  changes.theme = attrs["theme"];
+  return null;
+}
+
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
   .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
     const configuredToken = process.env["IACT_TOKEN"];
-    // the reference format's installer passes the token as a query parameter.
-    // Query-token compatibility is OPT-IN (todo 142: the default is the
-    // safer header-only flow) — set IACT_QUERY_TOKEN_ENABLED=1 to restore the
-    // reference installer behavior. The header alternative keeps the secret
-    // out of proxy logs, browser history, and traces entirely.
-    const queryEnabled = envFlag("IACT_QUERY_TOKEN_ENABLED");
-    const queryToken = request === undefined || !queryEnabled ? null : new URL(request.url).searchParams.get("token");
-    const headerToken = request === undefined ? null
-      : request.headers.get("x-iact-token")
-        ?? (() => {
-          const authorization = request.headers.get("authorization") ?? "";
-          return authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : null;
-        })();
-    const suppliedToken = queryToken ?? headerToken;
-    const configured = Buffer.from(configuredToken ?? "");
-    const supplied = Buffer.from(suppliedToken ?? "");
-    if (
-      configuredToken === undefined
-      || configuredToken === ""
-      || suppliedToken === null
-      || configured.length !== supplied.length
-      || !timingSafeEqual(configured, supplied)
-      || (await db.select({ value: count() }).from(users))[0]?.value !== 0
-    ) {
+    const suppliedToken = resolveIactToken(request);
+    if (!(await verifyIactElection(configuredToken, suppliedToken))) {
       (set as { status: number }).status = 404;
       return { status: "error", error: "Not found" };
     }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const username = typeof payload["username"] === "string" ? normalizeUsername(payload["username"]) ?? "" : "";
-    const email = typeof payload["email"] === "string" ? normalizeEmail(payload["email"]) ?? "" : "";
-    const password = typeof payload["password"] === "string" ? payload["password"] : "";
-    if (username === "" || email === "" || password === "") {
+    const parsed = parseInitialAdminPayload(body);
+    if (parsed === null) {
       (set as { status: number }).status = 422;
       return { status: "error", error: "Username, email, and password are required" };
     }
+    const { username, email, password } = parsed;
     const setupPolicy = checkPasswordPolicy(loadPasswordPolicy(), password, username);
     if (!setupPolicy.ok) {
       (set as { status: number }).status = 422;
@@ -582,27 +1184,9 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     return { status: "created", token };
   })
   .post("/api/v2/users/login", async ({ body, request, set, server }: ReqCtx): Promise<unknown> => {
-    let payload: DataPayload | undefined;
-    if (typeof body === "string") {
-      try {
-        payload = JSON.parse(body) as DataPayload;
-      } catch {
-        (set as { status: number }).status = 400;
-        return { errors: [{ status: "400", title: "Bad Request", detail: "Invalid JSON string" }] };
-      }
-    } else if (body !== null && typeof body === "object") {
-      payload = body;
-    }
-
-    const attrs = payload?.data?.attributes ?? {};
-    const username = typeof attrs["username"] === "string" ? attrs["username"] : "";
-    const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
-    const browserSession = attrs["browser-session"] === true;
-
-    if (username === "" || password === "") {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Missing credentials" }] };
-    }
+    const parsed = parseLoginCredentials(body, set);
+    if ("error" in parsed) return parsed.error;
+    const { username, password, browserSession } = parsed;
 
     const [sso, ldap] = await Promise.all([ssoSettingsSnapshot(), ldapSettings()]);
     const localAuthEnabled = sso.localAuthEnabled;
@@ -616,166 +1200,44 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     let localPasswordAuthenticated = false;
     let ldapUnavailable = false;
     if (ldap.enabled) {
-      let ldapUser: Awaited<ReturnType<typeof authenticateLdapWithCircuitBreaker>>["user"] = null;
-      try {
-        const ldapResult = await authenticateLdapWithCircuitBreaker(ldap, username, password);
-        ldapUser = ldapResult.user;
-        ldapUnavailable = ldapResult.unavailable;
-      } catch (error: unknown) {
-        ldapUnavailable = true;
-        log.warn("LDAP authentication probe failed; continuing with local authentication", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-      if (ldapUser !== null) {
-        try {
-          const provisioned = await provisionSsoUser({
-            provider: "ldap",
-            subject: ldapUser.dn,
-            username: ldapUser.username,
-            email: ldapUser.email,
-            // Directory attributes are operator-controlled; the bind against
-            // the user DN already authenticated the caller.
-            emailVerified: true,
-            allowEmailLinking: ldap.allowEmailLinking,
-          });
-          user = provisioned.user;
-        } catch (error: unknown) {
-          if (error instanceof SsoConflictError) {
-            // Do not reveal whether a local account owns the username; log
-            // the specifics server-side only.
-            log.warn("LDAP provisioning conflict", { username });
-            (set as { status: number }).status = 401;
-            return { errors: [{ status: "401", title: "Unauthorized", detail: "This account cannot be provisioned from the directory" }] };
-          }
-          throw error;
-        }
+      const attempt = await attemptLdapAuthentication(ldap, username, password);
+      ldapUnavailable = attempt.unavailable;
+      if (attempt.user !== null) {
+        const provisioned = await provisionLdapUser(attempt.user, ldap.allowEmailLinking, username, set);
+        if ("error" in provisioned) return provisioned.error;
+        user = provisioned.user;
       }
     }
 
     if (user === null) {
-      if (ldapUnavailable && !localAuthEnabled) {
-        (set as { status: number }).status = 503;
-        return { errors: [{ status: "503", title: "Service Unavailable", detail: "The LDAP directory is temporarily unavailable." }] };
-      }
-      if (!localAuthEnabled) {
-        (set as { status: number }).status = 401;
-        return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
-      }
-      const loginEmail = normalizeEmail(username);
-      const found = await db.query.users.findFirst({
-        where: loginEmail === null
-          ? eq(users.username, username)
-          : or(eq(users.username, username), eq(users.email, loginEmail)),
-      });
-      if (found !== undefined && isLoginLocked(found)) {
-        // Preserve the dummy-hash timing path without changing lockout behavior.
-        await passwordMatches(password, found.passwordHash);
-        (set as { status: number }).status = 401;
-        return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
-      }
-      const passwordValid = found === undefined
-        ? await passwordMatches(password)
-        : await verifyAndUpgradePassword(found.id, password, found.passwordHash);
-      if (found === undefined || !passwordValid) {
-        if (found !== undefined && !isUserLoginBlocked(found)) {
-          const failure = await recordFailedLogin(found.id);
-          if (failure.lockedUntil !== null) {
-            log.warn("Account locked after repeated failed login attempts", {
-              userId: found.id,
-              failedAttempts: failure.failedAttempts,
-              lockedUntil: failure.lockedUntil,
-            });
-          }
-        }
-        (set as { status: number }).status = 401;
-        return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
-      }
-      user = found;
+      const local = await authenticateLocalLogin(username, password, localAuthEnabled, ldapUnavailable, set);
+      if ("error" in local) return local.error;
+      user = local.user;
       localPasswordAuthenticated = true;
     }
 
-    if (localPasswordAuthenticated && isLoginLocked(user)) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
-    }
-    if (user.isProvisional === true) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "This invitation has not been accepted yet" }] };
-    }
-    if (isUserLoginBlocked(user)) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
-    }
-    // Keep the compare-and-clear even when the stale user row appears clean:
-    // a failed login can set a lock while password verification is in flight.
-    if (localPasswordAuthenticated && !(await clearLoginFailures(user.id))) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
-    }
-    // If MFA is enabled for this account, issue a short-lived challenge token
-    // instead of an access token. The client completes login via
-    // POST /users/login/mfa with a valid TOTP code.
-    const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
-    if (mfa !== undefined && mfa.enabled === true) {
-      const challengeToken = await issueMfaChallenge(user.id);
-      return {
-        data: {
-          type: "users",
-          attributes: {
-            "mfa-required": true,
-            "mfa-challenge-token": challengeToken,
-          },
-        },
-      };
-    }
+    const blocked = await checkPostLoginState(user, localPasswordAuthenticated, set);
+    if (blocked !== null) return blocked;
+
+    const challenge = await mfaChallengeResponse(user);
+    if (challenge !== null) return challenge;
 
     return issueLoginSession(user, browserSession, set, request, server);
   })
   .post("/api/v2/users/login/mfa", async ({ body, request, set, server }: ReqCtx): Promise<unknown> => {
-    let payload: DataPayload | undefined;
-    if (typeof body === "string") {
-      try {
-        payload = JSON.parse(body) as DataPayload;
-      } catch {
-        payload = undefined;
-      }
-    } else if (body !== null && typeof body === "object") {
-      payload = body;
-    }
-    const attrs = payload?.data?.attributes ?? {};
-    const challengeToken = typeof attrs["challenge-token"] === "string" ? attrs["challenge-token"] : "";
-    const code = typeof attrs["code"] === "string" ? attrs["code"] : "";
-    const browserSession = attrs["browser-session"] === true;
+    const parsed = parseMfaChallengeRequest(body, set);
+    if ("error" in parsed) return parsed.error;
 
-    if (challengeToken === "" || code === "") {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Missing MFA challenge token or code" }] };
-    }
+    const validated = await validateMfaChallenge(parsed.challengeToken, parsed.code, set);
+    if ("error" in validated) return validated.error;
 
-    const challenge = await consumeMfaChallenge(challengeToken);
-    if (challenge === null) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "MFA challenge has expired or is invalid" }] };
-    }
-
-    const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, challenge.userId) });
-    if (mfa === undefined || mfa.enabled !== true) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
-    }
-    if (!(await acceptTotpCode(challenge.userId, mfa, code))) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
-    }
-
-    const user = await db.query.users.findFirst({ where: eq(users.id, challenge.userId) });
+    const user = await db.query.users.findFirst({ where: eq(users.id, validated.userId) });
     if (user === undefined || isUserLoginBlocked(user)) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Account not found" }] };
     }
 
-    return issueLoginSession(user, browserSession, set, request, server, true);
+    return issueLoginSession(user, parsed.browserSession, set, request, server, true);
   })
   .post("/api/v2/users/refresh", async ({ request, server, set }: ReqCtx): Promise<unknown> => {
     const candidates = refreshCookieCandidates(request);
@@ -787,14 +1249,9 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       const now = Date.now();
       let liveFamilyId: string | null = null;
       for (const presentedToken of candidates) {
-        const key = tokenHash(presentedToken);
-        let current = seen.get(key) ?? null;
-        if (current === null) {
-          const row = await refreshSessionForToken(presentedToken);
-          if (row === undefined) continue;
-          seen.set(key, row);
-          current = row;
-        }
+        const loaded = await loadRefreshCandidate(seen, presentedToken);
+        if ("stale" in loaded) continue;
+        const current = loaded.current;
         if (current.revokedAt !== null || current.expiresAt <= now) {
           continue;
         }
@@ -803,189 +1260,12 @@ export const accountRoutes = new Elysia({ name: "accounts" })
           await revokeAllRefreshSessions(current.userId, now);
           return refreshUnauthorized(set, request, "Refresh session is invalid", server);
         }
-        // Two-tab concurrency grace (todo 125-127): this request serialized
-        // behind the winning tab (in-process rotation lock) and is presenting
-        // a token the winner just rotated. Within the grace window that is
-        // the legitimate second tab, not replay: re-issue an access token
-        // against the successor session WITHOUT rotating again. Outside the
-        // window the normal reuse handling below applies.
-        if (
-          current.rotatedAt !== null
-          && current.rotatedAtMs !== null
-          && current.successorHash !== null
-          && now - current.rotatedAtMs <= REFRESH_GRACE_MS
-        ) {
-          const successor = await db.query.refreshSessions.findFirst({
-            where: eq(refreshSessions.tokenHash, current.successorHash),
-          });
-          const successorUser = successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
-            ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
-            : undefined;
-          if (successor !== undefined && successorUser !== undefined && !isUserLoginBlocked(successorUser)) {
-            const graceAccess = opaqueToken("user");
-            const graceAccessId = crypto.randomUUID();
-            const graceExpiresAt = now + ACCESS_TOKEN_TTL_MS;
-            await db.insert(apiTokens).values({
-              id: graceAccessId,
-              token: tokenHash(graceAccess),
-              userId: successorUser.id,
-              refreshFamilyId: successor.familyId,
-              description: "Browser session access token",
-              expiresAt: graceExpiresAt,
-              createdAt: now,
-            });
-            // The browser already holds the successor refresh cookie from the
-            // winning response; only the access-token document is re-issued.
-            return accessTokenDocument(graceAccessId, graceAccess, successorUser, graceExpiresAt);
-          }
-        }
-        // Rotated tokens are normally reuse, but the pre-2026-08-19
-        // Path=/api/v2/users ghost cookie is a rotated token that shares
-        // the same family as the live token the browser also sends.
-        // Only relax reuse when the rotated token is from the same family
-        // as the live candidate we will successfully rotate.
-        // TODO(remove after 2027-02-19): legacy ghost-cookie relaxation.
-        if (current.rotatedAt !== null) {
-          if (liveFamilyId === null) {
-            // We don't know the live family yet — stash and re-evaluate
-            // after we find a live candidate. For now just remember it.
-            continue;
-          }
-          if (current.familyId !== liveFamilyId) {
-            await revokeRefreshFamily(current.familyId, current.userId, now);
-            return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
-          }
-          continue;
-        }
-        // This is a live candidate — record its family so earlier rotated
-        // ghosts from the same family can be forgiven (already skipped).
-        liveFamilyId ??= current.familyId;
-        const user = currentUser;
-
-        const accessToken = opaqueToken("user");
-        const accessTokenId = crypto.randomUUID();
-        const refreshToken = opaqueToken("refresh");
-        const accessExpiresAt = now + ACCESS_TOKEN_TTL_MS;
-        // Two-tab concurrency grace (todo 125-127): the rotation records the
-        // successor hash so an immediately-duplicated refresh presenting the
-        // same old token resolves to the successor instead of revoking the
-        // family. Only rotations within REFRESH_GRACE_MS are forgiven.
-        const rotated = await db.transaction(async (tx: unknown): Promise<boolean> => {
-          const t = tx as typeof db;
-          const claimed = await t.update(refreshSessions)
-            .set({ rotatedAt: now, rotatedAtMs: now, successorHash: tokenHash(refreshToken) })
-            .where(and(
-              eq(refreshSessions.id, current.id),
-              isNull(refreshSessions.rotatedAt),
-              isNull(refreshSessions.revokedAt),
-              gt(refreshSessions.expiresAt, now),
-            ))
-            .returning({ id: refreshSessions.id });
-          if (claimed.length === 0) return false;
-          await t.delete(apiTokens).where(eq(apiTokens.id, current.accessTokenId));
-          await t.insert(apiTokens).values({
-            id: accessTokenId,
-            token: tokenHash(accessToken),
-            userId: user.id,
-            refreshFamilyId: current.familyId,
-            description: "Browser session access token",
-            expiresAt: accessExpiresAt,
-            createdAt: now,
-          });
-          await t.insert(refreshSessions).values({
-            id: crypto.randomUUID(),
-            familyId: current.familyId,
-            tokenHash: tokenHash(refreshToken),
-            userId: user.id,
-            accessTokenId,
-            expiresAt: current.expiresAt,
-            createdAt: now,
-            mfaVerified: current.mfaVerified ?? false,
-          });
-          return true;
-        });
-        if (!rotated) {
-          // Re-read the row: the concurrent winner may have populated
-          // successorHash/rotatedAtMs that our stale snapshot lacks.
-          const fresh = await db.query.refreshSessions.findFirst({
-            where: eq(refreshSessions.id, current.id),
-          });
-          const effective = fresh ?? current;
-          // The claim failed: the token was already rotated (two-tab race or
-          // replay) or revoked/expired. The in-process rotation lock means a
-          // concurrent same-process tab serialized behind us and re-read the
-          // row; a genuine cross-process replay arrives later than the grace
-          // window. Inside the window, treat the duplicate as the legitimate
-          // second tab: hand back the successor session's access token
-          // WITHOUT rotating again (todo 125-126). Outside the window this
-          // stays a family-revocation reuse event (todo 127).
-          if (
-            effective.rotatedAtMs !== null
-            && effective.successorHash !== null
-            && now - effective.rotatedAtMs <= REFRESH_GRACE_MS
-          ) {
-            const successor = await db.query.refreshSessions.findFirst({
-              where: eq(refreshSessions.tokenHash, effective.successorHash),
-            });
-            const successorUser = successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
-              ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
-              : undefined;
-            if (successor !== undefined && successorUser !== undefined && !isUserLoginBlocked(successorUser)) {
-              const graceAccess = opaqueToken("user");
-              const graceAccessId = crypto.randomUUID();
-              const graceExpiresAt = now + ACCESS_TOKEN_TTL_MS;
-              await db.insert(apiTokens).values({
-                id: graceAccessId,
-                token: tokenHash(graceAccess),
-                userId: successorUser.id,
-                refreshFamilyId: successor.familyId,
-                description: "Browser session access token",
-                expiresAt: graceExpiresAt,
-                createdAt: now,
-              });
-              // Keep the successor's refresh cookie value as-is: the browser
-              // already holds it from the first response. Only the access
-              // token document is re-issued here.
-              return accessTokenDocument(graceAccessId, graceAccess, successorUser, graceExpiresAt);
-            }
-          }
-          await revokeRefreshFamily(current.familyId, current.userId, now);
-          return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
-        }
-
-        setRefreshCookie(set, request, refreshToken, current.expiresAt, server);
-        return accessTokenDocument(accessTokenId, accessToken, user, accessExpiresAt);
+        const outcome = await processRefreshCandidate(current, currentUser, liveFamilyId, now, set, request, server);
+        if ("response" in outcome) return outcome.response;
+        liveFamilyId = outcome.familyId;
       }
 
-      // No candidate matched a live session. If any candidate was a
-      // rotated token, treat it as reuse (revoke the family). Otherwise
-      // the session is simply invalid/expired.
-      const reuse = [...seen.values()].find((row): boolean => row.rotatedAt !== null) ?? null;
-      if (reuse !== null) {
-        await revokeRefreshFamily(reuse.familyId, reuse.userId, now);
-        return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
-      }
-      if ([...seen.values()].some((row): boolean => row.revokedAt !== null || row.expiresAt <= now)) {
-        return refreshUnauthorized(set, request, "Refresh session expired", server);
-      }
-      // Tokens not found in DB (seen miss) — fill the map for them too
-      // so the error classification above could consider them; otherwise
-      // treat as invalid.
-      for (const token of candidates) {
-        const key = tokenHash(token);
-        if (seen.has(key)) continue;
-        const row = await refreshSessionForToken(token);
-        if (row === undefined) continue;
-        seen.set(key, row);
-        if (row.rotatedAt !== null) {
-          await revokeRefreshFamily(row.familyId, row.userId, now);
-          return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
-        }
-        if (row.revokedAt !== null || row.expiresAt <= now) {
-          return refreshUnauthorized(set, request, "Refresh session expired", server);
-        }
-      }
-      return refreshUnauthorized(set, request, "Refresh session is invalid", server);
+      return classifyRefreshFailure(seen, candidates, now, set, request, server);
     });
   })
   .post("/api/v2/users/logout", async ({ request, server, set }: ReqCtx): Promise<unknown> => {
@@ -1007,79 +1287,34 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Registration is disabled on this instance. Ask a site administrator to create an account or enable registration in authentication settings." }] };
     }
-    const attrs = extractAttrs(body) ?? {};
-    const username = typeof attrs["username"] === "string" ? normalizeUsername(attrs["username"]) ?? "" : "";
-    const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
-    const email = attrs["email"];
+    const parsed = parseSignupCredentials(body, set);
+    if ("error" in parsed) return parsed.error;
 
-    if (username === "" || password === "") {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Missing username or password" }] };
-    }
-
-    const policyCheck = checkPasswordPolicy(loadPasswordPolicy(), password, username);
-    if (!policyCheck.ok) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyCheck.errors.join(" ") }] };
-    }
-    // Bounded email matcher. The full RFC-5322 grammar embeds nested
-    // quantifiers that admit catastrophic backtracking (ReDoS); this
-    // pragmatic pattern scans in linear time and is sufficient for signup.
-    const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
-
-    const emailStr = typeof email === "string" && email.trim() !== "" ? normalizeEmail(email) ?? "" : `${username}@example.com`;
-    if (!EMAIL_REGEX.test(emailStr)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email address is required" }] };
-    }
+    const resolved = resolveSignupEmail(parsed.email, parsed.username, set);
+    if ("error" in resolved) return resolved.error;
 
     // Hash before the lookup so duplicate and new registrations do not expose
     // username existence through a cheap-vs-expensive timing difference.
-    const passwordHash = await hashPassword(password);
+    const passwordHash = await hashPassword(parsed.password);
     const id = newResourceId("user");
-    const normalizedEmail = emailStr;
+    const normalizedEmail = resolved.email;
     const existing = await db.query.users.findFirst({
-      where: or(eq(users.username, username), eq(users.email, normalizedEmail)),
+      where: or(eq(users.username, parsed.username), eq(users.email, normalizedEmail)),
     });
     if (existing !== undefined) {
       // An exact replay is idempotent, so return the persisted identity. For a
       // partial username/email collision, keep the 201 response shape but do
       // not disclose which stored identity caused the collision.
-      if (existing.username === username && existing.email === normalizedEmail) {
+      if (existing.username === parsed.username && existing.email === normalizedEmail) {
         (set as { status: number }).status = 201;
         return localSignupAcknowledgement(existing.id, existing.username, existing.email);
       }
       (set as { status: number }).status = 201;
-      return localSignupAcknowledgement(id, username, normalizedEmail);
+      return localSignupAcknowledgement(id, parsed.username, normalizedEmail);
     }
 
 
-    // Local signup NEVER elects a site admin. The first user on a fresh
-    // instance must come from the ADMIN_PASSWORD (or installer IACT)
-    // bootstrap, whose count-then-insert runs under a serialized first-user
-    // lock. Letting signup elect admins from a plain count raced two
-    // concurrent signups into two site admins on PostgreSQL.
-    try {
-      await db.insert(users).values({ id, username, email: normalizedEmail, passwordHash, isSiteAdmin: false });
-      await auditLog("create", "users", id, null, null, { username });
-      (set as { status: number }).status = 201;
-      return localSignupAcknowledgement(id, username, normalizedEmail);
-    } catch (e: unknown) {
-      if (isUniqueConstraintError(e)) {
-        // A concurrent request may win the unique-key race after the lookup;
-        // answer with the same idempotent acknowledgement rather than exposing
-        // a distinct conflict response.
-        const raced = await db.query.users.findFirst({
-          where: or(eq(users.username, username), eq(users.email, normalizedEmail)),
-        });
-        (set as { status: number }).status = 201;
-        if (raced !== undefined && raced.username === username && raced.email === normalizedEmail) {
-          return localSignupAcknowledgement(raced.id, raced.username, raced.email);
-        }
-        return localSignupAcknowledgement(id, username, normalizedEmail);
-      }
-      throw e;
-    }
+    return createLocalSignupUser(id, parsed.username, normalizedEmail, passwordHash, set);
   })
   .use(authPlugin)
   .get("/api/v2/account/details", async ({ user, orgId, teamId, tokenError, set }: AuthReqCtx): Promise<unknown> => {
@@ -1180,40 +1415,13 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
 
-    const changes: { username?: string; email?: string | null; emailVerifiedAt?: number | null; theme?: string } = {};
-    if (Object.hasOwn(attrs, "username")) {
-      if (typeof attrs["username"] !== "string" || attrs["username"].trim() === "") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username cannot be empty" }] };
-      }
-      const normalizedUsername = normalizeUsername(attrs["username"]);
-      if (normalizedUsername === null) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username contains invalid characters" }] };
-      }
-      changes.username = normalizedUsername;
-    }
-    if (Object.hasOwn(attrs, "email")) {
-      const emailVal = attrs["email"];
-      if (emailVal !== null && (typeof emailVal !== "string" || emailVal.trim() === "")) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Email must be a string or null" }] };
-      }
-      const normalizedEmail = emailVal === null ? null : normalizeEmail(emailVal.trim());
-      if (emailVal !== null && normalizedEmail === null) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email address is required" }] };
-      }
-      changes.email = normalizedEmail;
-      if (normalizedEmail !== user.email) changes.emailVerifiedAt = null;
-    }
-    if (Object.hasOwn(attrs, "theme")) {
-      if (typeof attrs["theme"] !== "string" || attrs["theme"].length > 64 || !THEME_ID_PATTERN.test(attrs["theme"])) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Theme must be a valid theme id" }] };
-      }
-      changes.theme = attrs["theme"];
-    }
+    const changes: AccountChanges = {};
+    const usernameError = parseUsernameChange(attrs, changes, set);
+    if (usernameError !== null) return usernameError;
+    const emailError = parseEmailChange(attrs, user.email, changes, set);
+    if (emailError !== null) return emailError;
+    const themeError = parseThemeChange(attrs, changes, set);
+    if (themeError !== null) return themeError;
     if (Object.keys(changes).length === 0) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No account fields provided" }] };

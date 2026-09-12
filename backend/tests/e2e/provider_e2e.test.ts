@@ -986,7 +986,10 @@ data "tfe_team" "d_team" {
 }
 data "tfe_teams" "d_teams" {
   organization = tfe_organization.org.name
-  depends_on   = [tfe_organization.org, tfe_team.team]
+  // The no-op plan check compares this read across apply and plan: it must
+  // postdate every team creation, otherwise an apply-time read can miss a
+  // team created later in the same apply and the next plan spuriously diffs.
+  depends_on   = [tfe_organization.org, tfe_team.team, tfe_team.members_team, tfe_team.org_members_team]
 }
 data "tfe_variable_set" "d_vs" {
   name         = tfe_variable_set.vs.name

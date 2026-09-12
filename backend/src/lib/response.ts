@@ -1,4 +1,4 @@
-import { readStateSummary } from "./state-summary";
+import { readStateSummary, type StateSummary } from "./state-summary";
 import { createHash } from "node:crypto";
 import { db } from "../db";
 import { AvatarService } from "./avatars";
@@ -1283,6 +1283,83 @@ export function stateVersionResource(
 }
 
 /** History must never load, decrypt or parse state blobs. Details remain lazy. */
+function summaryIdentityAttributes(summary: StateSummary | null, rawStateAvailable: boolean): Record<string, unknown> {
+  return {
+    md5: rawStateAvailable ? summary?.md5 ?? null : null,
+    size: rawStateAvailable ? summary?.size ?? null : null,
+  };
+}
+
+function summaryVersionAttributes(summary: StateSummary | null): Record<string, unknown> {
+  return {
+    lineage: summary?.lineage ?? null,
+    "terraform-version": summary?.terraformVersion ?? null,
+    "state-version": summary?.stateVersion ?? null,
+  };
+}
+
+function opaqueRepresentationAttributes(summary: StateSummary | null): Record<string, unknown> {
+  return summary?.status === "opaque" ? {
+    "state-representation": "opentofu-encrypted",
+    "structured-state-unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR,
+  } : {};
+}
+
+function summaryStatusAttributes(summary: StateSummary | null, ready: boolean, stateSummaryMissing: boolean): Record<string, unknown> {
+  return {
+    "resources-processed": ready,
+    "summary-status": summary?.status ?? (stateSummaryMissing ? "unindexed" : "outdated"),
+    "index-generation": summary?.generation ?? null,
+  };
+}
+
+function summaryCoreAttributes(
+  summary: StateSummary | null,
+  rawStateAvailable: boolean,
+  ready: boolean,
+  stateSummaryMissing: boolean,
+): Record<string, unknown> {
+  return {
+    ...summaryIdentityAttributes(summary, rawStateAvailable),
+    ...summaryVersionAttributes(summary),
+    ...summaryStatusAttributes(summary, ready, stateSummaryMissing),
+    ...opaqueRepresentationAttributes(summary),
+  };
+}
+
+function summaryResourceCounts(counted: StateSummary | null): Record<string, unknown> {
+  return {
+    "resource-count": counted?.resourceCount ?? null,
+    "managed-resource-count": counted?.managedCount ?? null,
+    "data-resource-count": counted?.dataCount ?? null,
+  };
+}
+
+function summaryScopeCounts(counted: StateSummary | null): Record<string, unknown> {
+  return {
+    "module-count": counted?.moduleCount ?? null,
+    "provider-count": counted?.providerCount ?? null,
+    "output-count": counted?.outputCount ?? null,
+  };
+}
+
+function summaryCountAttributes(summary: StateSummary | null, ready: boolean): Record<string, unknown> {
+  const counted = ready && summary?.status === "ready" ? summary : null;
+  return { ...summaryResourceCounts(counted), ...summaryScopeCounts(counted) };
+}
+
+function stateVersionRelationships(
+  state: Readonly<{ id: string; workspaceId: string; runId: string | null; createdBy: string | null }>,
+  outputCount: number | null,
+): Record<string, unknown> {
+  return {
+    outputs: { links: { related: `/api/v2/state-versions/${state.id}/outputs` }, meta: { count: outputCount } },
+    workspace: { data: { id: state.workspaceId, type: "workspaces" } },
+    run: { data: state.runId === null ? null : { id: state.runId, type: "runs" } },
+    "created-by": { data: state.createdBy === null ? null : { id: state.createdBy, type: "users" } },
+  };
+}
+
 export function stateVersionSummaryResource(
   state: Readonly<Omit<StateParam, "statePayload" | "jsonState" | "jsonStateOutputs"> & { hasRawState: boolean; hasJsonState: boolean }>,
   request: Readonly<{ url: string }>,
@@ -1293,29 +1370,15 @@ export function stateVersionSummaryResource(
   const available = !["backing_data_soft_deleted", "backing_data_permanently_deleted", "discarded"].includes(state.status ?? "");
   const rawStateAvailable = available && state.hasRawState;
   const ready = summary?.status === "ready";
+  const counted = ready && summary?.status === "ready" ? summary : null;
   return {
     id: state.id, type: "state-versions",
     attributes: {
       serial: state.serial, status: state.status ?? "finalized", intermediate: state.intermediate,
       "created-at": new Date(state.createdAt).toISOString(),
       "vcs-commit-sha": state.vcsCommitSha, "vcs-commit-url": state.vcsCommitUrl,
-      md5: rawStateAvailable ? summary?.md5 ?? null : null,
-      size: rawStateAvailable ? summary?.size ?? null : null,
-      lineage: summary?.lineage ?? null, "terraform-version": summary?.terraformVersion ?? null,
-      "state-version": summary?.stateVersion ?? null,
-      "resources-processed": ready,
-      "summary-status": summary?.status ?? (state.stateSummary === null ? "unindexed" : "outdated"),
-      ...(summary?.status === "opaque" ? {
-        "state-representation": "opentofu-encrypted",
-        "structured-state-unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR,
-      } : {}),
-      "index-generation": summary?.generation ?? null,
-      "resource-count": ready ? summary.resourceCount : null,
-      "managed-resource-count": ready ? summary.managedCount : null,
-      "data-resource-count": ready ? summary.dataCount : null,
-      "module-count": ready ? summary.moduleCount : null,
-      "provider-count": ready ? summary.providerCount : null,
-      "output-count": ready ? summary.outputCount : null,
+      ...summaryCoreAttributes(summary, rawStateAvailable, ready, state.stateSummary === null),
+      ...summaryCountAttributes(summary, ready),
       ...buildStateUrlAttributes(state, {
         rawStateAvailable,
         jsonStateAvailable: available && state.hasJsonState && summary?.status !== "opaque",
@@ -1323,12 +1386,7 @@ export function stateVersionSummaryResource(
       }, request, authorization),
       ...buildStateRunAttributes(run),
     },
-    relationships: {
-      outputs: { links: { related: `/api/v2/state-versions/${state.id}/outputs` }, meta: { count: ready ? summary.outputCount : null } },
-      workspace: { data: { id: state.workspaceId, type: "workspaces" } },
-      run: { data: state.runId === null ? null : { id: state.runId, type: "runs" } },
-      "created-by": { data: state.createdBy === null ? null : { id: state.createdBy, type: "users" } },
-    },
+    relationships: stateVersionRelationships(state, counted?.outputCount ?? null),
     links: { self: `/api/v2/state-versions/${state.id}` },
   };
 }

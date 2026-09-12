@@ -129,13 +129,10 @@ function parseDefaultAgentPool(
     : { error: "default-agent-pool must be an agent pool ID or null" };
 }
 
-async function projectSettings(
-  orgId: string,
-  projectId: string,
-  data: Readonly<Record<string, unknown>> | undefined,
+function resolveExecutionMode(
   attributes: Readonly<Record<string, unknown>>,
   existing?: ExistingProjectSettings,
-): Promise<Readonly<{ value: ProjectSettings }> | Readonly<{ error: string }>> {
+): { mode: string } | { error: string } {
   const rawMode = attributes["default-execution-mode"];
   const defaultExecutionMode = rawMode === undefined
     ? existing?.defaultExecutionMode ?? "remote"
@@ -143,11 +140,16 @@ async function projectSettings(
   if (!isExecutionMode(defaultExecutionMode)) {
     return { error: "default-execution-mode must be remote, local, or agent" };
   }
+  return { mode: defaultExecutionMode };
+}
 
-  const overwrites = parseSettingOverwrites(attributes["setting-overwrites"], existing?.settingOverwrites);
-  if ("error" in overwrites) return overwrites;
+function applyExecutionModeOverwrite(
+  attributes: Readonly<Record<string, unknown>>,
+  defaultExecutionMode: string,
+  overwrites: Readonly<{ value: Record<string, boolean> }>,
+): void {
   if (
-    rawMode !== undefined
+    attributes["default-execution-mode"] !== undefined
     && (
       attributes["setting-overwrites"] === undefined
       || !Object.prototype.hasOwnProperty.call(attributes["setting-overwrites"] as object, "execution-mode")
@@ -155,7 +157,12 @@ async function projectSettings(
   ) {
     overwrites.value["execution-mode"] = defaultExecutionMode !== "remote";
   }
+}
 
+function resolveAutoDestroyDuration(
+  attributes: Readonly<Record<string, unknown>>,
+  existing?: ExistingProjectSettings,
+): { duration: string | null } | { error: string } {
   const rawDuration = attributes["auto-destroy-activity-duration"];
   const autoDestroyActivityDuration = rawDuration === undefined
     ? existing?.autoDestroyActivityDuration ?? null
@@ -166,7 +173,17 @@ async function projectSettings(
   ) {
     return { error: "auto-destroy-activity-duration must be null or a duration such as 14d or 24h" };
   }
+  return { duration: autoDestroyActivityDuration };
+}
 
+async function resolveAgentPoolId(
+  orgId: string,
+  projectId: string,
+  defaultExecutionMode: string,
+  data: Readonly<Record<string, unknown>> | undefined,
+  attributes: Readonly<Record<string, unknown>>,
+  existing?: ExistingProjectSettings,
+): Promise<{ poolId: string | null } | { error: string }> {
   const parsedPool = parseDefaultAgentPool(data, attributes);
   if ("error" in parsedPool) return parsedPool;
   const defaultAgentPoolId = parsedPool.provided
@@ -187,12 +204,34 @@ async function projectSettings(
       return { error: "default-agent-pool is not allowed for this project" };
     }
   }
+  return { poolId: defaultAgentPoolId };
+}
+
+async function projectSettings(
+  orgId: string,
+  projectId: string,
+  data: Readonly<Record<string, unknown>> | undefined,
+  attributes: Readonly<Record<string, unknown>>,
+  existing?: ExistingProjectSettings,
+): Promise<Readonly<{ value: ProjectSettings }> | Readonly<{ error: string }>> {
+  const mode = resolveExecutionMode(attributes, existing);
+  if ("error" in mode) return mode;
+
+  const overwrites = parseSettingOverwrites(attributes["setting-overwrites"], existing?.settingOverwrites);
+  if ("error" in overwrites) return overwrites;
+  applyExecutionModeOverwrite(attributes, mode.mode, overwrites);
+
+  const duration = resolveAutoDestroyDuration(attributes, existing);
+  if ("error" in duration) return duration;
+
+  const pool = await resolveAgentPoolId(orgId, projectId, mode.mode, data, attributes, existing);
+  if ("error" in pool) return pool;
 
   return {
     value: {
-      defaultExecutionMode,
-      defaultAgentPoolId,
-      autoDestroyActivityDuration,
+      defaultExecutionMode: mode.mode,
+      defaultAgentPoolId: pool.poolId,
+      autoDestroyActivityDuration: duration.duration,
       settingOverwrites: overwrites.value,
     },
   };
@@ -222,6 +261,91 @@ export async function ensureDefaultProject(orgId: string): Promise<typeof projec
   });
   if (project === undefined) throw new Error("Unable to create the default project");
   return project;
+}
+
+function projectCreateFields(body: unknown): {
+  data: Record<string, unknown> | undefined;
+  attributes: Record<string, unknown>;
+  name: string;
+} {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  return { data, attributes, name: typeof attributes["name"] === "string" ? attributes["name"] : "" };
+}
+
+async function insertProject(newProj: typeof projects.$inferInsert, set: SetObj): Promise<{ created: typeof projects.$inferSelect } | { error: unknown }> {
+  try {
+    await db.insert(projects).values(newProj);
+  } catch (error: unknown) {
+    if (!isUniqueConstraintError(error)) throw error;
+    (set as { status: number }).status = 409;
+    return { error: { errors: [{ status: "409", title: "Conflict", detail: "A project with this name already exists in the organization" }] } };
+  }
+  const created = await db.query.projects.findFirst({ where: eq(projects.id, newProj.id) });
+  if (created === undefined) throw new Error("Unable to create project");
+  return { created };
+}
+
+function parseProjectPatch(body: unknown, set: SetObj): {
+  data: Record<string, unknown> | undefined;
+  attributes: Record<string, unknown>;
+} | { failure: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  if (data !== null && typeof data === "object" && "type" in data && (data)["type"] !== undefined && (data)["type"] !== "projects") {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid type" }] } };
+  }
+  if (attributes["name"] !== undefined && typeof attributes["name"] === "string" && attributes["name"].trim() === "") {
+    (set as { status: number }).status = 422;
+    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] } };
+  }
+  return { data, attributes };
+}
+
+function projectPatchUpdates(
+  attributes: Record<string, unknown>,
+  settings: ProjectSettings,
+): Partial<typeof projects.$inferInsert> {
+  const updates: Partial<typeof projects.$inferInsert> = {};
+  if (typeof attributes["name"] === "string") updates.name = attributes["name"];
+  if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
+  return { ...updates, ...settings };
+}
+
+function workspaceProjectUpdates(
+  workspace: typeof workspaces.$inferSelect,
+  settings: ProjectSettings,
+): Partial<typeof workspaces.$inferInsert> {
+  const workspaceUpdates: Partial<typeof workspaces.$inferInsert> = {};
+  const overwrites = workspace.settingOverwrites ?? {};
+  if (overwrites["execution-mode"] !== true) {
+    workspaceUpdates.executionMode = settings.defaultExecutionMode;
+    if (settings.defaultExecutionMode !== "agent") {
+      workspaceUpdates.agentPoolId = null;
+    } else if (overwrites["agent-pool"] !== true) {
+      workspaceUpdates.agentPoolId = settings.defaultAgentPoolId;
+    }
+  }
+  if (workspace.inheritsProjectAutoDestroy) {
+    workspaceUpdates.autoDestroyActivityDuration = settings.autoDestroyActivityDuration;
+  }
+  return workspaceUpdates;
+}
+
+function groupWorkspaceUpdates(
+  updatesById: Map<string, Partial<typeof workspaces.$inferInsert>>,
+): { ids: string[]; update: Partial<typeof workspaces.$inferInsert> }[] {
+  const groups = new Map<string, { ids: string[]; update: Partial<typeof workspaces.$inferInsert> }>();
+  for (const [workspaceId, update] of updatesById) {
+    const key = JSON.stringify(update);
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, { ids: [workspaceId], update });
+    else group.ids.push(workspaceId);
+  }
+  return [...groups.values()];
 }
 
 export const projectRoutes = new Elysia({ name: "projects" })
@@ -262,38 +386,27 @@ export const projectRoutes = new Elysia({ name: "projects" })
     const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
-    if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
+    const fields = projectCreateFields(body);
+    if (fields.name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
     await ensureDefaultProject(org.id);
     const id = newResourceId("prj");
-    const settings = await projectSettings(org.id, id, data, attributes);
+    const settings = await projectSettings(org.id, id, fields.data, fields.attributes);
     if ("error" in settings) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: settings.error }] };
     }
-    const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
-    const newProj: typeof projects.$inferInsert = {
+    const description = typeof fields.attributes["description"] === "string" ? fields.attributes["description"] : null;
+    const inserted = await insertProject({
       id,
       orgId: org.id,
-      name,
+      name: fields.name,
       description,
       ...settings.value,
       createdAt: Date.now(),
-    };
-    try {
-      await db.insert(projects).values(newProj);
-    } catch (error: unknown) {
-      if (!isUniqueConstraintError(error)) throw error;
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "A project with this name already exists in the organization" }] };
-    }
-    const created = await db.query.projects.findFirst({ where: eq(projects.id, id) });
-    if (created === undefined) throw new Error("Unable to create project");
+    }, set);
+    if ("error" in inserted) return inserted.error;
     (set as { status: number }).status = 201;
-    return { data: await projectResource(created, 0, 0) };
+    return { data: await projectResource(inserted.created, 0, 0) };
   })
   .get("/api/v2/projects/:project_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const projectId = params["project_id"] ?? "";
@@ -311,26 +424,14 @@ export const projectRoutes = new Elysia({ name: "projects" })
     const projectId = params["project_id"] ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    if (data !== null && typeof data === "object" && "type" in data && (data as Record<string, unknown>)["type"] !== undefined && (data as Record<string, unknown>)["type"] !== "projects") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid type" }] };
-    }
-    if (attributes["name"] !== undefined && typeof attributes["name"] === "string" && attributes["name"].trim() === "") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] };
-    }
-    const settings = await projectSettings(project.orgId, projectId, data, attributes, project);
+    const parsed = parseProjectPatch(body, set);
+    if ("failure" in parsed) return parsed.failure;
+    const settings = await projectSettings(project.orgId, projectId, parsed.data, parsed.attributes, project);
     if ("error" in settings) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: settings.error }] };
     }
-    const updates: Partial<typeof projects.$inferInsert> = {};
-    if (typeof attributes["name"] === "string") updates.name = attributes["name"];
-    if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
-    Object.assign(updates, settings.value);
+    const updates = projectPatchUpdates(parsed.attributes, settings.value);
     const projectWorkspaces = await db.query.workspaces.findMany({ where: eq(workspaces.projectId, projectId) });
     try {
       await db.transaction(async (tx): Promise<void> => {
@@ -340,31 +441,12 @@ export const projectRoutes = new Elysia({ name: "projects" })
         // instead of updating each workspace one-by-one.
         const updatesById = new Map<string, Partial<typeof workspaces.$inferInsert>>();
         for (const workspace of projectWorkspaces) {
-          const workspaceUpdates: Partial<typeof workspaces.$inferInsert> = {};
-          const overwrites = workspace.settingOverwrites ?? {};
-          if (overwrites["execution-mode"] !== true) {
-            workspaceUpdates.executionMode = settings.value.defaultExecutionMode;
-            if (settings.value.defaultExecutionMode !== "agent") {
-              workspaceUpdates.agentPoolId = null;
-            } else if (overwrites["agent-pool"] !== true) {
-              workspaceUpdates.agentPoolId = settings.value.defaultAgentPoolId;
-            }
-          }
-          if (workspace.inheritsProjectAutoDestroy) {
-            workspaceUpdates.autoDestroyActivityDuration = settings.value.autoDestroyActivityDuration;
-          }
+          const workspaceUpdates = workspaceProjectUpdates(workspace, settings.value);
           if (Object.keys(workspaceUpdates).length > 0) {
             updatesById.set(workspace.id, workspaceUpdates);
           }
         }
-        const groups = new Map<string, { ids: string[]; update: Partial<typeof workspaces.$inferInsert> }>();
-        for (const [workspaceId, update] of updatesById) {
-          const key = JSON.stringify(update);
-          const group = groups.get(key);
-          if (group === undefined) groups.set(key, { ids: [workspaceId], update });
-          else group.ids.push(workspaceId);
-        }
-        for (const group of groups.values()) {
+        for (const group of groupWorkspaceUpdates(updatesById)) {
           await tx.update(workspaces).set(group.update).where(inArray(workspaces.id, group.ids));
         }
       });

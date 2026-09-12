@@ -36,6 +36,104 @@ type ExplainerModel = {
 
 const CUSTOM_PROVIDER_ID = "custom";
 
+function ExplainerProviderModelFields({
+  providers,
+  providerModels,
+  explainerProvider,
+  explainerModel,
+  onProviderSelect,
+  onProviderInput,
+  onModelSelect,
+  onModelInput,
+}: Readonly<{
+  providers: ExplainerProvider[];
+  providerModels: ExplainerModel[];
+  explainerProvider: string;
+  explainerModel: string;
+  onProviderSelect: (id: string) => void;
+  onProviderInput: (value: string) => void;
+  onModelSelect: (id: string) => void;
+  onModelInput: (value: string) => void;
+}>): React.JSX.Element {
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      <div className="space-y-1.5">
+        <label htmlFor="explainer-provider" className="block text-sm font-medium text-foreground">
+          Provider
+        </label>
+        {providers.length > 0 ? (
+          <FuzzyCombobox
+            id="explainer-provider"
+            options={providers.map((p): { id: string; label: string; hint?: string } => ({
+              id: p.id,
+              label: p.name,
+              ...(p["model-count"] > 0 ? { hint: `${p["model-count"]} models` } : {}),
+            }))}
+            value={explainerProvider}
+            onSelect={onProviderSelect}
+            placeholder="Select a provider…"
+            emptyText="No provider found. Use Custom for arbitrary endpoints."
+            allowCustom
+            className="w-full"
+          />
+        ) : (
+          <Input
+            id="explainer-provider"
+            name="explainer-provider"
+            value={explainerProvider}
+            onChange={(event): void => { onProviderInput(event.target.value); }}
+            placeholder="custom"
+          />
+        )}
+        <p className="text-xs text-muted-foreground">
+          {explainerProvider === CUSTOM_PROVIDER_ID
+            ? "Custom endpoint — enter any OpenAI-compatible base URL below."
+            : "Standard provider catalog from models.dev."}
+        </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <label htmlFor="explainer-model" className="block text-sm font-medium text-foreground">
+          Model
+        </label>
+        {providerModels.length > 0 ? (
+          <FuzzyCombobox
+            id="explainer-model"
+            options={providerModels.map((m): { id: string; label: string; hint?: string } => {
+              const hintText = [
+                m.reasoning ? "reasoning" : undefined,
+                m.context !== null ? `${Math.round(m.context / 1000)}k ctx` : undefined,
+              ]
+                .filter(Boolean)
+                .join(" · ");
+              return {
+                id: m.id,
+                label: m.name,
+                ...(hintText !== "" ? { hint: hintText } : {}),
+              };
+            })}
+            value={explainerModel}
+            onSelect={onModelSelect}
+            placeholder="Select a model…"
+            emptyText="No model found. Enter a model ID manually."
+            allowCustom
+            className="w-full"
+          />
+        ) : (
+          <Input
+            id="explainer-model"
+            name="explainer-model"
+            value={explainerModel}
+            onChange={(event): void => { onModelInput(event.target.value); }}
+            placeholder="e.g. gpt-4o, claude-3-7-sonnet"
+          />
+        )}
+        <p className="text-xs text-muted-foreground">Model identifier sent in chat completions requests.</p>
+      </div>
+    </div>
+  );
+}
+
 type OperationsSettings = {
   "plan-explainer"?: PlanExplainerSettings;
 };
@@ -223,84 +321,19 @@ export function AdminPlanExplainer(): React.JSX.Element {
           </CardAction>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <label htmlFor="explainer-provider" className="block text-sm font-medium text-foreground">
-                Provider
-              </label>
-              {providers.length > 0 ? (
-                <FuzzyCombobox
-                  id="explainer-provider"
-                  options={providers.map((p): { id: string; label: string; hint?: string } => ({
-                    id: p.id,
-                    label: p.name,
-                    ...(p["model-count"] > 0 ? { hint: `${p["model-count"]} models` } : {}),
-                  }))}
-                  value={explainerProvider}
-                  onSelect={(id): void => {
-                    setExplainerProvider(id);
-                    setExplainerModel("");
-                  }}
-                  placeholder="Select a provider…"
-                  emptyText="No provider found. Use Custom for arbitrary endpoints."
-                  allowCustom
-                  className="w-full"
-                />
-              ) : (
-                <Input
-                  id="explainer-provider"
-                  name="explainer-provider"
-                  value={explainerProvider}
-                  onChange={(event): void => { setExplainerProvider(event.target.value); }}
-                  placeholder="custom"
-                />
-              )}
-              <p className="text-xs text-muted-foreground">
-                {explainerProvider === CUSTOM_PROVIDER_ID
-                  ? "Custom endpoint — enter any OpenAI-compatible base URL below."
-                  : "Standard provider catalog from models.dev."}
-              </p>
-            </div>
-
-            <div className="space-y-1.5">
-              <label htmlFor="explainer-model" className="block text-sm font-medium text-foreground">
-                Model
-              </label>
-              {providerModels.length > 0 ? (
-                <FuzzyCombobox
-                  id="explainer-model"
-                  options={providerModels.map((m): { id: string; label: string; hint?: string } => {
-                    const hintText = [
-                      m.reasoning ? "reasoning" : undefined,
-                      m.context !== null ? `${Math.round(m.context / 1000)}k ctx` : undefined,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ");
-                    return {
-                      id: m.id,
-                      label: m.name,
-                      ...(hintText !== "" ? { hint: hintText } : {}),
-                    };
-                  })}
-                  value={explainerModel}
-                  onSelect={(id): void => { setExplainerModel(id); }}
-                  placeholder="Select a model…"
-                  emptyText="No model found. Enter a model ID manually."
-                  allowCustom
-                  className="w-full"
-                />
-              ) : (
-                <Input
-                  id="explainer-model"
-                  name="explainer-model"
-                  value={explainerModel}
-                  onChange={(event): void => { setExplainerModel(event.target.value); }}
-                  placeholder="e.g. gpt-4o, claude-3-7-sonnet"
-                />
-              )}
-              <p className="text-xs text-muted-foreground">Model identifier sent in chat completions requests.</p>
-            </div>
-          </div>
+          <ExplainerProviderModelFields
+            providers={providers}
+            providerModels={providerModels}
+            explainerProvider={explainerProvider}
+            explainerModel={explainerModel}
+            onProviderSelect={(id): void => {
+              setExplainerProvider(id);
+              setExplainerModel("");
+            }}
+            onProviderInput={(value: string): void => { setExplainerProvider(value); }}
+            onModelSelect={(id): void => { setExplainerModel(id); }}
+            onModelInput={(value: string): void => { setExplainerModel(value); }}
+          />
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">

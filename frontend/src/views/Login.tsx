@@ -12,6 +12,123 @@ import { ApiError, fetchApi, setAuthToken } from "@/lib/api";
 import { resolveReturnTarget } from "@/lib/return-to";
 import { isString } from "../lib/type-guards";
 
+function submitDisabled(
+  submitting: boolean,
+  mfaNull: boolean,
+  username: string,
+  password: string,
+  mfaCode: string,
+): boolean {
+  if (submitting) return true;
+  if (mfaNull) return username === "" || password === "";
+  return mfaCode.trim() === "";
+}
+
+function LoginFields({
+  isMfa,
+  localAuthEnabled,
+  ldapEnabled,
+  samlEnabled,
+  oidcEnabled,
+  showLocalForm,
+  username,
+  password,
+  mfaCode,
+  error,
+  onUsernameChange,
+  onPasswordChange,
+  onMfaCodeChange,
+}: Readonly<{
+  isMfa: boolean;
+  localAuthEnabled: boolean;
+  ldapEnabled: boolean;
+  samlEnabled: boolean;
+  oidcEnabled: boolean;
+  showLocalForm: boolean;
+  username: string;
+  password: string;
+  mfaCode: string;
+  error: string;
+  onUsernameChange: (value: string) => void;
+  onPasswordChange: (value: string) => void;
+  onMfaCodeChange: (value: string) => void;
+}>): React.JSX.Element {
+  if (isMfa) {
+    return (
+      <Field data-invalid={error !== ""}>
+        <FieldLabel htmlFor="login-mfa-code">Authentication code</FieldLabel>
+        <Input id="login-mfa-code" name="mfa-code" inputMode="numeric" autoComplete="one-time-code" autoFocus required aria-invalid={error !== ""} value={mfaCode} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onMfaCodeChange(event.currentTarget.value); }} placeholder="6-digit code" />
+      </Field>
+    );
+  }
+  return (
+    <>
+      {!localAuthEnabled && !ldapEnabled && (
+        <div role="status" className="mb-3 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
+          {!samlEnabled && !oidcEnabled
+            ? "No authentication methods are configured. Contact an administrator."
+            : "Local password sign-in is disabled. Use single sign-on below."}
+        </div>
+      )}
+      {showLocalForm && (
+        <>
+          <Field data-invalid={error !== ""}>
+            <FieldLabel htmlFor="login-username">Username or email address</FieldLabel>
+          <Input id="login-username" name="username" value={username} autoComplete="username" autoFocus required aria-invalid={error !== ""} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onUsernameChange(event.currentTarget.value); }} />
+          </Field>
+          <Field data-invalid={error !== ""}>
+            <FieldLabel htmlFor="login-password">Password</FieldLabel>
+          <Input id="login-password" name="password" type="password" value={password} autoComplete="current-password" required aria-invalid={error !== ""} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onPasswordChange(event.currentTarget.value); }} />
+          </Field>
+        </>
+      )}
+    </>
+  );
+}
+
+function SignupLink({ mfaNull, localAuthEnabled, signupEnabled, returnTo }: Readonly<{
+  mfaNull: boolean;
+  localAuthEnabled: boolean;
+  signupEnabled: boolean;
+  returnTo: string | null;
+}>): React.JSX.Element | null {
+  if (!mfaNull || !localAuthEnabled || !signupEnabled) return null;
+  return (
+    <Link
+      to={returnTo === null ? "/register" : `/register?returnTo=${encodeURIComponent(returnTo)}`}
+      className={buttonVariants({ variant: "link" })}
+    >
+      Create account
+    </Link>
+  );
+}
+
+function SsoButtons({ ssoEnabled, showLocalForm, samlEnabled, oidcEnabled }: Readonly<{
+  ssoEnabled: boolean;
+  showLocalForm: boolean;
+  samlEnabled: boolean;
+  oidcEnabled: boolean;
+}>): React.JSX.Element | null {
+  if (!ssoEnabled) return null;
+  return (
+    <div className="flex w-full flex-col gap-2 border-t pt-3">
+      <p className="text-xs text-muted-foreground">
+        {showLocalForm ? "Or sign in with single sign-on" : "Sign in with single sign-on"}
+      </p>
+      {samlEnabled && (
+        <Button type="button" variant="outline" className="w-full" onClick={(): void => { window.location.href = "/users/saml/auth"; }}>
+          Sign in with SAML SSO
+        </Button>
+      )}
+      {oidcEnabled && (
+        <Button type="button" variant="outline" className="w-full" onClick={(): void => { window.location.href = "/users/oidc/auth"; }}>
+          Sign in with OpenID Connect
+        </Button>
+      )}
+    </div>
+  );
+}
+
 
 export function Login(): React.JSX.Element {
   const [username, setUsername] = useState("");
@@ -163,57 +280,30 @@ export function Login(): React.JSX.Element {
         <form onSubmit={mfaChallengeToken === null ? handleLogin : handleMfaChallenge}>
           <CardContent>
             <FieldGroup>
-              {mfaChallengeToken === null ? (
-                <>
-                  {!localAuthEnabled && !ldapEnabled && (
-                    <div role="status" className="mb-3 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
-                      {!samlEnabled && !oidcEnabled
-                        ? "No authentication methods are configured. Contact an administrator."
-                        : "Local password sign-in is disabled. Use single sign-on below."}
-                    </div>
-                  )}
-                  {showLocalForm && (
-                    <>
-                      <Field data-invalid={error !== ""}>
-                        <FieldLabel htmlFor="login-username">Username or email address</FieldLabel>
-                      <Input id="login-username" name="username" value={username} autoComplete="username" autoFocus required aria-invalid={error !== ""} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setUsername(event.currentTarget.value); }} />
-                      </Field>
-                      <Field data-invalid={error !== ""}>
-                        <FieldLabel htmlFor="login-password">Password</FieldLabel>
-                      <Input id="login-password" name="password" type="password" value={password} autoComplete="current-password" required aria-invalid={error !== ""} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setPassword(event.currentTarget.value); }} />
-                      </Field>
-                    </>
-                  )}
-                </>
-              ) : (
-                <Field data-invalid={error !== ""}>
-                  <FieldLabel htmlFor="login-mfa-code">Authentication code</FieldLabel>
-                  <Input id="login-mfa-code" name="mfa-code" inputMode="numeric" autoComplete="one-time-code" autoFocus required aria-invalid={error !== ""} value={mfaCode} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setMfaCode(event.currentTarget.value); }} placeholder="6-digit code" />
-                </Field>
-              )}
+              <LoginFields
+                isMfa={mfaChallengeToken !== null}
+                localAuthEnabled={localAuthEnabled}
+                ldapEnabled={ldapEnabled}
+                samlEnabled={samlEnabled}
+                oidcEnabled={oidcEnabled}
+                showLocalForm={showLocalForm}
+                username={username}
+                password={password}
+                mfaCode={mfaCode}
+                error={error}
+                onUsernameChange={(value: string): void => { setUsername(value); }}
+                onPasswordChange={(value: string): void => { setPassword(value); }}
+                onMfaCodeChange={(value: string): void => { setMfaCode(value); }}
+              />
               <FieldError>{error}</FieldError>
             </FieldGroup>
           </CardContent>
           <CardFooter className="flex flex-col gap-2">
-            {mfaChallengeToken === null && ssoEnabled && (
-              <div className="flex w-full flex-col gap-2 border-t pt-3">
-                <p className="text-xs text-muted-foreground">
-                  {showLocalForm ? "Or sign in with single sign-on" : "Sign in with single sign-on"}
-                </p>
-                {samlEnabled && (
-                  <Button type="button" variant="outline" className="w-full" onClick={(): void => { window.location.href = "/users/saml/auth"; }}>
-                    Sign in with SAML SSO
-                  </Button>
-                )}
-                {oidcEnabled && (
-                  <Button type="button" variant="outline" className="w-full" onClick={(): void => { window.location.href = "/users/oidc/auth"; }}>
-                    Sign in with OpenID Connect
-                  </Button>
-                )}
-              </div>
+            {mfaChallengeToken === null && (
+              <SsoButtons ssoEnabled={ssoEnabled} showLocalForm={showLocalForm} samlEnabled={samlEnabled} oidcEnabled={oidcEnabled} />
             )}
             {(showLocalForm || mfaChallengeToken !== null) && (
-              <Button type="submit" className="w-full" disabled={submitting || (mfaChallengeToken === null ? username === "" || password === "" : mfaCode.trim() === "")}>
+              <Button type="submit" className="w-full" disabled={submitDisabled(submitting, mfaChallengeToken === null, username, password, mfaCode)}>
                 {submitting && <Spinner data-icon="inline-start" />}
                 {mfaChallengeToken === null ? "Sign in" : "Verify code"}
               </Button>
@@ -223,14 +313,12 @@ export function Login(): React.JSX.Element {
                 Use a different account
               </Button>
             )}
-            {mfaChallengeToken === null && localAuthEnabled && signupEnabled && (
-              <Link
-                to={returnTo === null ? "/register" : `/register?returnTo=${encodeURIComponent(returnTo)}`}
-                className={buttonVariants({ variant: "link" })}
-              >
-                Create account
-              </Link>
-            )}
+            <SignupLink
+              mfaNull={mfaChallengeToken === null}
+              localAuthEnabled={localAuthEnabled}
+              signupEnabled={signupEnabled}
+              returnTo={returnTo}
+            />
           </CardFooter>
         </form>
       </Card>

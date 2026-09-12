@@ -6,10 +6,12 @@ import { eq, and, count, inArray, asc, desc, or } from "drizzle-orm";
 import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
 import { TOKEN_DESCRIPTION_MAX_LENGTH } from "../lib/constants";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
+import type { TtlPolicyResolution } from "../lib/token-ttl-policy";
 
 const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 
 import { auditLog, checkOrganizationPermission, checkOrgPermission, checkWorkspacePermission, pageRequest, pagination } from "../lib/utils";
+import type { RequestWithUrl } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { orgMembershipResource } from "../lib/response";
 import { cachedOrgByName } from "../lib/cached-lookups";
@@ -226,6 +228,384 @@ async function scimLinked(teamId: string): Promise<boolean> {
   })) !== undefined;
 }
 
+type TeamPatchError = Readonly<{ status: 404 } | { status: 422; detail?: string }>;
+
+function parseTeamPatchAttributes(body: unknown): Record<string, unknown> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  return typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+}
+
+function applyBasicTeamUpdates(
+  attributes: Record<string, unknown>,
+  teamName: string,
+  linked: boolean,
+  updates: Partial<typeof teams.$inferInsert>,
+): string | null {
+  if (linked && typeof attributes["name"] === "string" && attributes["name"] !== teamName) {
+    return "SCIM-linked teams cannot be renamed";
+  }
+  if (typeof attributes["name"] === "string") updates.name = attributes["name"];
+  if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
+  if (typeof attributes["visibility"] === "string") updates.visibility = attributes["visibility"];
+  if (!linked && attributes["sso-team-id"] !== undefined) updates.ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : null;
+  return null;
+}
+
+function applyMemberTokenManagement(
+  attributes: Record<string, unknown>,
+  updates: Partial<typeof teams.$inferInsert>,
+): boolean {
+  if (attributes["allow-member-token-management"] === undefined) return false;
+  if (typeof attributes["allow-member-token-management"] !== "boolean") return true;
+  updates.allowMemberTokenManagement = attributes["allow-member-token-management"];
+  return false;
+}
+
+function applyOrganizationAccessUpdate(
+  attributes: Record<string, unknown>,
+  organizationAccess: typeof teams.$inferSelect["organizationAccess"],
+  linked: boolean,
+  updates: Partial<typeof teams.$inferInsert>,
+): string | null {
+  const rawOrgAccess = attributes["organization-access"] as Record<string, unknown> | null;
+  const parsed = parseOrganizationAccess(rawOrgAccess);
+  if ("error" in parsed) return parsed.error;
+  updates.organizationAccess = { ...organizationAccess, ...parsed.value };
+  // Legacy clients may carry visibility / sso-team-id / allow-member-token-management
+  // inside organization-access; the top-level attribute takes precedence
+  // when present (matching the create handler), and sso-team-id is gated by
+  // the linked-team guard. Column-backed keys are persisted to their columns.
+  if (attributes["visibility"] === undefined && typeof rawOrgAccess?.["visibility"] === "string") updates.visibility = rawOrgAccess["visibility"];
+  if (!linked && attributes["sso-team-id"] === undefined && rawOrgAccess?.["sso-team-id"] !== undefined) updates.ssoTeamId = typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null;
+  if (attributes["allow-member-token-management"] === undefined && rawOrgAccess?.["allow-member-token-management"] !== undefined) updates.allowMemberTokenManagement = typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
+  return null;
+}
+
+function applyPolicyOverrideExpiry(
+  attributes: Record<string, unknown>,
+  updates: Partial<typeof teams.$inferInsert>,
+): string | null {
+  const rawExpiry = attributes["policy-override-delegation-expires-at"];
+  if (rawExpiry === null) {
+    updates.policyOverrideDelegationExpiresAt = null;
+    return null;
+  }
+  if (typeof rawExpiry === "number" && Number.isFinite(rawExpiry)) {
+    if (rawExpiry <= 0) return "policy-override-delegation-expires-at must be a future epoch-millis timestamp, or null";
+    updates.policyOverrideDelegationExpiresAt = Math.floor(rawExpiry);
+    return null;
+  }
+  return "policy-override-delegation-expires-at must be a number or null";
+}
+
+async function buildTeamPatchUpdates(
+  attributes: Record<string, unknown>,
+  team: Readonly<typeof teams.$inferSelect>,
+  linked: boolean,
+  canManageOrganizationAccess: () => Promise<boolean>,
+  updates: Partial<typeof teams.$inferInsert>,
+): Promise<TeamPatchError | null> {
+  const basicError = applyBasicTeamUpdates(attributes, team.name, linked, updates);
+  if (basicError !== null) return { status: 422, detail: basicError };
+  if ((attributes["organization-access"] !== undefined || attributes["allow-member-token-management"] !== undefined)
+    && !(await canManageOrganizationAccess())) {
+    return { status: 404 };
+  }
+  if (applyMemberTokenManagement(attributes, updates)) return { status: 422 };
+  if (attributes["organization-access"] !== undefined) {
+    const orgAccessError = applyOrganizationAccessUpdate(attributes, team.organizationAccess, linked, updates);
+    if (orgAccessError !== null) return { status: 422, detail: orgAccessError };
+  }
+  // Time-bounded policy-override delegation (kanban 18.7): epoch-millis
+  // expiry (or null/0 to clear and return to a permanent grant). Requires
+  // manage-organization-access, same as the delegation grant itself.
+  if (attributes["policy-override-delegation-expires-at"] !== undefined) {
+    if (!(await canManageOrganizationAccess())) return { status: 404 };
+    const expiryError = applyPolicyOverrideExpiry(attributes, updates);
+    if (expiryError !== null) return { status: 422, detail: expiryError };
+  }
+  return null;
+}
+
+function teamWorkspaceRelationId(rels: Record<string, unknown>, key: string): string {
+  const rel = typeof rels[key] === "object" && rels[key] !== null ? (rels[key] as Record<string, unknown>) : {};
+  const relData = typeof rel["data"] === "object" && rel["data"] !== null ? (rel["data"] as Record<string, unknown>) : {};
+  return typeof relData["id"] === "string" ? relData["id"] : "";
+}
+
+function parseTeamWorkspaceRequest(body: unknown): { teamId: string; workspaceId: string; attrs: Record<string, unknown> } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+  const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  return { teamId: teamWorkspaceRelationId(rels, "team"), workspaceId: teamWorkspaceRelationId(rels, "workspace"), attrs };
+}
+
+async function requirePolicyOverrideGrant(
+  applies: boolean,
+  orgId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+): Promise<{ status: 403; detail: string } | null> {
+  if (applies && !(await checkOrganizationPermission(orgId, userId, tokenOrgId, tokenTeamId, "manage-policy-overrides"))) {
+    return { status: 403, detail: "manage-policy-overrides is required to grant policy overrides" };
+  }
+  return null;
+}
+
+async function resolveCallerTeamVisibility(
+  orgId: string,
+  callerUserId: string | null,
+  callerIsSiteAdmin: boolean,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+): Promise<{ callerTeamIds: Set<string> | null; callerCanSeeSecret: boolean }> {
+  const callerIsOwner = callerUserId !== null && (await db.query.organizationMemberships.findFirst({ where: and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.userId, callerUserId), eq(organizationMemberships.role, "owner"), eq(organizationMemberships.status, "active")) })) !== undefined;
+  // A team token identifies one team; it is not an organization-wide secret
+  // roster token. Keep its visibility limited to public teams plus itself.
+  let callerTeamIds: Set<string> | null = tokenTeamId === null ? null : new Set([tokenTeamId]);
+  let callerCanSeeSecret = callerIsOwner || callerIsSiteAdmin || (tokenOrgId !== null && tokenOrgId === orgId);
+  if (callerUserId !== null) {
+    const rows = await db.query.teamMemberships.findMany({ where: eq(teamMemberships.userId, callerUserId), columns: { teamId: true } });
+    const memberTeamIds = rows.map((r: { teamId: string }): string => r.teamId);
+    const callerTeams = memberTeamIds.length === 0
+      ? []
+      : await db.query.teams.findMany({ where: and(eq(teams.orgId, orgId), inArray(teams.id, memberTeamIds)), columns: { id: true, organizationAccess: true } });
+    callerTeamIds = new Set(callerTeams.map((tm): string => tm.id));
+    if (!callerCanSeeSecret) {
+      callerCanSeeSecret = callerTeams.some((tm): boolean => (tm.organizationAccess as Record<string, unknown> | undefined)?.["access-secret-teams"] === true);
+    }
+  }
+  return { callerTeamIds, callerCanSeeSecret };
+}
+
+function buildVisibleTeamWhere(orgId: string, callerCanSeeSecret: boolean, callerTeamIds: Set<string> | null) {
+  if (callerCanSeeSecret) return eq(teams.orgId, orgId);
+  if (callerTeamIds !== null && callerTeamIds.size > 0) {
+    return and(eq(teams.orgId, orgId), or(eq(teams.visibility, "organization"), inArray(teams.id, [...callerTeamIds])))!;
+  }
+  return and(eq(teams.orgId, orgId), eq(teams.visibility, "organization"))!;
+}
+
+async function loadTeamListAssociations(teamIds: string[], scimEnabled: boolean): Promise<{
+  membersByTeam: Map<string, { id: string; type: string }[]>;
+  mappingByTeam: Map<string, Readonly<{ scimGroupId: string; syncPaused: boolean; updatedAt: number }>>;
+  groupById: Map<string, string | null>;
+}> {
+  const [membershipRows, mappingRows] = teamIds.length === 0
+    ? [[], []]
+    : await Promise.all([
+      db.query.teamMemberships.findMany({ where: inArray(teamMemberships.teamId, teamIds), columns: { teamId: true, userId: true } }),
+      scimEnabled ? db.query.teamScimGroupMappings.findMany({ where: inArray(teamScimGroupMappings.teamId, teamIds) }) : [],
+    ]);
+  const groupIds = [...new Set(mappingRows.map((m: Readonly<{ readonly scimGroupId: string }>): string => m.scimGroupId))];
+  const groupRows = groupIds.length === 0 ? [] : await db.query.scimGroups.findMany({ where: inArray(scimGroups.id, groupIds) });
+  const groupById = new Map(groupRows.map((g: Readonly<{ readonly id: string; readonly name: string | null }>): [string, string | null] => [g.id, g.name]));
+  const membersByTeam = new Map<string, { id: string; type: string }[]>();
+  for (const m of membershipRows) {
+    const refs = membersByTeam.get(m.teamId) ?? [];
+    refs.push({ id: m.userId, type: "users" });
+    membersByTeam.set(m.teamId, refs);
+  }
+  const mappingByTeam = new Map(mappingRows.map((m: Readonly<{ readonly teamId: string; readonly scimGroupId: string; readonly syncPaused: boolean | null; readonly updatedAt: number }>): [string, Readonly<{ scimGroupId: string; syncPaused: boolean; updatedAt: number }>] => [m.teamId, { scimGroupId: m.scimGroupId, syncPaused: m.syncPaused ?? false, updatedAt: m.updatedAt }]));
+  return { membersByTeam, mappingByTeam, groupById };
+}
+
+async function teamListResponse(
+  request: RequestWithUrl,
+  number: number,
+  size: number,
+  countRows: Readonly<{ total: number }>[],
+  data: Promise<Record<string, unknown>>[],
+): Promise<unknown> {
+  return { data: await Promise.all(data), ...pagination(request, number, size, countRows[0]?.total ?? 0) };
+}
+
+type NewTeamFields = Readonly<{
+  name: string;
+  description: string | null;
+  visibility: string;
+  ssoTeamId: string | null;
+  allowMemberTokenManagement: boolean;
+  organizationAccess: Record<string, boolean>;
+}>;
+
+function resolveNewTeamColumnFields(
+  attributes: Record<string, unknown>,
+  rawOrgAccess: Record<string, unknown>,
+): Omit<NewTeamFields, "name" | "organizationAccess"> {
+  return {
+    description: typeof attributes["description"] === "string" ? attributes["description"] : null,
+    visibility: typeof attributes["visibility"] === "string" ? attributes["visibility"] : (typeof rawOrgAccess["visibility"] === "string" ? rawOrgAccess["visibility"] : "organization"),
+    ssoTeamId: typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : (typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null),
+    allowMemberTokenManagement: typeof attributes["allow-member-token-management"] === "boolean" ? attributes["allow-member-token-management"] : typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false,
+  };
+}
+
+function buildNewTeamFields(
+  attributes: Record<string, unknown>,
+): Readonly<{ value: NewTeamFields }> | Readonly<{ error: Extract<TeamPatchError, { status: 422 }> }> {
+  const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
+  if (name === "") return { error: { status: 422, detail: "Name is required" } };
+  if (attributes["allow-member-token-management"] !== undefined && typeof attributes["allow-member-token-management"] !== "boolean") {
+    return { error: { status: 422 } };
+  }
+  const rawOrgAccess = attributes["organization-access"] !== undefined && typeof attributes["organization-access"] === "object" && attributes["organization-access"] !== null
+    ? attributes["organization-access"] as Record<string, unknown>
+    : {};
+  const organizationAccess = parseOrganizationAccess(rawOrgAccess);
+  if ("error" in organizationAccess) return { error: { status: 422, detail: organizationAccess.error } };
+  return { value: { name, ...resolveNewTeamColumnFields(attributes, rawOrgAccess), organizationAccess: organizationAccess.value } };
+}
+
+async function loadTeamDetailIncludes(
+  teamOrgId: string,
+  members: Readonly<{ userId: string }>[],
+  query: Readonly<Record<string, string>> | undefined,
+  canReadMembers: boolean,
+): Promise<{ included: Record<string, unknown>[]; linkage: TeamLinkage | undefined }> {
+  const includeQuery = query !== undefined ? query["include"] : undefined;
+  const includes = typeof includeQuery === "string" ? includeQuery.split(",") : [];
+  const includeUsers = canReadMembers && includes.includes("users");
+  const includeOrgMemberships = canReadMembers && includes.includes("organization-memberships");
+  const userIds = members.map((m): string => m.userId);
+  let included: Record<string, unknown>[] = [];
+  if (includeUsers && userIds.length > 0) {
+    const uList = await db.query.users.findMany({ where: inArray(users.id, userIds) });
+    included = uList.map((u: Readonly<{ readonly id: string; readonly username: string; readonly email: string | null }>): Record<string, unknown> => ({ id: u.id, type: "users", attributes: { username: u.username, email: u.email } }));
+  }
+  if (includeOrgMemberships && userIds.length > 0) {
+    const memList = (await db.query.organizationMemberships.findMany({ where: inArray(organizationMemberships.userId, userIds) }))
+      .filter((m): boolean => m.orgId === teamOrgId);
+    const uMap = new Map((await db.query.users.findMany({ where: inArray(users.id, userIds) })).map((u): [string, typeof u] => [u.id, u]));
+    included = included.concat(await Promise.all(memList.map(async (m): Promise<Record<string, unknown>> => orgMembershipResource(m, uMap.get(m.userId) ?? null))));
+    const linkage: TeamLinkage = {
+      users: members.map((m): { id: string; type: string } => ({ id: m.userId, type: "users" })),
+      organizationMemberships: memList.map((m): { id: string; type: string } => ({ id: m.id, type: "organization-memberships" })),
+    };
+    return { included, linkage };
+  }
+  if (includeUsers) {
+    const linkage: TeamLinkage = { users: members.map((m): { id: string; type: string } => ({ id: m.userId, type: "users" })) };
+    return { included, linkage };
+  }
+  return { included, linkage: undefined };
+}
+
+function resolveRequestedTokenExpiry(attrs: Record<string, unknown>): Readonly<{ expiry: number }> | Readonly<{ error: string }> {
+  const expiredAtVal = attrs["expired-at"] ?? attrs["expires-at"] ?? attrs["expiredAt"] ?? attrs["expiresAt"];
+  const expiredAtStr = typeof expiredAtVal === "string" ? expiredAtVal : "";
+  if (expiredAtStr === "") return { expiry: Date.now() + TWO_YEARS_MS };
+  const parsedMs = new Date(expiredAtStr).getTime();
+  if (Number.isNaN(parsedMs)) return { error: "expired-at must be a valid ISO-8601 date" };
+  if (parsedMs <= Date.now()) return { error: "expired-at must be in the future" };
+  return { expiry: parsedMs };
+}
+
+function parseTeamTokenRequest(attrs: Record<string, unknown>): Readonly<{ value: { description: string; expiry: number } }> | Readonly<{ error: string }> {
+  // TFE parity: modern team tokens require an explicit description and
+  // default to a two-year expiration when none is supplied. The org TTL
+  // policy caps or forbids the result (todo 72-74).
+  const description = typeof attrs["description"] === "string" ? attrs["description"].trim() : "";
+  if (description === "" || description.length > TOKEN_DESCRIPTION_MAX_LENGTH) {
+    return { error: `Description is required for team tokens and must be at most ${TOKEN_DESCRIPTION_MAX_LENGTH} characters` };
+  }
+  const expiry = resolveRequestedTokenExpiry(attrs);
+  if ("error" in expiry) return expiry;
+  return { value: { description, expiry: expiry.expiry } };
+}
+
+function teamTokenPolicyError(resolution: TtlPolicyResolution): { status: 422 | 403; detail: string } | null {
+  if (resolution.kind === "invalid") return { status: 422, detail: resolution.detail };
+  if (resolution.kind === "forbidden") return { status: 403, detail: resolution.detail };
+  return null;
+}
+
+function teamTokenResponse(tokenId: string, secret: string, description: string, expiresAt: number | null): unknown {
+  return { data: { id: tokenId, type: "authentication-tokens", attributes: { token: secret, description, "created-at": new Date().toISOString(), "expired-at": expiresAt !== null ? new Date(expiresAt).toISOString() : null } } };
+}
+
+// the reference format's Atlas convention lets `data[].id` be either a user UUID or a
+// username; the go-tfe v2 client sends usernames.
+function parseRelationshipIds(userItems: unknown): string[] {
+  if (!Array.isArray(userItems)) return [];
+  return userItems
+    .map((item: unknown): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string") ? (item as Record<string, unknown>)["id"] as string : "")
+    .filter((s: string): boolean => s !== "");
+}
+
+async function addTeamMembersByIds(teamOrgId: string, teamId: string, rawIds: string[]): Promise<void> {
+  const userIds = await resolveUserIds(rawIds);
+  const memberships = userIds.length === 0
+    ? new Map<string, typeof organizationMemberships.$inferSelect>()
+    : new Map(
+        (await db.query.organizationMemberships.findMany({
+          where: and(eq(organizationMemberships.orgId, teamOrgId), inArray(organizationMemberships.userId, userIds)),
+        })).map((m): [string, typeof organizationMemberships.$inferSelect] => [m.userId, m]),
+      );
+  const batch: (typeof teamMemberships.$inferInsert)[] = [];
+  for (const userId of userIds) {
+    const membership = memberships.get(userId);
+    if (membership?.status === "active") {
+      batch.push({ id: newResourceId("tm"), teamId, userId, createdAt: Date.now() });
+    }
+  }
+  if (batch.length > 0) await db.insert(teamMemberships).values(batch).onConflictDoNothing();
+}
+
+async function removeTeamMembersByIds(teamId: string, rawIds: string[]): Promise<void> {
+  const userIds = await resolveUserIds(rawIds);
+  if (userIds.length > 0) await db.delete(teamMemberships).where(and(eq(teamMemberships.teamId, teamId), inArray(teamMemberships.userId, userIds)));
+}
+
+function resolveTeamWorkspaceGrantInputs(
+  attributes: Record<string, unknown>,
+  currentAccess: unknown,
+  currentPermissions: unknown,
+): { accessInput: unknown; permissionsInput: unknown } {
+  const accessInput = attributes["access"] === undefined ? currentAccess : attributes["access"];
+  const permissionsInput = attributes["permissions"] === undefined
+    ? (accessInput === "custom" ? currentPermissions : null)
+    : attributes["permissions"];
+  return { accessInput, permissionsInput };
+}
+
+function buildTeamWorkspaceUpdates(
+  attributes: Record<string, unknown>,
+  grant: ParsedTeamWorkspaceGrant,
+): Record<string, unknown> {
+  const updates: Record<string, unknown> = {};
+  if (attributes["access"] !== undefined) updates["access"] = grant.access;
+  if (attributes["permissions"] !== undefined) updates["permissions"] = grant.permissions;
+  return updates;
+}
+
+async function addTeamMembersByOrgMembershipIds(teamOrgId: string, teamId: string, rawIds: string[]): Promise<void> {
+  const memberships = rawIds.length === 0
+    ? new Map<string, typeof organizationMemberships.$inferSelect>()
+    : new Map(
+        (await db.query.organizationMemberships.findMany({ where: inArray(organizationMemberships.id, rawIds) }))
+          .map((m): [string, typeof organizationMemberships.$inferSelect] => [m.id, m]),
+      );
+  const batch: (typeof teamMemberships.$inferInsert)[] = [];
+  for (const memId of rawIds) {
+    const mem = memberships.get(memId);
+    if (mem?.orgId === teamOrgId) {
+      batch.push({ id: newResourceId("tm"), teamId, userId: mem.userId, createdAt: Date.now() });
+    }
+  }
+  if (batch.length > 0) await db.insert(teamMemberships).values(batch).onConflictDoNothing();
+}
+
+async function removeTeamMembersByOrgMembershipIds(teamOrgId: string, teamId: string, rawIds: string[]): Promise<void> {
+  if (rawIds.length === 0) return;
+  const memberships = await db.query.organizationMemberships.findMany({ where: inArray(organizationMemberships.id, rawIds) });
+  const userIds = memberships.filter((m): boolean => m.orgId === teamOrgId).map((m): string => m.userId);
+  if (userIds.length > 0) await db.delete(teamMemberships).where(and(eq(teamMemberships.teamId, teamId), inArray(teamMemberships.userId, userIds)));
+}
+
 export const teamRoutes = new Elysia({ name: "teams" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/team-tokens", async ({ params, request, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -280,50 +660,15 @@ export const teamRoutes = new Elysia({ name: "teams" })
     ]);
     const { number, size } = pageRequest(request);
     const callerUserId = user?.id ?? null;
-    const callerIsOwner = callerUserId !== null && (await db.query.organizationMemberships.findFirst({ where: and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.userId, callerUserId), eq(organizationMemberships.role, "owner"), eq(organizationMemberships.status, "active")) })) !== undefined;
-    const callerIsSiteAdmin = user?.isSiteAdmin === true;
-    // A team token identifies one team; it is not an organization-wide secret
-    // roster token. Keep its visibility limited to public teams plus itself.
-    let callerTeamIds: Set<string> | null = tokenTeamId === null ? null : new Set([tokenTeamId]);
-    let callerCanSeeSecret = callerIsOwner || callerIsSiteAdmin || (tokenOrgId !== null && tokenOrgId === org.id);
-    if (callerUserId !== null) {
-      const rows = await db.query.teamMemberships.findMany({ where: eq(teamMemberships.userId, callerUserId), columns: { teamId: true } });
-      const memberTeamIds = rows.map((r: { teamId: string }): string => r.teamId);
-      const callerTeams = memberTeamIds.length === 0
-        ? []
-        : await db.query.teams.findMany({ where: and(eq(teams.orgId, org.id), inArray(teams.id, memberTeamIds)), columns: { id: true, organizationAccess: true } });
-      callerTeamIds = new Set(callerTeams.map((tm): string => tm.id));
-      if (!callerCanSeeSecret) {
-        callerCanSeeSecret = callerTeams.some((tm): boolean => (tm.organizationAccess as Record<string, unknown> | undefined)?.["access-secret-teams"] === true);
-      }
-    }
-    const visibleTeamWhere = callerCanSeeSecret
-      ? eq(teams.orgId, org.id)
-      : callerTeamIds !== null && callerTeamIds.size > 0
-        ? and(eq(teams.orgId, org.id), or(eq(teams.visibility, "organization"), inArray(teams.id, [...callerTeamIds])))!
-        : and(eq(teams.orgId, org.id), eq(teams.visibility, "organization"))!;
+    const { callerTeamIds, callerCanSeeSecret } = await resolveCallerTeamVisibility(org.id, callerUserId, user?.isSiteAdmin === true, tokenOrgId, tokenTeamId);
+    const visibleTeamWhere = buildVisibleTeamWhere(org.id, callerCanSeeSecret, callerTeamIds);
     const [teamList, countRows] = await Promise.all([
       db.query.teams.findMany({ where: visibleTeamWhere, orderBy: [asc(teams.id)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(teams).where(visibleTeamWhere),
     ]);
     const teamIds = teamList.map((t: TeamItem): string => t.id);
     const scimEnabled = (await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") }))?.enabled === true;
-    const [membershipRows, mappingRows] = teamIds.length === 0
-      ? [[], []]
-      : await Promise.all([
-        db.query.teamMemberships.findMany({ where: inArray(teamMemberships.teamId, teamIds), columns: { teamId: true, userId: true } }),
-        scimEnabled ? db.query.teamScimGroupMappings.findMany({ where: inArray(teamScimGroupMappings.teamId, teamIds) }) : [],
-      ]);
-    const groupIds = [...new Set(mappingRows.map((m: Readonly<{ readonly scimGroupId: string }>): string => m.scimGroupId))];
-    const groupRows = groupIds.length === 0 ? [] : await db.query.scimGroups.findMany({ where: inArray(scimGroups.id, groupIds) });
-    const groupById = new Map(groupRows.map((g: Readonly<{ readonly id: string; readonly name: string | null }>): [string, string | null] => [g.id, g.name]));
-    const membersByTeam = new Map<string, { id: string; type: string }[]>();
-    for (const m of membershipRows) {
-      const refs = membersByTeam.get(m.teamId) ?? [];
-      refs.push({ id: m.userId, type: "users" });
-      membersByTeam.set(m.teamId, refs);
-    }
-    const mappingByTeam = new Map(mappingRows.map((m: Readonly<{ readonly teamId: string; readonly scimGroupId: string; readonly syncPaused: boolean | null; readonly updatedAt: number }>): [string, Readonly<{ scimGroupId: string; syncPaused: boolean; updatedAt: number }>] => [m.teamId, { scimGroupId: m.scimGroupId, syncPaused: m.syncPaused ?? false, updatedAt: m.updatedAt }]));
+    const { membersByTeam, mappingByTeam, groupById } = await loadTeamListAssociations(teamIds, scimEnabled);
     const data = teamList.map(async (t: TeamItem): Promise<Record<string, unknown>> => {
       const userRefs = canReadMembers ? (membersByTeam.get(t.id) ?? []) : [];
       const mapping = mappingByTeam.get(t.id);
@@ -332,38 +677,26 @@ export const teamRoutes = new Elysia({ name: "teams" })
         : undefined;
       return teamResource(t, userRefs.length, { users: userRefs }, scim, { canUpdate: canManageTeams, canDestroy: canManageTeams });
     });
-    const totalCount = countRows[0]?.total ?? 0;
-    return { data: await Promise.all(data), ...pagination(request, number, size, totalCount) };
+    return teamListResponse(request, number, size, countRows, data);
   })
   .post("/api/v2/organizations/:org_name/teams", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
-    if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
-    if (attributes["allow-member-token-management"] !== undefined && typeof attributes["allow-member-token-management"] !== "boolean") {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    const attributes = parseTeamPatchAttributes(body);
+    const fields = buildNewTeamFields(attributes);
+    if ("error" in fields) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", ...("detail" in fields.error && fields.error.detail !== undefined ? { detail: fields.error.detail } : {}) }] };
     }
     const id = newResourceId("team");
-    const rawOrgAccess = attributes["organization-access"] !== undefined && typeof attributes["organization-access"] === "object" && attributes["organization-access"] !== null
-      ? attributes["organization-access"] as Record<string, unknown>
-      : {};
-    const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
-    const visibility = typeof attributes["visibility"] === "string" ? attributes["visibility"] : (typeof rawOrgAccess["visibility"] === "string" ? rawOrgAccess["visibility"] : "organization");
-    const ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : (typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null);
-    const allowMemberTokenManagement = typeof attributes["allow-member-token-management"] === "boolean" ? attributes["allow-member-token-management"] : typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
-    const organizationAccess = parseOrganizationAccess(rawOrgAccess);
-    if ("error" in organizationAccess) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: organizationAccess.error }] }; }
     if (
       (attributes["organization-access"] !== undefined || attributes["allow-member-token-management"] !== undefined)
       && !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"))
     ) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const newTeam = { id, orgId: org.id, name, description, visibility, ssoTeamId, allowMemberTokenManagement, organizationAccess: organizationAccess.value, createdAt: Date.now() };
+    const newTeam = { id, orgId: org.id, ...fields.value, createdAt: Date.now() };
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
       await t.insert(teams).values(newTeam);
@@ -392,99 +725,35 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null, "teams:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const userCount = (await db.select({ val: count() }).from(teamMemberships).where(eq(teamMemberships.teamId, team.id)))[0]?.val ?? 0;
-    const includeQuery = query !== undefined ? query["include"] : undefined;
-    const includes = typeof includeQuery === "string" ? includeQuery.split(",") : [];
-    // Membership data (usernames/emails, membership refs, and the exact team
-    // size) requires members:read.
     const [canReadMembers, canManageTeams] = await Promise.all([
       checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null, "members:read"),
       checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"),
     ]);
     const permissions: TeamPermissions = { canUpdate: canManageTeams, canDestroy: canManageTeams };
     const rosterCount = canReadMembers ? userCount : 0;
-    const includeUsers = canReadMembers && includes.includes("users");
-    const includeOrgMemberships = canReadMembers && includes.includes("organization-memberships");
-    let included: Record<string, unknown>[] = [];
     const members = await db.query.teamMemberships.findMany({ where: eq(teamMemberships.teamId, team.id) });
-    const userIds = members.map((m: Readonly<{ readonly userId: string }>): string => m.userId);
     const scim = await teamScim(team.id, (await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") }))?.enabled === true);
-    if (includeUsers && userIds.length > 0) {
-      const uList = await db.query.users.findMany({ where: inArray(users.id, userIds) });
-      included = uList.map((u: Readonly<{ readonly id: string; readonly username: string; readonly email: string | null }>): Record<string, unknown> => ({ id: u.id, type: "users", attributes: { username: u.username, email: u.email } }));
-    }
-    if (includeOrgMemberships && userIds.length > 0) {
-      const memList = (await db.query.organizationMemberships.findMany({ where: inArray(organizationMemberships.userId, userIds) }))
-        .filter((m): boolean => m.orgId === team.orgId);
-      const uMap = new Map((await db.query.users.findMany({ where: inArray(users.id, userIds) })).map((u): [string, typeof u] => [u.id, u]));
-      included = included.concat(await Promise.all(memList.map(async (m): Promise<Record<string, unknown>> => orgMembershipResource(m, uMap.get(m.userId) ?? null))));
-      const linkage: TeamLinkage = {
-        users: members.map((m): { id: string; type: string } => ({ id: m.userId, type: "users" })),
-        organizationMemberships: memList.map((m): { id: string; type: string } => ({ id: m.id, type: "organization-memberships" })),
-      };
-      return { data: await teamResource(team, rosterCount, linkage, scim, permissions), ...(included.length > 0 ? { included } : {}) };
-    }
-    if (includeUsers) {
-      const linkage: TeamLinkage = { users: members.map((m): { id: string; type: string } => ({ id: m.userId, type: "users" })) };
-      return { data: await teamResource(team, rosterCount, linkage, scim, permissions), ...(included.length > 0 ? { included } : {}) };
-    }
-    return { data: await teamResource(team, rosterCount, undefined, scim, permissions), ...(included.length > 0 ? { included } : {}) };
+    const { included, linkage } = await loadTeamDetailIncludes(team.orgId, members, query, canReadMembers);
+    return { data: await teamResource(team, rosterCount, linkage, scim, permissions), ...(included.length > 0 ? { included } : {}) };
   })
   .patch("/api/v2/teams/:team_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const attributes = parseTeamPatchAttributes(body);
     const updates: Partial<typeof teams.$inferInsert> = {};
     const linked = await scimLinked(teamId);
-    if (linked && typeof attributes["name"] === "string" && attributes["name"] !== team.name) {
+    const patchError = await buildTeamPatchUpdates(
+      attributes,
+      team,
+      linked,
+      async (): Promise<boolean> => checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"),
+      updates,
+    );
+    if (patchError !== null) {
+      if (patchError.status === 404) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SCIM-linked teams cannot be renamed" }] };
-    }
-    if (typeof attributes["name"] === "string") updates.name = attributes["name"];
-    if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
-    if (typeof attributes["visibility"] === "string") updates.visibility = attributes["visibility"];
-    if (!linked && attributes["sso-team-id"] !== undefined) updates.ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : null;
-    if ((attributes["organization-access"] !== undefined || attributes["allow-member-token-management"] !== undefined)
-      && !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (attributes["allow-member-token-management"] !== undefined) {
-      if (typeof attributes["allow-member-token-management"] !== "boolean") {
-        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
-      }
-      updates.allowMemberTokenManagement = attributes["allow-member-token-management"];
-    }
-    if (attributes["organization-access"] !== undefined) {
-      const rawOrgAccess = attributes["organization-access"] as Record<string, unknown> | null;
-      const organizationAccess = parseOrganizationAccess(rawOrgAccess);
-      if ("error" in organizationAccess) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: organizationAccess.error }] }; }
-      updates.organizationAccess = { ...team.organizationAccess, ...organizationAccess.value };
-      // Legacy clients may carry visibility / sso-team-id / allow-member-token-management
-      // inside organization-access; the top-level attribute takes precedence
-      // when present (matching the create handler), and sso-team-id is gated by
-      // the linked-team guard. Column-backed keys are persisted to their columns.
-      if (attributes["visibility"] === undefined && typeof rawOrgAccess?.["visibility"] === "string") updates.visibility = rawOrgAccess["visibility"];
-      if (!linked && attributes["sso-team-id"] === undefined && rawOrgAccess?.["sso-team-id"] !== undefined) updates.ssoTeamId = typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null;
-      if (attributes["allow-member-token-management"] === undefined && rawOrgAccess?.["allow-member-token-management"] !== undefined) updates.allowMemberTokenManagement = typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
-    }
-    // Time-bounded policy-override delegation (kanban 18.7): epoch-millis
-    // expiry (or null/0 to clear and return to a permanent grant). Requires
-    // manage-organization-access, same as the delegation grant itself.
-    if (attributes["policy-override-delegation-expires-at"] !== undefined) {
-      if (!(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"))) {
-        (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-      }
-      const rawExpiry = attributes["policy-override-delegation-expires-at"];
-      if (rawExpiry === null) {
-        updates.policyOverrideDelegationExpiresAt = null;
-      } else if (typeof rawExpiry === "number" && Number.isFinite(rawExpiry)) {
-        if (rawExpiry <= 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "policy-override-delegation-expires-at must be a future epoch-millis timestamp, or null" }] }; }
-        updates.policyOverrideDelegationExpiresAt = Math.floor(rawExpiry);
-      } else {
-        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "policy-override-delegation-expires-at must be a number or null" }] };
-      }
+      return { errors: [{ status: "422", title: "Unprocessable Entity", ...("detail" in patchError && patchError.detail !== undefined ? { detail: patchError.detail } : {}) }] };
     }
     if (Object.keys(updates).length > 0) await db.update(teams).set(updates).where(eq(teams.id, teamId));
     const updated = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
@@ -514,30 +783,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const userItems = payload["data"];
-    if (Array.isArray(userItems)) {
-      const batch: (typeof teamMemberships.$inferInsert)[] = [];
-      // the reference format's Atlas convention lets `data[].id` be either a user UUID or a
-      // username; the go-tfe v2 client sends usernames.
-      const rawIds = userItems
-        .map((item): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string") ? (item as Record<string, unknown>)["id"] as string : "")
-        .filter((s: string): boolean => s !== "");
-      const userIds = await resolveUserIds(rawIds);
-      const memberships = userIds.length === 0
-        ? new Map<string, typeof organizationMemberships.$inferSelect>()
-        : new Map(
-            (await db.query.organizationMemberships.findMany({
-              where: and(eq(organizationMemberships.orgId, team.orgId), inArray(organizationMemberships.userId, userIds)),
-            })).map((m): [string, typeof organizationMemberships.$inferSelect] => [m.userId, m]),
-          );
-      for (const userId of userIds) {
-        const membership = memberships.get(userId);
-        if (membership?.status === "active") {
-          batch.push({ id: newResourceId("tm"), teamId, userId, createdAt: Date.now() });
-        }
-      }
-      if (batch.length > 0) await db.insert(teamMemberships).values(batch).onConflictDoNothing();
-    }
+    await addTeamMembersByIds(team.orgId, teamId, parseRelationshipIds(payload["data"]));
     (set as { status: number }).status = 204;
     return {};
   })
@@ -547,12 +793,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const userItems = payload["data"];
-    if (Array.isArray(userItems)) {
-      const rawIds = userItems.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>)["id"] === "string") ? (i as Record<string, unknown>)["id"] as string : "").filter((s: string): boolean => s !== "");
-      const userIds = await resolveUserIds(rawIds);
-      if (userIds.length > 0) await db.delete(teamMemberships).where(and(eq(teamMemberships.teamId, teamId), inArray(teamMemberships.userId, userIds)));
-    }
+    await removeTeamMembersByIds(teamId, parseRelationshipIds(payload["data"]));
     (set as { status: number }).status = 204;
     return {};
   })
@@ -579,27 +820,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload["data"];
-    if (Array.isArray(items)) {
-      const memIds = items
-        .map((item): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string") ? (item as Record<string, unknown>)["id"] as string : "")
-        .filter((s: string): boolean => s !== "");
-      const memberships = memIds.length === 0
-        ? new Map<string, typeof organizationMemberships.$inferSelect>()
-        : new Map(
-            (await db.query.organizationMemberships.findMany({
-              where: inArray(organizationMemberships.id, memIds),
-            })).map((m): [string, typeof organizationMemberships.$inferSelect] => [m.id, m]),
-          );
-      const batch: (typeof teamMemberships.$inferInsert)[] = [];
-      for (const memId of memIds) {
-        const mem = memberships.get(memId);
-        if (mem?.orgId === team.orgId) {
-          batch.push({ id: newResourceId("tm"), teamId, userId: mem.userId, createdAt: Date.now() });
-        }
-      }
-      if (batch.length > 0) await db.insert(teamMemberships).values(batch).onConflictDoNothing();
-    }
+    await addTeamMembersByOrgMembershipIds(team.orgId, teamId, parseRelationshipIds(payload["data"]));
     (set as { status: number }).status = 204;
     return {};
   })
@@ -609,17 +830,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload["data"];
-    if (Array.isArray(items)) {
-      const memIds = items
-        .map((item): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string") ? (item as Record<string, unknown>)["id"] as string : "")
-        .filter((s: string): boolean => s !== "");
-      if (memIds.length > 0) {
-        const memberships = await db.query.organizationMemberships.findMany({ where: inArray(organizationMemberships.id, memIds) });
-        const userIds = memberships.filter((m): boolean => m.orgId === team.orgId).map((m): string => m.userId);
-        if (userIds.length > 0) await db.delete(teamMemberships).where(and(eq(teamMemberships.teamId, teamId), inArray(teamMemberships.userId, userIds)));
-      }
-    }
+    await removeTeamMembersByOrgMembershipIds(team.orgId, teamId, parseRelationshipIds(payload["data"]));
     (set as { status: number }).status = 204;
     return {};
   })
@@ -684,45 +895,19 @@ export const teamRoutes = new Elysia({ name: "teams" })
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const secret = generateAuthenticationToken("team");
     const tokenId = newResourceId("tok");
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    // TFE parity: modern team tokens require an explicit description and
-    // default to a two-year expiration when none is supplied. The org TTL
-    // policy caps or forbids the result (todo 72-74).
-    const description = typeof attrs["description"] === "string" ? attrs["description"].trim() : "";
-    if (description === "" || description.length > TOKEN_DESCRIPTION_MAX_LENGTH) {
+    const tokenRequest = parseTeamTokenRequest(parseTeamPatchAttributes(body));
+    if ("error" in tokenRequest) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Description is required for team tokens and must be at most ${TOKEN_DESCRIPTION_MAX_LENGTH} characters` }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: tokenRequest.error }] };
     }
-    const expiredAtVal = attrs["expired-at"] ?? attrs["expires-at"] ?? attrs["expiredAt"] ?? attrs["expiresAt"];
-    const expiredAtStr = typeof expiredAtVal === "string" ? expiredAtVal : "";
-    let requestedExpiry: number;
-    if (expiredAtStr === "") {
-      requestedExpiry = Date.now() + TWO_YEARS_MS;
-    } else {
-      const parsed = new Date(expiredAtStr);
-      const parsedMs = parsed.getTime();
-      if (Number.isNaN(parsedMs)) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "expired-at must be a valid ISO-8601 date" }] };
-      }
-      if (parsedMs <= Date.now()) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "expired-at must be in the future" }] };
-      }
-      requestedExpiry = parsedMs;
-    }
+    const { description, expiry: requestedExpiry } = tokenRequest.value;
     const policyResolution = await resolveTokenExpiryUnderPolicy(team.orgId, "team", requestedExpiry);
-    if (policyResolution.kind === "invalid") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
+    const policyError = teamTokenPolicyError(policyResolution);
+    if (policyError !== null) {
+      (set as { status: number }).status = policyError.status;
+      return { errors: [{ status: String(policyError.status), title: policyError.status === 403 ? "Forbidden" : "Unprocessable Entity", detail: policyError.detail }] };
     }
-    if (policyResolution.kind === "forbidden") {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
-    }
-    const expiresAt = policyResolution.expiresAt;
+    const expiresAt = policyResolution.kind === "ok" ? policyResolution.expiresAt : null;
     // TFE parity: descriptions must be unique among a team's modern tokens.
     const duplicate = await db.query.apiTokens.findFirst({ where: and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, false), eq(apiTokens.description, description)), columns: { id: true } });
     if (duplicate !== undefined) {
@@ -733,7 +918,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     await db.insert(apiTokens).values({ id: tokenId, token: tokenHash, orgId: team.orgId, teamId: team.id, description, createdAt: Date.now(), expiresAt, legacy: false });
     await auditLog("create", "team-authentication-token", tokenId, user?.id ?? null, team.orgId, { teamId, description });
     (set as { status: number }).status = 201;
-    return { data: { id: tokenId, type: "authentication-tokens", attributes: { token: secret, description, "created-at": new Date().toISOString(), "expired-at": expiresAt !== null ? new Date(expiresAt).toISOString() : null } } };
+    return teamTokenResponse(tokenId, secret, description, expiresAt);
   })
   .get("/api/v2/teams/:team_id/authentication-tokens", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const teamId = params["team_id"] ?? "";
@@ -769,16 +954,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return { data: twList.map((tw: TwItem): Record<string, unknown> => ({ id: tw.id, type: "team-workspaces", attributes: { access: tw.access, permissions: tw.permissions ?? { runs: "write", variables: "write", "state-versions": "write" } }, relationships: { team: { data: { id: tw.teamId, type: "teams" } }, workspace: { data: { id: tw.workspaceId, type: "workspaces" } } } })) };
   })
   .post("/api/v2/team-workspaces", async ({ body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-    const teamRel = typeof rels["team"] === "object" && rels["team"] !== null ? (rels["team"] as Record<string, unknown>) : {};
-    const teamData = typeof teamRel["data"] === "object" && teamRel["data"] !== null ? (teamRel["data"] as Record<string, unknown>) : {};
-    const wsRel = typeof rels["workspace"] === "object" && rels["workspace"] !== null ? (rels["workspace"] as Record<string, unknown>) : {};
-    const wsData = typeof wsRel["data"] === "object" && wsRel["data"] !== null ? (wsRel["data"] as Record<string, unknown>) : {};
-    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const teamId = typeof teamData["id"] === "string" ? teamData["id"] : "";
-    const workspaceId = typeof wsData["id"] === "string" ? wsData["id"] : "";
+    const { teamId, workspaceId, attrs } = parseTeamWorkspaceRequest(body);
     const accessInput = attrs["access"] === undefined ? "write" : attrs["access"];
     const grant = parseTeamWorkspaceGrant(accessInput, attrs["permissions"]);
     if ("error" in grant) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: grant.error }] }; }
@@ -793,12 +969,10 @@ export const teamRoutes = new Elysia({ name: "teams" })
       || targetTeam?.orgId !== ws.orgId
       || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "admin"))
     ) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (
-      grant.value.grantsPolicyOverrides
-      && !(await checkOrganizationPermission(ws.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policy-overrides"))
-    ) {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: "manage-policy-overrides is required to grant policy overrides" }] };
+    const grantError = await requirePolicyOverrideGrant(grant.value.grantsPolicyOverrides, ws.orgId, user?.id, tokenOrgId, tokenTeamId ?? null);
+    if (grantError !== null) {
+      (set as { status: number }).status = grantError.status;
+      return { errors: [{ status: "403", title: "Forbidden", detail: grantError.detail }] };
     }
     const id = newResourceId("tw");
     await db.insert(teamWorkspaces).values({ id, teamId, workspaceId, access, permissions });
@@ -819,26 +993,22 @@ export const teamRoutes = new Elysia({ name: "teams" })
     if (tw === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, tw.workspaceId) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "admin"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const accessInput = attributes["access"] === undefined ? tw.access : attributes["access"];
-    const permissionsInput = attributes["permissions"] === undefined
-      ? (accessInput === "custom" ? tw.permissions : null)
-      : attributes["permissions"];
+    const attributes = parseTeamPatchAttributes(body);
+    const { accessInput, permissionsInput } = resolveTeamWorkspaceGrantInputs(attributes, tw.access, tw.permissions);
     const grant = parseTeamWorkspaceGrant(accessInput, permissionsInput);
     if ("error" in grant) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: grant.error }] }; }
-    if (
-      (attributes["access"] !== undefined || attributes["permissions"] !== undefined)
-      && grant.value.grantsPolicyOverrides
-      && !(await checkOrganizationPermission(ws.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policy-overrides"))
-    ) {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: "manage-policy-overrides is required to grant policy overrides" }] };
+    const grantError = await requirePolicyOverrideGrant(
+      (attributes["access"] !== undefined || attributes["permissions"] !== undefined) && grant.value.grantsPolicyOverrides,
+      ws.orgId,
+      user?.id,
+      tokenOrgId,
+      tokenTeamId ?? null,
+    );
+    if (grantError !== null) {
+      (set as { status: number }).status = grantError.status;
+      return { errors: [{ status: "403", title: "Forbidden", detail: grantError.detail }] };
     }
-    const updates: Record<string, unknown> = {};
-    if (attributes["access"] !== undefined) updates["access"] = grant.value.access;
-    if (attributes["permissions"] !== undefined) updates["permissions"] = grant.value.permissions;
+    const updates = buildTeamWorkspaceUpdates(attributes, grant.value);
     if (Object.keys(updates).length > 0) await db.update(teamWorkspaces).set(updates).where(eq(teamWorkspaces.id, id));
     const updated = await db.query.teamWorkspaces.findFirst({ where: eq(teamWorkspaces.id, id) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }

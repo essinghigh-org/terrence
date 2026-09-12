@@ -53,7 +53,7 @@ function gpgKeyResource(key: GpgKeyItem): Record<string, unknown> {
   };
 }
 
-function gpgKeyInput(body: unknown, requireArmor: boolean): GpgKeyInput | Readonly<{ error: string }> {
+function gpgKeyEnvelope(body: unknown): { attributes: Record<string, unknown> } | Readonly<{ error: string }> {
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
   const rawData = payload["data"];
   if (rawData === null || typeof rawData !== "object") return { error: "data is required" };
@@ -61,7 +61,13 @@ function gpgKeyInput(body: unknown, requireArmor: boolean): GpgKeyInput | Readon
   if (data["type"] !== "gpg-keys") return { error: "data.type must be gpg-keys" };
   const rawAttributes = data["attributes"];
   if (rawAttributes === null || typeof rawAttributes !== "object") return { error: "data.attributes is required" };
-  const attributes = rawAttributes as Record<string, unknown>;
+  return { attributes: rawAttributes as Record<string, unknown> };
+}
+
+function gpgKeyInput(body: unknown, requireArmor: boolean): GpgKeyInput | Readonly<{ error: string }> {
+  const envelope = gpgKeyEnvelope(body);
+  if ("error" in envelope) return envelope;
+  const attributes = envelope.attributes;
   const namespace = attributes["namespace"];
   const asciiArmor = attributes["ascii-armor"];
   if (typeof namespace !== "string" || namespace.trim() === "") return { error: "namespace is required" };
@@ -71,6 +77,60 @@ function gpgKeyInput(body: unknown, requireArmor: boolean): GpgKeyInput | Readon
     namespace: namespace.trim(),
     ...(typeof asciiArmor === "string" ? { asciiArmor } : {}),
   };
+}
+
+async function resolveGpgKeyForManage(
+  params: Readonly<Record<string, string>>,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  teamId: string | null,
+  set: SetObj,
+): Promise<{ key: GpgKeyItem } | { error: unknown }> {
+  const key = await db.query.registryGpgKeys.findFirst({
+    where: and(
+      eq(registryGpgKeys.namespace, params["namespace"] ?? ""),
+      eq(registryGpgKeys.keyId, (params["key_id"] ?? "").toUpperCase()),
+    ),
+  });
+  if (key === undefined || !(await canManageGpgKeys(key.orgId, userId, tokenOrgId, teamId))) {
+    (set as { status: number }).status = 404;
+    return { error: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { key };
+}
+
+async function resolveGpgKeyMoveTarget(
+  namespace: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  teamId: string | null,
+  set: SetObj,
+): Promise<{ targetOrg: { id: string } } | { error: unknown }> {
+  const targetOrg = await db.query.organizations.findFirst({ where: eq(organizations.name, namespace) });
+  if (targetOrg === undefined || !(await canManageGpgKeys(targetOrg.id, userId, tokenOrgId, teamId))) {
+    (set as { status: number }).status = 404;
+    return { error: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  return { targetOrg };
+}
+
+async function checkGpgKeyMove(
+  key: GpgKeyItem,
+  namespace: string,
+  set: SetObj,
+): Promise<{ ok: true } | { error: unknown }> {
+  const duplicate = await db.query.registryGpgKeys.findFirst({
+    where: and(eq(registryGpgKeys.namespace, namespace), eq(registryGpgKeys.keyId, key.keyId)),
+  });
+  if (duplicate !== undefined && duplicate.id !== key.id) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "This GPG key already exists in the namespace" }] } };
+  }
+  if (namespace !== key.namespace && await gpgKeyInUse(key)) {
+    (set as { status: number }).status = 409;
+    return { error: { errors: [{ status: "409", title: "Conflict", detail: "The GPG key is in use by a registry version" }] } };
+  }
+  return { ok: true };
 }
 
 async function canManageGpgKeys(
@@ -233,40 +293,21 @@ export const gpgKeyRoutes = new Elysia({ name: "registry-gpg-keys" })
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden" }] };
     }
-    const key = await db.query.registryGpgKeys.findFirst({
-      where: and(
-        eq(registryGpgKeys.namespace, params["namespace"] ?? ""),
-        eq(registryGpgKeys.keyId, (params["key_id"] ?? "").toUpperCase()),
-      ),
-    });
-    if (key === undefined || !(await canManageGpgKeys(key.orgId, user?.id, tokenOrgId ?? null, teamId ?? null))) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
+    const found = await resolveGpgKeyForManage(params, user?.id, tokenOrgId ?? null, teamId ?? null, set);
+    if ("error" in found) return found.error;
+    const { key } = found;
     const input = gpgKeyInput(body, false);
     if ("error" in input) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
     }
-    const targetOrg = await db.query.organizations.findFirst({ where: eq(organizations.name, input.namespace) });
-    if (targetOrg === undefined || !(await canManageGpgKeys(targetOrg.id, user?.id, tokenOrgId ?? null, teamId ?? null))) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const duplicate = await db.query.registryGpgKeys.findFirst({
-      where: and(eq(registryGpgKeys.namespace, input.namespace), eq(registryGpgKeys.keyId, key.keyId)),
-    });
-    if (duplicate !== undefined && duplicate.id !== key.id) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "This GPG key already exists in the namespace" }] };
-    }
-    if (input.namespace !== key.namespace && await gpgKeyInUse(key)) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "The GPG key is in use by a registry version" }] };
-    }
-    const updated = { ...key, orgId: targetOrg.id, namespace: input.namespace, updatedAt: Date.now() };
+    const target = await resolveGpgKeyMoveTarget(input.namespace, user?.id, tokenOrgId ?? null, teamId ?? null, set);
+    if ("error" in target) return target.error;
+    const movable = await checkGpgKeyMove(key, input.namespace, set);
+    if ("error" in movable) return movable.error;
+    const updated = { ...key, orgId: target.targetOrg.id, namespace: input.namespace, updatedAt: Date.now() };
     await db.update(registryGpgKeys)
-      .set({ orgId: targetOrg.id, namespace: input.namespace, updatedAt: updated.updatedAt })
+      .set({ orgId: target.targetOrg.id, namespace: input.namespace, updatedAt: updated.updatedAt })
       .where(eq(registryGpgKeys.id, key.id));
     (set as { status: number }).status = 201;
     return { data: gpgKeyResource(updated) };

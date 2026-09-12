@@ -210,6 +210,108 @@ function buildColumn(column: AnyColumn): unknown {
   return builder;
 }
 
+type ExtraColumnContext = Readonly<{
+  table: SqliteTable;
+  pg: Record<string, unknown>;
+  tableColumns: Record<string, unknown>;
+  columnsByDbName: Record<string, unknown>;
+}>;
+
+// Indexes/PKs may reference the table's OWN columns (not yet published to
+// `pg` during construction) or another table's columns.
+function resolveExtraColumn(ctx: ExtraColumnContext, c: AnyColumn): unknown {
+  const name = columnName(c);
+  if (columnTable(c) === ctx.table) {
+    const local = ctx.columnsByDbName[name];
+    if (local === undefined) {
+      throw new Error(`pg-convert: index/PK references unknown column "${name}" on "${tableName(ctx.table)}"`);
+    }
+    return local;
+  }
+  const target = ctx.pg[tableName(columnTable(c))];
+  const column = pgColumnByDbName(target, name);
+  if (column === undefined) {
+    throw new Error(
+      `pg-convert: index/PK references unknown column "${tableName(columnTable(c))}.${name}"`,
+    );
+  }
+  return column;
+}
+
+function resolvePartialIndexWhere(cfg: IndexConfig, tableColumns: Record<string, unknown>): SQL {
+  const override = PARTIAL_INDEX_WHERE[cfg.name];
+  if (override === undefined) {
+    throw new Error(
+      `pg-convert: partial index "${cfg.name}" has no pg WHERE override; add one to PARTIAL_INDEX_WHERE`,
+    );
+  }
+  return override(tableColumns);
+}
+
+function buildIndexItem(cfg: IndexConfig, tableColumns: Record<string, unknown>, resolve: (c: AnyColumn) => unknown): unknown {
+  if (cfg.type !== undefined && cfg.type !== null) {
+    throw new Error(`pg-convert: unsupported index type "${String(cfg.type)}" on "${cfg.name}"`);
+  }
+  const columns = cfg.columns.map(resolve);
+  const where = cfg.where !== undefined ? resolvePartialIndexWhere(cfg, tableColumns) : undefined;
+  const builder = cfg.unique === true ? pgUniqueIndex(cfg.name) : pgIndex(cfg.name);
+  const built = builder.on(...(columns as [never, ...never[]]));
+  if (where !== undefined) built.where(where);
+  return built;
+}
+
+type CompositeFkReference = {
+  reference: () => {
+    name?: string;
+    columns: readonly AnyColumn[];
+    foreignTable: unknown;
+    foreignColumns: readonly AnyColumn[];
+  };
+  _onDelete?: string;
+  _onUpdate?: string;
+};
+
+const isCompositeFkItem = (item: unknown): item is CompositeFkReference =>
+  item !== null &&
+  typeof item === "object" &&
+  typeof (item as { reference?: unknown }).reference === "function";
+
+function buildCompositeFkItem(item: CompositeFkReference, ctx: ExtraColumnContext, resolve: (c: AnyColumn) => unknown): unknown {
+  // Composite foreign key expressed through the table's extra-config
+  // callback (foreignKey({ ... })). Inline column-level foreign keys are
+  // consumed separately from table[FKS]; the composite form only appears
+  // here, so resolve it against the already-built pg tables.
+  const ref = item.reference();
+  const local = ref.columns.map(resolve);
+  const foreignTable = tableName(ref.foreignTable as SqliteTable);
+  const isSelfReference = foreignTable === tableName(ctx.table);
+  const target = isSelfReference ? ctx.tableColumns : ctx.pg[foreignTable];
+  if (target === undefined) {
+    throw new Error(
+      `pg-convert: composite FK on "${tableName(ctx.table)}" references unknown table "${foreignTable}"`,
+    );
+  }
+  const foreign = ref.foreignColumns.map((c): unknown => {
+    const column = isSelfReference ? ctx.columnsByDbName[columnName(c)] : pgColumnByDbName(target, columnName(c));
+    if (column === undefined) {
+      throw new Error(
+        `pg-convert: composite FK column "${foreignTable}.${columnName(c)}" not found`,
+      );
+    }
+    return column;
+  });
+  const fkBuilder = foreignKey({ columns: local as never, foreignColumns: foreign as never });
+  if (item._onDelete !== undefined) fkBuilder.onDelete(item._onDelete as never);
+  if (item._onUpdate !== undefined) fkBuilder.onUpdate(item._onUpdate as never);
+  return fkBuilder;
+}
+
+const isPrimaryKeyItem = (item: unknown): item is { columns: readonly AnyColumn[] } =>
+  item !== null &&
+  typeof item === "object" &&
+  "columns" in item &&
+  Array.isArray((item).columns);
+
 function buildExtraConfig(
   table: SqliteTable,
   pg: Record<string, unknown>,
@@ -219,101 +321,17 @@ function buildExtraConfig(
   const extra = table[EXTRA];
   if (typeof extra !== "function") return [];
 
-  // Indexes/PKs may reference the table's OWN columns (not yet published to
-  // `pg` during construction) or another table's columns.
-  const resolveColumn = (c: AnyColumn): unknown => {
-    const name = columnName(c);
-    if (columnTable(c) === table) {
-      const local = columnsByDbName[name];
-      if (local === undefined) {
-        throw new Error(`pg-convert: index/PK references unknown column "${name}" on "${tableName(table)}"`);
-      }
-      return local;
-    }
-    const target = pg[tableName(columnTable(c))];
-    const column = pgColumnByDbName(target, name);
-    if (column === undefined) {
-      throw new Error(
-        `pg-convert: index/PK references unknown column "${tableName(columnTable(c))}.${name}"`,
-      );
-    }
-    return column;
-  };
-
+  const ctx: ExtraColumnContext = { table, pg, tableColumns, columnsByDbName };
+  const resolve = (c: AnyColumn): unknown => resolveExtraColumn(ctx, c);
   const items: unknown[] = [];
   for (const item of extra(table)) {
     if (isIndexBuilder(item)) {
-      const cfg = item.config;
-      if (cfg.type !== undefined && cfg.type !== null) {
-        throw new Error(`pg-convert: unsupported index type "${String(cfg.type)}" on "${cfg.name}"`);
-      }
-      const columns = cfg.columns.map(resolveColumn);
-      const where = cfg.where !== undefined
-        ? (() => {
-            const override = PARTIAL_INDEX_WHERE[cfg.name];
-            if (override === undefined) {
-              throw new Error(
-                `pg-convert: partial index "${cfg.name}" has no pg WHERE override; add one to PARTIAL_INDEX_WHERE`,
-              );
-            }
-            return override(tableColumns);
-          })()
-        : undefined;
-      const builder = cfg.unique === true ? pgUniqueIndex(cfg.name) : pgIndex(cfg.name);
-      const built = builder.on(...(columns as [never, ...never[]]));
-      if (where !== undefined) built.where(where);
-      items.push(built);
-    } else if (
-      item !== null &&
-      typeof item === "object" &&
-      typeof (item as { reference?: unknown }).reference === "function"
-    ) {
-      // Composite foreign key expressed through the table's extra-config
-      // callback (foreignKey({ ... })). Inline column-level foreign keys are
-      // consumed separately from table[FKS]; the composite form only appears
-      // here, so resolve it against the already-built pg tables.
-      const ref = (item as {
-        reference: () => {
-          name?: string;
-          columns: readonly AnyColumn[];
-          foreignTable: unknown;
-          foreignColumns: readonly AnyColumn[];
-        };
-        _onDelete?: string;
-        _onUpdate?: string;
-      }).reference();
-      const local = ref.columns.map(resolveColumn);
-      const foreignTable = tableName(ref.foreignTable as SqliteTable);
-      const isSelfReference = foreignTable === tableName(table);
-      const target = isSelfReference ? tableColumns : pg[foreignTable];
-      if (target === undefined) {
-        throw new Error(
-          `pg-convert: composite FK on "${tableName(table)}" references unknown table "${foreignTable}"`,
-        );
-      }
-      const foreign = ref.foreignColumns.map((c): unknown => {
-        const column = isSelfReference ? columnsByDbName[columnName(c)] : pgColumnByDbName(target, columnName(c));
-        if (column === undefined) {
-          throw new Error(
-            `pg-convert: composite FK column "${foreignTable}.${columnName(c)}" not found`,
-          );
-        }
-        return column;
-      });
-      const fkBuilder = foreignKey({ columns: local as never, foreignColumns: foreign as never });
-      const fkMeta = item as { _onDelete?: string; _onUpdate?: string };
-      if (fkMeta._onDelete !== undefined) fkBuilder.onDelete(fkMeta._onDelete as never);
-      if (fkMeta._onUpdate !== undefined) fkBuilder.onUpdate(fkMeta._onUpdate as never);
-      items.push(fkBuilder);
-    } else if (
-      item !== null &&
-      typeof item === "object" &&
-      "columns" in item &&
-      Array.isArray((item).columns)
-    ) {
+      items.push(buildIndexItem(item.config, tableColumns, resolve));
+    } else if (isCompositeFkItem(item)) {
+      items.push(buildCompositeFkItem(item, ctx, resolve));
+    } else if (isPrimaryKeyItem(item)) {
       // Composite primary key (PrimaryKeyBuilder).
-      const columns = (item as { columns: readonly AnyColumn[] }).columns.map(resolveColumn);
-      items.push(pgPrimaryKey({ columns: columns as never }));
+      items.push(pgPrimaryKey({ columns: item.columns.map(resolve) as never }));
     } else {
       throw new Error(
         `pg-convert: unsupported extra-config item ${String((item as { constructor?: { name?: string } })?.constructor?.name)}`,
@@ -323,7 +341,7 @@ function buildExtraConfig(
   return items;
 }
 
-export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<string, unknown> {
+function inventorySqliteTables(sqliteSchema: Record<string, unknown>): Map<string, SqliteTable> {
   // 1. Inventory sqlite tables.
   const sqliteTables = new Map<string, SqliteTable>();
   for (const [key, value] of Object.entries(sqliteSchema)) {
@@ -331,7 +349,10 @@ export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<str
       sqliteTables.set(key, value as SqliteTable);
     }
   }
+  return sqliteTables;
+}
 
+function resolveTableFks(sqliteTables: Map<string, SqliteTable>): Map<string, readonly ResolvedFk[]> {
   // 2. Resolve foreign keys up front (the metadata callbacks are deferred,
   // so reading them needs no construction order).
   const fksByTable = new Map<string, readonly ResolvedFk[]>();
@@ -360,7 +381,10 @@ export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<str
     }
     fksByTable.set(key, resolved);
   }
+  return fksByTable;
+}
 
+function orderTablesByDependency(sqliteTables: Map<string, SqliteTable>, fksByTable: Map<string, readonly ResolvedFk[]>): string[] {
   // 3. Topologically order tables so referenced tables exist before
   // referencing tables are constructed (pg-core resolves .references() at
   // table construction time).
@@ -384,93 +408,129 @@ export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<str
     ordered.push(key);
   };
   for (const key of sqliteTables.keys()) visit(key);
+  return ordered;
+}
 
-  // 4. Build pg tables in dependency order.
-  const pg: Record<string, unknown> = {};
-  for (const key of ordered) {
-    const sqliteTable = sqliteTables.get(key)!;
-    if (sqliteTable === undefined) {
-      throw new Error(`pg-convert: table "${key}" vanished during ordering`);
-    }
-    const name = tableName(sqliteTable);
-    const columns: Record<string, unknown> = {};
-    // Foreign keys resolve columns by their DATABASE name; property names
-    // (camelCase) differ from DB names (snake_case), so keep both indexes.
-    const columnsByDbName: Record<string, unknown> = {};
-    for (const [columnKey, column] of Object.entries(sqliteTable[COLS])) {
-      columns[columnKey] = buildColumn(column);
-      columnsByDbName[columnName(column)] = columns[columnKey];
-    }
-
-    // Column-level foreign keys (1:1 column mapping).
-    const fks = fksByTable.get(key) ?? [];
-    const simpleFks = fks.filter((fk): boolean => fk.localColumns.length === 1 && fk.foreignColumns.length === 1);
-    const compositeFks = fks.filter((fk): boolean => !(fk.localColumns.length === 1 && fk.foreignColumns.length === 1));
-    for (const fk of simpleFks) {
-      const localColumn = fk.localColumns[0]!;
-      const column = columnsByDbName[localColumn] as {
-        references?: (ref: () => unknown, actions?: { onDelete?: string; onUpdate?: string }) => unknown;
-      };
-      if (column === undefined || typeof column.references !== "function") {
-        throw new Error(`pg-convert: foreign key on "${name}.${localColumn}" cannot be attached`);
-      }
-      const target = pg[fk.foreignTable];
-      if (target === undefined) {
-        throw new Error(`pg-convert: foreign key on "${name}" references unknown table "${fk.foreignTable}"`);
-      }
-      const foreignColumn = fk.foreignColumns[0]!;
-      const targetColumn = (target as Record<string, unknown>)[foreignColumn];
-      if (targetColumn === undefined) {
-        throw new Error(
-          `pg-convert: foreign key on "${name}.${localColumn}" references unknown column "${fk.foreignTable}.${foreignColumn}"`,
-        );
-      }
-      const actions: { onDelete?: string; onUpdate?: string } = {};
-      if (fk.onDelete !== undefined) actions.onDelete = fk.onDelete;
-      if (fk.onUpdate !== undefined) actions.onUpdate = fk.onUpdate;
-      column.references((): unknown => targetColumn, actions);
-    }
-
-    // Extra-config callbacks receive built columns. Column builders have no
-    // table identity, so using them here loses self-referencing FK targets.
-    const buildExtra = (builtColumns: Readonly<Record<string, unknown>>): unknown[] => {
-      const builtByDbName = Object.fromEntries(Object.entries(sqliteTable[COLS]).map(
-        ([property, column]): [string, unknown] => [columnName(column), builtColumns[property]],
-      ));
-      const extra = buildExtraConfig(sqliteTable, pg, builtColumns, builtByDbName);
-      for (const fk of compositeFks) {
-        const local = fk.localColumns.map((columnName): unknown => {
-          const column = builtByDbName[columnName];
-          if (column === undefined) throw new Error(`pg-convert: composite FK column "${columnName}" not found on "${name}"`);
-          return column;
-        });
-        const foreign = fk.foreignColumns.map((columnName): unknown => {
-          const column = fk.foreignTable === name ? builtByDbName[columnName] : pgColumnByDbName(pg[fk.foreignTable], columnName);
-          if (column === undefined) throw new Error(`pg-convert: composite FK column "${fk.foreignTable}.${columnName}" not found`);
-          return column;
-        });
-        const builder = foreignKey({ columns: local as never, foreignColumns: foreign as never });
-        if (fk.onDelete !== undefined) builder.onDelete(fk.onDelete as never);
-        if (fk.onUpdate !== undefined) builder.onUpdate(fk.onUpdate as never);
-        extra.push(builder);
-      }
-      return extra;
+function attachSimpleFks(
+  name: string,
+  fks: readonly ResolvedFk[],
+  columnsByDbName: Record<string, unknown>,
+  pg: Record<string, unknown>,
+): void {
+  // Column-level foreign keys (1:1 column mapping).
+  const simpleFks = fks.filter((fk): boolean => fk.localColumns.length === 1 && fk.foreignColumns.length === 1);
+  for (const fk of simpleFks) {
+    const localColumn = fk.localColumns[0]!;
+    const column = columnsByDbName[localColumn] as {
+      references?: (ref: () => unknown, actions?: { onDelete?: string; onUpdate?: string }) => unknown;
     };
-    const pgTableValue = pgTable(name, columns as never, buildExtra as never);
-    // Drizzle's jsonb mapper stringifies values for drivers such as postgres.js.
-    // Bun.SQL accepts objects directly and would stringify that string again,
-    // storing a JSON string instead of a JSON object.
-    const pgColumns = (pgTableValue as unknown as Record<PropertyKey, unknown>)[COLS] as Record<
-      string,
-      { columnType?: string; mapToDriverValue?: (value: unknown) => unknown }
-    >;
-    for (const column of Object.values(pgColumns)) {
-      if (column.columnType === "PgJsonb") {
-        column.mapToDriverValue = (value: unknown): unknown => value;
-      }
+    if (column === undefined || typeof column.references !== "function") {
+      throw new Error(`pg-convert: foreign key on "${name}.${localColumn}" cannot be attached`);
     }
-    pg[name] = pgTableValue;
+    const target = pg[fk.foreignTable];
+    if (target === undefined) {
+      throw new Error(`pg-convert: foreign key on "${name}" references unknown table "${fk.foreignTable}"`);
+    }
+    const foreignColumn = fk.foreignColumns[0]!;
+    const targetColumn = (target as Record<string, unknown>)[foreignColumn];
+    if (targetColumn === undefined) {
+      throw new Error(
+        `pg-convert: foreign key on "${name}.${localColumn}" references unknown column "${fk.foreignTable}.${foreignColumn}"`,
+      );
+    }
+    const actions: { onDelete?: string; onUpdate?: string } = {};
+    if (fk.onDelete !== undefined) actions.onDelete = fk.onDelete;
+    if (fk.onUpdate !== undefined) actions.onUpdate = fk.onUpdate;
+    column.references((): unknown => targetColumn, actions);
+  }
+}
+
+function compositeFkBuilders(
+  name: string,
+  compositeFks: readonly ResolvedFk[],
+  builtByDbName: Record<string, unknown>,
+  pg: Record<string, unknown>,
+): unknown[] {
+  const builders: unknown[] = [];
+  for (const fk of compositeFks) {
+    const local = fk.localColumns.map((columnName): unknown => {
+      const column = builtByDbName[columnName];
+      if (column === undefined) throw new Error(`pg-convert: composite FK column "${columnName}" not found on "${name}"`);
+      return column;
+    });
+    const foreign = fk.foreignColumns.map((columnName): unknown => {
+      const column = fk.foreignTable === name ? builtByDbName[columnName] : pgColumnByDbName(pg[fk.foreignTable], columnName);
+      if (column === undefined) throw new Error(`pg-convert: composite FK column "${fk.foreignTable}.${columnName}" not found`);
+      return column;
+    });
+    const builder = foreignKey({ columns: local as never, foreignColumns: foreign as never });
+    if (fk.onDelete !== undefined) builder.onDelete(fk.onDelete as never);
+    if (fk.onUpdate !== undefined) builder.onUpdate(fk.onUpdate as never);
+    builders.push(builder);
+  }
+  return builders;
+}
+
+function applyJsonbDriverFix(pgTableValue: unknown): void {
+  // Drizzle's jsonb mapper stringifies values for drivers such as postgres.js.
+  // Bun.SQL accepts objects directly and would stringify that string again,
+  // storing a JSON string instead of a JSON object.
+  const pgColumns = (pgTableValue as Record<PropertyKey, unknown>)[COLS] as Record<
+    string,
+    { columnType?: string; mapToDriverValue?: (value: unknown) => unknown }
+  >;
+  for (const column of Object.values(pgColumns)) {
+    if (column.columnType === "PgJsonb") {
+      column.mapToDriverValue = (value: unknown): unknown => value;
+    }
+  }
+}
+
+function buildOnePgTable(
+  key: string,
+  sqliteTables: Map<string, SqliteTable>,
+  fksByTable: Map<string, readonly ResolvedFk[]>,
+  pg: Record<string, unknown>,
+): void {
+  // 4. Build pg tables in dependency order.
+  const sqliteTable = sqliteTables.get(key)!;
+  if (sqliteTable === undefined) {
+    throw new Error(`pg-convert: table "${key}" vanished during ordering`);
+  }
+  const name = tableName(sqliteTable);
+  const columns: Record<string, unknown> = {};
+  // Foreign keys resolve columns by their DATABASE name; property names
+  // (camelCase) differ from DB names (snake_case), so keep both indexes.
+  const columnsByDbName: Record<string, unknown> = {};
+  for (const [columnKey, column] of Object.entries(sqliteTable[COLS])) {
+    columns[columnKey] = buildColumn(column);
+    columnsByDbName[columnName(column)] = columns[columnKey];
   }
 
+  const fks = fksByTable.get(key) ?? [];
+  attachSimpleFks(name, fks, columnsByDbName, pg);
+  const compositeFks = fks.filter((fk): boolean => !(fk.localColumns.length === 1 && fk.foreignColumns.length === 1));
+
+  // Extra-config callbacks receive built columns. Column builders have no
+  // table identity, so using them here loses self-referencing FK targets.
+  const buildExtra = (builtColumns: Readonly<Record<string, unknown>>): unknown[] => {
+    const builtByDbName = Object.fromEntries(Object.entries(sqliteTable[COLS]).map(
+      ([property, column]): [string, unknown] => [columnName(column), builtColumns[property]],
+    ));
+    const extra = buildExtraConfig(sqliteTable, pg, builtColumns, builtByDbName);
+    extra.push(...compositeFkBuilders(name, compositeFks, builtByDbName, pg));
+    return extra;
+  };
+  const pgTableValue = pgTable(name, columns as never, buildExtra as never);
+  applyJsonbDriverFix(pgTableValue);
+  pg[name] = pgTableValue;
+}
+
+export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<string, unknown> {
+  const sqliteTables = inventorySqliteTables(sqliteSchema);
+  const fksByTable = resolveTableFks(sqliteTables);
+  const ordered = orderTablesByDependency(sqliteTables, fksByTable);
+  const pg: Record<string, unknown> = {};
+  for (const key of ordered) buildOnePgTable(key, sqliteTables, fksByTable, pg);
   return pg;
 }

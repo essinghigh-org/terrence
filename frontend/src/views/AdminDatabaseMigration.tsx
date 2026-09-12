@@ -134,6 +134,19 @@ const MIGRATION_TIMELINE = [
   { key: "post-cutover", label: "Post-cutover validation", description: "Restart, confirm the target identity, and keep the SQLite rollback image.", steps: [] },
 ] as const;
 
+function midTimelineStatus(
+  timelineIndex: number,
+  phase: string,
+  matchingSteps: readonly WizardStep[],
+): TimelineStatus {
+  if (timelineIndex === 0 && phase !== "idle") return matchingSteps.some((step): boolean => step.status === "running") ? "active" : "complete";
+  if (timelineIndex === 1 && phase === "draining") return "active";
+  if (timelineIndex === 2 && phase === "copying") return "active";
+  if (timelineIndex === 3 && phase === "verifying") return "active";
+  if (["failed", "aborted", "interrupted"].includes(phase) && timelineIndex <= 3) return "failed";
+  return "pending";
+}
+
 function timelineStatus(
   timelineIndex: number,
   phase: string,
@@ -146,12 +159,7 @@ function timelineStatus(
   if (timelineIndex === 4 && phase === "switched") return "complete";
   if (timelineIndex === 5 && phase === "switched") return "active";
   if (timelineIndex === 4 && phase === "ready_to_switch") return "active";
-  if (timelineIndex === 0 && phase !== "idle") return matchingSteps.some((step): boolean => step.status === "running") ? "active" : "complete";
-  if (timelineIndex === 1 && phase === "draining") return "active";
-  if (timelineIndex === 2 && phase === "copying") return "active";
-  if (timelineIndex === 3 && phase === "verifying") return "active";
-  if (["failed", "aborted", "interrupted"].includes(phase) && timelineIndex <= 3) return "failed";
-  return "pending";
+  return midTimelineStatus(timelineIndex, phase, matchingSteps);
 }
 
 function recoveryGuidance(phase: string, hasSqliteSource: boolean): Readonly<{ tone: "info" | "success" | "warning" | "danger"; title: string; body: string }> {
@@ -230,14 +238,572 @@ function Field({
   );
 }
 
+function MigrationErrorBanner({ error, onRetry }: Readonly<{
+  error: string;
+  onRetry: () => void;
+}>): React.JSX.Element {
+  return (
+    <div role="alert" className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+      <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <div className="min-w-0 flex-1"><span className="font-semibold">Migration action failed.</span>{" "}{error}</div>
+      <Button type="button" size="sm" variant="outline" onClick={onRetry}>Try again</Button>
+    </div>
+  );
+}
+
+function StatusFields({ status, wizard, isSwitched }: Readonly<{
+  status: StatusBody;
+  wizard: WizardState | null;
+  isSwitched: boolean;
+}>): React.JSX.Element {
+  return (
+    <div className="grid gap-3 rounded-lg border bg-muted/20 p-3 text-sm sm:grid-cols-2">
+      <Field
+        label="Current source"
+        children={
+          status["source-database"] === null
+            ? "PostgreSQL backend"
+            : <><span className="font-medium">SQLite</span><span className="ml-2 font-mono text-xs text-muted-foreground">{status["source-database"].path}</span></>
+        }
+      />
+      <Field
+        label="Target identity"
+        children={wizard?.targetMasked !== undefined && wizard.targetMasked !== "" ? <span className="font-mono text-xs">{wizard.targetMasked}</span> : "No target selected"}
+      />
+      <Field
+        label="Authoritative source"
+        children={status["source-database"] === null
+          ? "PostgreSQL backend"
+          : isSwitched ? "PostgreSQL after restart; SQLite rollback image retained" : "SQLite until cutover"}
+      />
+      <Field
+        label="Persisted checkpoint"
+        children={wizard?.updatedAt !== undefined ? <time dateTime={wizard.updatedAt}>{formatDateTime(wizard.updatedAt, "Unknown")}</time> : "No migration checkpoint"}
+      />
+    </div>
+  );
+}
+
+function GuidanceCallout({ tone, title, body, phase }: Readonly<{
+  tone: "info" | "success" | "warning" | "danger";
+  title: string;
+  body: string;
+  phase: string;
+}>): React.JSX.Element {
+  return (
+    <Callout tone={tone} title={title} role={phase === "failed" || phase === "aborted" || phase === "interrupted" ? "alert" : "status"}>
+      {body}
+    </Callout>
+  );
+}
+
+function MigrationTimeline({ phase, wizard }: Readonly<{
+  phase: string;
+  wizard: WizardState | null;
+}>): React.JSX.Element {
+  const steps = wizard?.steps ?? [];
+  return (
+    <ol aria-label="Migration phases" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      {MIGRATION_TIMELINE.map((item, index): React.JSX.Element => {
+        const state = timelineStatus(index, phase, steps);
+        return (
+          <li key={item.key} className={cn(
+            "rounded-lg border p-3",
+            state === "complete" && "border-success/30 bg-success/5",
+            state === "active" && "border-primary/30 bg-primary/5",
+            state === "failed" && "border-destructive/30 bg-destructive/5",
+            state === "pending" && "bg-muted/20",
+          )}>
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <span className={cn(
+                "flex size-6 items-center justify-center rounded-full border text-xs",
+                state === "complete" && "border-success/40 text-success",
+                state === "active" && "border-primary/40 text-primary",
+                state === "failed" && "border-destructive/40 text-destructive",
+                state === "pending" && "border-border text-muted-foreground",
+              )} aria-hidden="true">
+                {state === "complete" ? <Check className="size-3.5" /> : state === "failed" ? <X className="size-3.5" /> : index + 1}
+              </span>
+              <span>{item.label}</span>
+              {state === "active" && <Spinner className="size-3.5" />}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">{item.description}</p>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function MaintenanceBanner({ active, wizard }: Readonly<{
+  active: boolean;
+  wizard: WizardState | null;
+}>): React.JSX.Element | null {
+  if (!(active && wizard?.steps.some((step): boolean => step.key === "maintenance" && step.status === "passed") === true)) return null;
+  return <div className="flex items-center gap-4 rounded-lg border bg-muted/30 p-4"><Terrence pose="maintenance" detail="small" className="w-28" /><div><h2 className="font-heading font-semibold">Maintenance mode</h2><p className="mt-1 text-sm text-muted-foreground">New runs are paused while the database migration is in progress.</p></div></div>;
+}
+
+function PhaseStatusRow({ active, phase, terminalFailed, wizard }: Readonly<{
+  active: boolean;
+  phase: string;
+  terminalFailed: boolean;
+  wizard: WizardState | null;
+}>): React.JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <span
+        aria-live="polite"
+        aria-atomic="true"
+        className={cn(
+          "font-medium",
+          active && "text-warning-text",
+          phase === "ready_to_switch" && "text-success",
+          phase === "switched" && "text-success",
+          terminalFailed && "text-destructive",
+        )}
+      >
+        {phaseLabel(phase)}
+      </span>
+      {wizard?.targetMasked !== "" && wizard?.targetMasked !== undefined && (
+        <span className="font-mono text-xs text-muted-foreground">{wizard.targetMasked}</span>
+      )}
+      {active && <Spinner className="size-4" />}
+    </div>
+  );
+}
+
+function WizardErrorNote({ wizard }: Readonly<{ wizard: WizardState | null }>): React.JSX.Element | null {
+  if (!(wizard?.error !== null && wizard?.error !== undefined)) return null;
+  return (
+    <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+      {wizard.error}
+    </div>
+  );
+}
+
+function StepsList({ wizard }: Readonly<{ wizard: WizardState | null }>): React.JSX.Element | null {
+  if (!(wizard !== null && wizard.steps.length > 0)) return null;
+  return (
+    <div>
+      <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Steps</div>
+      <ul className="space-y-1">
+        {wizard.steps.map((step): React.JSX.Element => {
+          // SAFETY: unknown migration steps fall back to the raw step key below.
+          const stepLabel = Object.prototype.hasOwnProperty.call(STEP_LABELS, step.key)
+            ? STEP_LABELS[step.key as keyof typeof STEP_LABELS]
+            : step.key;
+          return (
+          <li key={step.key} className="flex items-center gap-2 text-sm">
+            {stepSymbol(step.status)}
+            <span className={cn(step.status === "failed" && "text-destructive")}>
+              {stepLabel}
+            </span>
+            {step.detail !== null && (
+              <span className="truncate font-mono text-xs text-muted-foreground">{step.detail}</span>
+            )}
+            {step.error !== null && <span className="text-xs text-destructive">{step.error}</span>}
+          </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function CopyProgressNote({ wizard }: Readonly<{ wizard: WizardState | null }>): React.JSX.Element | null {
+  if (!(wizard?.copyProgress !== null && wizard?.copyProgress !== undefined)) return null;
+  return (
+    <div className="text-sm text-muted-foreground">
+      Copying <span className="font-medium text-foreground">{wizard.copyProgress.table}</span> —{" "}
+      {wizard.copyProgress.doneTables}/{wizard.copyProgress.totalTables} tables,{" "}
+      {wizard.copyProgress.rows.toLocaleString()} rows in the current table
+    </div>
+  );
+}
+
+function VerificationSection({ verification }: Readonly<{
+  verification: readonly VerifyResult[] | null | undefined;
+}>): React.JSX.Element | null {
+  if (!(verification !== null && verification !== undefined && verification.length > 0)) return null;
+  return (
+    <Section defaultOpen={false} title={`Verification (${verification.length} tables)`}>
+      <div className="overflow-x-auto rounded-lg border border-border">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border text-left text-muted-foreground">
+              <th className="px-2 py-1.5 font-medium">Table</th>
+              <th className="px-2 py-1.5 font-medium">Source</th>
+              <th className="px-2 py-1.5 font-medium">Target</th>
+              <th className="px-2 py-1.5 font-medium">Digest</th>
+            </tr>
+          </thead>
+          <tbody>
+            {verification.map((row): React.JSX.Element => (
+              <tr key={row.table} className="border-b border-border last:border-b-0">
+                <td className="px-2 py-1.5 font-mono">{row.table}</td>
+                <td className="px-2 py-1.5">{row.sourceCount.toLocaleString()}</td>
+                <td className="px-2 py-1.5">{row.targetCount.toLocaleString()}</td>
+                <td className={cn("px-2 py-1.5", row.digestMatch === false && "text-destructive")}>
+                  {row.digestMatch === null
+                    ? (row.digestSkipped ?? "skipped")
+                    : row.digestMatch ? "match" : "MISMATCH"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Section>
+  );
+}
+
+function MigrationReportSection({ report }: Readonly<{
+  report: MigrationReport | null | undefined;
+}>): React.JSX.Element | null {
+  if (!(report !== null && report !== undefined)) return null;
+  return (
+    <Section defaultOpen={false} title="Migration report">
+      <div className="space-y-1">
+        <Field label="Triggers skipped" children={<span className={report.triggersSkipped > 0 ? "text-warning-text" : undefined}>{report.triggersSkipped}</span>} />
+        <Field label="Defaults dropped" children={<span className={report.defaultsDropped.length > 0 ? "text-warning-text" : undefined}>{report.defaultsDropped.length > 0 ? report.defaultsDropped.join(", ") : "none"}</span>} />
+        <Field label="Checks skipped" children={<span className={report.checksSkipped.length > 0 ? "text-warning-text" : undefined}>{report.checksSkipped.length > 0 ? report.checksSkipped.join(", ") : "none"}</span>} />
+        <Field label="Indexes skipped" children={<span className={report.indexesSkipped.length > 0 ? "text-warning-text" : undefined}>{report.indexesSkipped.length > 0 ? report.indexesSkipped.join(", ") : "none"}</span>} />
+        <Field label="FK violations" children={<span className={report.fkViolations.length > 0 ? "text-destructive" : undefined}>{report.fkViolations.length}</span>} />
+        <Field label="Journal match" children={report.journalMatch ? "ok" : "mismatch"} />
+      </div>
+    </Section>
+  );
+}
+
+function ReadyToSwitchPanel({ wizard, envDbUrl, busy, onAction }: Readonly<{
+  wizard: WizardState | null;
+  envDbUrl: string | null;
+  busy: string | null;
+  onAction: (path: string, method: string, body?: JsonValue) => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <div className="space-y-3">
+      <div className="text-sm text-muted-foreground">
+        Verification passed: every table matches by row count and content digest. Switch the boot
+        configuration to PostgreSQL, then restart the process.
+      </div>
+      <VerificationSection verification={wizard?.verification} />
+      <MigrationReportSection report={wizard?.report} />
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        <Button
+          aria-describedby={envDbUrl !== null ? "migration-switch-reason" : undefined}
+          disabled={envDbUrl !== null || busy !== null}
+          onClick={(): void => { void onAction("switch", "POST"); }}
+        >
+          <ArrowRight className="size-4" aria-hidden />
+          Switch to PostgreSQL
+        </Button>
+        <Button variant="outline" onClick={(): void => { void onAction("cancel", "POST"); }}>
+          Cancel
+        </Button>
+        {envDbUrl !== null && (
+          <p id="migration-switch-reason" className="basis-full text-xs text-muted-foreground">
+            Switch is unavailable while DATABASE_URL is set. Remove or empty that environment value before cutover.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SwitchedPanel({ restartDisabled, busy, onAction }: Readonly<{
+  restartDisabled: boolean;
+  busy: string | null;
+  onAction: (path: string, method: string, body?: JsonValue) => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <div className="space-y-3">
+      <div className="text-sm text-muted-foreground">
+        The boot configuration now points at PostgreSQL. Restart the process to boot on the new backend;
+        the SQLite database remains as the rollback image.
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          aria-describedby={restartDisabled ? "migration-restart-reason" : undefined}
+          disabled={restartDisabled || busy !== null}
+          onClick={(): void => { void onAction("restart", "POST"); }}
+        >
+          <Power className="size-4" aria-hidden />
+          Restart process
+        </Button>
+        {restartDisabled && (
+          <span id="migration-restart-reason" className="text-xs text-muted-foreground">
+            Restart is suppressed in this environment; restart the process manually.
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MigrationStatusCard({ status, wizard, phase, active, terminalFailed, guidance, busy, onAction }: Readonly<{
+  status: StatusBody;
+  wizard: WizardState | null;
+  phase: string;
+  active: boolean;
+  terminalFailed: boolean;
+  guidance: Readonly<{ tone: "info" | "success" | "warning" | "danger"; title: string; body: string }>;
+  busy: string | null;
+  onAction: (path: string, method: string, body?: JsonValue) => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Database className="size-4 text-muted-foreground" aria-hidden />
+          Migration status
+        </CardTitle>
+        <CardDescription>
+          Source database:{" "}
+          <span className="font-mono text-xs">
+            {status["source-database"] === null ? "none (PostgreSQL backend)" : status["source-database"].path}
+          </span>
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <StatusFields status={status} wizard={wizard} isSwitched={phase === "switched"} />
+
+        <GuidanceCallout tone={guidance.tone} title={guidance.title} body={guidance.body} phase={phase} />
+
+        <MigrationTimeline phase={phase} wizard={wizard} />
+
+        <MaintenanceBanner active={active} wizard={wizard} />
+        <PhaseStatusRow active={active} phase={phase} terminalFailed={terminalFailed} wizard={wizard} />
+
+        <WizardErrorNote wizard={wizard} />
+
+        {status["environment-database-url"] !== null && (
+          <Callout tone="warning" className="p-3">
+            {status["environment-database-url"]}
+          </Callout>
+        )}
+
+        <StepsList wizard={wizard} />
+
+        <CopyProgressNote wizard={wizard} />
+
+        {phase === "ready_to_switch" && (
+          <ReadyToSwitchPanel wizard={wizard} envDbUrl={status["environment-database-url"]} busy={busy} onAction={onAction} />
+        )}
+
+        {phase === "switched" && (
+          <SwitchedPanel restartDisabled={status["restart-disabled"]} busy={busy} onAction={onAction} />
+        )}
+
+        {terminalFailed && (
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Button variant="outline" onClick={(): void => { void onAction("cancel", "POST"); }}>
+              Clear
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+type CompatResult = {
+  ok: boolean;
+  checks: { name: string; ok: boolean; detail: string }[];
+};
+
+function TargetCheckButtons({ urlBlank, busy, onTest, onCheck }: Readonly<{
+  urlBlank: boolean;
+  busy: string | null;
+  onTest: () => void;
+  onCheck: () => void;
+}>): React.JSX.Element {
+  return (
+    <div className="flex shrink-0 gap-2">
+      <Button
+        disabled={urlBlank || busy !== null}
+        onClick={onTest}
+        variant="outline"
+      >
+        <RefreshCw className="size-4" aria-hidden />
+        Test connection
+      </Button>
+      <Button
+        disabled={urlBlank || busy !== null}
+        onClick={onCheck}
+        variant="outline"
+      >
+        <Check className="size-4" aria-hidden />
+        Compatibility
+      </Button>
+    </div>
+  );
+}
+
+function StartConfirmSection({ urlBlank, busy, running, confirmStart, onRequestStart, onConfirmStart, onCancelConfirm }: Readonly<{
+  urlBlank: boolean;
+  busy: string | null;
+  running: boolean;
+  confirmStart: boolean;
+  onRequestStart: () => void;
+  onConfirmStart: () => void;
+  onCancelConfirm: () => void;
+}>): React.JSX.Element {
+  if (!confirmStart) {
+    return (
+      <Button
+        disabled={urlBlank || busy !== null || running}
+        onClick={onRequestStart}
+      >
+        Start migration
+      </Button>
+    );
+  }
+  return (
+    <Callout
+      tone="warning"
+      className="p-3"
+      actions={
+        <>
+          <Button
+            disabled={busy !== null}
+            onClick={onConfirmStart}
+          >
+            Confirm start
+          </Button>
+          <Button variant="outline" onClick={onCancelConfirm}>Back</Button>
+        </>
+      }
+    >
+      The backend enters maintenance mode: existing runs finish, new runs are blocked until the copy
+      completes and you decide to switch.
+    </Callout>
+  );
+}
+
+function StartMigrationCard({ hasSqliteSource, active, phase, running, busy, act, onBusyChange, onError, onAction }: Readonly<{
+  hasSqliteSource: boolean;
+  active: boolean;
+  phase: string;
+  running: boolean;
+  busy: string | null;
+  act: (path: string, method: string, body?: JsonValue) => Promise<JsonValue>;
+  onBusyChange: (busy: string | null) => void;
+  onError: (message: string) => void;
+  onAction: (path: string, method: string, body?: JsonValue) => Promise<void>;
+}>): React.JSX.Element | null {
+  const [url, setUrl] = useState("");
+  const [testResult, setTestResult] = useState<string | null>(null);
+  const [compatResult, setCompatResult] = useState<CompatResult | null>(null);
+  const [confirmStart, setConfirmStart] = useState(false);
+  if (!hasSqliteSource || active || (phase !== "idle" && phase !== "failed" && phase !== "aborted" && phase !== "interrupted")) return null;
+  const urlBlank = url.trim() === "";
+
+  const handleTestConnection = (): void => {
+    onBusyChange("test-connection");
+    setTestResult(null);
+    act("test-connection", "POST", { data: { attributes: { url } } })
+      .then((body): void => {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+        const result = (body as { data: { ok?: boolean; detail?: string } }).data;
+        setTestResult(result.ok === false ? `Connection failed: ${result.detail ?? "unknown error"}` : "Connection OK");
+      })
+      .catch((err: unknown): void => {
+        onError(err instanceof Error ? err.message : String(err));
+      })
+      .finally((): void => { onBusyChange(null); });
+  };
+
+  const handleCheckCompatibility = (): void => {
+    onBusyChange("compatibility");
+    setCompatResult(null);
+    act("compatibility", "POST", { data: { attributes: { url } } })
+      .then((body): void => {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+        setCompatResult((body as { data: CompatResult }).data);
+      })
+      .catch((err: unknown): void => {
+        onError(err instanceof Error ? err.message : String(err));
+      })
+      .finally((): void => { onBusyChange(null); });
+  };
+
+  return (
+    <Card>
+      <CardHeader variant="danger">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <AlertTriangle className="size-4" aria-hidden="true" />
+          Start a migration
+        </CardTitle>
+        <CardDescription>
+          Enter the target PostgreSQL connection URL. The target database must be empty; the wizard creates the
+          schema and copies all records. The backend enters maintenance mode for the duration of the copy.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          This changes the storage backend and puts the instance into maintenance mode. Verify the target and rollback plan before continuing.
+        </p>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Input
+            aria-label="PostgreSQL connection URL"
+            className="font-mono text-xs"
+            onChange={(event): void => { setUrl(event.target.value); }}
+            placeholder="postgres://user:***@host:5432/terrence"
+            spellCheck={false}
+            value={url}
+          />
+          <TargetCheckButtons
+            urlBlank={urlBlank}
+            busy={busy}
+            onTest={handleTestConnection}
+            onCheck={handleCheckCompatibility}
+          />
+        </div>
+
+        {busy === "test-connection" && <div className="text-sm text-muted-foreground">Testing connection…</div>}
+        {testResult !== null && (
+          <div className={cn("text-sm", testResult.startsWith("Connection failed") ? "text-destructive" : "text-success")}>
+            {testResult}
+          </div>
+        )}
+        {busy === "compatibility" && <div className="text-sm text-muted-foreground">Checking target…</div>}
+
+        {compatResult !== null && (
+          <ul className="space-y-1 text-sm">
+            {compatResult.checks.map((check): React.JSX.Element => (
+              <li key={check.name} className="flex items-center gap-2">
+                {check.ok
+                  ? <Check className="size-3.5 text-success" aria-hidden />
+                  : <X className="size-3.5 text-destructive" aria-hidden />}
+                <span className={cn(!check.ok && "text-destructive")}>{check.name}</span>
+                {check.detail !== "" && <span className="font-mono text-xs text-muted-foreground">{check.detail}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <StartConfirmSection
+          urlBlank={urlBlank}
+          busy={busy}
+          running={running}
+          confirmStart={confirmStart}
+          onRequestStart={(): void => { setConfirmStart(true); }}
+          onConfirmStart={(): void => {
+            setConfirmStart(false);
+            void onAction("start", "POST", { data: { attributes: { url } } });
+          }}
+          onCancelConfirm={(): void => { setConfirmStart(false); }}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
 export function AdminDatabaseMigration(): React.JSX.Element {
   const [status, setStatus] = useState<StatusBody | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [url, setUrl] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<string | null>(null);
-  const [compatResult, setCompatResult] = useState<{ ok: boolean; checks: { name: string; ok: boolean; detail: string }[] } | null>(null);
-  const [confirmStart, setConfirmStart] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
@@ -305,383 +871,33 @@ export function AdminDatabaseMigration(): React.JSX.Element {
       />
 
       {error !== null && (
-        <div role="alert" className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-          <div className="min-w-0 flex-1"><span className="font-semibold">Migration action failed.</span>{" "}{error}</div>
-          <Button type="button" size="sm" variant="outline" onClick={(): void => { void load(); }}>Try again</Button>
-        </div>
+        <MigrationErrorBanner error={error} onRetry={(): void => { void load(); }} />
       )}
 
       {status !== null && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Database className="size-4 text-muted-foreground" aria-hidden />
-              Migration status
-            </CardTitle>
-            <CardDescription>
-              Source database:{" "}
-              <span className="font-mono text-xs">
-                {status["source-database"] === null ? "none (PostgreSQL backend)" : status["source-database"].path}
-              </span>
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-3 rounded-lg border bg-muted/20 p-3 text-sm sm:grid-cols-2">
-              <Field
-                label="Current source"
-                children={
-                  status["source-database"] === null
-                    ? "PostgreSQL backend"
-                    : <><span className="font-medium">SQLite</span><span className="ml-2 font-mono text-xs text-muted-foreground">{status["source-database"].path}</span></>
-                }
-              />
-              <Field
-                label="Target identity"
-                children={wizard?.targetMasked !== undefined && wizard.targetMasked !== "" ? <span className="font-mono text-xs">{wizard.targetMasked}</span> : "No target selected"}
-              />
-              <Field
-                label="Authoritative source"
-                children={status["source-database"] === null
-                  ? "PostgreSQL backend"
-                  : phase === "switched" ? "PostgreSQL after restart; SQLite rollback image retained" : "SQLite until cutover"}
-              />
-              <Field
-                label="Persisted checkpoint"
-                children={wizard?.updatedAt !== undefined ? <time dateTime={wizard.updatedAt}>{formatDateTime(wizard.updatedAt, "Unknown")}</time> : "No migration checkpoint"}
-              />
-            </div>
-
-            <Callout tone={guidance.tone} title={guidance.title} role={phase === "failed" || phase === "aborted" || phase === "interrupted" ? "alert" : "status"}>
-              {guidance.body}
-            </Callout>
-
-            <ol aria-label="Migration phases" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {MIGRATION_TIMELINE.map((item, index): React.JSX.Element => {
-                const state = timelineStatus(index, phase, wizard?.steps ?? []);
-                return (
-                  <li key={item.key} className={cn(
-                    "rounded-lg border p-3",
-                    state === "complete" && "border-success/30 bg-success/5",
-                    state === "active" && "border-primary/30 bg-primary/5",
-                    state === "failed" && "border-destructive/30 bg-destructive/5",
-                    state === "pending" && "bg-muted/20",
-                  )}>
-                    <div className="flex items-center gap-2 text-sm font-semibold">
-                      <span className={cn(
-                        "flex size-6 items-center justify-center rounded-full border text-xs",
-                        state === "complete" && "border-success/40 text-success",
-                        state === "active" && "border-primary/40 text-primary",
-                        state === "failed" && "border-destructive/40 text-destructive",
-                        state === "pending" && "border-border text-muted-foreground",
-                      )} aria-hidden="true">
-                        {state === "complete" ? <Check className="size-3.5" /> : state === "failed" ? <X className="size-3.5" /> : index + 1}
-                      </span>
-                      <span>{item.label}</span>
-                      {state === "active" && <Spinner className="size-3.5" />}
-                    </div>
-                    <p className="mt-2 text-xs text-muted-foreground">{item.description}</p>
-                  </li>
-                );
-              })}
-            </ol>
-
-            {active && wizard?.steps.some((step): boolean => step.key === "maintenance" && step.status === "passed") === true && <div className="flex items-center gap-4 rounded-lg border bg-muted/30 p-4"><Terrence pose="maintenance" detail="small" className="w-28" /><div><h2 className="font-heading font-semibold">Maintenance mode</h2><p className="mt-1 text-sm text-muted-foreground">New runs are paused while the database migration is in progress.</p></div></div>}
-            <div className="flex flex-wrap items-center gap-3">
-              <span
-                aria-live="polite"
-                aria-atomic="true"
-                className={cn(
-                  "font-medium",
-                  active && "text-warning-text",
-                  phase === "ready_to_switch" && "text-success",
-                  phase === "switched" && "text-success",
-                  terminalFailed && "text-destructive",
-                )}
-              >
-                {phaseLabel(phase)}
-              </span>
-              {wizard?.targetMasked !== "" && wizard?.targetMasked !== undefined && (
-                <span className="font-mono text-xs text-muted-foreground">{wizard.targetMasked}</span>
-              )}
-              {active && <Spinner className="size-4" />}
-            </div>
-
-            {wizard?.error !== null && wizard?.error !== undefined && (
-              <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {wizard.error}
-              </div>
-            )}
-
-            {status["environment-database-url"] !== null && (
-              <Callout tone="warning" className="p-3">
-                {status["environment-database-url"]}
-              </Callout>
-            )}
-
-            {wizard !== null && wizard.steps.length > 0 && (
-              <div>
-                <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Steps</div>
-                <ul className="space-y-1">
-                  {wizard.steps.map((step): React.JSX.Element => {
-                    // SAFETY: unknown migration steps fall back to the raw step key below.
-                    const stepLabel = Object.prototype.hasOwnProperty.call(STEP_LABELS, step.key)
-                      ? STEP_LABELS[step.key as keyof typeof STEP_LABELS]
-                      : step.key;
-                    return (
-                    <li key={step.key} className="flex items-center gap-2 text-sm">
-                      {stepSymbol(step.status)}
-                      <span className={cn(step.status === "failed" && "text-destructive")}>
-                        {stepLabel}
-                      </span>
-                      {step.detail !== null && (
-                        <span className="truncate font-mono text-xs text-muted-foreground">{step.detail}</span>
-                      )}
-                      {step.error !== null && <span className="text-xs text-destructive">{step.error}</span>}
-                    </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            )}
-
-            {wizard?.copyProgress !== null && wizard?.copyProgress !== undefined && (
-              <div className="text-sm text-muted-foreground">
-                Copying <span className="font-medium text-foreground">{wizard.copyProgress.table}</span> —{" "}
-                {wizard.copyProgress.doneTables}/{wizard.copyProgress.totalTables} tables,{" "}
-                {wizard.copyProgress.rows.toLocaleString()} rows in the current table
-              </div>
-            )}
-
-            {phase === "ready_to_switch" && (
-              <div className="space-y-3">
-                <div className="text-sm text-muted-foreground">
-                  Verification passed: every table matches by row count and content digest. Switch the boot
-                  configuration to PostgreSQL, then restart the process.
-                </div>
-                {wizard?.verification !== null && wizard?.verification !== undefined && wizard.verification.length > 0 && (
-                  <Section defaultOpen={false} title={`Verification (${wizard.verification.length} tables)`}>
-                    <div className="overflow-x-auto rounded-lg border border-border">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="border-b border-border text-left text-muted-foreground">
-                            <th className="px-2 py-1.5 font-medium">Table</th>
-                            <th className="px-2 py-1.5 font-medium">Source</th>
-                            <th className="px-2 py-1.5 font-medium">Target</th>
-                            <th className="px-2 py-1.5 font-medium">Digest</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {wizard.verification.map((row): React.JSX.Element => (
-                            <tr key={row.table} className="border-b border-border last:border-b-0">
-                              <td className="px-2 py-1.5 font-mono">{row.table}</td>
-                              <td className="px-2 py-1.5">{row.sourceCount.toLocaleString()}</td>
-                              <td className="px-2 py-1.5">{row.targetCount.toLocaleString()}</td>
-                              <td className={cn("px-2 py-1.5", row.digestMatch === false && "text-destructive")}>
-                                {row.digestMatch === null
-                                  ? (row.digestSkipped ?? "skipped")
-                                  : row.digestMatch ? "match" : "MISMATCH"}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </Section>
-                )}
-                {wizard?.report !== null && wizard?.report !== undefined && (
-                  <Section defaultOpen={false} title="Migration report">
-                    <div className="space-y-1">
-                      <Field label="Triggers skipped" children={<span className={wizard.report.triggersSkipped > 0 ? "text-warning-text" : undefined}>{wizard.report.triggersSkipped}</span>} />
-                      <Field label="Defaults dropped" children={<span className={wizard.report.defaultsDropped.length > 0 ? "text-warning-text" : undefined}>{wizard.report.defaultsDropped.length > 0 ? wizard.report.defaultsDropped.join(", ") : "none"}</span>} />
-                      <Field label="Checks skipped" children={<span className={wizard.report.checksSkipped.length > 0 ? "text-warning-text" : undefined}>{wizard.report.checksSkipped.length > 0 ? wizard.report.checksSkipped.join(", ") : "none"}</span>} />
-                      <Field label="Indexes skipped" children={<span className={wizard.report.indexesSkipped.length > 0 ? "text-warning-text" : undefined}>{wizard.report.indexesSkipped.length > 0 ? wizard.report.indexesSkipped.join(", ") : "none"}</span>} />
-                      <Field label="FK violations" children={<span className={wizard.report.fkViolations.length > 0 ? "text-destructive" : undefined}>{wizard.report.fkViolations.length}</span>} />
-                      <Field label="Journal match" children={wizard.report.journalMatch ? "ok" : "mismatch"} />
-                    </div>
-                  </Section>
-                )}
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                  <Button
-                    aria-describedby={status["environment-database-url"] !== null ? "migration-switch-reason" : undefined}
-                    disabled={status["environment-database-url"] !== null || busy !== null}
-                    onClick={(): void => { void runAction("switch", "POST"); }}
-                  >
-                    <ArrowRight className="size-4" aria-hidden />
-                    Switch to PostgreSQL
-                  </Button>
-                  <Button variant="outline" onClick={(): void => { void runAction("cancel", "POST"); }}>
-                    Cancel
-                  </Button>
-                  {status["environment-database-url"] !== null && (
-                    <p id="migration-switch-reason" className="basis-full text-xs text-muted-foreground">
-                      Switch is unavailable while DATABASE_URL is set. Remove or empty that environment value before cutover.
-                    </p>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {phase === "switched" && (
-              <div className="space-y-3">
-                <div className="text-sm text-muted-foreground">
-                  The boot configuration now points at PostgreSQL. Restart the process to boot on the new backend;
-                  the SQLite database remains as the rollback image.
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    aria-describedby={status["restart-disabled"] ? "migration-restart-reason" : undefined}
-                    disabled={status["restart-disabled"] || busy !== null}
-                    onClick={(): void => { void runAction("restart", "POST"); }}
-                  >
-                    <Power className="size-4" aria-hidden />
-                    Restart process
-                  </Button>
-                  {status["restart-disabled"] && (
-                    <span id="migration-restart-reason" className="text-xs text-muted-foreground">
-                      Restart is suppressed in this environment; restart the process manually.
-                    </span>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {terminalFailed && (
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <Button variant="outline" onClick={(): void => { void runAction("cancel", "POST"); }}>
-                  Clear
-                </Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <MigrationStatusCard
+          status={status}
+          wizard={wizard}
+          phase={phase}
+          active={active}
+          terminalFailed={terminalFailed}
+          guidance={guidance}
+          busy={busy}
+          onAction={runAction}
+        />
       )}
 
-      {hasSqliteSource && !active && (phase === "idle" || phase === "failed" || phase === "aborted" || phase === "interrupted") && (
-        <Card>
-          <CardHeader variant="danger">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <AlertTriangle className="size-4" aria-hidden="true" />
-              Start a migration
-            </CardTitle>
-            <CardDescription>
-              Enter the target PostgreSQL connection URL. The target database must be empty; the wizard creates the
-              schema and copies all records. The backend enters maintenance mode for the duration of the copy.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-              This changes the storage backend and puts the instance into maintenance mode. Verify the target and rollback plan before continuing.
-            </p>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <Input
-                aria-label="PostgreSQL connection URL"
-                className="font-mono text-xs"
-                onChange={(event): void => { setUrl(event.target.value); }}
-                placeholder="postgres://user:password@host:5432/terrence"
-                spellCheck={false}
-                value={url}
-              />
-              <div className="flex shrink-0 gap-2">
-                <Button
-                  disabled={url.trim() === "" || busy !== null}
-                  onClick={(): void => {
-                    setBusy("test-connection");
-                    setTestResult(null);
-                    act("test-connection", "POST", { data: { attributes: { url } } })
-                      .then((body): void => {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-                        const result = (body as { data: { ok?: boolean; detail?: string } }).data;
-                        setTestResult(result.ok === false ? `Connection failed: ${result.detail ?? "unknown error"}` : "Connection OK");
-                      })
-                      .catch((err: unknown): void => {
-                        setError(err instanceof Error ? err.message : String(err));
-                      })
-                      .finally((): void => { setBusy(null); });
-                  }}
-                  variant="outline"
-                >
-                  <RefreshCw className="size-4" aria-hidden />
-                  Test connection
-                </Button>
-                <Button
-                  disabled={url.trim() === "" || busy !== null}
-                  onClick={(): void => {
-                    setBusy("compatibility");
-                    setCompatResult(null);
-                    act("compatibility", "POST", { data: { attributes: { url } } })
-                      .then((body): void => {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-                        setCompatResult((body as { data: { ok: boolean; checks: { name: string; ok: boolean; detail: string }[] } }).data);
-                      })
-                      .catch((err: unknown): void => {
-                        setError(err instanceof Error ? err.message : String(err));
-                      })
-                      .finally((): void => { setBusy(null); });
-                  }}
-                  variant="outline"
-                >
-                  <Check className="size-4" aria-hidden />
-                  Compatibility
-                </Button>
-              </div>
-            </div>
-
-            {busy === "test-connection" && <div className="text-sm text-muted-foreground">Testing connection…</div>}
-            {testResult !== null && (
-              <div className={cn("text-sm", testResult.startsWith("Connection failed") ? "text-destructive" : "text-success")}>
-                {testResult}
-              </div>
-            )}
-            {busy === "compatibility" && <div className="text-sm text-muted-foreground">Checking target…</div>}
-
-            {compatResult !== null && (
-              <ul className="space-y-1 text-sm">
-                {compatResult.checks.map((check): React.JSX.Element => (
-                  <li key={check.name} className="flex items-center gap-2">
-                    {check.ok
-                      ? <Check className="size-3.5 text-success" aria-hidden />
-                      : <X className="size-3.5 text-destructive" aria-hidden />}
-                    <span className={cn(!check.ok && "text-destructive")}>{check.name}</span>
-                    {check.detail !== "" && <span className="font-mono text-xs text-muted-foreground">{check.detail}</span>}
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {!confirmStart ? (
-              <Button
-                disabled={url.trim() === "" || busy !== null || status.running}
-                onClick={(): void => { setConfirmStart(true); }}
-              >
-                Start migration
-              </Button>
-            ) : (
-              <Callout
-                tone="warning"
-                className="p-3"
-                actions={
-                  <>
-                    <Button
-                      disabled={busy !== null}
-                      onClick={(): void => {
-                        setConfirmStart(false);
-                        void runAction("start", "POST", { data: { attributes: { url } } });
-                      }}
-                    >
-                      Confirm start
-                    </Button>
-                    <Button variant="outline" onClick={(): void => { setConfirmStart(false); }}>Back</Button>
-                  </>
-                }
-              >
-                The backend enters maintenance mode: existing runs finish, new runs are blocked until the copy
-                completes and you decide to switch.
-              </Callout>
-            )}
-          </CardContent>
-        </Card>
-      )}
+      <StartMigrationCard
+        hasSqliteSource={hasSqliteSource}
+        active={active}
+        phase={phase}
+        running={status?.running === true}
+        busy={busy}
+        act={act}
+        onBusyChange={setBusy}
+        onError={setError}
+        onAction={runAction}
+      />
     </PageShell>
   );
 }

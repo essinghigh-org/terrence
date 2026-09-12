@@ -107,53 +107,58 @@ function isChange(value: unknown): value is Change {
     ));
 }
 
+function hasOptionalStringFields(value: JsonObject, fields: readonly string[]): boolean {
+  return fields.every((field): boolean => value[field] === undefined || isString(value[field]));
+}
+
+function isOptionalList(value: unknown, isItem: (item: unknown) => boolean): boolean {
+  return value === undefined || (Array.isArray(value) && value.every(isItem));
+}
+
+function isOutputChangeRecord(value: unknown): boolean {
+  return value === undefined || (isRecord(value) && Object.values(value).every(isChange));
+}
+
+const RESOURCE_CHANGE_STRING_FIELDS = [
+  "deposed",
+  "module_address",
+  "mode",
+  "name",
+  "previous_address",
+  "provider_name",
+  "action_reason",
+];
+
+const ACTION_INVOCATION_STRING_FIELDS = ["address", "type", "name", "provider_name"];
+
 function isResourceChange(value: unknown): value is ResourceChange {
   return isRecord(value)
     && isString(value["address"])
     && isString(value["type"])
-    && (value["deposed"] === undefined || isString(value["deposed"]))
-    && (value["module_address"] === undefined || isString(value["module_address"]))
-    && (value["mode"] === undefined || isString(value["mode"]))
-    && (value["name"] === undefined || isString(value["name"]))
-    && (value["previous_address"] === undefined || isString(value["previous_address"]))
-    && (value["provider_name"] === undefined || isString(value["provider_name"]))
-    && (value["action_reason"] === undefined || isString(value["action_reason"]))
+    && hasOptionalStringFields(value, RESOURCE_CHANGE_STRING_FIELDS)
     && isChange(value["change"]);
 }
 
+function isLifecycleTrigger(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isRecord(value)) return false;
+  return hasOptionalStringFields(value, ["triggering_resource_address", "action_trigger_event"]);
+}
+
 function isActionInvocation(value: unknown): value is ActionInvocation {
-  if (!isRecord(value)
-    || (value["address"] !== undefined && !isString(value["address"]))
-    || (value["type"] !== undefined && !isString(value["type"]))
-    || (value["name"] !== undefined && !isString(value["name"]))
-    || (value["provider_name"] !== undefined && !isString(value["provider_name"]))) return false;
-  const lifecycleTrigger = value["lifecycle_action_trigger"];
-  return (lifecycleTrigger === undefined || (
-      isRecord(lifecycleTrigger)
-      && (lifecycleTrigger["triggering_resource_address"] === undefined
-        || isString(lifecycleTrigger["triggering_resource_address"]))
-      && (lifecycleTrigger["action_trigger_event"] === undefined
-        || isString(lifecycleTrigger["action_trigger_event"]))
-    ))
-    && (value["invoke_action_trigger"] === undefined || isRecord(value["invoke_action_trigger"]));
+  if (!isRecord(value)) return false;
+  if (!hasOptionalStringFields(value, ACTION_INVOCATION_STRING_FIELDS)) return false;
+  if (!isLifecycleTrigger(value["lifecycle_action_trigger"])) return false;
+  return value["invoke_action_trigger"] === undefined || isRecord(value["invoke_action_trigger"]);
 }
 
 function parsePlanJson(value: unknown): PlanJson | null {
   if (!isRecord(value)) return null;
-  const actions = value["action_invocations"];
-  const resources = value["resource_changes"];
-  const drift = value["resource_drift"];
-  const outputs = value["output_changes"];
-  if (actions !== undefined
-    && (!Array.isArray(actions) || !actions.every(isActionInvocation))) return null;
-  if (resources !== undefined
-    && (!Array.isArray(resources) || !resources.every(isResourceChange))) return null;
-  if (drift !== undefined
-    && (!Array.isArray(drift) || !drift.every(isResourceChange))) return null;
-  if (outputs !== undefined
-    && (!isRecord(outputs) || !Object.values(outputs).every(isChange))) return null;
-  if (value["terraform_version"] !== undefined && !isString(value["terraform_version"])) return null;
-  if (value["format_version"] !== undefined && !isString(value["format_version"])) return null;
+  if (!isOptionalList(value["action_invocations"], isActionInvocation)) return null;
+  if (!isOptionalList(value["resource_changes"], isResourceChange)) return null;
+  if (!isOptionalList(value["resource_drift"], isResourceChange)) return null;
+  if (!isOutputChangeRecord(value["output_changes"])) return null;
+  if (!hasOptionalStringFields(value, ["terraform_version", "format_version"])) return null;
   return value;
 }
 
@@ -276,6 +281,78 @@ type DiffNode =
       children: readonly DiffNode[];
     }>;
 
+function buildArrayNode(
+  key: string | number | null,
+  path: string,
+  before: unknown,
+  after: unknown,
+  beforeSensitive: unknown,
+  afterSensitive: unknown,
+  afterUnknown: unknown,
+  equal: boolean,
+): DiffNode {
+  const length = Math.max(
+    Array.isArray(before) ? before.length : 0,
+    Array.isArray(after) ? after.length : 0,
+  );
+  const children: DiffNode[] = [];
+  for (let index = 0; index < length; index++) {
+    children.push(buildDiffNode(
+      index,
+      path === "" ? `[${index}]` : `${path}[${index}]`,
+      Array.isArray(before) ? before[index] : undefined,
+      Array.isArray(after) ? after[index] : undefined,
+      Array.isArray(beforeSensitive) ? beforeSensitive[index] : undefined,
+      Array.isArray(afterSensitive) ? afterSensitive[index] : undefined,
+      Array.isArray(afterUnknown) ? afterUnknown[index] : undefined,
+    ));
+  }
+  return {
+    kind: "array",
+    key,
+    path,
+    before,
+    after,
+    unchanged: equal,
+    added: before === undefined || before === null,
+    removed: after === undefined || after === null,
+    children,
+  };
+}
+
+function buildObjectNode(
+  key: string | number | null,
+  path: string,
+  before: unknown,
+  after: unknown,
+  beforeSensitive: unknown,
+  afterSensitive: unknown,
+  afterUnknown: unknown,
+  equal: boolean,
+): DiffNode {
+  const keys = collectionKeys([before, after, beforeSensitive, afterSensitive, afterUnknown]);
+  const children = keys.map((childKey): DiffNode => buildDiffNode(
+    childKey,
+    path === "" ? String(childKey) : `${path}.${childKey}`,
+    childValue(before, childKey),
+    childValue(after, childKey),
+    childValue(beforeSensitive, childKey),
+    childValue(afterSensitive, childKey),
+    childValue(afterUnknown, childKey),
+  ));
+  return {
+    kind: "object",
+    key,
+    path,
+    before,
+    after,
+    unchanged: equal,
+    added: before === undefined || before === null,
+    removed: after === undefined || after === null,
+    children,
+  };
+}
+
 function buildDiffNode(
   key: string | number | null,
   path: string,
@@ -299,56 +376,10 @@ function buildDiffNode(
     };
   }
   if (Array.isArray(before) || Array.isArray(after)) {
-    const length = Math.max(
-      Array.isArray(before) ? before.length : 0,
-      Array.isArray(after) ? after.length : 0,
-    );
-    const children: DiffNode[] = [];
-    for (let index = 0; index < length; index++) {
-      children.push(buildDiffNode(
-        index,
-        path === "" ? `[${index}]` : `${path}[${index}]`,
-        Array.isArray(before) ? before[index] : undefined,
-        Array.isArray(after) ? after[index] : undefined,
-        Array.isArray(beforeSensitive) ? beforeSensitive[index] : undefined,
-        Array.isArray(afterSensitive) ? afterSensitive[index] : undefined,
-        Array.isArray(afterUnknown) ? afterUnknown[index] : undefined,
-      ));
-    }
-    return {
-      kind: "array",
-      key,
-      path,
-      before,
-      after,
-      unchanged: equal,
-      added: before === undefined || before === null,
-      removed: after === undefined || after === null,
-      children,
-    };
+    return buildArrayNode(key, path, before, after, beforeSensitive, afterSensitive, afterUnknown, equal);
   }
   if (isRecord(before) || isRecord(after)) {
-    const keys = collectionKeys([before, after, beforeSensitive, afterSensitive, afterUnknown]);
-    const children = keys.map((childKey): DiffNode => buildDiffNode(
-      childKey,
-      path === "" ? String(childKey) : `${path}.${childKey}`,
-      childValue(before, childKey),
-      childValue(after, childKey),
-      childValue(beforeSensitive, childKey),
-      childValue(afterSensitive, childKey),
-      childValue(afterUnknown, childKey),
-    ));
-    return {
-      kind: "object",
-      key,
-      path,
-      before,
-      after,
-      unchanged: equal,
-      added: before === undefined || before === null,
-      removed: after === undefined || after === null,
-      children,
-    };
+    return buildObjectNode(key, path, before, after, beforeSensitive, afterSensitive, afterUnknown, equal);
   }
   return {
     kind: "leaf",
@@ -448,26 +479,184 @@ function emitArrayItemBlock(
     parts: [{ text: `${diffMarkerText[marker]} ${open}`, cls: diffMarkerClasses[marker] }],
     replacement: forcesReplacement(node.path),
   });
-  const childDepth = depth + 1;
-  const width = node.kind === "object" ? maxKeyWidth(node.children) : 0;
-  for (const child of node.children) {
-    flattenDiff(
-      child,
-      context,
-      force,
-      childDepth,
-      node.kind === "object" && child.key !== null ? padKeyText(child.key, width) : null,
-      node.kind === "array",
-      forcesReplacement,
-      lines,
-    );
-  }
+  flattenChildNodes(node, context, force, depth + 1, forcesReplacement, lines, node.kind === "object" ? maxKeyWidth(node.children) : 0);
   lines.push({
     depth,
     path: node.path,
     parts: [{ text: close, cls: "text-muted-foreground/70" }],
     replacement: false,
   });
+}
+
+function pushLeafReplacementLines(
+  node: Extract<DiffNode, { kind: "leaf" }>,
+  depth: number,
+  forcesReplacement: (path: string) => boolean,
+  lines: DiffLine[],
+): void {
+  lines.push({
+    depth,
+    path: node.path,
+    parts: [
+      { text: "- ", cls: diffMarkerClasses.del },
+      { text: formatValue(node.before), cls: "text-foreground/85" },
+      { text: ",", cls: "text-muted-foreground/70" },
+    ],
+    replacement: forcesReplacement(node.path),
+  });
+  lines.push({
+    depth,
+    path: node.path,
+    parts: [
+      { text: "+ ", cls: diffMarkerClasses.add },
+      { text: formatValue(node.after), cls: "text-foreground/85" },
+      { text: ",", cls: "text-muted-foreground/70" },
+    ],
+    replacement: forcesReplacement(node.path),
+  });
+}
+
+function leafValueParts(
+  node: Extract<DiffNode, { kind: "leaf" }>,
+  marker: DiffMarker | null,
+  keyText: string | null,
+): { text: string; cls: string }[] {
+  const parts: { text: string; cls: string }[] = [];
+  if (marker !== null) parts.push({ text: `${diffMarkerText[marker]} `, cls: diffMarkerClasses[marker] });
+  if (keyText !== null) {
+    parts.push({ text: keyText, cls: "text-foreground" });
+    parts.push({ text: " = ", cls: "text-muted-foreground/70" });
+  }
+  if (node.sensitive) {
+    parts.push({ text: "Sensitive value", cls: "font-medium italic text-muted-foreground" });
+  } else if (node.unknown) {
+    parts.push({ text: "Known after apply", cls: "font-medium italic text-primary" });
+  } else if (marker === "mod") {
+    parts.push({ text: formatValue(node.before), cls: "text-foreground/85" });
+    parts.push({ text: " -> ", cls: "text-muted-foreground/70" });
+    parts.push({ text: formatValue(node.after), cls: "text-foreground/85" });
+  } else {
+    parts.push({
+      text: formatValue(marker === "del" ? node.before : node.after),
+      cls: node.unchanged ? "text-muted-foreground" : "text-foreground/85",
+    });
+  }
+  return parts;
+}
+
+function flattenLeafNode(
+  node: Extract<DiffNode, { kind: "leaf" }>,
+  context: ReadonlySet<string>,
+  force: "add" | "del" | null,
+  depth: number,
+  keyText: string | null,
+  inArray: boolean,
+  forcesReplacement: (path: string) => boolean,
+  lines: DiffLine[],
+): void {
+  if (node.unchanged && force === null && !context.has(node.path)) return;
+  const marker = diffMarkerFor(node, force);
+  if (inArray && marker === "mod") {
+    pushLeafReplacementLines(node, depth, forcesReplacement, lines);
+    return;
+  }
+  const parts = leafValueParts(node, marker, keyText);
+  if (inArray) parts.push({ text: ",", cls: "text-muted-foreground/70" });
+  lines.push({ depth, path: node.path, parts, replacement: forcesReplacement(node.path) });
+}
+
+function flattenChildNodes(
+  node: Extract<DiffNode, { kind: "object" | "array" }>,
+  context: ReadonlySet<string>,
+  childForce: "add" | "del" | null,
+  depth: number,
+  forcesReplacement: (path: string) => boolean,
+  lines: DiffLine[],
+  width: number,
+): void {
+  for (const child of node.children) {
+    flattenDiff(
+      child,
+      context,
+      childForce,
+      depth,
+      node.kind === "object" && child.key !== null ? padKeyText(child.key, width) : null,
+      node.kind === "array",
+      forcesReplacement,
+      lines,
+    );
+  }
+}
+
+function flattenArrayForcedNode(
+  node: Extract<DiffNode, { kind: "object" | "array" }>,
+  context: ReadonlySet<string>,
+  force: "add" | "del" | null,
+  marker: DiffMarker | null,
+  childForce: "add" | "del" | null,
+  depth: number,
+  forcesReplacement: (path: string) => boolean,
+  lines: DiffLine[],
+): void {
+  if (marker === "mod" && force === null) {
+    emitArrayItemBlock(node, "del", context, depth, forcesReplacement, lines);
+    emitArrayItemBlock(node, "add", context, depth, forcesReplacement, lines);
+  } else {
+    emitArrayItemBlock(node, childForce ?? "del", context, depth, forcesReplacement, lines);
+  }
+}
+
+function flattenContainerChildren(
+  node: Extract<DiffNode, { kind: "object" | "array" }>,
+  context: ReadonlySet<string>,
+  childForce: "add" | "del" | null,
+  depth: number,
+  childDepth: number,
+  width: number,
+  marker: DiffMarker | null,
+  keyText: string | null,
+  forcesReplacement: (path: string) => boolean,
+  lines: DiffLine[],
+): void {
+  const open = node.kind === "array" ? "[" : "{";
+  const close = node.kind === "array" ? "]" : "}";
+  const keyedParts: { text: string; cls: string }[] = [];
+  if (marker !== null) keyedParts.push({ text: `${diffMarkerText[marker]} `, cls: diffMarkerClasses[marker] });
+  keyedParts.push({ text: keyText ?? "", cls: "text-foreground" });
+  keyedParts.push({ text: ` = ${open}`, cls: "text-muted-foreground/70" });
+  lines.push({ depth, path: node.path, parts: keyedParts, replacement: forcesReplacement(node.path) });
+  flattenChildNodes(node, context, childForce, childDepth, forcesReplacement, lines, width);
+  lines.push({ depth, path: node.path, parts: [{ text: close, cls: "text-muted-foreground/70" }], replacement: false });
+}
+
+function flattenContainerNode(
+  node: Extract<DiffNode, { kind: "object" | "array" }>,
+  context: ReadonlySet<string>,
+  force: "add" | "del" | null,
+  depth: number,
+  keyText: string | null,
+  inArray: boolean,
+  forcesReplacement: (path: string) => boolean,
+  lines: DiffLine[],
+): void {
+  const isRoot = node.key === null && keyText === null && !inArray;
+  if (!isRoot && node.unchanged && force === null) return;
+  const marker = diffMarkerFor(node, force);
+  const childForce: "add" | "del" | null = force ?? (node.added ? "add" : node.removed ? "del" : null);
+  const childDepth = depth + 1;
+  const width = node.kind === "object" ? maxKeyWidth(node.children) : 0;
+
+  if (isRoot) {
+    flattenChildNodes(node, context, childForce, depth, forcesReplacement, lines, width);
+    return;
+  }
+
+  if (inArray) {
+    flattenArrayForcedNode(node, context, force, marker, childForce, depth, forcesReplacement, lines);
+    return;
+  }
+
+  flattenContainerChildren(node, context, childForce, depth, childDepth, width, marker, keyText, forcesReplacement, lines);
 }
 
 function flattenDiff(
@@ -481,109 +670,11 @@ function flattenDiff(
   lines: DiffLine[],
 ): void {
   if (node.kind === "leaf") {
-    if (node.unchanged && force === null && !context.has(node.path)) return;
-    const marker = diffMarkerFor(node, force);
-    if (inArray && marker === "mod") {
-      lines.push({
-        depth,
-        path: node.path,
-        parts: [
-          { text: "- ", cls: diffMarkerClasses.del },
-          { text: formatValue(node.before), cls: "text-foreground/85" },
-          { text: ",", cls: "text-muted-foreground/70" },
-        ],
-        replacement: forcesReplacement(node.path),
-      });
-      lines.push({
-        depth,
-        path: node.path,
-        parts: [
-          { text: "+ ", cls: diffMarkerClasses.add },
-          { text: formatValue(node.after), cls: "text-foreground/85" },
-          { text: ",", cls: "text-muted-foreground/70" },
-        ],
-        replacement: forcesReplacement(node.path),
-      });
-      return;
-    }
-    const parts: { text: string; cls: string }[] = [];
-    if (marker !== null) parts.push({ text: `${diffMarkerText[marker]} `, cls: diffMarkerClasses[marker] });
-    if (keyText !== null) {
-      parts.push({ text: keyText, cls: "text-foreground" });
-      parts.push({ text: " = ", cls: "text-muted-foreground/70" });
-    }
-    if (node.sensitive) {
-      parts.push({ text: "Sensitive value", cls: "font-medium italic text-muted-foreground" });
-    } else if (node.unknown) {
-      parts.push({ text: "Known after apply", cls: "font-medium italic text-primary" });
-    } else if (marker === "mod") {
-      parts.push({ text: formatValue(node.before), cls: "text-foreground/85" });
-      parts.push({ text: " -> ", cls: "text-muted-foreground/70" });
-      parts.push({ text: formatValue(node.after), cls: "text-foreground/85" });
-    } else {
-      parts.push({
-        text: formatValue(marker === "del" ? node.before : node.after),
-        cls: node.unchanged ? "text-muted-foreground" : "text-foreground/85",
-      });
-    }
-    if (inArray) parts.push({ text: ",", cls: "text-muted-foreground/70" });
-    lines.push({ depth, path: node.path, parts, replacement: forcesReplacement(node.path) });
+    flattenLeafNode(node, context, force, depth, keyText, inArray, forcesReplacement, lines);
     return;
   }
 
-  const isRoot = node.key === null && keyText === null && !inArray;
-  if (!isRoot && node.unchanged && force === null) return;
-  const marker = diffMarkerFor(node, force);
-  const childForce: "add" | "del" | null = force ?? (node.added ? "add" : node.removed ? "del" : null);
-  const childDepth = depth + 1;
-  const width = node.kind === "object" ? maxKeyWidth(node.children) : 0;
-
-  if (isRoot) {
-    for (const child of node.children) {
-      flattenDiff(
-        child,
-        context,
-        childForce,
-        depth,
-        node.kind === "object" && child.key !== null ? padKeyText(child.key, width) : null,
-        node.kind === "array",
-        forcesReplacement,
-        lines,
-      );
-    }
-    return;
-  }
-
-  if (inArray) {
-    if (marker === "mod" && force === null) {
-      emitArrayItemBlock(node, "del", context, depth, forcesReplacement, lines);
-      emitArrayItemBlock(node, "add", context, depth, forcesReplacement, lines);
-    } else {
-      emitArrayItemBlock(node, childForce ?? "del", context, depth, forcesReplacement, lines);
-    }
-    return;
-  }
-
-  const open = node.kind === "array" ? "[" : "{";
-  const close = node.kind === "array" ? "]" : "}";
-  const keyedParts: { text: string; cls: string }[] = [];
-  if (marker !== null) keyedParts.push({ text: `${diffMarkerText[marker]} `, cls: diffMarkerClasses[marker] });
-  keyedParts.push({ text: keyText ?? "", cls: "text-foreground" });
-  keyedParts.push({ text: ` = ${open}`, cls: "text-muted-foreground/70" });
-  lines.push({ depth, path: node.path, parts: keyedParts, replacement: forcesReplacement(node.path) });
-  for (const child of node.children) {
-    flattenDiff(
-      child,
-      context,
-      childForce,
-      childDepth,
-      node.kind === "object" && child.key !== null ? padKeyText(child.key, width) : null,
-      node.kind === "array",
-      forcesReplacement,
-      lines,
-    );
-  }
-  lines.push({ depth, path: node.path, parts: [{ text: close, cls: "text-muted-foreground/70" }], replacement: false });
+  flattenContainerNode(node, context, force, depth, keyText, inArray, forcesReplacement, lines);
 }
 
 export function AttributeDiff({
@@ -954,6 +1045,277 @@ function OutputChanges({ outputs }: Readonly<{ outputs: readonly [string, Change
   );
 }
 
+function settleLoadFailure(
+  reason: unknown,
+  shouldPoll: boolean,
+  planStatus: string | undefined,
+  status: string,
+  setLoadState: (state: LoadState) => void,
+  scheduleDegraded: () => void,
+): void {
+  if (reason instanceof ApiError && reason.status === 404 && shouldPoll) {
+    setLoadState({ kind: "waiting" });
+    scheduleDegraded();
+    return;
+  }
+  if (reason instanceof ApiError
+    && reason.status === 404
+    && PLANLESS_TERMINAL_STATUSES.has(status)
+    && planStatus !== "finished") {
+    setLoadState({ kind: "unavailable" });
+    return;
+  }
+  setLoadState({
+    kind: "error",
+    message: reason instanceof ApiError && reason.status === 404
+      ? "Plan output is not available for this run."
+      : reason instanceof Error
+        ? reason.message
+        : "Failed to load structured plan output.",
+  });
+}
+
+function PlanLoadingState({ planStatus }: Readonly<{ planStatus?: string | undefined }>): React.JSX.Element {
+  if (planStatus === "running") return <></>;
+  return (
+    <div role="status" className="flex items-center gap-2 border-t border-border px-5 py-4 text-sm text-muted-foreground">
+      <Spinner className="size-4" />
+      Loading structured plan output…
+    </div>
+  );
+}
+
+function PlanWaitingState({ planStatus }: Readonly<{ planStatus?: string | undefined }>): React.JSX.Element {
+  if (planStatus === "running") return <></>;
+  return (
+    <div role="status" className="flex items-start gap-3 border-t border-border bg-primary/10 px-5 py-4 text-sm text-muted-foreground">
+      <Spinner className="mt-0.5 size-4 text-primary" />
+      <div>
+        <p className="font-medium text-foreground/85">Preparing structured plan output…</p>
+        <p className="mt-0.5 text-xs">This view will update automatically when the plan is ready.</p>
+      </div>
+    </div>
+  );
+}
+
+function PlanUnavailableState(): React.JSX.Element {
+  return (
+    <div role="status" className="border-t border-border bg-muted px-5 py-4">
+      <p className="text-sm font-medium text-foreground/85">Plan output was not produced for this run.</p>
+    </div>
+  );
+}
+
+function PlanErrorState({ message, onRetry }: Readonly<{ message: string; onRetry: () => void }>): React.JSX.Element {
+  return (
+    <div role="alert" className="border-t border-border bg-destructive/10 px-5 py-4">
+      <p className="text-sm font-medium text-destructive">Could not load plan output</p>
+      <p className="mt-1 text-xs text-destructive">{message}</p>
+      <button
+        type="button"
+        className="mt-3 rounded border border-destructive/30 bg-background px-2.5 py-1 text-xs font-medium text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={onRetry}
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+
+type PlanDerived = {
+  planJson: PlanJson;
+  changedResources: ResourceChange[];
+  driftResources: ResourceChange[];
+  counts: { add: number; change: number; destroy: number; replace: number };
+  filteredResources: ResourceChange[];
+  filteredDrift: ResourceChange[];
+  importCount: number;
+  moveCount: number;
+  outputs: [string, Change][];
+  actionInvocations: ActionInvocation[];
+  operationSummary: { count: number; label: string; symbol: string; className: string }[];
+  opCounts: {
+    create: number;
+    update: number;
+    delete: number;
+    replace: number;
+    read: number;
+    import: number;
+    move: number;
+    remove: number;
+    unsupported: number;
+  };
+};
+
+function operationForSummaryLabel(label: string): Operation | null {
+  if (label === "to remove from state") return "remove";
+  if (label === "unsupported operations") return "unsupported";
+  if (label === "to move") return "move";
+  if (label === "to import") return "import";
+  if (label === "to create") return "create";
+  if (label === "to change") return "update";
+  if (label === "to destroy") return "delete";
+  return null;
+}
+
+function PlanOperationSummary({
+  operationSummary,
+  onSelect,
+}: Readonly<{
+  operationSummary: PlanDerived["operationSummary"];
+  onSelect: (label: string) => void;
+}>): React.JSX.Element {
+  return (
+    <div aria-label="Resource change summary" className="flex flex-wrap gap-2 border-b border-border p-4">
+      {operationSummary.length === 0 ? (
+        <div aria-label="No resource changes" className="w-full rounded-md bg-muted px-3 py-2 text-sm font-medium text-muted-foreground">
+          No resource changes
+        </div>
+      ) : operationSummary.map((item): React.JSX.Element => (
+        <button
+          type="button"
+          key={item.label}
+          aria-label={`${item.count} ${item.label}`}
+          aria-controls="plan-resource-list"
+          title="Show these changes"
+          className={`inline-flex items-center gap-1 rounded px-1 text-xs font-semibold leading-5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${item.className}`}
+          onClick={(): void => {
+            onSelect(item.label);
+          }}
+        >
+          <span aria-hidden="true">{item.symbol}</span>
+          {item.count} <span className="font-normal">{item.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function PlanExtraCounts({
+  replaceCount,
+  moveCount,
+  driftCount,
+  actionCount,
+}: Readonly<{
+  replaceCount: number;
+  moveCount: number;
+  driftCount: number;
+  actionCount: number;
+}>): React.JSX.Element | null {
+  if (replaceCount === 0 && moveCount === 0 && driftCount === 0 && actionCount === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-2 border-b border-border px-4 py-2 text-xs text-muted-foreground">
+      {replaceCount > 0 && <span>{replaceCount} replacement{replaceCount === 1 ? "" : "s"}</span>}
+      {moveCount > 0 && <span>{moveCount} move{moveCount === 1 ? "" : "s"}</span>}
+      {driftCount > 0 && <span>{driftCount} drifted resource{driftCount === 1 ? "" : "s"}</span>}
+      {actionCount > 0 && (
+        <span>{actionCount} action{actionCount === 1 ? "" : "s"} to invoke</span>
+      )}
+    </div>
+  );
+}
+
+function PlanResourceList({
+  filteredResources,
+  changedResources,
+  driftResources,
+  actionInvocations,
+  outputs,
+  planStatus,
+}: Readonly<{
+  filteredResources: PlanDerived["filteredResources"];
+  changedResources: PlanDerived["changedResources"];
+  driftResources: PlanDerived["driftResources"];
+  actionInvocations: PlanDerived["actionInvocations"];
+  outputs: PlanDerived["outputs"];
+  planStatus?: string | undefined;
+}>): React.JSX.Element {
+  if (filteredResources.length !== 0) {
+    return (
+      <div id="plan-resource-list" aria-label={`Resource list, ${filteredResources.length} items`}>
+        {filteredResources.map((resource): React.JSX.Element => (
+          <ResourceRow key={resourceIdentity(resource)} resource={resource} />
+        ))}
+      </div>
+    );
+  }
+  const showMascot = changedResources.length === 0
+    && driftResources.length === 0
+    && actionInvocations.length === 0
+    && outputs.length === 0
+    && planStatus === "finished";
+  return (
+    <div className="px-5 py-6 text-center text-sm text-muted-foreground">
+      {showMascot && <Terrence pose="healthy" detail="small" className="mx-auto mb-3 w-32" />}
+      <p>{changedResources.length === 0
+        ? actionInvocations.length === 0
+          ? "This plan has no resource changes."
+          : `This plan has no resource changes, but it will invoke ${actionInvocations.length} action${actionInvocations.length === 1 ? "" : "s"}.`
+        : "No resources match these filters."}</p>
+    </div>
+  );
+}
+
+function PlanDriftSection({
+  driftResources,
+  filteredDrift,
+}: Readonly<{
+  driftResources: PlanDerived["driftResources"];
+  filteredDrift: PlanDerived["filteredDrift"];
+}>): React.JSX.Element | null {
+  if (driftResources.length === 0) return null;
+  return (
+    <details className="border-t border-border">
+      <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+        Resource drift <span className="font-normal text-muted-foreground">({filteredDrift.length})</span>
+      </summary>
+      {filteredDrift.length === 0 ? (
+        <p className="border-t border-border/60 px-5 py-4 text-sm text-muted-foreground">
+          No drifted resources match these filters.
+        </p>
+      ) : (
+        <div className="border-t border-border/60">
+          {filteredDrift.map((resource): React.JSX.Element => (
+            <ResourceRow key={resourceIdentity(resource)} resource={resource} />
+          ))}
+        </div>
+      )}
+    </details>
+  );
+}
+
+function PlanSummaryHeader({
+  planJson,
+  summaryCopied,
+  onCopySummary,
+}: Readonly<{
+  planJson: PlanJson;
+  summaryCopied: boolean;
+  onCopySummary: () => void;
+}>): React.JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted px-5 py-2.5">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          aria-label="Copy plan summary as markdown"
+          title={summaryCopied ? "Copied!" : "Copy plan summary as markdown"}
+          className="rounded border border-border bg-background p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={onCopySummary}
+        >
+          {summaryCopied
+            ? <Check className="size-3.5" aria-hidden="true" />
+            : <Copy className="size-3.5" aria-hidden="true" />}
+        </button>
+      </div>
+      <span className="text-xs text-muted-foreground">
+        Terraform {planJson.terraform_version ?? "unknown"}
+        {planJson.format_version !== undefined && ` · JSON ${planJson.format_version}`}
+      </span>
+    </div>
+  );
+}
+
 export function PlanOutput({
   runId,
   status,
@@ -1036,26 +1398,7 @@ export function PlanOutput({
         setLoadState({ kind: "ready", plan });
       } catch (reason: unknown) {
         if (cancelled) return;
-        if (reason instanceof ApiError && reason.status === 404 && shouldPoll) {
-          setLoadState({ kind: "waiting" });
-          scheduleDegraded();
-          return;
-        }
-        if (reason instanceof ApiError
-          && reason.status === 404
-          && PLANLESS_TERMINAL_STATUSES.has(status)
-          && planStatus !== "finished") {
-          setLoadState({ kind: "unavailable" });
-          return;
-        }
-        setLoadState({
-          kind: "error",
-          message: reason instanceof ApiError && reason.status === 404
-            ? "Plan output is not available for this run."
-            : reason instanceof Error
-              ? reason.message
-              : "Failed to load structured plan output.",
-        });
+        settleLoadFailure(reason, shouldPoll, planStatus, status, setLoadState, scheduleDegraded);
       }
     };
     loadRef.current = (): void => { void load(); };
@@ -1090,7 +1433,7 @@ export function PlanOutput({
       : null);
   }, [loadState, onSummaryChange, runId]);
 
-  const derived = useMemo(() => {
+  const derived = useMemo((): PlanDerived | null => {
     if (loadState.kind !== "ready") return null;
     const planJson = loadState.plan;
     const changedResources = (planJson.resource_changes ?? [])
@@ -1168,52 +1511,26 @@ export function PlanOutput({
     };
   }, [loadState, search, selectedOps]);
   if (activeRunId.current !== runId || loadState.kind === "loading") {
-    if (planStatus === "running") return <></>;
-    return (
-      <div role="status" className="flex items-center gap-2 border-t border-border px-5 py-4 text-sm text-muted-foreground">
-        <Spinner className="size-4" />
-        Loading structured plan output…
-      </div>
-    );
+    return <PlanLoadingState planStatus={planStatus} />;
   }
 
   if (loadState.kind === "waiting") {
-    if (planStatus === "running") return <></>;
-    return (
-      <div role="status" className="flex items-start gap-3 border-t border-border bg-primary/10 px-5 py-4 text-sm text-muted-foreground">
-        <Spinner className="mt-0.5 size-4 text-primary" />
-        <div>
-          <p className="font-medium text-foreground/85">Preparing structured plan output…</p>
-          <p className="mt-0.5 text-xs">This view will update automatically when the plan is ready.</p>
-        </div>
-      </div>
-    );
+    return <PlanWaitingState planStatus={planStatus} />;
   }
 
   if (loadState.kind === "unavailable") {
-    return (
-      <div role="status" className="border-t border-border bg-muted px-5 py-4">
-        <p className="text-sm font-medium text-foreground/85">Plan output was not produced for this run.</p>
-      </div>
-    );
+    return <PlanUnavailableState />;
   }
 
   if (loadState.kind === "error") {
     return (
-      <div role="alert" className="border-t border-border bg-destructive/10 px-5 py-4">
-        <p className="text-sm font-medium text-destructive">Could not load plan output</p>
-        <p className="mt-1 text-xs text-destructive">{loadState.message}</p>
-        <button
-          type="button"
-          className="mt-3 rounded border border-destructive/30 bg-background px-2.5 py-1 text-xs font-medium text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={(): void => {
-            setLoadState({ kind: "loading" });
-            setRetry((value): number => value + 1);
-          }}
-        >
-          Try again
-        </button>
-      </div>
+      <PlanErrorState
+        message={loadState.message}
+        onRetry={(): void => {
+          setLoadState({ kind: "loading" });
+          setRetry((value): number => value + 1);
+        }}
+      />
     );
   }
 
@@ -1234,88 +1551,39 @@ export function PlanOutput({
     opCounts,
   } = derived;
 
+  const handleSelectOperation = (label: string): void => {
+    const operation = operationForSummaryLabel(label);
+    if (operation !== null) {
+      // Replacement resources contribute to both the create and
+      // destroy summary counts, so keep them in either summary
+      // filter as well.
+      setSelectedOps(new Set(
+        operation === "create" || operation === "delete"
+          ? [operation, "replace"]
+          : [operation],
+      ));
+    }
+    document.getElementById("plan-resource-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const handleCopySummary = (): void => {
+    void copyTextToClipboard(planSummaryMarkdown({ ...counts, importCount, moveCount, removeCount: opCounts.remove, unsupportedCount: opCounts.unsupported })).then((didCopy): void => {
+      if (!didCopy || !mountedRef.current) return;
+      setSummaryCopied(true);
+      if (summaryCopiedResetTimerRef.current !== undefined) window.clearTimeout(summaryCopiedResetTimerRef.current);
+      summaryCopiedResetTimerRef.current = window.setTimeout((): void => {
+        summaryCopiedResetTimerRef.current = undefined;
+        setSummaryCopied(false);
+      }, 2_000);
+    });
+  };
+
   return (
     <section aria-label="Plan output" className="border-t border-border">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted px-5 py-2.5">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            aria-label="Copy plan summary as markdown"
-            title={summaryCopied ? "Copied!" : "Copy plan summary as markdown"}
-            className="rounded border border-border bg-background p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={(): void => {
-              void copyTextToClipboard(planSummaryMarkdown({ ...counts, importCount, moveCount, removeCount: opCounts.remove, unsupportedCount: opCounts.unsupported })).then((didCopy): void => {
-                if (!didCopy || !mountedRef.current) return;
-                setSummaryCopied(true);
-                if (summaryCopiedResetTimerRef.current !== undefined) window.clearTimeout(summaryCopiedResetTimerRef.current);
-                summaryCopiedResetTimerRef.current = window.setTimeout((): void => {
-                  summaryCopiedResetTimerRef.current = undefined;
-                  setSummaryCopied(false);
-                }, 2_000);
-              });
-            }}
-          >
-            {summaryCopied
-              ? <Check className="size-3.5" aria-hidden="true" />
-              : <Copy className="size-3.5" aria-hidden="true" />}
-          </button>
-        </div>
-        <span className="text-xs text-muted-foreground">
-          Terraform {planJson.terraform_version ?? "unknown"}
-          {planJson.format_version !== undefined && ` · JSON ${planJson.format_version}`}
-        </span>
-      </div>
+      <PlanSummaryHeader planJson={planJson} summaryCopied={summaryCopied} onCopySummary={handleCopySummary} />
 
-      <div aria-label="Resource change summary" className="flex flex-wrap gap-2 border-b border-border p-4">
-        {operationSummary.length === 0 ? (
-          <div aria-label="No resource changes" className="w-full rounded-md bg-muted px-3 py-2 text-sm font-medium text-muted-foreground">
-            No resource changes
-          </div>
-        ) : operationSummary.map((item): React.JSX.Element => (
-          <button
-            type="button"
-            key={item.label}
-            aria-label={`${item.count} ${item.label}`}
-            aria-controls="plan-resource-list"
-            title="Show these changes"
-            className={`inline-flex items-center gap-1 rounded px-1 text-xs font-semibold leading-5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${item.className}`}
-            onClick={(): void => {
-              const operation = item.label === "to remove from state" ? "remove"
-                : item.label === "unsupported operations" ? "unsupported"
-                  : item.label === "to move" ? "move"
-                    : item.label === "to import" ? "import"
-                      : item.label === "to create" ? "create"
-                        : item.label === "to change" ? "update"
-                          : item.label === "to destroy" ? "delete"
-                            : null;
-              if (operation !== null) {
-                // Replacement resources contribute to both the create and
-                // destroy summary counts, so keep them in either summary
-                // filter as well.
-                setSelectedOps(new Set(
-                  operation === "create" || operation === "delete"
-                    ? [operation as Operation, "replace"]
-                    : [operation as Operation],
-                ));
-              }
-              document.getElementById("plan-resource-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
-            }}
-          >
-            <span aria-hidden="true">{item.symbol}</span>
-            {item.count} <span className="font-normal">{item.label}</span>
-          </button>
-        ))}
-      </div>
-      {(counts.replace > 0 || moveCount > 0 || driftResources.length > 0 || actionInvocations.length > 0) && (
-        <div className="flex flex-wrap gap-2 border-b border-border px-4 py-2 text-xs text-muted-foreground">
-          {counts.replace > 0 && <span>{counts.replace} replacement{counts.replace === 1 ? "" : "s"}</span>}
-          {moveCount > 0 && <span>{moveCount} move{moveCount === 1 ? "" : "s"}</span>}
-          {driftResources.length > 0 && <span>{driftResources.length} drifted resource{driftResources.length === 1 ? "" : "s"}</span>}
-          {actionInvocations.length > 0 && (
-            <span>{actionInvocations.length} action{actionInvocations.length === 1 ? "" : "s"} to invoke</span>
-          )}
-        </div>
-      )}
+      <PlanOperationSummary operationSummary={operationSummary} onSelect={handleSelectOperation} />
+      <PlanExtraCounts replaceCount={counts.replace} moveCount={moveCount} driftCount={driftResources.length} actionCount={actionInvocations.length} />
 
       <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border px-4 py-3">
         <div className="flex flex-1 flex-wrap gap-2">
@@ -1348,41 +1616,16 @@ export function PlanOutput({
         </span>
       </div>
 
-      {filteredResources.length === 0 ? (
-        <div className="px-5 py-6 text-center text-sm text-muted-foreground">
-          {changedResources.length === 0 && driftResources.length === 0 && actionInvocations.length === 0 && outputs.length === 0 && planStatus === "finished" && <Terrence pose="healthy" detail="small" className="mx-auto mb-3 w-32" />}
-          <p>{changedResources.length === 0
-            ? actionInvocations.length === 0
-              ? "This plan has no resource changes."
-              : `This plan has no resource changes, but it will invoke ${actionInvocations.length} action${actionInvocations.length === 1 ? "" : "s"}.`
-            : "No resources match these filters."}</p>
-        </div>
-      ) : (
-        <div id="plan-resource-list" aria-label={`Resource list, ${filteredResources.length} items`}>
-          {filteredResources.map((resource): React.JSX.Element => (
-            <ResourceRow key={resourceIdentity(resource)} resource={resource} />
-          ))}
-        </div>
-      )}
+      <PlanResourceList
+        filteredResources={filteredResources}
+        changedResources={changedResources}
+        driftResources={driftResources}
+        actionInvocations={actionInvocations}
+        outputs={outputs}
+        planStatus={planStatus}
+      />
 
-      {driftResources.length > 0 && (
-        <details className="border-t border-border">
-          <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-            Resource drift <span className="font-normal text-muted-foreground">({filteredDrift.length})</span>
-          </summary>
-          {filteredDrift.length === 0 ? (
-            <p className="border-t border-border/60 px-5 py-4 text-sm text-muted-foreground">
-              No drifted resources match these filters.
-            </p>
-          ) : (
-            <div className="border-t border-border/60">
-              {filteredDrift.map((resource): React.JSX.Element => (
-                <ResourceRow key={resourceIdentity(resource)} resource={resource} />
-              ))}
-            </div>
-          )}
-        </details>
-      )}
+      <PlanDriftSection driftResources={driftResources} filteredDrift={filteredDrift} />
 
       <ActionInvocations actions={actionInvocations} />
       <OutputChanges outputs={outputs} />

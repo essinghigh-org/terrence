@@ -67,6 +67,113 @@ const enforcementOptions = [
 const messageFrom = (error: unknown, fallback: string): string =>
   error instanceof Error ? error.message : fallback;
 
+type BindingLabels = Readonly<{
+  taskId: string;
+  taskName: string;
+  taskDescription: string | null | undefined;
+  taskEnabled: boolean | undefined;
+  stageLabel: string;
+  enforcementLabel: string;
+}>;
+
+function bindingLabels(binding: WorkspaceRunTask, task: RunTask | undefined): BindingLabels {
+  const taskId = binding.relationships["run-task"].data.id;
+  return {
+    taskId,
+    taskName: task?.attributes.name ?? binding.attributes["run-task-name"] ?? taskId,
+    taskDescription: task?.attributes.description ?? binding.attributes["run-task-description"],
+    taskEnabled: task?.attributes.enabled ?? binding.attributes["run-task-enabled"],
+    stageLabel: stageOptions.find(([value]): boolean => value === binding.attributes.stage)?.[1]
+      ?? binding.attributes.stage,
+    enforcementLabel: enforcementOptions.find(([value]): boolean => value === binding.attributes["enforcement-level"])?.[1]
+      ?? binding.attributes["enforcement-level"],
+  };
+}
+
+function AttachRunTaskForm({
+  loading,
+  saving,
+  availableTasks,
+  selectedTaskId,
+  onSelectedTaskIdChange,
+  stage,
+  onStageChange,
+  enforcementLevel,
+  onEnforcementChange,
+  onSubmit,
+}: Readonly<{
+  loading: boolean;
+  saving: string | null;
+  availableTasks: RunTask[];
+  selectedTaskId: string;
+  onSelectedTaskIdChange: (value: string) => void;
+  stage: string;
+  onStageChange: (value: string) => void;
+  enforcementLevel: string;
+  onEnforcementChange: (value: string) => void;
+  onSubmit: (event: React.SyntheticEvent) => Promise<void>;
+}>): React.JSX.Element {
+  const controlsDisabled = loading || saving !== null;
+  return (
+    <form onSubmit={onSubmit}>
+      <FieldGroup className="md:grid md:grid-cols-3">
+        <Field data-disabled={controlsDisabled}>
+          <FieldLabel htmlFor="workspace-run-task">Run task</FieldLabel>
+          <Select
+            id="workspace-run-task"
+            value={selectedTaskId}
+            onValueChange={onSelectedTaskIdChange}
+            disabled={controlsDisabled || availableTasks.length === 0}
+          >
+            <SelectItem value="">
+              {availableTasks.length === 0 ? "No available run tasks" : "Select a run task"}
+            </SelectItem>
+            {availableTasks.map((task: RunTask): React.JSX.Element => (
+              <SelectItem key={task.id} value={task.id}>
+                {task.attributes.name}
+              </SelectItem>
+            ))}
+          </Select>
+        </Field>
+        <Field data-disabled={controlsDisabled}>
+          <FieldLabel htmlFor="workspace-run-task-stage">Stage</FieldLabel>
+          <Select
+            id="workspace-run-task-stage"
+            value={stage}
+            onValueChange={onStageChange}
+            disabled={controlsDisabled}
+          >
+            {stageOptions.map(([value, label]): React.JSX.Element => (
+              <SelectItem key={value} value={value}>{label}</SelectItem>
+            ))}
+          </Select>
+        </Field>
+        <Field data-disabled={controlsDisabled}>
+          <FieldLabel htmlFor="workspace-run-task-enforcement">Enforcement</FieldLabel>
+          <Select
+            id="workspace-run-task-enforcement"
+            value={enforcementLevel}
+            onValueChange={onEnforcementChange}
+            disabled={controlsDisabled}
+          >
+            {enforcementOptions.map(([value, label]): React.JSX.Element => (
+              <SelectItem key={value} value={value}>{label}</SelectItem>
+            ))}
+          </Select>
+        </Field>
+        <Button
+          type="submit"
+          className="self-start md:col-span-3"
+          disabled={selectedTaskId === "" || saving !== null}
+        >
+          {saving === "attach" && <Spinner data-icon="inline-start" />}
+          {saving === "attach" ? "Attaching" : "Attach run task"}
+        </Button>
+      </FieldGroup>
+    </form>
+  );
+}
+
 export function WorkspaceRunTasks({
   orgName,
   workspaceId,
@@ -200,62 +307,18 @@ export function WorkspaceRunTasks({
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {canManage ? (
-          <form onSubmit={attach}>
-            <FieldGroup className="md:grid md:grid-cols-3">
-              <Field data-disabled={loading || saving !== null}>
-                <FieldLabel htmlFor="workspace-run-task">Run task</FieldLabel>
-                <Select
-                  id="workspace-run-task"
-                  value={selectedTaskId}
-                  onValueChange={setSelectedTaskId}
-                  disabled={loading || saving !== null || availableTasks.length === 0}
-                >
-                  <SelectItem value="">
-                    {availableTasks.length === 0 ? "No available run tasks" : "Select a run task"}
-                  </SelectItem>
-                  {availableTasks.map((task: RunTask): React.JSX.Element => (
-                    <SelectItem key={task.id} value={task.id}>
-                      {task.attributes.name}
-                    </SelectItem>
-                  ))}
-                </Select>
-              </Field>
-              <Field data-disabled={loading || saving !== null}>
-                <FieldLabel htmlFor="workspace-run-task-stage">Stage</FieldLabel>
-                <Select
-                  id="workspace-run-task-stage"
-                  value={stage}
-                  onValueChange={setStage}
-                  disabled={loading || saving !== null}
-                >
-                  {stageOptions.map(([value, label]): React.JSX.Element => (
-                    <SelectItem key={value} value={value}>{label}</SelectItem>
-                  ))}
-                </Select>
-              </Field>
-              <Field data-disabled={loading || saving !== null}>
-                <FieldLabel htmlFor="workspace-run-task-enforcement">Enforcement</FieldLabel>
-                <Select
-                  id="workspace-run-task-enforcement"
-                  value={enforcementLevel}
-                  onValueChange={setEnforcementLevel}
-                  disabled={loading || saving !== null}
-                >
-                  {enforcementOptions.map(([value, label]): React.JSX.Element => (
-                    <SelectItem key={value} value={value}>{label}</SelectItem>
-                  ))}
-                </Select>
-              </Field>
-              <Button
-                type="submit"
-                className="self-start md:col-span-3"
-                disabled={selectedTaskId === "" || saving !== null}
-              >
-                {saving === "attach" && <Spinner data-icon="inline-start" />}
-                {saving === "attach" ? "Attaching" : "Attach run task"}
-              </Button>
-            </FieldGroup>
-          </form>
+          <AttachRunTaskForm
+            loading={loading}
+            saving={saving}
+            availableTasks={availableTasks}
+            selectedTaskId={selectedTaskId}
+            onSelectedTaskIdChange={(value: string): void => { setSelectedTaskId(value); }}
+            stage={stage}
+            onStageChange={(value: string): void => { setStage(value); }}
+            enforcementLevel={enforcementLevel}
+            onEnforcementChange={(value: string): void => { setEnforcementLevel(value); }}
+            onSubmit={attach}
+          />
         ) : (
           <FieldDescription>
             You can view attached run tasks, but only workspace administrators with run task access can change them.
@@ -291,18 +354,8 @@ export function WorkspaceRunTasks({
                 </TableRow>
               )}
               {!loading && bindings.map((binding: WorkspaceRunTask): React.JSX.Element => {
-                const taskId = binding.relationships["run-task"].data.id;
-                const task = tasksById.get(taskId);
-                const taskName = task?.attributes.name ?? binding.attributes["run-task-name"] ?? taskId;
-                const taskDescription = task?.attributes.description
-                  ?? binding.attributes["run-task-description"];
-                const taskEnabled = task?.attributes.enabled
-                  ?? binding.attributes["run-task-enabled"];
-                const stageLabel = stageOptions.find(([value]): boolean =>
-                  value === binding.attributes.stage)?.[1] ?? binding.attributes.stage;
-                const enforcementLabel = enforcementOptions.find(([value]): boolean =>
-                  value === binding.attributes["enforcement-level"])?.[1]
-                  ?? binding.attributes["enforcement-level"];
+                const labels = bindingLabels(binding, tasksById.get(binding.relationships["run-task"].data.id));
+                const { taskId, taskName, taskDescription, taskEnabled, stageLabel, enforcementLabel } = labels;
                 return (
                   <TableRow key={binding.id}>
                     <TableCell>

@@ -247,10 +247,20 @@ export { validOidcIssuer } from "../../lib/settings-contract";
 export function normalizeIssuer(value: string): string {
   return value.trim();
 }
-export function samlInput(
-  attributes: Readonly<Record<string, unknown>>,
-  current: SamlSettings,
-): Readonly<{ values: typeof samlSettings.$inferInsert }> | Readonly<{ error: string }> {
+type SamlFieldValues = Readonly<{
+  idpCert: string | null;
+  sloEndpointUrl: string | null;
+  ssoEndpointUrl: string | null;
+  idpEntityId: string | null;
+  attrUsername: string;
+  attrEmail: string;
+  attrGroups: string;
+  attrSiteAdmin: string;
+  siteAdminRole: string;
+  enabled: boolean;
+}>;
+
+function checkSamlTypes(attributes: Readonly<Record<string, unknown>>): Readonly<{ ok: true }> | Readonly<{ error: string }> {
   for (const key of ["enabled", "debug"] as const) {
     if (attributes[key] !== undefined && typeof attributes[key] !== "boolean") {
       return { error: `${key} must be a boolean` };
@@ -275,6 +285,13 @@ export function samlInput(
   if (timeout !== undefined && !(typeof timeout === "number" && Number.isSafeInteger(timeout) && timeout >= 0)) {
     return { error: "sso-api-token-session-timeout must be a non-negative integer" };
   }
+  return { ok: true };
+}
+
+function resolveSamlFields(
+  attributes: Readonly<Record<string, unknown>>,
+  current: SamlSettings,
+): SamlFieldValues {
   const nullableString = (key: "idp-cert" | "idp-entity-id" | "slo-endpoint-url" | "sso-endpoint-url", fallback: string | null): string | null =>
     attributes[key] === undefined ? fallback : typeof attributes[key] === "string" ? attributes[key].trim() : null;
   // idp-cert must round-trip byte-for-byte (the provider compares it exactly,
@@ -291,41 +308,71 @@ export function samlInput(
   // The tfe_saml_settings resource does not expose idp-entity-id; the reference format derives a
   // default entity ID when the SSO endpoint is known.
   const idpEntityId = nullableString("idp-entity-id", current.idpEntityId) ?? ssoEndpointUrl;
-  const attrUsername = requiredString("attr-username", current.attrUsername);
-  const attrEmail = requiredString("attr-email", current.attrEmail);
-  const attrGroups = requiredString("attr-groups", current.attrGroups);
-  const attrSiteAdmin = requiredString("attr-site-admin", current.attrSiteAdmin);
-  const siteAdminRole = requiredString("site-admin-role", current.siteAdminRole);
-  const enabled = typeof attributes["enabled"] === "boolean" ? attributes["enabled"] : current.enabled;
+  return {
+    idpCert,
+    sloEndpointUrl,
+    ssoEndpointUrl,
+    idpEntityId,
+    attrUsername: requiredString("attr-username", current.attrUsername),
+    attrEmail: requiredString("attr-email", current.attrEmail),
+    attrGroups: requiredString("attr-groups", current.attrGroups),
+    attrSiteAdmin: requiredString("attr-site-admin", current.attrSiteAdmin),
+    siteAdminRole: requiredString("site-admin-role", current.siteAdminRole),
+    enabled: typeof attributes["enabled"] === "boolean" ? attributes["enabled"] : current.enabled,
+  };
+}
+
+function checkSamlFormats(fields: SamlFieldValues): Readonly<{ ok: true }> | Readonly<{ error: string }> {
+  const { idpCert, sloEndpointUrl, ssoEndpointUrl } = fields;
   if (idpCert !== null && idpCert !== "" && (
     !idpCert.includes("-----BEGIN CERTIFICATE-----")
     || !idpCert.includes("-----END CERTIFICATE-----")
   )) return { error: "idp-cert must be a PEM encoded X.509 certificate" };
   if (sloEndpointUrl !== null && sloEndpointUrl !== "" && !validHttpsUrl(sloEndpointUrl)) return { error: "slo-endpoint-url must be an HTTPS URL" };
   if (ssoEndpointUrl !== null && ssoEndpointUrl !== "" && !validHttpsUrl(ssoEndpointUrl)) return { error: "sso-endpoint-url must be an HTTPS URL" };
+  return { ok: true };
+}
+
+function checkSamlRequirements(fields: SamlFieldValues): Readonly<{ ok: true }> | Readonly<{ error: string }> {
+  const { idpCert, idpEntityId, ssoEndpointUrl, attrUsername, attrEmail, attrGroups, attrSiteAdmin, siteAdminRole, enabled } = fields;
   if (attrUsername === "" || attrEmail === "" || attrGroups === "" || attrSiteAdmin === "" || siteAdminRole === "") {
     return { error: "attr-username, attr-email, attr-groups, attr-site-admin, and site-admin-role must not be empty" };
   }
   if (enabled && (idpCert === null || idpCert === "" || idpEntityId === null || idpEntityId === "" || ssoEndpointUrl === null || ssoEndpointUrl === "")) {
     return { error: "idp-cert, idp-entity-id, and sso-endpoint-url are required when SAML is enabled" };
   }
+  return { ok: true };
+}
+
+export function samlInput(
+  attributes: Readonly<Record<string, unknown>>,
+  current: SamlSettings,
+): Readonly<{ values: typeof samlSettings.$inferInsert }> | Readonly<{ error: string }> {
+  const types = checkSamlTypes(attributes);
+  if ("error" in types) return types;
+  const fields = resolveSamlFields(attributes, current);
+  const formats = checkSamlFormats(fields);
+  if ("error" in formats) return formats;
+  const requirements = checkSamlRequirements(fields);
+  if ("error" in requirements) return requirements;
+  const timeout = attributes["sso-api-token-session-timeout"];
   return {
     values: {
       id: SAML_SETTINGS_ID,
-      enabled,
+      enabled: fields.enabled,
       debug: typeof attributes["debug"] === "boolean" ? attributes["debug"] : current.debug,
-      oldIdpCert: idpCert !== null && idpCert !== current.idpCert && current.idpCert !== null
+      oldIdpCert: fields.idpCert !== null && fields.idpCert !== current.idpCert && current.idpCert !== null
         ? current.idpCert
         : current.oldIdpCert,
-      idpCert,
-      idpEntityId,
-      sloEndpointUrl,
-      ssoEndpointUrl,
-      attrUsername,
-      attrEmail,
-      attrGroups,
-      attrSiteAdmin,
-      siteAdminRole,
+      idpCert: fields.idpCert,
+      idpEntityId: fields.idpEntityId,
+      sloEndpointUrl: fields.sloEndpointUrl,
+      ssoEndpointUrl: fields.ssoEndpointUrl,
+      attrUsername: fields.attrUsername,
+      attrEmail: fields.attrEmail,
+      attrGroups: fields.attrGroups,
+      attrSiteAdmin: fields.attrSiteAdmin,
+      siteAdminRole: fields.siteAdminRole,
       ssoApiTokenSessionTimeout: typeof timeout === "number" ? timeout : current.ssoApiTokenSessionTimeout,
       updatedAt: Date.now(),
     },

@@ -43,6 +43,45 @@ function planExportResource(pe: PlanExportItem): Record<string, unknown> {
   };
 }
 
+function parsePlanExportRequest(
+  body: unknown,
+  set: SetObj,
+): { attributes: Record<string, unknown>; planId: string } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes: Record<string, unknown> = (data?.["attributes"] ?? {}) as Record<string, unknown>;
+  const rels: Record<string, unknown> = (data?.["relationships"] ?? {}) as Record<string, unknown>;
+  const planRel = rels["plan"] as Record<string, unknown> | undefined;
+  const planId = typeof (planRel?.["data"] as Record<string, unknown> | undefined)?.["id"] === "string" ? ((planRel?.["data"] as Record<string, unknown>)["id"] as string) : "";
+  if (planId === "") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "plan ID is required" }] } };
+  }
+  return { attributes, planId };
+}
+
+function buildPlanExport(
+  attributes: Record<string, unknown>,
+  planId: string,
+  set: SetObj,
+): { pe: PlanExportItem } | { error: unknown } {
+  const id = newResourceId("pe");
+  if (typeof attributes["data-type"] !== "string" || !["sentinel-mock-bundle-v0", "configuration-version"].includes(attributes["data-type"])) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data-type must be one of: sentinel-mock-bundle-v0, configuration-version" }] } };
+  }
+  const pe: PlanExportItem = {
+    id,
+    planId,
+    dataType: attributes["data-type"],
+    status: "finished",
+    downloadUrl: `/api/v2/plan-exports/${id}/download`,
+    expiresAt: Date.now() + 3600 * 1000,
+    createdAt: Date.now(),
+  };
+  return { pe };
+}
+
 export const planExportRoutes = new Elysia({ name: "plan-exports" })
   .use(authPlugin)
   .post("/api/v2/plan-exports", async ({ user, body, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -50,43 +89,21 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes: Record<string, unknown> = (data?.["attributes"] ?? {}) as Record<string, unknown>;
-    const rels: Record<string, unknown> = (data?.["relationships"] ?? {}) as Record<string, unknown>;
-    const planRel = rels["plan"] as Record<string, unknown> | undefined;
-    const planId = typeof (planRel?.["data"] as Record<string, unknown> | undefined)?.["id"] === "string" ? ((planRel?.["data"] as Record<string, unknown>)["id"] as string) : "";
+    const parsed = parsePlanExportRequest(body, set);
+    if ("error" in parsed) return parsed.error;
 
-    if (planId === "") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "plan ID is required" }] };
-    }
-
-    const runId = planId.replace(/^plan-/, "");
+    const runId = parsed.planId.replace(/^plan-/, "");
     const authorized = await findAuthorizedRun(runId, user.id, orgId, teamId);
     if (authorized === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
 
-    const id = newResourceId("pe");
-    if (typeof attributes["data-type"] !== "string" || !["sentinel-mock-bundle-v0", "configuration-version"].includes(attributes["data-type"])) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data-type must be one of: sentinel-mock-bundle-v0, configuration-version" }] };
-    }
-    const pe: PlanExportItem = {
-      id,
-      planId,
-      dataType: attributes["data-type"],
-      status: "finished",
-      downloadUrl: `/api/v2/plan-exports/${id}/download`,
-      expiresAt: Date.now() + 3600 * 1000,
-      createdAt: Date.now(),
-    };
-
-    await db.insert(planExports).values(pe);
+    const built = buildPlanExport(parsed.attributes, parsed.planId, set);
+    if ("error" in built) return built.error;
+    await db.insert(planExports).values(built.pe);
     (set as { status: number }).status = 201;
-    return { data: planExportResource(pe) };
+    return { data: planExportResource(built.pe) };
   })
   .get("/api/v2/plan-exports/:export_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     if (user === null || user === undefined) {

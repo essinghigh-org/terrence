@@ -8,7 +8,7 @@ import { db, isPostgres } from "../db";
 import { apiTokens, githubAppInstallations, oauthClients, oauthTokens, organizations, users } from "../db/schema";
 import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission, requestBaseUrl } from "../lib/utils";
 import { decryptSecret } from "../lib/secrets";
-import { fetchVcsUrl, getGitHubAppAccessToken, getGitHubAppAccessTokenDetails } from "../lib/webhooks";
+import { fetchVcsUrl, getGitHubAppAccessToken, getGitHubAppAccessTokenDetails, type GitHubAppAccessTokenDetails } from "../lib/webhooks";
 import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail, type VcsIntegrationUsage } from "../lib/vcs-integration-usage";
 import { AvatarService } from "../lib/avatars";
 import { githubAppApiBase } from "../lib/github-api";
@@ -24,6 +24,8 @@ import {
   validateGitHubAppConfiguration,
   type GitHubAppConfiguration,
   type GitHubAppInstallationSummary,
+  type GitHubAppPendingConfiguration,
+  type GitHubAppRecord,
 } from "../lib/github-app-config";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -136,6 +138,56 @@ function manifestPayload(request: Readonly<{ url: string }>): Readonly<Record<st
   };
 }
 
+function parseManifestConfiguration(record: RepositoryRecord, apiUrl: string): GitHubAppConfiguration | null {
+  const pem = stringValue(record["pem"]);
+  const webhookSecret = stringValue(record["webhook_secret"]);
+  const clientId = stringValue(record["client_id"]);
+  const clientSecret = stringValue(record["client_secret"]);
+  const appId = positiveInteger(record["id"]);
+  const slug = stringValue(record["slug"]);
+  if (pem === null || webhookSecret === null || clientId === null || clientSecret === null || appId === null || slug === null) return null;
+  return {
+    appId,
+    appIdText: String(appId),
+    slug,
+    name: stringValue(record["name"]),
+    owner: null,
+    privateKey: pem,
+    webhookSecret,
+    clientId,
+    clientSecret,
+    apiUrl,
+    httpUrl: manifestGitHubHttpUrl(),
+    source: "manifest",
+  };
+}
+
+function mergeValidatedAppConfiguration(
+  configuration: GitHubAppConfiguration,
+  validation: Readonly<{ appId?: number; slug?: string; name?: string | null; owner?: string | null }>,
+): GitHubAppConfiguration {
+  return {
+    ...configuration,
+    appId: validation.appId ?? configuration.appId,
+    appIdText: String(validation.appId ?? configuration.appId),
+    slug: validation.slug ?? configuration.slug,
+    name: validation.name ?? configuration.name,
+    owner: validation.owner ?? configuration.owner,
+  };
+}
+
+function resolvePendingInstallation<P extends { flowId: string }>(
+  pending: P | null | undefined,
+  statePendingId: string,
+  installationId: number | null,
+  setupAction: string,
+): { pending: P; installationId: number } | null {
+  if (pending === null || pending === undefined || pending.flowId !== statePendingId || installationId === null || (setupAction !== "install" && setupAction !== "update")) {
+    return null;
+  }
+  return { pending, installationId };
+}
+
 async function manifestConversion(code: string): Promise<Readonly<{ configuration: GitHubAppConfiguration; htmlUrl: string | null }> | null> {
   const apiUrl = manifestGitHubApiUrl();
   const controller = new AbortController();
@@ -155,38 +207,12 @@ async function manifestConversion(code: string): Promise<Readonly<{ configuratio
     if (!response.ok) return null;
     const record = recordValue(body);
     if (record === null) return null;
-    const pem = stringValue(record["pem"]);
-    const webhookSecret = stringValue(record["webhook_secret"]);
-    const clientId = stringValue(record["client_id"]);
-    const clientSecret = stringValue(record["client_secret"]);
-    const appId = positiveInteger(record["id"]);
-    const slug = stringValue(record["slug"]);
-    if (pem === null || webhookSecret === null || clientId === null || clientSecret === null || appId === null || slug === null) return null;
-    const configuration: GitHubAppConfiguration = {
-      appId,
-      appIdText: String(appId),
-      slug,
-      name: stringValue(record["name"]),
-      owner: null,
-      privateKey: pem,
-      webhookSecret,
-      clientId,
-      clientSecret,
-      apiUrl,
-      httpUrl: manifestGitHubHttpUrl(),
-      source: "manifest",
-    };
+    const configuration = parseManifestConfiguration(record, apiUrl);
+    if (configuration === null) return null;
     const validation = await validateGitHubAppConfiguration(configuration);
     if (!validation.ok) return null;
     return {
-      configuration: {
-        ...configuration,
-        appId: validation.appId ?? configuration.appId,
-        appIdText: String(validation.appId ?? configuration.appId),
-        slug: validation.slug ?? configuration.slug,
-        name: validation.name ?? configuration.name,
-        owner: validation.owner ?? configuration.owner,
-      },
+      configuration: mergeValidatedAppConfiguration(configuration, validation),
       htmlUrl: httpUrl(record["html_url"]),
     };
   } catch {
@@ -448,29 +474,35 @@ function appendApiPath(base: URL, suffix: string): URL {
   return url;
 }
 
-function repositoryApiTarget(client: Readonly<typeof oauthClients.$inferSelect>): { base: URL; provider: RepositoryProvider } | null {
-  const provider = repositoryProvider(client.serviceProvider);
-  if (provider === null) return null;
-
+function explicitApiUrlTarget(
+  client: Readonly<typeof oauthClients.$inferSelect>,
+): Readonly<{ base: URL }> | null | undefined {
   const configuredApiUrl = client.apiUrl?.trim() ?? "";
-  if (configuredApiUrl !== "") {
-    const base = validRepositoryApiUrl(configuredApiUrl);
-    return base === null ? null : { base, provider };
-  }
+  if (configuredApiUrl === "") return undefined;
+  const base = validRepositoryApiUrl(configuredApiUrl);
+  return base === null ? null : { base };
+}
 
+function httpUrlApiTarget(
+  client: Readonly<typeof oauthClients.$inferSelect>,
+  provider: RepositoryProvider,
+): Readonly<{ base: URL }> | null | undefined {
   const configuredHttpUrl = client.httpUrl?.trim() ?? "";
-  if (configuredHttpUrl !== "") {
-    const httpUrl = validRepositoryApiUrl(configuredHttpUrl);
-    if (httpUrl === null) return null;
-    return {
-      base: appendApiPath(
-        httpUrl,
-        provider === "github" ? "/api/v3" : provider === "gitlab" ? "/api/v4" : "/2.0",
-      ),
-      provider,
-    };
-  }
+  if (configuredHttpUrl === "") return undefined;
+  const httpUrl = validRepositoryApiUrl(configuredHttpUrl);
+  if (httpUrl === null) return null;
+  return {
+    base: appendApiPath(
+      httpUrl,
+      provider === "github" ? "/api/v3" : provider === "gitlab" ? "/api/v4" : "/2.0",
+    ),
+  };
+}
 
+function defaultApiUrlTarget(
+  client: Readonly<typeof oauthClients.$inferSelect>,
+  provider: RepositoryProvider,
+): Readonly<{ base: URL }> | null {
   const defaultApiUrl = provider === "github"
     ? client.serviceProvider === "github" ? "https://api.github.com" : null
     : provider === "gitlab"
@@ -478,7 +510,18 @@ function repositoryApiTarget(client: Readonly<typeof oauthClients.$inferSelect>)
       : "https://api.bitbucket.org/2.0";
   if (defaultApiUrl === null) return null;
   const base = validRepositoryApiUrl(defaultApiUrl);
-  return base === null ? null : { base, provider };
+  return base === null ? null : { base };
+}
+
+function repositoryApiTarget(client: Readonly<typeof oauthClients.$inferSelect>): { base: URL; provider: RepositoryProvider } | null {
+  const provider = repositoryProvider(client.serviceProvider);
+  if (provider === null) return null;
+  const explicit = explicitApiUrlTarget(client);
+  if (explicit !== undefined) return explicit === null ? null : { ...explicit, provider };
+  const derived = httpUrlApiTarget(client, provider);
+  if (derived !== undefined) return derived === null ? null : { ...derived, provider };
+  const fallback = defaultApiUrlTarget(client, provider);
+  return fallback === null ? null : { ...fallback, provider };
 }
 
 function repositoryEndpoint(base: URL, path: string, parameters: Readonly<Record<string, string>>): URL {
@@ -566,23 +609,30 @@ function recordValue(value: unknown): RepositoryRecord | null {
     : null;
 }
 
-function normalizedRepository(record: RepositoryRecord, provider: RepositoryProvider): RepositoryResource | null {
+function gitlabFullName(record: RepositoryRecord): string | null {
+  const direct = stringValue(record["path_with_namespace"]);
+  if (direct !== null) return direct;
   const namespace = recordValue(record["namespace"]);
-  const ownerRecord = recordValue(record["owner"]);
-  const fullName = provider === "gitlab"
-    ? stringValue(record["path_with_namespace"])
-      ?? (stringValue(namespace?.["full_path"]) === null || stringValue(record["path"]) === null
-        ? null
-        : `${stringValue(namespace?.["full_path"])}/${stringValue(record["path"])}`)
-    : stringValue(record["full_name"]);
-  if (fullName === null) return null;
+  const namespacePath = stringValue(namespace?.["full_path"]);
+  const path = stringValue(record["path"]);
+  if (namespacePath === null || path === null) return null;
+  return `${namespacePath}/${path}`;
+}
 
+function repositoryOwner(record: RepositoryRecord, provider: RepositoryProvider): string | null {
+  const ownerRecord = recordValue(record["owner"]);
+  if (provider === "github") return stringValue(ownerRecord?.["login"]);
+  if (provider === "bitbucket") {
+    return stringValue(ownerRecord?.["display_name"]) ?? stringValue(ownerRecord?.["nickname"]) ?? stringValue(ownerRecord?.["username"]);
+  }
+  return null;
+}
+
+function normalizedRepository(record: RepositoryRecord, provider: RepositoryProvider): RepositoryResource | null {
+  const fullName = provider === "gitlab" ? gitlabFullName(record) : stringValue(record["full_name"]);
+  if (fullName === null) return null;
   const name = stringValue(record["name"]) ?? fullName.split("/").at(-1) ?? fullName;
-  const owner = provider === "github"
-    ? stringValue(ownerRecord?.["login"])
-    : provider === "bitbucket"
-      ? stringValue(ownerRecord?.["display_name"]) ?? stringValue(ownerRecord?.["nickname"]) ?? stringValue(ownerRecord?.["username"])
-      : null;
+  const owner = repositoryOwner(record, provider);
   const pathOwner = fullName.split("/").slice(0, -1).join("/");
   return {
     id: fullName,
@@ -634,21 +684,21 @@ function workspaceSlug(record: RepositoryRecord): string | null {
   return stringValue(recordValue(record["workspace"])?.["slug"]);
 }
 
-async function discoverBitbucketRepositories(
+async function collectBitbucketWorkspaces(
   base: URL,
   token: string,
+  budget: { remaining: number },
   serviceProviderUser: string | null,
-): Promise<RepositoryResource[]> {
-  const requestBudget = { remaining: MAX_BITBUCKET_REQUESTS };
+): Promise<Set<string>> {
   const workspaceSlugs = new Set<string>();
   let workspaceUrl = repositoryEndpoint(base, "user/workspaces", { pagelen: String(REPOSITORY_PAGE_SIZE) });
   const seenWorkspaceUrls = new Set<string>();
   for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
-    if (requestBudget.remaining === 0) break;
+    if (budget.remaining === 0) break;
     const urlKey = workspaceUrl.toString();
     if (seenWorkspaceUrls.has(urlKey)) break;
     seenWorkspaceUrls.add(urlKey);
-    requestBudget.remaining -= 1;
+    budget.remaining -= 1;
     const response = await fetchRepositoryPage(workspaceUrl, token);
     if (response === null) break;
     const parsed = repositoryPage(response.body, "bitbucket");
@@ -666,35 +716,76 @@ async function discoverBitbucketRepositories(
     const fallbackWorkspace = stringValue(serviceProviderUser);
     if (fallbackWorkspace !== null) workspaceSlugs.add(fallbackWorkspace);
   }
+  return workspaceSlugs;
+}
 
+async function collectBitbucketWorkspaceRepositories(
+  base: URL,
+  token: string,
+  budget: { remaining: number },
+  workspace: string,
+  repositories: Map<string, RepositoryResource>,
+): Promise<void> {
+  let url = repositoryEndpoint(base, `repositories/${encodeURIComponent(workspace)}`, {
+    pagelen: String(REPOSITORY_PAGE_SIZE),
+    sort: "-updated_on",
+  });
+  const seenUrls = new Set<string>();
+  for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
+    if (budget.remaining === 0) break;
+    const urlKey = url.toString();
+    if (seenUrls.has(urlKey)) break;
+    seenUrls.add(urlKey);
+    budget.remaining -= 1;
+    const response = await fetchRepositoryPage(url, token);
+    if (response === null) break;
+    const parsed = repositoryPage(response.body, "bitbucket");
+    if (parsed === null) break;
+    for (const record of parsed.records) {
+      const repository = normalizedRepository(record, "bitbucket");
+      if (repository !== null) repositories.set(repository.id, repository);
+    }
+    const next = safeNextRepositoryUrl(parsed.nextUrl, base);
+    if (next === null) break;
+    url = next;
+  }
+}
+
+async function discoverBitbucketRepositories(
+  base: URL,
+  token: string,
+  serviceProviderUser: string | null,
+): Promise<RepositoryResource[]> {
+  const requestBudget = { remaining: MAX_BITBUCKET_REQUESTS };
+  const workspaceSlugs = await collectBitbucketWorkspaces(base, token, requestBudget, serviceProviderUser);
   const repositories = new Map<string, RepositoryResource>();
   for (const workspace of workspaceSlugs) {
     if (requestBudget.remaining === 0) break;
-    let url = repositoryEndpoint(base, `repositories/${encodeURIComponent(workspace)}`, {
-      pagelen: String(REPOSITORY_PAGE_SIZE),
-      sort: "-updated_on",
-    });
-    const seenUrls = new Set<string>();
-    for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
-      if (requestBudget.remaining === 0) break;
-      const urlKey = url.toString();
-      if (seenUrls.has(urlKey)) break;
-      seenUrls.add(urlKey);
-      requestBudget.remaining -= 1;
-      const response = await fetchRepositoryPage(url, token);
-      if (response === null) break;
-      const parsed = repositoryPage(response.body, "bitbucket");
-      if (parsed === null) break;
-      for (const record of parsed.records) {
-        const repository = normalizedRepository(record, "bitbucket");
-        if (repository !== null) repositories.set(repository.id, repository);
-      }
-      const next = safeNextRepositoryUrl(parsed.nextUrl, base);
-      if (next === null) break;
-      url = next;
-    }
+    await collectBitbucketWorkspaceRepositories(base, token, requestBudget, workspace, repositories);
   }
   return [...repositories.values()];
+}
+
+function nextRepositoryPageUrl(
+  provider: RepositoryProvider,
+  base: URL,
+  page: number,
+  headers: Headers,
+  rawCount: number,
+): Readonly<{ url: URL; page: number }> | null {
+  if (provider === "github") {
+    const next = safeNextRepositoryUrl(nextLink(headers), base);
+    if (next !== null) return { url: next, page };
+  } else {
+    const nextPageText = headers.get("x-next-page")?.trim() ?? "";
+    const nextPage = /^[1-9]\d*$/.test(nextPageText) ? Number(nextPageText) : null;
+    if (nextPage !== null && Number.isSafeInteger(nextPage)) {
+      return { url: repositoryPageUrl(base, provider, nextPage), page: nextPage };
+    }
+  }
+  if (rawCount < REPOSITORY_PAGE_SIZE) return null;
+  const followingPage = page + 1;
+  return { url: repositoryPageUrl(base, provider, followingPage), page: followingPage };
 }
 
 async function discoverOAuthRepositories(
@@ -723,26 +814,10 @@ async function discoverOAuthRepositories(
       const repository = normalizedRepository(record, target.provider);
       if (repository !== null) repositories.push(repository);
     }
-
-    if (target.provider === "github") {
-      const next = safeNextRepositoryUrl(nextLink(response.headers), target.base);
-      if (next !== null) {
-        url = next;
-        continue;
-      }
-    } else {
-      const nextPageText = response.headers.get("x-next-page")?.trim() ?? "";
-      const nextPage = /^[1-9]\d*$/.test(nextPageText) ? Number(nextPageText) : null;
-      if (nextPage !== null && Number.isSafeInteger(nextPage)) {
-        page = nextPage;
-        url = repositoryPageUrl(target.base, target.provider, page);
-        continue;
-      }
-    }
-
-    if (parsed.rawCount < REPOSITORY_PAGE_SIZE) break;
-    page += 1;
-    url = repositoryPageUrl(target.base, target.provider, page);
+    const next = nextRepositoryPageUrl(target.provider, target.base, page, response.headers, parsed.rawCount);
+    if (next === null) break;
+    page = next.page;
+    url = next.url;
   }
   return repositories;
 }
@@ -818,6 +893,289 @@ function installationResource(installation: Readonly<typeof githubAppInstallatio
   };
 }
 
+type GitHubAppHealth = Awaited<ReturnType<typeof validateGitHubAppConfiguration>>;
+
+async function checkGitHubAppHealth(
+  configuration: GitHubAppConfiguration | null,
+  record: GitHubAppRecord | null,
+): Promise<GitHubAppHealth | null> {
+  if (configuration === null) return null;
+  const health = await validateGitHubAppConfiguration(configuration);
+  if (record !== null && record.status === "active" && !health.ok && health.credentialError) {
+    await markGitHubAppInvalid(health.detail);
+  }
+  return health;
+}
+
+function resolveGitHubAppUrls(
+  safeConfiguration: GitHubAppConfiguration | null,
+): Readonly<{ registrationUrl: string; installUrl: string | null }> {
+  if (safeConfiguration === null) {
+    return { registrationUrl: `${manifestGitHubHttpUrl()}/settings/apps`, installUrl: null };
+  }
+  return {
+    registrationUrl: `${safeConfiguration.httpUrl}/settings/apps/${encodeURIComponent(safeConfiguration.slug)}`,
+    installUrl: new URL(`/apps/${encodeURIComponent(safeConfiguration.slug)}/installations/new`, safeConfiguration.httpUrl).toString(),
+  };
+}
+
+function resolveGitHubAppStatus(
+  effectiveStatus: GitHubAppRecord["status"] | undefined,
+  health: GitHubAppHealth | null,
+  hasConfiguration: boolean,
+): string {
+  if (effectiveStatus === "invalid" || (health !== null && !health.ok && health.credentialError)) return "invalid";
+  return effectiveStatus ?? (hasConfiguration ? "active" : "unconfigured");
+}
+
+function resolvePendingOwners(
+  pending: GitHubAppPendingConfiguration | null | undefined,
+): Readonly<{ installed: string[]; required: string[]; missing: string[]; hasPending: boolean }> {
+  if (pending === null || pending === undefined) return { installed: [], required: [], missing: [], hasPending: false };
+  const installedOwners = new Set(pending.installations.map((installation): string => installation.owner));
+  const required = [...pending.requiredOwners];
+  return {
+    installed: [...installedOwners].sort(),
+    required,
+    missing: required.filter((owner): boolean => !installedOwners.has(owner)),
+    hasPending: true,
+  };
+}
+
+function resolveSafeConfiguration(
+  configuration: GitHubAppConfiguration | null,
+  effectiveRecord: GitHubAppRecord | null,
+): GitHubAppConfiguration | null {
+  return configuration ?? effectiveRecord?.configuration ?? null;
+}
+
+function resolveGitHubAppSource(
+  effectiveRecord: GitHubAppRecord | null,
+  safeConfiguration: GitHubAppConfiguration | null,
+): string | null {
+  return effectiveRecord?.source ?? (safeConfiguration?.source === "legacy_environment_import" ? "environment" : null);
+}
+
+function resolveGitHubAppInvalidReason(
+  health: GitHubAppHealth | null,
+  effectiveRecord: GitHubAppRecord | null,
+): string | null {
+  if (health !== null && !health.ok) return health.detail;
+  return effectiveRecord?.invalidReason ?? null;
+}
+
+function buildGitHubAppIdentity(safeConfiguration: GitHubAppConfiguration | null): Record<string, unknown> {
+  return {
+    "app-id": safeConfiguration?.appId ?? null,
+    slug: safeConfiguration?.slug ?? null,
+    name: safeConfiguration?.name ?? null,
+    owner: safeConfiguration?.owner ?? null,
+  };
+}
+
+function buildGitHubAppAttributes(
+  effectiveRecord: GitHubAppRecord | null,
+  configuration: GitHubAppConfiguration | null,
+  health: GitHubAppHealth | null,
+  request: ParamCtx["request"],
+): Record<string, unknown> {
+  const owners = resolvePendingOwners(effectiveRecord?.pending);
+  const safeConfiguration = resolveSafeConfiguration(configuration, effectiveRecord);
+  const urls = resolveGitHubAppUrls(safeConfiguration);
+  return {
+    configured: safeConfiguration !== null,
+    status: resolveGitHubAppStatus(effectiveRecord?.status, health, safeConfiguration !== null),
+    source: resolveGitHubAppSource(effectiveRecord, safeConfiguration),
+    bootstrapConsumed: effectiveRecord?.bootstrapConsumed === true,
+    ...buildGitHubAppIdentity(safeConfiguration),
+    "registration-url": urls.registrationUrl,
+    "install-url": urls.installUrl,
+    "invalid-reason": resolveGitHubAppInvalidReason(health, effectiveRecord),
+    "pending-replacement": owners.hasPending,
+    "required-owners": owners.required,
+    "installed-owners": owners.installed,
+    "missing-owners": owners.missing,
+    modes: ["manifest", "manual", "environment"],
+    "manifest-flow": request === undefined ? null : apiURL(request, "/api/v2/admin/github-app/manifest/setup"),
+  };
+}
+
+type DiagnosticCheck = Readonly<{
+  id: string;
+  label: string;
+  ok: boolean;
+  status: number | null;
+  detail: string;
+}>;
+
+type RepositoryProbe = Readonly<
+  { repo: Readonly<{ full_name: string }>; scopeCheck: null }
+  | { repo: undefined; scopeCheck: DiagnosticCheck }
+>;
+
+async function probeInstallationRepositories(
+  githubApiBase: string,
+  repoHeaders: Readonly<Record<string, string>>,
+): Promise<RepositoryProbe> {
+  // Listing repositories is the read path Terrence uses to resolve a
+  // workspace's VCS repo; an install scoped to too few repos breaks it.
+  // GitHub returns archived repositories in this list, but archived repos
+  // reject status writes even when the App has the required permission.
+  let repositoryUrl = repositoryEndpoint(new URL(githubApiBase), "installation/repositories", {
+    per_page: String(REPOSITORY_PAGE_SIZE),
+  });
+  let repo: { full_name: string } | undefined;
+  let sawRepository = false;
+  for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
+    const statusRes = await fetchVcsUrl(repositoryUrl.toString(), {
+      headers: repoHeaders,
+      timeoutMs: GITHUB_TIMEOUT_MS,
+    });
+    if (!statusRes.ok) {
+      return {
+        repo: undefined,
+        scopeCheck: { id: "installation-access", label: "Installation repo access", ok: false, status: statusRes.status, detail: `Installation could not list repositories (HTTP ${statusRes.status}). Re-install the app and grant repository access.` },
+      };
+    }
+    const repoList = await statusRes.json() as { repositories?: { full_name?: unknown; archived?: unknown }[] };
+    for (const candidate of repoList.repositories ?? []) {
+      if (typeof candidate.full_name !== "string" || candidate.full_name === "") continue;
+      sawRepository = true;
+      if (candidate.archived !== true) {
+        repo = { full_name: candidate.full_name };
+        break;
+      }
+    }
+    if (repo !== undefined) break;
+    const next = safeNextRepositoryUrl(nextLink(statusRes.headers), new URL(githubApiBase));
+    if (next === null) break;
+    repositoryUrl = next;
+  }
+  if (repo === undefined) {
+    return {
+      repo: undefined,
+      scopeCheck: {
+        id: "repo-scope",
+        label: "Repository access scope",
+        ok: false,
+        status: null,
+        detail: sawRepository
+          ? "The installation only exposes archived repositories, which cannot accept commit statuses. Select at least one active repository for the installation."
+          : "The installation has access to no repositories. Select at least one repository (including the ones this workspace points at).",
+      },
+    };
+  }
+  return { repo, scopeCheck: null };
+}
+
+async function checkCommitStatusesPermission(
+  permissions: GitHubAppAccessTokenDetails["permissions"],
+  githubApiBase: string,
+  repoHeaders: Readonly<Record<string, string>>,
+  repoFullName: string,
+): Promise<DiagnosticCheck> {
+  if (permissions !== null) {
+    const statusesPermission = permissions["statuses"];
+    if (statusesPermission === "write") {
+      return { id: "commit-statuses", label: "Commit statuses (write)", ok: true, status: null, detail: `The installation access token grants Commit statuses write on active repository ${repoFullName}.` };
+    }
+    return { id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: null, detail: `The installation access token reports Commit statuses permission as ${statusesPermission === undefined ? "not granted" : JSON.stringify(statusesPermission)} on ${repoFullName}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` };
+  }
+  // Some GitHub-compatible APIs omit permissions from the access-token
+  // response. Keep the synthetic write probe for those deployments.
+  const testSha = "a".repeat(40);
+  const writeRes = await fetchVcsUrl(`${githubApiBase}/repos/${encodeURIComponent(repoFullName)}/statuses/${testSha}`, {
+    method: "POST",
+    headers: repoHeaders,
+    body: JSON.stringify({ state: "pending", context: "terrence/diagnostics", description: "Terrence permission check" }),
+    timeoutMs: GITHUB_TIMEOUT_MS,
+  });
+  // GitHub-compatible APIs commonly return 422 for a synthetic
+  // (non-existent) SHA when the token has the commit-statuses permission.
+  // A 200 also proves the permission. 403/404 remain failure signals when
+  // the API did not provide explicit permission metadata above.
+  if (writeRes.ok || writeRes.status === 422) {
+    return { id: "commit-statuses", label: "Commit statuses (write)", ok: true, status: writeRes.status, detail: `Commit statuses write path is authorized on active repository ${repoFullName}.` };
+  }
+  if (writeRes.status === 404) {
+    return { id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: 404, detail: `Commit statuses write returned 404 on ${repoFullName}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` };
+  }
+  if (writeRes.status === 403) {
+    return { id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: 403, detail: `Commit statuses write returned 403 on ${repoFullName}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` };
+  }
+  return { id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: writeRes.status, detail: `Commit statuses write returned HTTP ${writeRes.status}. Check the GitHub App's permission settings.` };
+}
+
+async function checkSetupAuthorization(
+  state: SetupState,
+  initiatingToken: Readonly<typeof apiTokens.$inferSelect> | undefined,
+): Promise<boolean> {
+  if (initiatingToken === undefined) return false;
+  const identityMatches = state.userId !== null
+    ? initiatingToken.userId === state.userId
+    : state.tokenTeamId !== null
+      ? initiatingToken.teamId === state.tokenTeamId
+      : initiatingToken.orgId === state.orgId && state.tokenOrgId === state.orgId;
+  if (!identityMatches) return false;
+  return checkOrganizationPermission(
+    state.orgId,
+    state.userId ?? undefined,
+    state.tokenOrgId,
+    state.tokenTeamId,
+    "manage-vcs-settings",
+  );
+}
+
+async function discoverInstallationRepositories(installationId: number): Promise<RepositoryResource[]> {
+  const token = await getGitHubAppAccessToken(installationId);
+  const apiBase = (await githubAppConfig())?.apiUrl;
+  if (token === null || apiBase === undefined) return [];
+  try {
+    return await discoverGithubInstallationRepositories(apiBase, token);
+  } catch {
+    // A valid installation with a temporarily unavailable API returns an
+    // empty discovery result, matching OAuth discovery semantics.
+    return [];
+  }
+}
+
+async function discoverConnectionRepositories(connectionId: string, orgId: string): Promise<RepositoryResource[] | null> {
+  // Resolve OAuth token -> OAuth client inside this organization before
+  // decrypting the token or contacting any provider API. The token ID is a
+  // client-controlled path parameter and must not be looked up globally.
+  const oauthToken = await db.query.oauthTokens.findFirst({
+    where: eq(oauthTokens.id, connectionId),
+  });
+  const oauthClient = oauthToken === undefined
+    ? undefined
+    : await db.query.oauthClients.findFirst({
+        where: and(eq(oauthClients.id, oauthToken.oauthClientId), eq(oauthClients.orgId, orgId)),
+      });
+  if (oauthToken === undefined || oauthClient === undefined) return null;
+  try {
+    return await discoverOAuthRepositories(oauthClient, await decryptSecret(oauthToken.token), oauthToken.serviceProviderUser);
+  } catch {
+    // Preserve the existing discovery behavior for provider/decryption
+    // failures: the connection is valid, but currently has no results.
+    return [];
+  }
+}
+
+function parseInstallationPayload(body: unknown): { name: string; installationId: unknown } {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
+  return { name, installationId: attributes["installation-id"] };
+}
+
+function installationPayloadError(name: string, installationId: unknown): string | null {
+  if (name === "" || typeof installationId !== "number" || !Number.isSafeInteger(installationId) || installationId <= 0) {
+    return "Name and a positive integer installation ID are required";
+  }
+  return null;
+}
+
 export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstallations" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/vcs-connections/:connection_id/repositories", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -831,51 +1189,20 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     if (connectionId.startsWith("github-app:")) connectionId = connectionId.slice("github-app:".length);
     if (connectionId.startsWith("oauth-token:")) connectionId = connectionId.slice("oauth-token:".length);
 
-    const repos: { id: string; type: string; attributes: { identifier: string; name: string; owner: string } }[] = [];
-
     // 1. Check if connection is GitHub App Installation
     const installation = await db.query.githubAppInstallations.findFirst({
       where: and(eq(githubAppInstallations.id, connectionId), eq(githubAppInstallations.orgId, org.id)),
     });
 
     if (installation !== undefined) {
-      const token = await getGitHubAppAccessToken(installation.installationId);
-      const apiBase = (await githubAppConfig())?.apiUrl;
-      if (token !== null && apiBase !== undefined) {
-        try {
-          repos.push(...await discoverGithubInstallationRepositories(apiBase, token));
-        } catch {
-          // A valid installation with a temporarily unavailable API returns an
-          // empty discovery result, matching OAuth discovery semantics.
-        }
-      }
-      return { data: repos };
-    } else {
-      // 2. Resolve OAuth token -> OAuth client inside this organization before
-      // decrypting the token or contacting any provider API. The token ID is a
-      // client-controlled path parameter and must not be looked up globally.
-      const oauthToken = await db.query.oauthTokens.findFirst({
-        where: eq(oauthTokens.id, connectionId),
-      });
-      const oauthClient = oauthToken === undefined
-        ? undefined
-        : await db.query.oauthClients.findFirst({
-            where: and(eq(oauthClients.id, oauthToken.oauthClientId), eq(oauthClients.orgId, org.id)),
-          });
-      if (oauthToken === undefined || oauthClient === undefined) {
-        (set as { status: number }).status = 404;
-        return { errors: [{ status: "404", title: "Not Found" }] };
-      }
-      try {
-        const tokenStr = await decryptSecret(oauthToken.token);
-        repos.push(...await discoverOAuthRepositories(oauthClient, tokenStr, oauthToken.serviceProviderUser));
-      } catch {
-        // Preserve the existing discovery behavior for provider/decryption
-        // failures: the connection is valid, but currently has no results.
-      }
+      return { data: await discoverInstallationRepositories(installation.installationId) };
     }
-
-    return { data: repos };
+    const discovered = await discoverConnectionRepositories(connectionId, org.id);
+    if (discovered === null) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return { data: discovered };
   })
   .get("/api/v2/github-app/installations", async ({ user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     // go-tfe GHAInstallations.List (global list across orgs) — used by the
@@ -928,17 +1255,15 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
-    const installationId = attributes["installation-id"];
-    if (name === "" || typeof installationId !== "number" || !Number.isSafeInteger(installationId) || installationId <= 0) {
+    const { name, installationId } = parseInstallationPayload(body);
+    const payloadError = installationPayloadError(name, installationId);
+    if (payloadError !== null) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name and a positive integer installation ID are required" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: payloadError }] };
     }
+    const numericInstallationId = installationId as number;
     const existing = await db.query.githubAppInstallations.findFirst({
-      where: and(eq(githubAppInstallations.orgId, org.id), eq(githubAppInstallations.installationId, installationId)),
+      where: and(eq(githubAppInstallations.orgId, org.id), eq(githubAppInstallations.installationId, numericInstallationId)),
     });
     if (existing !== undefined) {
       (set as { status: number }).status = 409;
@@ -948,7 +1273,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       id: newResourceId("ghain"),
       orgId: org.id,
       name,
-      installationId,
+      installationId: numericInstallationId,
       createdAt: Date.now(),
     };
     await db.insert(githubAppInstallations).values(installation);
@@ -1036,47 +1361,13 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     }
     const record = await getGitHubAppRecord();
     const configuration = await getGitHubAppConfiguration();
-    let health: Awaited<ReturnType<typeof validateGitHubAppConfiguration>> | null = null;
-    if (configuration !== null) {
-      health = await validateGitHubAppConfiguration(configuration);
-      if (record !== null && record.status === "active" && !health.ok && health.credentialError) await markGitHubAppInvalid(health.detail);
-    }
+    const health = await checkGitHubAppHealth(configuration, record);
     const effectiveRecord = await getGitHubAppRecord();
-    const pending = effectiveRecord?.pending;
-    const installedOwners = new Set(pending?.installations.map((installation): string => installation.owner) ?? []);
-    const missingOwners = (pending?.requiredOwners ?? []).filter((owner): boolean => !installedOwners.has(owner));
-    const safeConfiguration = configuration ?? effectiveRecord?.configuration ?? null;
-    const registrationUrl = safeConfiguration === null
-      ? `${manifestGitHubHttpUrl()}/settings/apps`
-      : `${safeConfiguration.httpUrl}/settings/apps/${encodeURIComponent(safeConfiguration.slug)}`;
-    const installUrl = safeConfiguration === null
-      ? null
-      : new URL(`/apps/${encodeURIComponent(safeConfiguration.slug)}/installations/new`, safeConfiguration.httpUrl).toString();
     return {
       data: {
         id: "github-app",
         type: "github-app",
-        attributes: {
-          configured: safeConfiguration !== null,
-          status: effectiveRecord?.status === "invalid" || (health?.ok === false && health.credentialError)
-            ? "invalid"
-            : effectiveRecord?.status ?? (safeConfiguration === null ? "unconfigured" : "active"),
-          source: effectiveRecord?.source ?? (safeConfiguration?.source === "legacy_environment_import" ? "environment" : null),
-          bootstrapConsumed: effectiveRecord?.bootstrapConsumed === true,
-          "app-id": safeConfiguration?.appId ?? null,
-          slug: safeConfiguration?.slug ?? null,
-          name: safeConfiguration?.name ?? null,
-          owner: safeConfiguration?.owner ?? null,
-          "registration-url": registrationUrl,
-          "install-url": installUrl,
-          "invalid-reason": health?.ok === false ? health.detail : effectiveRecord?.invalidReason ?? null,
-          "pending-replacement": pending !== undefined && pending !== null,
-          "required-owners": pending?.requiredOwners ?? [],
-          "installed-owners": [...installedOwners].sort(),
-          "missing-owners": missingOwners,
-          modes: ["manifest", "manual", "environment"],
-          "manifest-flow": request === undefined ? null : apiURL(request, "/api/v2/admin/github-app/manifest/setup"),
-        },
+        attributes: buildGitHubAppAttributes(effectiveRecord, configuration, health, request),
       },
     };
   })
@@ -1094,12 +1385,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       return flowError(set, 422, "GitHub App Validation Failed", validation.detail);
     }
     await persistGitHubAppConfiguration({
-      ...configuration,
-      appId: validation.appId ?? configuration.appId,
-      appIdText: String(validation.appId ?? configuration.appId),
-      slug: validation.slug ?? configuration.slug,
-      name: validation.name ?? configuration.name,
-      owner: validation.owner ?? configuration.owner,
+      ...mergeValidatedAppConfiguration(configuration, validation),
       source: "manual",
     });
     const record = await getGitHubAppRecord();
@@ -1181,12 +1467,16 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     manifestInstallStates.delete(stateId);
     if (!(await siteAdminManifestStateAuthorized(state))) return flowError(set, 403, "Forbidden", "Site administrator authorization is no longer valid");
     const record = await getGitHubAppRecord();
-    const pending = record?.pending;
-    const installationId = positiveInteger(stringQuery(query, "installation_id"));
-    const setupAction = stringQuery(query, "setup_action");
-    if (pending === null || pending === undefined || pending.flowId !== state.pendingId || installationId === null || (setupAction !== "install" && setupAction !== "update")) {
+    const resolved = resolvePendingInstallation(
+      record?.pending,
+      state.pendingId,
+      positiveInteger(stringQuery(query, "installation_id")),
+      stringQuery(query, "setup_action"),
+    );
+    if (resolved === null) {
       return flowError(set, 400, "Invalid GitHub App Installation Callback", "GitHub returned an invalid installation or no pending replacement exists");
     }
+    const { pending, installationId } = resolved;
     const config: GitHubAppConfig = { ...pending.configuration, installUrl: new URL(`/apps/${encodeURIComponent(pending.configuration.slug)}/installations/new`, pending.configuration.httpUrl).toString() };
     const verified = await fetchInstallation(config, installationId);
     if (verified === null || !(await validatePendingInstallation(config, installationId))) {
@@ -1270,21 +1560,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, state.orgId) });
     const initiatingToken = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, state.tokenId) });
-    const stillAuthorized = initiatingToken !== undefined
-      && (
-        state.userId !== null
-          ? initiatingToken.userId === state.userId
-          : state.tokenTeamId !== null
-            ? initiatingToken.teamId === state.tokenTeamId
-            : initiatingToken.orgId === state.orgId && state.tokenOrgId === state.orgId
-      )
-      && await checkOrganizationPermission(
-        state.orgId,
-        state.userId ?? undefined,
-        state.tokenOrgId,
-        state.tokenTeamId,
-        "manage-vcs-settings",
-      );
+    const stillAuthorized = await checkSetupAuthorization(state, initiatingToken);
     if (org?.name !== state.orgName || !stillAuthorized) {
       return flowError(set, 403, "Forbidden", "Organization authorization is no longer valid");
     }
@@ -1345,99 +1621,29 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       return { errors: [{ status: "409", title: "Conflict", detail: "No GitHub App installation is registered for this organization. Install the app on the target repository first." }] };
     }
     const config = await githubAppConfig();
+    const appId = config?.appId ?? null;
+    const githubApiBase = config?.apiUrl ?? "https://api.github.com";
     const results = await Promise.all(installations.map(async (installation) => {
-      const checks: {
-        id: string; label: string; ok: boolean; status: number | null; detail: string;
-      }[] = [];
+      const checks: DiagnosticCheck[] = [];
       const tokenDetails = await getGitHubAppAccessTokenDetails(installation.installationId);
       if (tokenDetails === null) {
         checks.push({ id: "app-token", label: "GitHub App token creation", ok: false, status: null, detail: "GITHUB_APP_ID or GITHUB_APP_PRIVATE_KEY is missing or invalid — token generation failed." });
-        return { installationId: installation.installationId, config: config?.appId ?? null, checks };
+        return { installationId: installation.installationId, config: appId, checks };
       }
       const token = tokenDetails.token;
-      const githubApiBase = config?.apiUrl ?? "https://api.github.com";
       const repoHeaders = {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,
         "User-Agent": "Terrence",
         "X-GitHub-Api-Version": "2022-11-28",
       };
-      // Listing repositories is the read path Terrence uses to resolve a
-      // workspace's VCS repo; an install scoped to too few repos breaks it.
-      // GitHub returns archived repositories in this list, but archived repos
-      // reject status writes even when the App has the required permission.
-      let repositoryUrl = repositoryEndpoint(new URL(githubApiBase), "installation/repositories", {
-        per_page: String(REPOSITORY_PAGE_SIZE),
-      });
-      let repo: { full_name: string } | undefined;
-      let sawRepository = false;
-      for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
-        const statusRes = await fetchVcsUrl(repositoryUrl.toString(), {
-          headers: repoHeaders,
-          timeoutMs: GITHUB_TIMEOUT_MS,
-        });
-        if (!statusRes.ok) {
-          checks.push({ id: "installation-access", label: "Installation repo access", ok: false, status: statusRes.status, detail: `Installation could not list repositories (HTTP ${statusRes.status}). Re-install the app and grant repository access.` });
-          return { installationId: installation.installationId, config: config?.appId ?? null, checks };
-        }
-        const repoList = await statusRes.json() as { repositories?: { full_name?: unknown; archived?: unknown }[] };
-        for (const candidate of repoList.repositories ?? []) {
-          if (typeof candidate.full_name !== "string" || candidate.full_name === "") continue;
-          sawRepository = true;
-          if (candidate.archived !== true) {
-            repo = { full_name: candidate.full_name };
-            break;
-          }
-        }
-        if (repo !== undefined) break;
-        const next = safeNextRepositoryUrl(nextLink(statusRes.headers), new URL(githubApiBase));
-        if (next === null) break;
-        repositoryUrl = next;
+      const probe = await probeInstallationRepositories(githubApiBase, repoHeaders);
+      if (probe.scopeCheck !== null) {
+        checks.push(probe.scopeCheck);
+        return { installationId: installation.installationId, config: appId, checks };
       }
-      if (repo === undefined) {
-        checks.push({
-          id: "repo-scope",
-          label: "Repository access scope",
-          ok: false,
-          status: null,
-          detail: sawRepository
-            ? "The installation only exposes archived repositories, which cannot accept commit statuses. Select at least one active repository for the installation."
-            : "The installation has access to no repositories. Select at least one repository (including the ones this workspace points at).",
-        });
-        return { installationId: installation.installationId, config: config?.appId ?? null, checks };
-      }
-      if (tokenDetails.permissions !== null) {
-        const statusesPermission = tokenDetails.permissions["statuses"];
-        if (statusesPermission === "write") {
-          checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: true, status: null, detail: `The installation access token grants Commit statuses write on active repository ${repo.full_name}.` });
-        } else {
-          checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: null, detail: `The installation access token reports Commit statuses permission as ${statusesPermission === undefined ? "not granted" : JSON.stringify(statusesPermission)} on ${repo.full_name}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` });
-        }
-        return { installationId: installation.installationId, config: config?.appId ?? null, checks };
-      }
-      // Some GitHub-compatible APIs omit permissions from the access-token
-      // response. Keep the synthetic write probe for those deployments.
-      const testSha = "a".repeat(40);
-      const writeRes = await fetchVcsUrl(`${githubApiBase}/repos/${encodeURIComponent(repo.full_name)}/statuses/${testSha}`, {
-        method: "POST",
-        headers: repoHeaders,
-        body: JSON.stringify({ state: "pending", context: "terrence/diagnostics", description: "Terrence permission check" }),
-        timeoutMs: GITHUB_TIMEOUT_MS,
-      });
-      // GitHub-compatible APIs commonly return 422 for a synthetic
-      // (non-existent) SHA when the token has the commit-statuses permission.
-      // A 200 also proves the permission. 403/404 remain failure signals when
-      // the API did not provide explicit permission metadata above.
-      if (writeRes.ok || writeRes.status === 422) {
-        checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: true, status: writeRes.status, detail: `Commit statuses write path is authorized on active repository ${repo.full_name}.` });
-      } else if (writeRes.status === 404) {
-        checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: 404, detail: `Commit statuses write returned 404 on ${repo.full_name}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` });
-      } else if (writeRes.status === 403) {
-        checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: 403, detail: `Commit statuses write returned 403 on ${repo.full_name}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` });
-      } else {
-        checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: writeRes.status, detail: `Commit statuses write returned HTTP ${writeRes.status}. Check the GitHub App's permission settings.` });
-      }
-      return { installationId: installation.installationId, config: config?.appId ?? null, checks };
+      checks.push(await checkCommitStatusesPermission(tokenDetails.permissions, githubApiBase, repoHeaders, probe.repo.full_name));
+      return { installationId: installation.installationId, config: appId, checks };
     }));
     return { data: results };
   });

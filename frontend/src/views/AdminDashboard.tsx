@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import type { ComponentProps } from "react";
 import { Navigate, useNavigate, useOutletContext } from "react-router-dom";
 import { fetchAllApiPages, fetchApi } from "../lib/api";
 import type { LayoutOutletContext } from "../components/Layout";
@@ -48,6 +49,208 @@ async function saveAuthSettings(options: Readonly<{
     options.setSaving(false);
   }
 }
+
+type SecuritySectionState = {
+  summary: SecuritySummary;
+  samlEnabled: boolean;
+  oidcEnabled: boolean;
+  ldapEnabled: boolean;
+};
+
+type SandboxSettings = {
+  enabled?: boolean;
+  available?: boolean;
+  reason?: string | null;
+  "extra-rw-allowed"?: boolean;
+  "net-policy"?: string;
+  "net-scope"?: string | null;
+};
+
+function buildSecuritySummary(signupEnabled: boolean, sandbox: SandboxSettings | undefined): SecuritySummary {
+  const rawNetPolicy = sandbox?.["net-policy"];
+  const netPolicy = rawNetPolicy === "deny" || rawNetPolicy === "invalid" ? rawNetPolicy : "allow";
+  const rawNetScope = sandbox?.["net-scope"];
+  return {
+    signupEnabled,
+    sandboxEnabled: sandbox?.enabled === true,
+    sandboxAvailable: sandbox?.available === true,
+    sandboxReason: isString(sandbox?.reason) ? sandbox.reason : null,
+    sandboxExtraRwAllowed: sandbox?.["extra-rw-allowed"] === true,
+    sandboxNetPolicy: netPolicy,
+    sandboxNetScope: isString(rawNetScope) ? rawNetScope : null,
+  };
+}
+
+function parseSecuritySection(
+  pingResponse: unknown,
+  metaResponse: unknown,
+  samlResponse: unknown,
+  oidcResponse: unknown,
+  ldapResponse: unknown,
+): SecuritySectionState {
+  // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+  const ping = pingResponse as { "signup-enabled"?: boolean };
+  // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+  const sandbox = (metaResponse as {
+    data?: { attributes?: { "run-sandbox"?: SandboxSettings } };
+  }).data?.attributes?.["run-sandbox"];
+  // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+  const samlEnabled = (samlResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
+  // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+  const oidcEnabled = (oidcResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
+  // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+  const ldapEnabled = (ldapResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
+  return {
+    summary: buildSecuritySummary(ping["signup-enabled"] === true, sandbox),
+    samlEnabled,
+    oidcEnabled,
+    ldapEnabled,
+  };
+}
+
+function isLastAuthMethodStanding(
+  enabled: boolean,
+  localAuthEnabled: boolean,
+  persistedSamlEnabled: boolean | null,
+  persistedOidcEnabled: boolean | null,
+): boolean {
+  return !enabled && !localAuthEnabled && persistedSamlEnabled === false && persistedOidcEnabled === false;
+}
+
+function validateLdapForm(
+  enabled: boolean,
+  host: string,
+  baseDn: string,
+  port: number,
+  userFilter: string,
+  bindDn: string,
+  bindPassword: string,
+  bindPasswordSet: boolean,
+  localAuthEnabled: boolean,
+  persistedSamlEnabled: boolean | null,
+  persistedOidcEnabled: boolean | null,
+): string | null {
+  // Client-side mirror of the API validation so the admin sees the error
+  // before submitting an unusable configuration.
+  if (enabled && (host.trim() === "" || baseDn.trim() === "")) {
+    return "Host and Base DN are required when LDAP is enabled.";
+  }
+  // The port must be usable whenever the form is saved, even while LDAP is
+  // disabled: a dormant misconfiguration breaks the next enable.
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return "Port must be between 1 and 65535.";
+  }
+  if (enabled && !userFilter.includes("{{username}}")) {
+    return "User filter must contain the {{username}} placeholder.";
+  }
+  if (bindDn.trim() !== "" && bindPassword === "" && !bindPasswordSet) {
+    return "A bind password is required when a bind DN is set.";
+  }
+  // Never allow the last authentication method to be switched off.
+  if (isLastAuthMethodStanding(enabled, localAuthEnabled, persistedSamlEnabled, persistedOidcEnabled)) {
+    return "At least one authentication method must remain enabled.";
+  }
+  return null;
+}
+
+function WorkloadIdentityKeys({
+  error,
+  keys,
+  action,
+  onAction,
+}: Readonly<{
+  error: string | null;
+  keys: DataItem[];
+  action: "rotate" | "trim" | null;
+  onAction: (action: "rotate" | "trim") => void;
+}>): React.JSX.Element {
+  return (
+    <div className="space-y-4 rounded-md border border-border p-5">
+      <div>
+        <h2 className="text-base font-semibold">Workload identity signing keys</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Dynamic provider credentials use the public JWKS at <code>/.well-known/jwks</code>. Retired keys remain available until trimmed.</p>
+      </div>
+      {error !== null && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      <div className="space-y-2 text-sm">
+        {keys.length === 0 ? <p className="text-muted-foreground">No signing keys have been generated yet.</p> : keys.map((key): React.JSX.Element => (
+          <div key={key.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-border/70 px-3 py-2">
+            <code className="text-xs">{attrString(key.attributes, "key-id", key.id)}</code>
+            <span className="text-muted-foreground">{attrString(key.attributes, "status", "unknown")}</span>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <Button variant="outline" size="sm" onClick={(): void => { onAction("rotate"); }} disabled={action !== null}>Rotate key</Button>
+        <Button variant="outline" size="sm" onClick={(): void => { onAction("trim"); }} disabled={action !== null}>Trim retired keys</Button>
+      </div>
+    </div>
+  );
+}
+
+function AdminSectionContent({
+  section,
+  security,
+  users,
+  orgs,
+  workspaces,
+  runs,
+  versions,
+  audit,
+  auth,
+  workload,
+}: Readonly<{
+  section: AdminSection;
+  security: ComponentProps<typeof SecurityOverview>;
+  users: ComponentProps<typeof UsersAdmin>;
+  orgs: ComponentProps<typeof OrgsAdmin>;
+  workspaces: ComponentProps<typeof WorkspacesAdmin>;
+  runs: ComponentProps<typeof RunsAdmin>;
+  versions: ComponentProps<typeof VersionsAdmin>;
+  audit: ComponentProps<typeof AuditAdmin>;
+  auth: ComponentProps<typeof AuthAdmin>;
+  workload: ComponentProps<typeof WorkloadIdentityKeys>;
+}>): React.JSX.Element {
+  return (
+    <>
+      {/* SECURITY OVERVIEW TAB */}
+      {section === "security" && (
+        <SecurityOverview {...security} />
+      )}
+      {/* USERS TAB */}
+      {section === "users" && (
+        <UsersAdmin {...users} />
+      )}
+      {/* ORGANIZATIONS TAB */}
+      {section === "orgs" && (
+        <OrgsAdmin {...orgs} />
+      )}
+      {/* WORKSPACES TAB */}
+      {section === "workspaces" && (
+        <WorkspacesAdmin {...workspaces} />
+      )}
+      {/* RUNS TAB */}
+      {section === "runs" && (
+        <RunsAdmin {...runs} />
+      )}
+      {/* TOOL VERSIONS TAB */}
+      {section === "versions" && (
+        <VersionsAdmin {...versions} />
+      )}
+      {/* AUDIT LOGS TAB */}
+      {section === "audit" && (
+        <AuditAdmin {...audit} />
+      )}
+      {/* AUTHENTICATION TAB */}
+      {section === "auth" && (
+        <>
+          <AuthAdmin {...auth} />
+          <WorkloadIdentityKeys {...workload} />
+        </>
+      )}
+    </>
+  );
+}
+
 export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>): React.JSX.Element {
   const navigate = useNavigate();
   const { accountLoaded, siteAdmin } = useOutletContext<LayoutOutletContext>();
@@ -198,6 +401,28 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   const [newVersion, setNewVersion] = useState("");
   const [newUrl, setNewUrl] = useState("");
   const [newSha, setNewSha] = useState("");
+  const loadSecuritySection = async (): Promise<void> => {
+    const [usersResponse, auditResponse, pingResponse, metaResponse, samlResponse, oidcResponse, ldapResponse] = await Promise.all([
+      fetchAllApiPages<DataItem>("/admin/users?page[size]=100"),
+      fetchApi("/api/v2/admin/audit-logs"),
+      fetchApi("/api/v2/ping"),
+      fetchApi("/api/v2/meta"),
+      fetchApi("/api/v2/admin/saml-settings"),
+      fetchApi("/api/v2/admin/oidc-settings"),
+      fetchApi("/api/v2/admin/ldap-settings"),
+    ]);
+    setUsers(usersResponse);
+    // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+    setAuditLogs((auditResponse as { data?: DataItem[] }).data ?? []);
+    const parsed = parseSecuritySection(pingResponse, metaResponse, samlResponse, oidcResponse, ldapResponse);
+    setSecuritySummary(parsed.summary);
+    setSamlEnabled(parsed.samlEnabled);
+    setPersistedSamlEnabled(parsed.samlEnabled);
+    setOidcEnabled(parsed.oidcEnabled);
+    setPersistedOidcEnabled(parsed.oidcEnabled);
+    setLdapEnabled(parsed.ldapEnabled);
+    setPersistedLdapEnabled(parsed.ldapEnabled);
+  };
   const loadAdminData = async (): Promise<void> => {
     setLoading(true);
     setError(null);
@@ -211,48 +436,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           loadWorkloadIdentityKeys(),
         ]);
       } else if (section === "security") {
-        const [usersResponse, auditResponse, pingResponse, metaResponse, samlResponse, oidcResponse, ldapResponse] = await Promise.all([
-          fetchAllApiPages<DataItem>("/admin/users?page[size]=100"),
-          fetchApi("/api/v2/admin/audit-logs"),
-          fetchApi("/api/v2/ping"),
-          fetchApi("/api/v2/meta"),
-          fetchApi("/api/v2/admin/saml-settings"),
-          fetchApi("/api/v2/admin/oidc-settings"),
-          fetchApi("/api/v2/admin/ldap-settings"),
-        ]);
-        setUsers(usersResponse);
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        setAuditLogs((auditResponse as { data?: DataItem[] }).data ?? []);
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const ping = pingResponse as { "signup-enabled"?: boolean };
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-        const sandbox = (metaResponse as {
-          data?: { attributes?: { "run-sandbox"?: { enabled?: boolean; available?: boolean; reason?: string | null; "extra-rw-allowed"?: boolean; "net-policy"?: string; "net-scope"?: string | null } } };
-        }).data?.attributes?.["run-sandbox"];
-        const rawNetPolicy = sandbox?.["net-policy"];
-        const netPolicy = rawNetPolicy === "deny" || rawNetPolicy === "invalid" ? rawNetPolicy : "allow";
-        const rawNetScope = sandbox?.["net-scope"];
-        setSecuritySummary({
-          signupEnabled: ping["signup-enabled"] === true,
-          sandboxEnabled: sandbox?.enabled === true,
-          sandboxAvailable: sandbox?.available === true,
-          sandboxReason: isString(sandbox?.reason) ? sandbox.reason : null,
-          sandboxExtraRwAllowed: sandbox?.["extra-rw-allowed"] === true,
-          sandboxNetPolicy: netPolicy,
-          sandboxNetScope: isString(rawNetScope) ? rawNetScope : null,
-        });
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const samlIsEnabled = (samlResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const oidcIsEnabled = (oidcResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const ldapIsEnabled = (ldapResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
-        setSamlEnabled(samlIsEnabled);
-        setPersistedSamlEnabled(samlIsEnabled);
-        setOidcEnabled(oidcIsEnabled);
-        setPersistedOidcEnabled(oidcIsEnabled);
-        setLdapEnabled(ldapIsEnabled);
-        setPersistedLdapEnabled(ldapIsEnabled);
+        await loadSecuritySection();
       } else if (section === "users") {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const res = await fetchApi("/api/v2/admin/users") as { data: DataItem[] };
@@ -461,29 +645,13 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   };
   const handleSaveLdap = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    // Client-side mirror of the API validation so the admin sees the error
-    // before submitting an unusable configuration.
-    if (ldapEnabled && (ldapHost.trim() === "" || ldapBaseDn.trim() === "")) {
-      setLdapError("Host and Base DN are required when LDAP is enabled.");
-      return;
-    }
-    // The port must be usable whenever the form is saved, even while LDAP is
-    // disabled: a dormant misconfiguration breaks the next enable.
-    if (!Number.isInteger(ldapPort) || ldapPort < 1 || ldapPort > 65535) {
-      setLdapError("Port must be between 1 and 65535.");
-      return;
-    }
-    if (ldapEnabled && !ldapUserFilter.includes("{{username}}")) {
-      setLdapError("User filter must contain the {{username}} placeholder.");
-      return;
-    }
-    if (ldapBindDn.trim() !== "" && ldapBindPassword === "" && !ldapBindPasswordSet) {
-      setLdapError("A bind password is required when a bind DN is set.");
-      return;
-    }
-    // Never allow the last authentication method to be switched off.
-    if (!ldapEnabled && !localAuthEnabled && persistedSamlEnabled === false && persistedOidcEnabled === false) {
-      setLdapError("At least one authentication method must remain enabled.");
+    const validationError = validateLdapForm(
+      ldapEnabled, ldapHost, ldapBaseDn, ldapPort, ldapUserFilter,
+      ldapBindDn, ldapBindPassword, ldapBindPasswordSet,
+      localAuthEnabled, persistedSamlEnabled, persistedOidcEnabled,
+    );
+    if (validationError !== null) {
+      setLdapError(validationError);
       return;
     }
     const body = {
@@ -694,62 +862,40 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         </div>
       ) : (
         <>
-          {/* SECURITY OVERVIEW TAB */}
-          {section === "security" && (
-            <SecurityOverview
-              navigate={navigate}
-              samlEnabled={samlEnabled}
-              oidcEnabled={oidcEnabled}
-              ldapEnabled={ldapEnabled}
-              securitySummary={securitySummary}
-              users={users}
-              auditLogs={auditLogs}
-            />
-          )}
-          {/* USERS TAB */}
-          {section === "users" && (
-            <UsersAdmin
-              users={users}
-              setCreateDialogOpen={setCreateDialogOpen}
-              setDeleteUserId={setDeleteUserId}
-              loadAdminData={loadAdminData}
-            />
-          )}
-          {/* ORGANIZATIONS TAB */}
-          {section === "orgs" && (
-            <OrgsAdmin orgs={orgs} />
-          )}
-          {/* WORKSPACES TAB */}
-          {section === "workspaces" && (
-            <WorkspacesAdmin workspaces={workspaces} />
-          )}
-          {/* RUNS TAB */}
-          {section === "runs" && (
-            <RunsAdmin runs={runs} queueMeta={runQueueMeta} handleCancelRun={handleCancelRun} />
-          )}
-          {/* TOOL VERSIONS TAB */}
-          {section === "versions" && (
-            <VersionsAdmin
-              handleAddVersion={handleAddVersion}
-              newVersion={newVersion}
-              setNewVersion={setNewVersion}
-              newUrl={newUrl}
-              setNewUrl={setNewUrl}
-              newSha={newSha}
-              setNewSha={setNewSha}
-              tfVersions={tfVersions}
-              setVersionToDelete={setVersionToDelete}
-            />
-          )}
-          {/* AUDIT LOGS TAB */}
-          {section === "audit" && (
-            <AuditAdmin auditLogs={auditLogs} />
-          )}
-          {/* AUTHENTICATION TAB */}
-          {section === "auth" && (
-            <>
-              <AuthAdmin
-              general={{
+          <AdminSectionContent
+            section={section}
+            security={{
+              navigate: (path: string): void => { void navigate(path); },
+              samlEnabled,
+              oidcEnabled,
+              ldapEnabled,
+              securitySummary,
+              users,
+              auditLogs,
+            }}
+            users={{
+              users,
+              setCreateDialogOpen,
+              setDeleteUserId,
+              loadAdminData,
+            }}
+            orgs={{ orgs }}
+            workspaces={{ workspaces }}
+            runs={{ runs, queueMeta: runQueueMeta, handleCancelRun }}
+            versions={{
+              handleAddVersion,
+              newVersion,
+              setNewVersion,
+              newUrl,
+              setNewUrl,
+              newSha,
+              setNewSha,
+              tfVersions,
+              setVersionToDelete,
+            }}
+            audit={{ auditLogs }}
+            auth={{
+              general: {
                 loading: generalLoading,
                 saving: generalSaving,
                 error: generalError,
@@ -763,8 +909,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                 persistedOidcEnabled,
                 persistedLdapEnabled,
                 handleSave: handleSaveGeneral,
-              }}
-              saml={{
+              },
+              saml: {
                 loading: samlLoading,
                 saving: samlSaving,
                 error: samlError,
@@ -797,8 +943,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                 acsUrl: samlAcsUrl,
                 metadataUrl: samlMetadataUrl,
                 handleSave: handleSaveSaml,
-              }}
-              oidc={{
+              },
+              oidc: {
                 loading: oidcLoading,
                 saving: oidcSaving,
                 error: oidcError,
@@ -820,8 +966,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                 signingAlg: oidcSigningAlg,
                 setSigningAlg: setOidcSigningAlg,
                 handleSave: handleSaveOidc,
-              }}
-              ldap={{
+              },
+              ldap: {
                 loading: ldapLoading,
                 saving: ldapSaving,
                 error: ldapError,
@@ -851,29 +997,15 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                 attrDisplayName: ldapAttrDisplayName,
                 setAttrDisplayName: setLdapAttrDisplayName,
                 handleSave: handleSaveLdap,
-              }}
-              />
-            <div className="space-y-4 rounded-md border border-border p-5">
-              <div>
-                <h2 className="text-base font-semibold">Workload identity signing keys</h2>
-                <p className="mt-1 text-sm text-muted-foreground">Dynamic provider credentials use the public JWKS at <code>/.well-known/jwks</code>. Retired keys remain available until trimmed.</p>
-              </div>
-              {workloadIdentityError !== null && <p role="alert" className="text-sm text-destructive">{workloadIdentityError}</p>}
-              <div className="space-y-2 text-sm">
-                {workloadIdentityKeys.length === 0 ? <p className="text-muted-foreground">No signing keys have been generated yet.</p> : workloadIdentityKeys.map((key): React.JSX.Element => (
-                  <div key={key.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-border/70 px-3 py-2">
-                    <code className="text-xs">{attrString(key.attributes, "key-id", key.id)}</code>
-                    <span className="text-muted-foreground">{attrString(key.attributes, "status", "unknown")}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={(): void => { void runWorkloadIdentityAction("rotate"); }} disabled={workloadIdentityAction !== null}>Rotate key</Button>
-                <Button variant="outline" size="sm" onClick={(): void => { void runWorkloadIdentityAction("trim"); }} disabled={workloadIdentityAction !== null}>Trim retired keys</Button>
-              </div>
-            </div>
-            </>
-          )}
+              },
+            }}
+            workload={{
+              error: workloadIdentityError,
+              keys: workloadIdentityKeys,
+              action: workloadIdentityAction,
+              onAction: (action: "rotate" | "trim"): void => { void runWorkloadIdentityAction(action); },
+            }}
+          />
         </>
       )}
       <ConfirmDialog

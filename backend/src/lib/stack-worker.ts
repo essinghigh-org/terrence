@@ -434,90 +434,122 @@ export function isCurrentStackStateRecord(record: Readonly<{ status: string; pay
   return record.status === "current" && record.payload?.["is-current"] !== false;
 }
 
+async function assertStateLockOwnership(stackId: string, deployment: string, runId: string, fencingToken: number | undefined): Promise<void> {
+  if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) {
+    throw new Error("Stack state lock ownership was lost before state publication");
+  }
+}
+
+async function publishStatePayload(path: string, temporary: string, statePayload: string | null): Promise<boolean> {
+  if (statePayload !== null) {
+    try {
+      JSON.parse(statePayload);
+      await writeFile(temporary, statePayload, { mode: 0o600 });
+      return true;
+    } catch {
+      await rm(temporary, { force: true });
+    }
+  }
+  if (!(await Bun.file(path).exists())) {
+    await writeFile(temporary, JSON.stringify({ version: 4, terraform_version: "", serial: 0, lineage: crypto.randomUUID(), outputs: {}, resources: [] }), { mode: 0o600 });
+    return true;
+  }
+  return false;
+}
+
+async function publishStateSnapshot(
+  path: string,
+  snapshotPath: string,
+  stackId: string,
+  deployment: string,
+  runId: string,
+  fencingToken: number | undefined,
+): Promise<void> {
+  await mkdir(dirname(snapshotPath), { recursive: true, mode: 0o700 });
+  const snapshotTemporary = `${snapshotPath}.${crypto.randomUUID()}.tmp`;
+  try {
+    await assertStateLockOwnership(stackId, deployment, runId, fencingToken);
+    await copyFile(path, snapshotTemporary);
+    await chmod(snapshotTemporary, 0o600);
+    await assertStateLockOwnership(stackId, deployment, runId, fencingToken);
+    await rename(snapshotTemporary, snapshotPath);
+  } catch (error: unknown) {
+    await rm(snapshotTemporary, { force: true });
+    throw error;
+  }
+}
+
+async function recordStatePublication(
+  stackId: string,
+  deployment: string,
+  runId: string,
+  recordId: string,
+  snapshotPath: string,
+  fencingToken: number | undefined,
+): Promise<void> {
+  await db.transaction(async (tx): Promise<void> => {
+    if (fencingToken !== undefined) {
+      const now = Date.now();
+      const renewed = await tx.update(stackStateLocks).set({ leaseExpiresAt: now + STACK_STATE_LOCK_LEASE_MS, updatedAt: now }).where(and(
+        eq(stackStateLocks.stackId, stackId),
+        eq(stackStateLocks.deployment, deployment),
+        eq(stackStateLocks.runId, runId),
+        gt(stackStateLocks.leaseExpiresAt, now),
+        eq(stackStateLocks.fencingToken, fencingToken),
+      )).returning({ id: stackStateLocks.id });
+      if (renewed.length === 0) throw new Error("Stack state lock ownership was lost during state publication");
+    }
+    const existing = await tx.query.stackRecords.findMany({ where: and(
+      eq(stackRecords.stackId, stackId),
+      eq(stackRecords.recordType, "stack-states"),
+      eq(stackRecords.name, deployment),
+    ) });
+    const currentRecords = existing.filter((record) => record.status === "current");
+    const now = Date.now();
+    for (const record of currentRecords) {
+      await tx.update(stackRecords).set({
+        status: "superseded",
+        payload: { ...(record.payload ?? {}), "is-current": false },
+        updatedAt: now,
+      }).where(and(eq(stackRecords.id, record.id), eq(stackRecords.status, "current")));
+    }
+    await tx.insert(stackRecords).values({
+      id: recordId,
+      stackId,
+      parentId: runId,
+      recordType: "stack-states",
+      name: deployment,
+      status: "current",
+      payload: { generation: existing.length + 1, "is-current": true, runId, descriptionPath: snapshotPath, components: [] },
+      createdAt: now,
+      updatedAt: now,
+    });
+  });
+}
+
 export async function saveStackState(stackId: string, deployment: string, runId: string, statePayload: string | null = null, fencingToken?: number): Promise<string> {
   const path = stateFilePath(stackId, deployment);
   const recordId = newResourceId("sst");
   const snapshotPath = stateSnapshotPath(stackId, deployment, recordId);
   let temporary: string | null = null;
-  let snapshotTemporary: string | null = null;
   let snapshotPublished = false;
   try {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) throw new Error("Stack state lock ownership was lost before state publication");
+    await assertStateLockOwnership(stackId, deployment, runId, fencingToken);
     temporary = `${path}.${crypto.randomUUID()}.tmp`;
-    let temporaryState = false;
-    let nextStatePayload = statePayload;
-    if (nextStatePayload !== null) {
-      try {
-        JSON.parse(nextStatePayload);
-        await writeFile(temporary, nextStatePayload, { mode: 0o600 });
-        temporaryState = true;
-      } catch {
-        nextStatePayload = null;
-        await rm(temporary, { force: true });
-      }
-    }
-    if (!temporaryState && !(await Bun.file(path).exists())) {
-      await writeFile(temporary, JSON.stringify({ version: 4, terraform_version: "", serial: 0, lineage: crypto.randomUUID(), outputs: {}, resources: [] }), { mode: 0o600 });
-      temporaryState = true;
-    }
+    const temporaryState = await publishStatePayload(path, temporary, statePayload);
     if (temporaryState) {
-      if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) throw new Error("Stack state lock ownership was lost before state publication");
+      await assertStateLockOwnership(stackId, deployment, runId, fencingToken);
       await rename(temporary, path);
     }
     temporary = null;
     if (!(await Bun.file(path).exists())) throw new Error("Stack state could not be read for publication");
-    await mkdir(dirname(snapshotPath), { recursive: true, mode: 0o700 });
-    snapshotTemporary = `${snapshotPath}.${crypto.randomUUID()}.tmp`;
-    if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) throw new Error("Stack state lock ownership was lost before state publication");
-    await copyFile(path, snapshotTemporary);
-    await chmod(snapshotTemporary, 0o600);
-    if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) throw new Error("Stack state lock ownership was lost before state publication");
-    await rename(snapshotTemporary, snapshotPath);
-    snapshotTemporary = null;
-    await db.transaction(async (tx): Promise<void> => {
-      if (fencingToken !== undefined) {
-        const now = Date.now();
-        const renewed = await tx.update(stackStateLocks).set({ leaseExpiresAt: now + STACK_STATE_LOCK_LEASE_MS, updatedAt: now }).where(and(
-          eq(stackStateLocks.stackId, stackId),
-          eq(stackStateLocks.deployment, deployment),
-          eq(stackStateLocks.runId, runId),
-          gt(stackStateLocks.leaseExpiresAt, now),
-          eq(stackStateLocks.fencingToken, fencingToken),
-        )).returning({ id: stackStateLocks.id });
-        if (renewed.length === 0) throw new Error("Stack state lock ownership was lost during state publication");
-      }
-      const existing = await tx.query.stackRecords.findMany({ where: and(
-        eq(stackRecords.stackId, stackId),
-        eq(stackRecords.recordType, "stack-states"),
-        eq(stackRecords.name, deployment),
-      ) });
-      const currentRecords = existing.filter((record) => record.status === "current");
-      const now = Date.now();
-      for (const record of currentRecords) {
-        await tx.update(stackRecords).set({
-          status: "superseded",
-          payload: { ...(record.payload ?? {}), "is-current": false },
-          updatedAt: now,
-        }).where(and(eq(stackRecords.id, record.id), eq(stackRecords.status, "current")));
-      }
-      await tx.insert(stackRecords).values({
-        id: recordId,
-        stackId,
-        parentId: runId,
-        recordType: "stack-states",
-        name: deployment,
-        status: "current",
-        payload: { generation: existing.length + 1, "is-current": true, runId, descriptionPath: snapshotPath, components: [] },
-        createdAt: now,
-        updatedAt: now,
-      });
-    });
+    await publishStateSnapshot(path, snapshotPath, stackId, deployment, runId, fencingToken);
+    await recordStatePublication(stackId, deployment, runId, recordId, snapshotPath, fencingToken);
     snapshotPublished = true;
     return path;
   } catch (error: unknown) {
     if (temporary !== null) await rm(temporary, { force: true });
-    if (snapshotTemporary !== null) await rm(snapshotTemporary, { force: true });
     if (!snapshotPublished) await rm(snapshotPath, { force: true });
     throw error;
   }

@@ -76,6 +76,231 @@ function stateSerial(value: unknown): string {
   return isNumber(value) ? `#${String(value)}` : "Unknown serial";
 }
 
+type PendingStateUpload = {
+  fileName: string;
+  rawText: string;
+  serial: number | null;
+  lineage: string | null;
+};
+
+function StateVersionCell({ item }: Readonly<{ item: StateItem }>): React.JSX.Element {
+  return (
+    <TableCell>
+      {/* SAFETY: the fixture field matches the API contract type. */}
+      <p className="font-bold">{stateSerial(item.attributes["serial"])}</p>
+      <p className="font-mono text-xs text-muted-foreground" title={item.id}>{shortStateId(item.id)}</p>
+      <p className="mt-1 text-2xs text-muted-foreground" title={isString(item.attributes["lineage"]) ? item.attributes["lineage"] : undefined}>
+        Lineage · {stateLineage(item.attributes["lineage"])}
+      </p>
+      <p className="text-2xs text-muted-foreground">
+        Processing · {stateStatus(item.attributes["summary-status"] ?? item.attributes["status"])}
+      </p>
+    </TableCell>
+  );
+}
+
+function StateRunCell({ item, orgName, workspaceName }: Readonly<{
+  item: StateItem;
+  orgName: string | undefined;
+  workspaceName: string | undefined;
+}>): React.JSX.Element {
+  return (
+    <TableCell className="font-mono text-xs">
+      {item.relationships?.run?.data?.id != null ? (
+        <div className="flex flex-col gap-0.5">
+          <Link
+            to={`/app/${encodeURIComponent(orgName ?? "")}/workspaces/${encodeURIComponent(workspaceName ?? "")}/runs/${encodeURIComponent(item.relationships.run.data.id)}`}
+            className="text-primary hover:underline"
+          >
+            {isString(item.attributes["run-message"]) && item.attributes["run-message"] !== ""
+              ? item.attributes["run-message"]
+              : "Manual run"}
+          </Link>
+          <span className="text-2xs text-muted-foreground">
+            <span className="font-medium text-foreground/70">Run</span>{" · "}
+            <span>{isString(item.attributes["run-status"])
+              ? formatRunStatusForUi(item.attributes["run-status"])
+              : "Run Status Unknown"}</span>
+          </span>
+          <span className="text-2xs text-muted-foreground">
+            <span className="font-medium text-foreground/70">State</span>{" · "}<span>{stateStatus(item.attributes["status"])}</span>
+          </span>
+        </div>
+      ) : (
+        <div className="space-y-0.5">
+          <span>—</span>
+          <span className="block text-2xs text-muted-foreground">Manual or imported state</span>
+        </div>
+      )}
+    </TableCell>
+  );
+}
+
+function StateCommitCell({ item }: Readonly<{ item: StateItem }>): React.JSX.Element {
+  return (
+    <TableCell className="font-mono text-xs">
+      {isString(item.attributes["vcs-commit-sha"]) ? (
+        isString(item.attributes["vcs-commit-url"]) && safeHttpUrl(item.attributes["vcs-commit-url"]) !== null ? (
+          <a
+            href={safeHttpUrl(item.attributes["vcs-commit-url"]) ?? undefined}
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary hover:underline"
+          >
+            {item.attributes["vcs-commit-sha"].slice(0, 8)}
+          </a>
+        ) : item.attributes["vcs-commit-sha"].slice(0, 8)
+      ) : "—"}
+    </TableCell>
+  );
+}
+
+function StateActionsCell({
+  item,
+  loadingStateId,
+  canRollback,
+  rollingBack,
+  onView,
+  onDownload,
+  onRollback,
+}: Readonly<{
+  item: StateItem;
+  loadingStateId: string | null;
+  canRollback: boolean;
+  rollingBack: boolean;
+  onView: (item: StateItem) => void;
+  onDownload: (item: StateItem) => void;
+  onRollback: (item: StateItem) => void;
+}>): React.JSX.Element {
+  return (
+    <TableCell>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={loadingStateId === item.id || item.attributes["state-representation"] === "opentofu-encrypted"}
+          onClick={(): void => { onView(item); }}
+        >
+          <Eye className="size-3.5" aria-hidden="true" />
+          {loadingStateId === item.id ? "Loading…" : "View JSON"}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          title="Download raw state — may contain secrets"
+          aria-describedby={`state-download-warning-${item.id}`}
+          onClick={(): void => { onDownload(item); }}
+        >
+          <Download className="size-3.5" aria-hidden="true" />
+          Download raw state
+        </Button>
+        {canRollback && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={rollingBack || item.attributes["state-representation"] === "opentofu-encrypted"}
+            onClick={(): void => { onRollback(item); }}
+          >
+            <RotateCcw className="size-3.5" aria-hidden="true" />
+            Rollback as new current
+          </Button>
+        )}
+      </div>
+      <span id={`state-download-warning-${item.id}`} className="mt-1 block text-2xs text-muted-foreground">Raw download may contain secrets.</span>
+      {item.attributes["state-representation"] === "opentofu-encrypted" && (
+        <span className="mt-1 block text-xs text-muted-foreground">Client-encrypted state: structured inspection is unavailable. Download it with its client keys for recovery.</span>
+      )}
+    </TableCell>
+  );
+}
+
+function currentStateMarkers(loadState: LoadState): Readonly<{ serial: number | null; lineage: string | null }> {
+  const latest = loadState.kind === "ready" && loadState.states.length > 0 ? loadState.states[0] : undefined;
+  const rawLineage = latest?.attributes["lineage"];
+  return {
+    serial: latest !== undefined && isNumber(latest.attributes["serial"]) ? latest.attributes["serial"] : null,
+    lineage: isString(rawLineage) && rawLineage !== "" ? rawLineage : null,
+  };
+}
+
+function uploadStaleness(
+  pendingUpload: PendingStateUpload,
+  currentSerial: number | null,
+  currentLineage: string | null,
+): Readonly<{ stale: boolean; mismatch: boolean }> {
+  return {
+    stale: pendingUpload.serial !== null && currentSerial !== null && pendingUpload.serial <= currentSerial,
+    mismatch: pendingUpload.lineage !== null && currentLineage !== null && pendingUpload.lineage !== currentLineage,
+  };
+}
+
+function isClientRejection(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status >= 400 && error.status < 500;
+}
+
+function RollbackErrorPanel({ error, workspaceId, onRetry }: Readonly<{
+  error: unknown;
+  workspaceId: string;
+  onRetry: () => void;
+}>): React.JSX.Element | null {
+  if (error === null) return null;
+  return (
+    <ErrorPanel
+      title={isClientRejection(error) ? "State promotion was rejected" : "State promotion needs reconciliation"}
+      message={isClientRejection(error)
+        ? `${error.message} No state change was committed.`
+        : "The server did not confirm whether promotion committed. Refresh state history before trying again."}
+      error={error}
+      retryLabel="Refresh state history"
+      onRetry={onRetry}
+      diagnosticContext={{ screen: "state-history", workspaceId, operation: "rollback" }}
+    />
+  );
+}
+
+function UploadStateButton({ uploading, onSelectFile }: Readonly<{
+  uploading: boolean;
+  onSelectFile: () => void;
+}>): React.JSX.Element {
+  return (
+    <Button
+      variant="outline"
+      disabled={uploading}
+      onClick={onSelectFile}
+    >
+      {uploading ? <Spinner className="size-4" /> : <Upload className="size-4" />}
+      {uploading ? "Uploading…" : "Upload state"}
+    </Button>
+  );
+}
+
+function uploadDescriptionContent(
+  pendingUpload: PendingStateUpload | null,
+  loadState: LoadState,
+): React.ReactNode {
+  if (pendingUpload === null) return null;
+  const current = currentStateMarkers(loadState);
+  const { stale, mismatch } = uploadStaleness(pendingUpload, current.serial, current.lineage);
+  return (
+    <span className="block space-y-1">
+      <span className="block">File <strong>{pendingUpload.fileName}</strong> becomes the latest state version.</span>
+      <span className="block">
+        Uploaded serial: {pendingUpload.serial ?? "unknown"} · Lineage: {pendingUpload.lineage ?? "unknown"}
+      </span>
+      <span className="block">
+        Current serial: {current.serial ?? "none"} · Lineage: {current.lineage ?? "unknown"}
+      </span>
+      {(stale || mismatch) && (
+        <span className="block font-medium text-destructive">
+          {stale ? "The uploaded serial is not newer than the current one. " : ""}
+          {mismatch ? "The lineage does not match the current state — this looks like a different state entirely. " : ""}
+          Upload only if you intend to replace history.
+        </span>
+      )}
+    </span>
+  );
+}
+
 function stateLineage(value: unknown): string {
   return isString(value) && value !== "" ? shortStateId(value) : "Unknown lineage";
 }
@@ -288,32 +513,19 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
               aria-label="Upload Terraform/OpenTofu state"
               onChange={(event): void => { void handleUpload(event); }}
             />
-            <Button
-              variant="outline"
-              disabled={uploading}
-              onClick={(): void => { fileInputRef.current?.click(); }}
-            >
-              {uploading ? <Spinner className="size-4" /> : <Upload className="size-4" />}
-              {uploading ? "Uploading…" : "Upload state"}
-            </Button>
+            <UploadStateButton
+              uploading={uploading}
+              onSelectFile={(): void => { fileInputRef.current?.click(); }}
+            />
           </>
         )}
       </div>
 
-      {rollbackError !== null && (
-        <ErrorPanel
-          title={rollbackError instanceof ApiError && rollbackError.status >= 400 && rollbackError.status < 500
-            ? "State promotion was rejected"
-            : "State promotion needs reconciliation"}
-          message={rollbackError instanceof ApiError && rollbackError.status >= 400 && rollbackError.status < 500
-            ? `${rollbackError.message} No state change was committed.`
-            : "The server did not confirm whether promotion committed. Refresh state history before trying again."}
-          error={rollbackError}
-          retryLabel="Refresh state history"
-          onRetry={(): void => { setRetry((value: number): number => value + 1); }}
-          diagnosticContext={{ screen: "state-history", workspaceId, operation: "rollback" }}
-        />
-      )}
+      <RollbackErrorPanel
+        error={rollbackError}
+        workspaceId={workspaceId}
+        onRetry={(): void => { setRetry((value: number): number => value + 1); }}
+      />
 
       <div className="border rounded-md">
         {loadState.kind === "ready" && loadState.refreshError !== undefined && (
@@ -362,98 +574,19 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
             )}
             {loadState.kind === "ready" && loadState.states.map((s: StateItem): React.JSX.Element => (
               <TableRow key={s.id}>
-                <TableCell>
-                  {/* SAFETY: the fixture field matches the API contract type. */}
-                  <p className="font-bold">{stateSerial(s.attributes["serial"])}</p>
-                  <p className="font-mono text-xs text-muted-foreground" title={s.id}>{shortStateId(s.id)}</p>
-                  <p className="mt-1 text-2xs text-muted-foreground" title={isString(s.attributes["lineage"]) ? s.attributes["lineage"] : undefined}>
-                    Lineage · {stateLineage(s.attributes["lineage"])}
-                  </p>
-                  <p className="text-2xs text-muted-foreground">
-                    Processing · {stateStatus(s.attributes["summary-status"] ?? s.attributes["status"])}
-                  </p>
-                </TableCell>
+                <StateVersionCell item={s} />
                 <TableCell className="text-sm">{formatDate(s.attributes["created-at"])}</TableCell>
-                <TableCell className="font-mono text-xs">
-                  {s.relationships?.run?.data?.id != null ? (
-                    <div className="flex flex-col gap-0.5">
-                      <Link
-                        to={`/app/${encodeURIComponent(orgName ?? "")}/workspaces/${encodeURIComponent(workspaceName ?? "")}/runs/${encodeURIComponent(s.relationships.run.data.id)}`}
-                        className="text-primary hover:underline"
-                      >
-                        {isString(s.attributes["run-message"]) && s.attributes["run-message"] !== ""
-                          ? s.attributes["run-message"]
-                          : "Manual run"}
-                      </Link>
-                      <span className="text-2xs text-muted-foreground">
-                        <span className="font-medium text-foreground/70">Run</span>{" · "}
-                        <span>{isString(s.attributes["run-status"])
-                          ? formatRunStatusForUi(s.attributes["run-status"])
-                          : "Run Status Unknown"}</span>
-                      </span>
-                      <span className="text-2xs text-muted-foreground">
-                        <span className="font-medium text-foreground/70">State</span>{" · "}<span>{stateStatus(s.attributes["status"])}</span>
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="space-y-0.5">
-                      <span>—</span>
-                      <span className="block text-2xs text-muted-foreground">Manual or imported state</span>
-                    </div>
-                  )}
-                </TableCell>
-                <TableCell className="font-mono text-xs">
-                  {isString(s.attributes["vcs-commit-sha"]) ? (
-                    isString(s.attributes["vcs-commit-url"]) && safeHttpUrl(s.attributes["vcs-commit-url"]) !== null ? (
-                      <a
-                        href={safeHttpUrl(s.attributes["vcs-commit-url"]) ?? undefined}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-primary hover:underline"
-                      >
-                        {s.attributes["vcs-commit-sha"].slice(0, 8)}
-                      </a>
-                    ) : s.attributes["vcs-commit-sha"].slice(0, 8)
-                  ) : "—"}
-                </TableCell>
-                <TableCell>
-                  <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={loadingStateId === s.id || s.attributes["state-representation"] === "opentofu-encrypted"}
-                    onClick={(): void => { void handleViewJson(s); }}
-                  >
-                    <Eye className="size-3.5" aria-hidden="true" />
-                    {loadingStateId === s.id ? "Loading…" : "View JSON"}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    title="Download raw state — may contain secrets"
-                    aria-describedby={`state-download-warning-${s.id}`}
-                    onClick={(): void => { void handleDownload(s); }}
-                  >
-                    <Download className="size-3.5" aria-hidden="true" />
-                    Download raw state
-                  </Button>
-                  {canRollback && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={rollingBack || s.attributes["state-representation"] === "opentofu-encrypted"}
-                      onClick={(): void => { setPendingRollback(s); }}
-                    >
-                      <RotateCcw className="size-3.5" aria-hidden="true" />
-                      Rollback as new current
-                    </Button>
-                  )}
-                  </div>
-                  <span id={`state-download-warning-${s.id}`} className="mt-1 block text-2xs text-muted-foreground">Raw download may contain secrets.</span>
-                  {s.attributes["state-representation"] === "opentofu-encrypted" && (
-                    <span className="mt-1 block text-xs text-muted-foreground">Client-encrypted state: structured inspection is unavailable. Download it with its client keys for recovery.</span>
-                  )}
-                </TableCell>
+                <StateRunCell item={s} orgName={orgName} workspaceName={workspaceName} />
+                <StateCommitCell item={s} />
+                <StateActionsCell
+                  item={s}
+                  loadingStateId={loadingStateId}
+                  canRollback={canRollback}
+                  rollingBack={rollingBack}
+                  onView={handleViewJson}
+                  onDownload={handleDownload}
+                  onRollback={setPendingRollback}
+                />
               </TableRow>
             ))}
             {loadState.kind === "ready" && loadState.states.length === 0 && (
@@ -481,34 +614,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
         open={pendingUpload !== null}
         onOpenChange={(open): void => { if (!open) setPendingUpload(null); }}
         title="Upload state version?"
-        description={((): React.ReactNode => {
-          if (pendingUpload === null) return null;
-          const latest = loadState.kind === "ready" && loadState.states.length > 0 ? loadState.states[0] : undefined;
-          const currentSerial = latest !== undefined && isNumber(latest.attributes["serial"]) ? latest.attributes["serial"] : null;
-          const currentLineage = isString(latest?.attributes["lineage"]) && latest.attributes["lineage"] !== ""
-            ? latest.attributes["lineage"]
-            : null;
-          const stale = pendingUpload.serial !== null && currentSerial !== null && pendingUpload.serial <= currentSerial;
-          const mismatch = pendingUpload.lineage !== null && currentLineage !== null && pendingUpload.lineage !== currentLineage;
-          return (
-            <span className="block space-y-1">
-              <span className="block">File <strong>{pendingUpload.fileName}</strong> becomes the latest state version.</span>
-              <span className="block">
-                Uploaded serial: {pendingUpload.serial ?? "unknown"} · Lineage: {pendingUpload.lineage ?? "unknown"}
-              </span>
-              <span className="block">
-                Current serial: {currentSerial ?? "none"} · Lineage: {currentLineage ?? "unknown"}
-              </span>
-              {(stale || mismatch) && (
-                <span className="block font-medium text-destructive">
-                  {stale ? "The uploaded serial is not newer than the current one. " : ""}
-                  {mismatch ? "The lineage does not match the current state — this looks like a different state entirely. " : ""}
-                  Upload only if you intend to replace history.
-                </span>
-              )}
-            </span>
-          );
-        })()}
+        description={uploadDescriptionContent(pendingUpload, loadState)}
         confirmText="Upload state"
         confirmVariant="destructive"
         onConfirm={(): void => { void performUpload(); }}

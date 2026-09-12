@@ -285,6 +285,36 @@ async function stackAgentPayload(details: ClaimedStackAgentJob, baseUrl: string)
  * directly. An absent or malformed credential is never treated as anonymous
  * access.
  */
+async function claimedPoolJob(
+  pool: Readonly<{ poolId: string }>,
+  jobId: string,
+  fencingToken: number,
+): Promise<ClaimedAgentJob | undefined> {
+  const job = await db.query.agentJobs.findFirst({
+    where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
+  });
+  if (job?.agentId === null || job?.agentId === undefined) return undefined;
+  const agent = await db.query.agents.findFirst({ where: eq(agents.id, job.agentId) });
+  if (agent === undefined || agent.agentPoolId !== pool.poolId) return undefined;
+  return findClaimedAgentJob(agent.id, jobId, fencingToken);
+}
+
+async function claimedSignedJob(
+  ctx: AgentCtx,
+  jobId: string,
+  fencingToken: number,
+): Promise<ClaimedAgentJob | undefined> {
+  const path = new URL(ctx.request.url).pathname;
+  const signed = validSignedApiURL(ctx.request, path, ctx.request.method)
+    || validSignedApiURL(ctx.request, path, "*");
+  if (!signed) return undefined;
+  const job = await db.query.agentJobs.findFirst({
+    where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
+  });
+  if (job?.agentId === null || job?.agentId === undefined) return undefined;
+  return findClaimedAgentJob(job.agentId, jobId, fencingToken);
+}
+
 async function claimedJobForArtifact(
   ctx: AgentCtx,
   jobId: string,
@@ -297,25 +327,11 @@ async function claimedJobForArtifact(
   if (token !== undefined) {
     const pool = await poolForToken(token);
     if (pool !== undefined) {
-      const job = await db.query.agentJobs.findFirst({
-        where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
-      });
-      if (job?.agentId === null || job?.agentId === undefined) return undefined;
-      const agent = await db.query.agents.findFirst({ where: eq(agents.id, job.agentId) });
-      if (agent === undefined || agent.agentPoolId !== pool.poolId) return undefined;
-      return findClaimedAgentJob(agent.id, jobId, fencingToken);
+      return claimedPoolJob(pool, jobId, fencingToken);
     }
   }
 
-  const path = new URL(ctx.request.url).pathname;
-  const signed = validSignedApiURL(ctx.request, path, ctx.request.method)
-    || validSignedApiURL(ctx.request, path, "*");
-  if (!signed) return undefined;
-  const job = await db.query.agentJobs.findFirst({
-    where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
-  });
-  if (job?.agentId === null || job?.agentId === undefined) return undefined;
-  return findClaimedAgentJob(job.agentId, jobId, fencingToken);
+  return claimedSignedJob(ctx, jobId, fencingToken);
 }
 
 async function acknowledgeArtifact(ctx: AgentCtx): Promise<unknown> {
@@ -428,6 +444,486 @@ async function jsonBody(ctx: AgentCtx): Promise<Record<string, unknown> | undefi
   return jsonBodyValue(ctx);
 }
 
+type RegistrationFields = {
+  name: string;
+  arch: string | null;
+  version: string | null;
+  accept: string;
+  requestForwarding: boolean;
+  hyok: boolean;
+  iacBinaries: string[];
+};
+
+function negotiateRegistrationProtocol(
+  ctx: AgentCtx,
+  body: Record<string, unknown>,
+  set: { status?: number; headers?: Record<string, string | number> },
+): ReturnType<typeof negotiateAgentProtocol> | { error: unknown } {
+  try {
+    const negotiation = negotiateAgentProtocol(parseAgentProtocolOffer(body, ctx.request.headers));
+    protocolHeaders(set, negotiation.capabilities);
+    return negotiation;
+  } catch (error: unknown) {
+    if (error instanceof AgentProtocolNegotiationError) return { error: protocolNegotiationError(set, error) };
+    throw error;
+  }
+}
+
+// tfc-agent never sends iac-binaries; terrence-agent declares it so the
+// claim path only hands it matching jobs. Absent means terraform-only,
+// preserving the pre-capability contract.
+function parseRegistrationIacBinaries(
+  body: Record<string, unknown>,
+  set: { status?: number },
+): { iacBinaries: string[] } | { error: unknown } {
+  if (body["iac_binaries"] === undefined) return { iacBinaries: ["terraform"] };
+  if (
+    !Array.isArray(body["iac_binaries"])
+    || body["iac_binaries"].length === 0
+    || body["iac_binaries"].some((binary: unknown): boolean =>
+      typeof binary !== "string" || (binary !== "tofu" && binary !== "terraform"))
+  ) {
+    set.status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binaries must be a non-empty array of 'tofu' or 'terraform'" }] } };
+  }
+  return { iacBinaries: [...new Set(body["iac_binaries"] as string[])] };
+}
+
+function parseRegistrationFields(
+  body: Record<string, unknown>,
+  version: string | null,
+  set: { status?: number },
+): RegistrationFields | { error: unknown } {
+  const name = typeof body["name"] === "string" && body["name"] !== "" ? body["name"] : "agent";
+  const arch = typeof body["arch"] === "string" ? body["arch"] : null;
+  if (arch !== null && !AGENT_ARCHITECTURES.has(arch)) {
+    set.status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "arch must be amd64, aarch64, arm64, 386, or arm" }] } };
+  }
+  const accept = typeof body["accept"] === "string" && body["accept"] !== "" ? body["accept"] : DEFAULT_AGENT_ACCEPT;
+  if (accept !== "none" && (!/^[a-z_]+(?:,[a-z_]+)*$/.test(accept) || accept.split(",").some((value): boolean => !AGENT_WORKLOAD_TYPES.includes(value)))) {
+    set.status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "accept contains an unsupported workload type" }] } };
+  }
+  const binaries = parseRegistrationIacBinaries(body, set);
+  if ("error" in binaries) return binaries;
+  return {
+    name,
+    arch,
+    version,
+    accept,
+    requestForwarding: body["request_forwarding"] === true,
+    hyok: body["hyok"] === true,
+    iacBinaries: binaries.iacBinaries,
+  };
+}
+
+async function upsertRegistrationAgent(
+  pool: Readonly<{ poolId: string }>,
+  fields: RegistrationFields,
+  negotiation: ReturnType<typeof negotiateAgentProtocol>,
+  now: number,
+): Promise<string> {
+  const existing = await db.query.agents.findFirst({
+    where: and(eq(agents.agentPoolId, pool.poolId), eq(agents.name, fields.name)),
+  });
+  if (existing !== undefined) {
+    await db.update(agents).set({
+      architecture: fields.arch,
+      version: fields.version ?? existing.version,
+      protocolVersion: negotiation.version,
+      capabilities: [...negotiation.capabilities],
+      artifactFormats: [...negotiation.artifactFormats],
+      iacBinaries: fields.iacBinaries,
+      accept: fields.accept,
+      requestForwarding: fields.requestForwarding,
+      hyok: fields.hyok,
+      status: "idle",
+      lastPingAt: now,
+    }).where(eq(agents.id, existing.id));
+    return existing.id;
+  }
+  const agentId = newResourceId("agent");
+  await db.insert(agents).values({
+    id: agentId,
+    agentPoolId: pool.poolId,
+    name: fields.name,
+    architecture: fields.arch,
+    version: fields.version,
+    protocolVersion: negotiation.version,
+    capabilities: [...negotiation.capabilities],
+    artifactFormats: [...negotiation.artifactFormats],
+    iacBinaries: fields.iacBinaries,
+    accept: fields.accept,
+    requestForwarding: fields.requestForwarding,
+    hyok: fields.hyok,
+    status: "idle",
+    lastPingAt: now,
+  });
+  return agentId;
+}
+
+type StatusJobPayload = {
+  jobStatus: unknown;
+  jobPayload: Record<string, unknown> | null;
+  jobData: Record<string, unknown> | null;
+  runId: string | null;
+  operation: string | null;
+};
+
+function parseStatusJobPayload(body: Record<string, unknown>): StatusJobPayload {
+  const jobPayload = typeof body["job"] === "object" && body["job"] !== null ? body["job"] as Record<string, unknown> : null;
+  const jobData = jobPayload !== null && typeof jobPayload["data"] === "object" && jobPayload["data"] !== null
+    ? jobPayload["data"] as Record<string, unknown>
+    : null;
+  return {
+    jobStatus: jobPayload === null ? null : jobPayload["status"],
+    jobPayload,
+    jobData,
+    runId: jobData !== null && typeof jobData["run_id"] === "string" ? jobData["run_id"] : null,
+    operation: jobData !== null && typeof jobData["operation"] === "string" ? jobData["operation"] : null,
+  };
+}
+
+function statusResultFields(jobData: Record<string, unknown> | null, keys: readonly string[]): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  if (jobData !== null) {
+    for (const key of keys) {
+      if (jobData[key] !== undefined) result[key] = jobData[key];
+    }
+  }
+  return result;
+}
+
+async function findStatusAgentJob(
+  agentId: string,
+  runId: string,
+  phase: string,
+  fencingToken: number | undefined,
+): Promise<typeof agentJobs.$inferSelect | undefined> {
+  if (fencingToken === undefined) return undefined;
+  return db.query.agentJobs.findFirst({
+    where: and(
+      eq(agentJobs.runId, runId),
+      eq(agentJobs.phase, phase),
+      eq(agentJobs.agentId, agentId),
+      eq(agentJobs.fencingToken, fencingToken),
+      inArray(agentJobs.status, ["claimed", "canceled"]),
+    ),
+  });
+}
+
+async function completeStatusAgentJob(
+  agent: Readonly<{ id: string }>,
+  job: typeof agentJobs.$inferSelect,
+  jobPayload: Record<string, unknown>,
+  jobData: Record<string, unknown> | null,
+  jobStatus: unknown,
+  fencingToken: number,
+  set: { status?: number },
+): Promise<unknown | undefined> {
+  const errorMessage = typeof jobPayload["error"] === "string" ? jobPayload["error"] : null;
+  const result = statusResultFields(jobData, ["has_changes", "generated_configuration", "resource_additions",
+    "resource_changes", "resource_destructions", "resource_imports", "action_failures",
+    "action_invocations"]);
+  const statePayload = jsonStringOrNull(jobData?.["state"]);
+  const jsonState = jsonStringOrNull(jobData?.["json_state"]);
+  const jsonStateOutputs = jsonStringOrNull(jobData?.["json_state_outputs"]);
+  if (statePayload === undefined || jsonState === undefined || jsonStateOutputs === undefined) {
+    set.status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent state payload must be valid JSON strings" }] };
+  }
+  if (isClientEncryptedState(statePayload)) {
+    set.status = 422;
+    return { errors: [{ status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR }] };
+  }
+  if (!isAgentResultValid(result)) {
+    set.status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `result exceeds ${MAX_AGENT_RESULT_BYTES} bytes or structural limits` }] };
+  }
+  const completion: AgentJobCompletion = {
+    status: jobStatus === "finished" ? "completed" : "errored",
+    errorMessage,
+    result,
+    planJson: null,
+    statePayload,
+    jsonState,
+    jsonStateOutputs,
+    resourceAdditions: numberOrNull(result["resource_additions"]),
+    resourceChanges: numberOrNull(result["resource_changes"]),
+    resourceDestructions: numberOrNull(result["resource_destructions"]),
+    resourceImports: numberOrNull(result["resource_imports"]),
+  };
+  const completed = await completeAgentJob(agent.id, job.id, fencingToken, completion);
+  if (completed === undefined) return fencingConflict(set);
+  return undefined;
+}
+
+async function findStatusStackJob(
+  agentId: string,
+  phase: string,
+  runId: string,
+  explicitStackJobId: string | null,
+  fencingToken: number | undefined,
+): Promise<typeof stackAgentJobs.$inferSelect | undefined> {
+  const fencing = fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)];
+  if (explicitStackJobId !== null) {
+    return db.query.stackAgentJobs.findFirst({
+      where: and(
+        eq(stackAgentJobs.id, explicitStackJobId),
+        eq(stackAgentJobs.phase, phase),
+        eq(stackAgentJobs.agentId, agentId),
+        eq(stackAgentJobs.status, "claimed"),
+        ...fencing,
+      ),
+    });
+  }
+  return db.query.stackAgentJobs.findFirst({
+    where: and(
+      eq(stackAgentJobs.deploymentRunId, runId),
+      eq(stackAgentJobs.phase, phase),
+      eq(stackAgentJobs.agentId, agentId),
+      eq(stackAgentJobs.status, "claimed"),
+      ...fencing,
+    ),
+  });
+}
+
+async function completeStatusStackJob(
+  agent: Readonly<{ id: string }>,
+  jobPayload: Record<string, unknown>,
+  jobData: Record<string, unknown> | null,
+  jobStatus: unknown,
+  phase: string,
+  runId: string,
+  fencingToken: number | undefined,
+  set: { status?: number },
+): Promise<unknown | undefined> {
+  const explicitStackJobId = jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
+  const stackJob = await findStatusStackJob(agent.id, phase, runId, explicitStackJobId, fencingToken);
+  if (stackJob === undefined) return fencingConflict(set);
+  const result = statusResultFields(jobData, ["has_changes", "has-changes", "deferred_changes", "deferred-changes", "resource_additions", "resource_changes", "resource_destructions", "resource_imports"]);
+  for (const key of ["state", "json_state"]) {
+    if (jobData?.[key] === undefined) continue;
+    const value = jsonStringOrNull(jobData?.[key]);
+    if (value === undefined) {
+      set.status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Agent ${key} payload must be a valid JSON string` }] };
+    }
+    result[key] = value;
+  }
+  const completed = await completeStackAgentJob(agent.id, stackJob.id, { status: jobStatus === "finished" ? "completed" : "errored", errorMessage: typeof jobPayload["error"] === "string" ? jobPayload["error"] : null, result }, fencingToken);
+  if (completed === undefined) return fencingConflict(set);
+  return undefined;
+}
+
+async function heartbeatStatusStackJob(
+  agent: Readonly<{ id: string }>,
+  jobData: Record<string, unknown> | null,
+  operation: string | null,
+  fencingToken: number | undefined,
+): Promise<void> {
+  const explicitStackJobId = jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
+  const stackPhase = operation === "apply" || operation === "plan" ? operation : undefined;
+  const stackJob = explicitStackJobId === null
+    ? await activeStackJobForStatus(agent.id, stackPhase)
+    : await db.query.stackAgentJobs.findFirst({
+        where: and(
+          eq(stackAgentJobs.id, explicitStackJobId),
+          eq(stackAgentJobs.agentId, agent.id),
+          eq(stackAgentJobs.status, "claimed"),
+          ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
+        ),
+      });
+  if (stackJob !== undefined) await heartbeatStackAgentJob(agent.id, stackJob.id, fencingToken);
+}
+
+async function handleStatusCompletion(
+  agent: Readonly<{ id: string }>,
+  jobPayload: Record<string, unknown>,
+  jobData: Record<string, unknown> | null,
+  jobStatus: unknown,
+  phase: string,
+  runId: string,
+  fencingToken: number | undefined,
+  set: { status?: number },
+): Promise<unknown | undefined> {
+  const job = await findStatusAgentJob(agent.id, runId, phase, fencingToken);
+  if (job !== undefined && fencingToken !== undefined) {
+    return completeStatusAgentJob(agent, job, jobPayload, jobData, jobStatus, fencingToken, set);
+  }
+  return completeStatusStackJob(agent, jobPayload, jobData, jobStatus, phase, runId, fencingToken, set);
+}
+
+function statusResponseHeaders(ctx: AgentCtx, set: { headers?: Record<string, string | number> }): Record<string, never> {
+  const messageIndex = ctx.request.headers.get("tfc-agent-message-index");
+  if (set.headers === undefined) set.headers = {};
+  if (messageIndex !== null) set.headers["tfc-agent-message-index"] = messageIndex;
+  set.headers["content-type"] = "application/json";
+  return {};
+}
+
+function parseForwardedStatus(body: Record<string, unknown> | undefined): number | null {
+  const status = body?.["status"];
+  return typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599 ? status : null;
+}
+
+function parseForwardedBody(
+  body: Record<string, unknown> | undefined,
+  set: { status?: number },
+): { responseBody: string | null } | { error: unknown } {
+  // A forwarded response without a body is valid (204 No Content, 304 Not
+  // Modified, HEAD responses). Only require responseStatus; default an
+  // omitted body to "" so these responses are not rejected as 422 while a
+  // non-string body (a malformed payload) still fails loudly.
+  const rawResponseBody = body?.["body"];
+  if (typeof rawResponseBody === "string" && rawResponseBody.length > MAX_FORWARDED_RESPONSE_BASE64_BYTES) {
+    set.status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Forwarded response body exceeds the size limit" }] } };
+  }
+  return { responseBody: typeof rawResponseBody === "string" ? rawResponseBody : rawResponseBody === undefined ? "" : null };
+}
+
+function parseForwardedHeaders(
+  body: Record<string, unknown> | undefined,
+  set: { status?: number },
+): { responseHeaders: Record<string, string[]> } | { error: unknown } {
+  const rawHeaders = body?.["headers"];
+  const responseHeaders: Record<string, string[]> = {};
+  if (rawHeaders !== null && typeof rawHeaders === "object" && !Array.isArray(rawHeaders)) {
+    for (const [name, values] of Object.entries(rawHeaders as Record<string, unknown>)) {
+      if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || !Array.isArray(values) || !values.every((value): value is string => typeof value === "string" && !/[\r\n]/.test(value))) {
+        set.status = 422;
+        return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid forwarded response headers" }] } };
+      }
+      responseHeaders[name] = values;
+    }
+  }
+  return { responseHeaders };
+}
+
+async function completeForwardedRequest(
+  agentId: string,
+  requestId: string,
+  fields: { responseStatus: number | null; responseHeaders: Record<string, string[]>; responseBody: string | null; errorMessage: string | null },
+  set: { status?: number },
+): Promise<unknown> {
+  const updated = await db.update(agentForwardedRequests).set({
+    status: fields.errorMessage === null ? "completed" : "errored",
+    responseStatus: fields.responseStatus,
+    responseHeaders: fields.responseHeaders,
+    responseBody: fields.responseBody,
+    errorMessage: fields.errorMessage,
+    completedAt: Date.now(),
+    // The request is done; the agent no longer needs the original request
+    // headers/body to replay it. Drop them so credentials that may have
+    // been forwarded (Authorization, cookies) are not persisted with the
+    // completed row in the database or a support bundle.
+    headers: {},
+    body: null,
+  }).where(and(
+    eq(agentForwardedRequests.id, requestId),
+    eq(agentForwardedRequests.agentId, agentId),
+    eq(agentForwardedRequests.status, "claimed"),
+  )).returning({ id: agentForwardedRequests.id });
+  if (updated.length === 0) {
+    set.status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
+  return {};
+}
+
+function acceptedWorkloadPhases(agent: Readonly<{ accept: string | null | undefined }>, headerValue: string | null): ReadonlySet<string> {
+  // The registered accept list is authoritative: the agent declared its
+  // workload set when it registered (validated against AGENT_WORKLOAD_TYPES
+  // then persisted). The tfc-agent-accept header may only narrow that set
+  // per request — never widen it — so a registration of "none" cannot be
+  // bypassed by polling with a header, and an agent cannot silently upgrade
+  // its own privileges.
+  const registered = agent.accept ?? DEFAULT_AGENT_ACCEPT;
+  const registeredSet = new Set(registered === "none" ? [] : registered.split(","));
+  if (headerValue === null) return registeredSet;
+  return new Set(headerValue.split(",").filter((value): boolean => registeredSet.has(value)));
+}
+
+async function claimAvailableJob(
+  agent: Parameters<typeof claimAgentJob>[0],
+  accepted: ReadonlySet<string>,
+  request: AgentCtx["request"],
+  set: { status?: number },
+): Promise<{ claimed: NonNullable<Awaited<ReturnType<typeof claimAgentJob>>> } | { response: unknown } | { empty: true }> {
+  const claimed = await claimAgentJob(agent, ["plan", "apply"].filter((phase): boolean => accepted.has(phase)));
+  if (claimed !== undefined) return { claimed };
+  const stackClaimed = await claimStackAgentJob(agent, ["plan", "apply"].filter((phase): boolean => accepted.has(`stack_${phase}`)));
+  if (stackClaimed === undefined) {
+    set.status = 204;
+    return { empty: true as const };
+  }
+  return { response: await stackAgentPayload(stackClaimed, agentApiBaseUrl(request)) };
+}
+
+async function buildClaimedJobPayload(
+  claimed: NonNullable<Awaited<ReturnType<typeof claimAgentJob>>>,
+  agent: Readonly<{ id: string; architecture: string | null }>,
+  request: AgentCtx["request"],
+  set: { status?: number },
+): Promise<unknown> {
+  const { job, run, workspace, configuration } = claimed;
+  try {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
+    if (org === undefined) throw new Error("organization not found");
+    const baseUrl = agentApiBaseUrl(request);
+    const version = run.terraformVersion ?? workspace.terraformVersion ?? org.defaultTerraformVersion ?? "latest";
+    const terraformInfo = await terraformReleaseInfo(version, agent.architecture ?? "amd64");
+    if (terraformInfo === null) throw new Error("Unable to resolve Terraform release");
+    const environment = await agentEnvironment(workspace.id, workspace.orgId, workspace.projectId ?? null, run.variables);
+    const runVars: Record<string, string> = {};
+    // Mint the run token only after all fallible lookups/resolution work has
+    // succeeded, so a failed payload build cannot accumulate valid tokens.
+    const runToken = await agentRunToken(run.id, workspace.id, workspace.orgId);
+    const details: AgentJobDetails = { job, run, workspace, organizationName: org.name, configuration };
+    const payload = await buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, runVars, environment);
+    return payload;
+  } catch (error: unknown) {
+    try {
+      await releaseAgentClaim(claimed);
+    } catch (releaseError: unknown) {
+      log.error("Failed to release an agent claim after payload construction failed", {
+        jobId: claimed.job.id,
+        runId: claimed.run.id,
+        error: releaseError,
+      });
+    }
+    log.error("Failed to construct an agent job payload", { jobId: claimed.job.id, runId: claimed.run.id, error });
+    set.status = 503;
+    return { errors: [{ status: "503", title: "Service Unavailable", detail: error instanceof Error ? error.message : "Unable to construct agent job" }] };
+  }
+}
+
+type ClaimedStackJob = NonNullable<Awaited<ReturnType<typeof findClaimedStackAgentJob>>>;
+
+function stackJobConfigArchivePath(claimed: ClaimedStackJob | undefined): string | null {
+  if (claimed === undefined) return null;
+  const runArchivePath = typeof (claimed.deploymentRun.payload ?? {})["archivePath"] === "string" ? (claimed.deploymentRun.payload ?? {})["archivePath"] as string : null;
+  const configurationArchivePath = typeof (claimed.configuration.payload ?? {})["archivePath"] === "string" ? (claimed.configuration.payload ?? {})["archivePath"] as string : null;
+  return runArchivePath ?? configurationArchivePath;
+}
+
+async function serveStackConfigArchive(
+  claimed: ClaimedStackJob | undefined,
+  archivePath: string | null,
+  agentMissing: boolean,
+  set: { status?: number; headers?: Record<string, string | number> },
+): Promise<unknown> {
+  if (claimed === undefined || archivePath === null || !isStackStoragePath(archivePath) || !(await Bun.file(archivePath).exists())) {
+    const status = agentMissing ? 401 : 404;
+    set.status = status;
+    return { errors: [{ status: String(status), title: status === 401 ? "Unauthorized" : "Not Found" }] };
+  }
+  set.headers = { "content-type": "application/gzip" };
+  return Bun.file(archivePath);
+}
+
 export const agentApiRoutes = new Elysia({ name: "agent-api" })
   .use(authPlugin)
 
@@ -459,84 +955,13 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
-    let negotiation: ReturnType<typeof negotiateAgentProtocol>;
-    try {
-      negotiation = negotiateAgentProtocol(parseAgentProtocolOffer(body, ctx.request.headers));
-    } catch (error: unknown) {
-      if (error instanceof AgentProtocolNegotiationError) return protocolNegotiationError(set, error);
-      throw error;
-    }
-    protocolHeaders(set, negotiation.capabilities);
-    const name = typeof body["name"] === "string" && body["name"] !== "" ? body["name"] : "agent";
-    const arch = typeof body["arch"] === "string" ? body["arch"] : null;
-    if (arch !== null && !AGENT_ARCHITECTURES.has(arch)) {
-      set.status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "arch must be amd64, aarch64, arm64, 386, or arm" }] };
-    }
-    const version = ctx.request.headers.get("tfc-agent-version");
-    const accept = typeof body["accept"] === "string" && body["accept"] !== "" ? body["accept"] : DEFAULT_AGENT_ACCEPT;
-    if (accept !== "none" && (!/^[a-z_]+(?:,[a-z_]+)*$/.test(accept) || accept.split(",").some((value): boolean => !AGENT_WORKLOAD_TYPES.includes(value)))) {
-      set.status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "accept contains an unsupported workload type" }] };
-    }
-    const requestForwarding = body["request_forwarding"] === true;
-    const hyok = body["hyok"] === true;
-    // tfc-agent never sends iac-binaries; terrence-agent declares it so the
-    // claim path only hands it matching jobs. Absent means terraform-only,
-    // preserving the pre-capability contract.
-    let iacBinaries: string[] = ["terraform"];
-    if (body["iac_binaries"] !== undefined) {
-      if (
-        !Array.isArray(body["iac_binaries"])
-        || body["iac_binaries"].length === 0
-        || body["iac_binaries"].some((binary: unknown): boolean =>
-          typeof binary !== "string" || (binary !== "tofu" && binary !== "terraform"))
-      ) {
-        set.status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binaries must be a non-empty array of 'tofu' or 'terraform'" }] };
-      }
-      iacBinaries = [...new Set(body["iac_binaries"] as string[])];
-    }
+    const negotiation = negotiateRegistrationProtocol(ctx, body, set);
+    if ("error" in negotiation) return negotiation.error;
+    const fields = parseRegistrationFields(body, ctx.request.headers.get("tfc-agent-version"), set);
+    if ("error" in fields) return fields.error;
 
     const now = Date.now();
-    const existing = await db.query.agents.findFirst({
-      where: and(eq(agents.agentPoolId, pool.poolId), eq(agents.name, name)),
-    });
-    let agentId: string;
-    if (existing !== undefined) {
-      agentId = existing.id;
-      await db.update(agents).set({
-        architecture: arch,
-        version: version ?? existing.version,
-        protocolVersion: negotiation.version,
-        capabilities: [...negotiation.capabilities],
-        artifactFormats: [...negotiation.artifactFormats],
-        iacBinaries,
-        accept,
-        requestForwarding,
-        hyok,
-        status: "idle",
-        lastPingAt: now,
-      }).where(eq(agents.id, existing.id));
-    } else {
-      agentId = newResourceId("agent");
-      await db.insert(agents).values({
-        id: agentId,
-        agentPoolId: pool.poolId,
-        name,
-        architecture: arch,
-        version,
-        protocolVersion: negotiation.version,
-        capabilities: [...negotiation.capabilities],
-        artifactFormats: [...negotiation.artifactFormats],
-        iacBinaries,
-        accept,
-        requestForwarding,
-        hyok,
-        status: "idle",
-        lastPingAt: now,
-      });
-    }
+    const agentId = await upsertRegistrationAgent(pool, fields, negotiation, now);
     await db.update(agentPoolTokens).set({ lastUsedAt: now }).where(eq(agentPoolTokens.id, pool.tokenId));
     return {
       id: agentId,
@@ -567,141 +992,24 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     const status = typeof body["status"] === "string" ? body["status"] : "idle";
     const now = Date.now();
 
-    const jobPayload = typeof body["job"] === "object" && body["job"] !== null ? body["job"] as Record<string, unknown> : null;
-    const jobStatus = jobPayload === null ? null : jobPayload["status"];
-    const jobData = jobPayload !== null && typeof jobPayload["data"] === "object" && jobPayload["data"] !== null
-      ? jobPayload["data"] as Record<string, unknown>
-      : null;
-    const runId = jobData !== null && typeof jobData["run_id"] === "string" ? jobData["run_id"] : null;
-    const operation = jobData !== null && typeof jobData["operation"] === "string" ? jobData["operation"] : null;
+    const payload = parseStatusJobPayload(body);
+    const fencingToken = parseAgentFencingToken(
+      payload.jobData?.["fencing_token"] ?? ctx.request.headers.get("tfc-agent-fencing-token"),
+    );
 
-    if ((jobStatus === "finished" || jobStatus === "errored") && jobPayload !== null && runId !== null) {
-      const fencingToken = parseAgentFencingToken(
-        jobData?.["fencing_token"] ?? ctx.request.headers.get("tfc-agent-fencing-token"),
-      );
+    if ((payload.jobStatus === "finished" || payload.jobStatus === "errored") && payload.jobPayload !== null && payload.runId !== null) {
       // Completion signal: the agent finished (or failed) its claimed job.
-      const phase = operation === "apply" ? "apply" : "plan";
-      const job = fencingToken === undefined
-        ? undefined
-        : await db.query.agentJobs.findFirst({
-            where: and(
-              eq(agentJobs.runId, runId),
-              eq(agentJobs.phase, phase),
-              eq(agentJobs.agentId, agent.id),
-              eq(agentJobs.fencingToken, fencingToken),
-              inArray(agentJobs.status, ["claimed", "canceled"]),
-            ),
-          });
-      if (job !== undefined && fencingToken !== undefined) {
-        const errorMessage = typeof jobPayload["error"] === "string" ? jobPayload["error"] : null;
-        const result: Record<string, unknown> = {};
-        if (jobData !== null) {
-          for (const key of ["has_changes", "generated_configuration", "resource_additions",
-            "resource_changes", "resource_destructions", "resource_imports", "action_failures",
-            "action_invocations"]) {
-            if (jobData[key] !== undefined) result[key] = jobData[key];
-          }
-        }
-        const statePayload = jsonStringOrNull(jobData?.["state"]);
-        const jsonState = jsonStringOrNull(jobData?.["json_state"]);
-        const jsonStateOutputs = jsonStringOrNull(jobData?.["json_state_outputs"]);
-        if (statePayload === undefined || jsonState === undefined || jsonStateOutputs === undefined) {
-          set.status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent state payload must be valid JSON strings" }] };
-        }
-        if (isClientEncryptedState(statePayload)) {
-          set.status = 422;
-          return { errors: [{ status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR }] };
-        }
-        if (!isAgentResultValid(result)) {
-          set.status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `result exceeds ${MAX_AGENT_RESULT_BYTES} bytes or structural limits` }] };
-        }
-        const completion: AgentJobCompletion = {
-          status: jobStatus === "finished" ? "completed" : "errored",
-          errorMessage,
-          result,
-          planJson: null,
-          statePayload,
-          jsonState,
-          jsonStateOutputs,
-          resourceAdditions: numberOrNull(result["resource_additions"]),
-          resourceChanges: numberOrNull(result["resource_changes"]),
-          resourceDestructions: numberOrNull(result["resource_destructions"]),
-          resourceImports: numberOrNull(result["resource_imports"]),
-        };
-        const completed = await completeAgentJob(agent.id, job.id, fencingToken, completion);
-        if (completed === undefined) return fencingConflict(set);
-      } else {
-        const explicitStackJobId = jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
-        const stackJob = explicitStackJobId !== null
-          ? await db.query.stackAgentJobs.findFirst({
-              where: and(
-                eq(stackAgentJobs.id, explicitStackJobId),
-                eq(stackAgentJobs.phase, phase),
-                eq(stackAgentJobs.agentId, agent.id),
-                eq(stackAgentJobs.status, "claimed"),
-                ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
-              ),
-            })
-          : await db.query.stackAgentJobs.findFirst({
-              where: and(
-                eq(stackAgentJobs.deploymentRunId, runId),
-                eq(stackAgentJobs.phase, phase),
-                eq(stackAgentJobs.agentId, agent.id),
-                eq(stackAgentJobs.status, "claimed"),
-                ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
-              ),
-            });
-        if (stackJob !== undefined) {
-          const result: Record<string, unknown> = {};
-          if (jobData !== null) {
-            for (const key of ["has_changes", "has-changes", "deferred_changes", "deferred-changes", "resource_additions", "resource_changes", "resource_destructions", "resource_imports"]) {
-              if (jobData[key] !== undefined) result[key] = jobData[key];
-            }
-            for (const key of ["state", "json_state"]) {
-              if (jobData[key] === undefined) continue;
-              const value = jsonStringOrNull(jobData[key]);
-              if (value === undefined) {
-                set.status = 422;
-                return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Agent ${key} payload must be a valid JSON string` }] };
-              }
-              result[key] = value;
-            }
-          }
-          const completed = await completeStackAgentJob(agent.id, stackJob.id, { status: jobStatus === "finished" ? "completed" : "errored", errorMessage: typeof jobPayload["error"] === "string" ? jobPayload["error"] : null, result }, fencingToken);
-          if (completed === undefined) return fencingConflict(set);
-        } else {
-          return fencingConflict(set);
-        }
-      }
+      const phase = payload.operation === "apply" ? "apply" : "plan";
+      const done = await handleStatusCompletion(agent, payload.jobPayload, payload.jobData, payload.jobStatus, phase, payload.runId, fencingToken, set);
+      if (done !== undefined) return done;
       await db.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agent.id));
     } else {
       const agentStatus = status === "busy" ? "busy" : status === "exited" ? "exited" : "idle";
       await db.update(agents).set({ status: agentStatus, lastPingAt: now }).where(eq(agents.id, agent.id));
-      const fencingToken = parseAgentFencingToken(
-        jobData?.["fencing_token"] ?? ctx.request.headers.get("tfc-agent-fencing-token"),
-      );
-      const explicitStackJobId = jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
-      const stackPhase = operation === "apply" || operation === "plan" ? operation : undefined;
-      const stackJob = explicitStackJobId === null
-        ? await activeStackJobForStatus(agent.id, stackPhase)
-        : await db.query.stackAgentJobs.findFirst({
-            where: and(
-              eq(stackAgentJobs.id, explicitStackJobId),
-              eq(stackAgentJobs.agentId, agent.id),
-              eq(stackAgentJobs.status, "claimed"),
-              ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
-            ),
-          });
-      if (stackJob !== undefined) await heartbeatStackAgentJob(agent.id, stackJob.id, fencingToken);
+      await heartbeatStatusStackJob(agent, payload.jobData, payload.operation, fencingToken);
     }
 
-    const messageIndex = ctx.request.headers.get("tfc-agent-message-index");
-    if (set.headers === undefined) set.headers = {};
-    if (messageIndex !== null) set.headers["tfc-agent-message-index"] = messageIndex;
-    set.headers["content-type"] = "application/json";
-    return {};
+    return statusResponseHeaders(ctx, set);
   })
 
   .get("/api/agent/update", async (ctx: AgentCtx): Promise<unknown> => {
@@ -801,56 +1109,22 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const body = await jsonBodyValue(ctx);
-    const responseStatus = typeof body?.["status"] === "number" && Number.isInteger(body["status"]) && body["status"] >= 100 && body["status"] <= 599 ? body["status"] : null;
-    // A forwarded response without a body is valid (204 No Content, 304 Not
-    // Modified, HEAD responses). Only require responseStatus; default an
-    // omitted body to "" so these responses are not rejected as 422 while a
-    // non-string body (a malformed payload) still fails loudly.
-    const rawResponseBody = body?.["body"];
-    if (typeof rawResponseBody === "string" && rawResponseBody.length > MAX_FORWARDED_RESPONSE_BASE64_BYTES) {
-      set.status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Forwarded response body exceeds the size limit" }] };
-    }
-    const responseBody = typeof rawResponseBody === "string" ? rawResponseBody : rawResponseBody === undefined ? "" : null;
+    const responseStatus = parseForwardedStatus(body);
+    const parsedBody = parseForwardedBody(body, set);
+    if ("error" in parsedBody) return parsedBody.error;
     const errorMessage = typeof body?.["error"] === "string" ? body["error"].slice(0, 2_000) : null;
-    const rawHeaders = body?.["headers"];
-    const responseHeaders: Record<string, string[]> = {};
-    if (rawHeaders !== null && typeof rawHeaders === "object" && !Array.isArray(rawHeaders)) {
-      for (const [name, values] of Object.entries(rawHeaders as Record<string, unknown>)) {
-        if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || !Array.isArray(values) || !values.every((value): value is string => typeof value === "string" && !/[\r\n]/.test(value))) {
-          set.status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid forwarded response headers" }] };
-        }
-        responseHeaders[name] = values;
-      }
-    }
-    if ((responseStatus === null || responseBody === null) && errorMessage === null) {
+    const parsedHeaders = parseForwardedHeaders(body, set);
+    if ("error" in parsedHeaders) return parsedHeaders.error;
+    if ((responseStatus === null || parsedBody.responseBody === null) && errorMessage === null) {
       set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A forwarded response or error is required" }] };
     }
-    const updated = await db.update(agentForwardedRequests).set({
-      status: errorMessage === null ? "completed" : "errored",
+    return completeForwardedRequest(agent.id, ctx.params["request_id"] ?? "", {
       responseStatus,
-      responseHeaders,
-      responseBody,
+      responseHeaders: parsedHeaders.responseHeaders,
+      responseBody: parsedBody.responseBody,
       errorMessage,
-      completedAt: Date.now(),
-      // The request is done; the agent no longer needs the original request
-      // headers/body to replay it. Drop them so credentials that may have
-      // been forwarded (Authorization, cookies) are not persisted with the
-      // completed row in the database or a support bundle.
-      headers: {},
-      body: null,
-    }).where(and(
-      eq(agentForwardedRequests.id, ctx.params["request_id"] ?? ""),
-      eq(agentForwardedRequests.agentId, agent.id),
-      eq(agentForwardedRequests.status, "claimed"),
-    )).returning({ id: agentForwardedRequests.id });
-    if (updated.length === 0) {
-      set.status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    return {};
+    }, set);
   })
 
   // --- Job claim ------------------------------------------------------------
@@ -862,57 +1136,11 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     protocolHeaders(set, agent.capabilities);
-    // The registered accept list is authoritative: the agent declared its
-    // workload set when it registered (validated against AGENT_WORKLOAD_TYPES
-    // then persisted). The tfc-agent-accept header may only narrow that set
-    // per request — never widen it — so a registration of "none" cannot be
-    // bypassed by polling with a header, and an agent cannot silently upgrade
-    // its own privileges.
-    const registered = (agent.accept ?? DEFAULT_AGENT_ACCEPT);
-    const registeredSet = new Set(registered === "none" ? [] : registered.split(","));
-    const headerValue = ctx.request.headers.get("tfc-agent-accept");
-    const accepted = headerValue === null
-      ? registeredSet
-      : new Set(headerValue.split(",").filter((value): boolean => registeredSet.has(value)));
-    const claimed = await claimAgentJob(agent, ["plan", "apply"].filter((phase): boolean => accepted.has(phase)));
-    if (claimed === undefined) {
-      const stackClaimed = await claimStackAgentJob(agent, ["plan", "apply"].filter((phase): boolean => accepted.has(`stack_${phase}`)));
-      if (stackClaimed === undefined) {
-        set.status = 204;
-        return undefined;
-      }
-      return await stackAgentPayload(stackClaimed, agentApiBaseUrl(ctx.request));
-    }
-    const { job, run, workspace, configuration } = claimed;
-    try {
-      const org = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
-      if (org === undefined) throw new Error("organization not found");
-      const baseUrl = agentApiBaseUrl(ctx.request);
-      const version = run.terraformVersion ?? workspace.terraformVersion ?? org.defaultTerraformVersion ?? "latest";
-      const terraformInfo = await terraformReleaseInfo(version, agent.architecture ?? "amd64");
-      if (terraformInfo === null) throw new Error("Unable to resolve Terraform release");
-      const environment = await agentEnvironment(workspace.id, workspace.orgId, workspace.projectId ?? null, run.variables);
-      const runVars: Record<string, string> = {};
-      // Mint the run token only after all fallible lookups/resolution work has
-      // succeeded, so a failed payload build cannot accumulate valid tokens.
-      const runToken = await agentRunToken(run.id, workspace.id, workspace.orgId);
-      const details: AgentJobDetails = { job, run, workspace, organizationName: org.name, configuration };
-      const payload = await buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, runVars, environment);
-      return payload;
-    } catch (error: unknown) {
-      try {
-        await releaseAgentClaim(claimed);
-      } catch (releaseError: unknown) {
-        log.error("Failed to release an agent claim after payload construction failed", {
-          jobId: claimed.job.id,
-          runId: claimed.run.id,
-          error: releaseError,
-        });
-      }
-      log.error("Failed to construct an agent job payload", { jobId: claimed.job.id, runId: claimed.run.id, error });
-      set.status = 503;
-      return { errors: [{ status: "503", title: "Service Unavailable", detail: error instanceof Error ? error.message : "Unable to construct agent job" }] };
-    }
+    const accepted = acceptedWorkloadPhases(agent, ctx.request.headers.get("tfc-agent-accept"));
+    const claim = await claimAvailableJob(agent, accepted, ctx.request, set);
+    if ("response" in claim) return claim.response;
+    if ("empty" in claim) return undefined;
+    return buildClaimedJobPayload(claim.claimed, agent, ctx.request, set);
   })
 
   .get("/api/agent/jobs/:job_id/status", async (ctx: AgentCtx): Promise<unknown> => {
@@ -939,15 +1167,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     const agent = await agentFromRequest(ctx);
     const fencingToken = requestedFencingToken(ctx);
     const claimed = agent === undefined ? undefined : await findClaimedStackAgentJob(agent.id, ctx.params["job_id"] ?? "", fencingToken);
-    const runArchivePath = typeof (claimed?.deploymentRun.payload ?? {})["archivePath"] === "string" ? (claimed?.deploymentRun.payload ?? {})["archivePath"] as string : null;
-    const configurationArchivePath = typeof (claimed?.configuration.payload ?? {})["archivePath"] === "string" ? (claimed?.configuration.payload ?? {})["archivePath"] as string : null;
-    const archivePath = runArchivePath ?? configurationArchivePath;
-    if (claimed === undefined || archivePath === null || !isStackStoragePath(archivePath) || !(await Bun.file(archivePath).exists())) {
-      set.status = agent === undefined ? 401 : 404;
-      return { errors: [{ status: String(set.status), title: set.status === 401 ? "Unauthorized" : "Not Found" }] };
-    }
-    set.headers = { "content-type": "application/gzip" };
-    return Bun.file(archivePath);
+    return serveStackConfigArchive(claimed, stackJobConfigArchivePath(claimed), agent === undefined, set);
   })
 
   // --- Artifact endpoints (agent-token + claimed-job scoped) ----------------

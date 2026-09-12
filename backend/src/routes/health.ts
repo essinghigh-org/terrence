@@ -260,136 +260,139 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
   return metrics;
 }
 
+function pushInstanceLines(lines: string[], instance: NonNullable<MetricsCollection["instance"]>): void {
+  lines.push(
+    "# HELP terrence_users_total Registered users.",
+    "# TYPE terrence_users_total gauge",
+    `terrence_users_total ${instance.users}`,
+    "# HELP terrence_organizations_total Organizations.",
+    "# TYPE terrence_organizations_total gauge",
+    `terrence_organizations_total ${instance.organizations}`,
+    "# HELP terrence_workspaces_total Workspaces.",
+    "# TYPE terrence_workspaces_total gauge",
+    `terrence_workspaces_total ${instance.workspaces}`,
+    "# HELP terrence_runs_total Runs.",
+    "# TYPE terrence_runs_total gauge",
+    `terrence_runs_total ${instance.runs}`,
+    "# HELP tfe_run_current_count Current runs by status.",
+    "# TYPE tfe_run_current_count gauge",
+    ...Object.entries(instance.runsByStatus).map(([status, value]): string =>
+      `tfe_run_current_count{status="${prometheusLabel(status)}"} ${value}`,
+    ),
+    "# HELP terrence_database_size_bytes Database file size on disk.",
+    "# TYPE terrence_database_size_bytes gauge",
+    `terrence_database_size_bytes ${instance.database.sizeBytes}`,
+    "# HELP terrence_database_wal_size_bytes Database WAL sidecar size on disk.",
+    "# TYPE terrence_database_wal_size_bytes gauge",
+    `terrence_database_wal_size_bytes ${instance.database.walSizeBytes ?? 0}`,
+    "# HELP terrence_database_page_count Database pages.",
+    "# TYPE terrence_database_page_count gauge",
+    `terrence_database_page_count ${instance.database.pageCount}`,
+    "# HELP terrence_database_cache_size_bytes Database page-cache budget (sqlite PRAGMA cache_size; null on postgres).",
+    "# TYPE terrence_database_cache_size_bytes gauge",
+    "# HELP terrence_database_freelist_bytes Database freelist pages in bytes (sqlite bloat signal; null on postgres).",
+    "# TYPE terrence_database_freelist_bytes gauge",
+    // VCS webhook delivery queue gauges (todo 192-194).
+    "# HELP terrence_webhook_queue_depth VCS webhook deliveries waiting or in-flight, by state.",
+    "# TYPE terrence_webhook_queue_depth gauge",
+    `terrence_webhook_queue_depth{state="queued"} ${instance.webhookQueue.queued}`,
+    `terrence_webhook_queue_depth{state="processing"} ${instance.webhookQueue.processing}`,
+    "# HELP terrence_webhook_failed_total VCS webhook deliveries dead-lettered after repeated failure.",
+    "# TYPE terrence_webhook_failed_total gauge",
+    `terrence_webhook_failed_total ${instance.webhookQueue.failed}`,
+    "# HELP terrence_webhook_oldest_pending_seconds Age of the oldest delivery not yet processed.",
+    "# TYPE terrence_webhook_oldest_pending_seconds gauge",
+    `terrence_webhook_oldest_pending_seconds ${instance.webhookQueue.oldestPendingSeconds}`,
+    "# HELP terrence_outbox_queue_depth Transactional outbox events by state.",
+    "# TYPE terrence_outbox_queue_depth gauge",
+    `terrence_outbox_queue_depth{state="pending"} ${instance.outboxQueue.pending}`,
+    `terrence_outbox_queue_depth{state="processing"} ${instance.outboxQueue.processing}`,
+    `terrence_outbox_queue_depth{state="delivered"} ${instance.outboxQueue.delivered}`,
+    `terrence_outbox_queue_depth{state="dead_letter"} ${instance.outboxQueue.deadLetter}`,
+    "# HELP terrence_outbox_oldest_pending_seconds Age of the oldest pending outbox event.",
+    "# TYPE terrence_outbox_oldest_pending_seconds gauge",
+    `terrence_outbox_oldest_pending_seconds ${instance.outboxQueue.oldestPendingSeconds}`,
+    "# HELP terrence_resource_budget_queued Durable jobs waiting for capacity, by class.",
+    "# TYPE terrence_resource_budget_queued gauge",
+    ...Object.entries(instance.resourceBudgets.queuedByClass).map(([jobClass, value]): string =>
+      `terrence_resource_budget_queued{class="${prometheusLabel(jobClass)}"} ${value}`,
+    ),
+    "# HELP terrence_resource_budget_running Durable jobs consuming capacity, by class.",
+    "# TYPE terrence_resource_budget_running gauge",
+    ...Object.entries(instance.resourceBudgets.runningByClass).map(([jobClass, value]): string =>
+      `terrence_resource_budget_running{class="${prometheusLabel(jobClass)}"} ${value}`,
+    ),
+    "# HELP terrence_resource_budget_queue_limit Configured aggregate durable queue limit.",
+    "# TYPE terrence_resource_budget_queue_limit gauge",
+    `terrence_resource_budget_queue_limit ${instance.resourceBudgets.limits.globalQueue}`,
+    "# HELP terrence_resource_budget_concurrency_limit Configured aggregate durable concurrency limit.",
+    "# TYPE terrence_resource_budget_concurrency_limit gauge",
+    `terrence_resource_budget_concurrency_limit ${instance.resourceBudgets.limits.globalConcurrency}`,
+    "# HELP terrence_resource_budget_artifact_bytes_limit Configured aggregate in-flight artifact byte limit.",
+    "# TYPE terrence_resource_budget_artifact_bytes_limit gauge",
+    `terrence_resource_budget_artifact_bytes_limit ${instance.resourceBudgets.limits.artifactBytes}`,
+    "# HELP terrence_resource_budget_running_bytes In-flight estimated artifact bytes.",
+    "# TYPE terrence_resource_budget_running_bytes gauge",
+    `terrence_resource_budget_running_bytes ${instance.resourceBudgets.runningBytes}`,
+  );
+  // Backend-specific samples are omitted when the value is unavailable
+  // (postgres has no sqlite page cache/freelist) rather than emitting 0.
+  if (instance.database.cacheSizeBytes !== null) {
+    lines.push(`terrence_database_cache_size_bytes ${instance.database.cacheSizeBytes}`);
+  }
+  if (instance.database.freelistBytes !== null) {
+    lines.push(`terrence_database_freelist_bytes ${instance.database.freelistBytes}`);
+  }
+  pushPoolLines(lines, instance);
+}
+
+function pushPoolLines(lines: string[], instance: NonNullable<MetricsCollection["instance"]>): void {
+  // DB pool (todos 289,290,291)
+  const p = instance.database.pool;
+  lines.push(
+    "# HELP terrence_database_pool_pending Queries currently waiting or executing.",
+    "# TYPE terrence_database_pool_pending gauge",
+    `terrence_database_pool_pending{driver="${p.driver}"} ${p.pendingQueries}`,
+    "# HELP terrence_database_pool_exhausted_total Queries that arrived while another was pending (contention signal).",
+    "# TYPE terrence_database_pool_exhausted_total counter",
+    `terrence_database_pool_exhausted_total ${p.queriesExhausted}`,
+    "# HELP terrence_database_sqlite_write_contention_total SQLite write transactions rejected or delayed by a busy/locked database.",
+    "# TYPE terrence_database_sqlite_write_contention_total counter",
+    `terrence_database_sqlite_write_contention_total ${p.sqliteWriteContention}`,
+    "# HELP terrence_database_query_duration_ms Observed query/transaction latency (recent window).",
+    "# TYPE terrence_database_query_duration_ms gauge",
+    `terrence_database_query_duration_ms{quantile="0.5"} ${p.p50Ms ?? 0}`,
+    `terrence_database_query_duration_ms{quantile="0.95"} ${p.p95Ms ?? 0}`,
+    `terrence_database_query_duration_ms{quantile="max"} ${p.maxMs ?? 0}`,
+  );
+  for (const budget of Object.values(p.queryBudgets)) {
+    lines.push(
+      `terrence_database_query_budget_active{kind="${budget.kind}"} ${budget.active}`,
+      `terrence_database_query_budget_queued{kind="${budget.kind}"} ${budget.queued}`,
+      `terrence_database_query_budget_concurrency{kind="${budget.kind}"} ${budget.concurrency}`,
+      `terrence_database_query_budget_queue_limit{kind="${budget.kind}"} ${budget.queueLimit}`,
+      `terrence_database_query_budget_rejected_total{kind="${budget.kind}"} ${budget.rejected}`,
+      `terrence_database_query_budget_cancelled_total{kind="${budget.kind}"} ${budget.cancelled}`,
+      `terrence_database_query_budget_completed_total{kind="${budget.kind}"} ${budget.completed}`,
+    );
+  }
+  const fps = (instance.database as unknown as { slowFingerprints?: Readonly<Record<string, number>> }).slowFingerprints ?? {};
+  const fpLines = Object.entries(fps).slice(0, 10).map(([fp, count]): string =>
+    `terrence_database_slow_fingerprint_total{fingerprint="${prometheusLabel(fp)}"} ${count}`,
+  );
+  if (fpLines.length > 0) {
+    lines.push(
+      "# HELP terrence_database_slow_fingerprint_total Normalized slow-query fingerprint occurrences.",
+      "# TYPE terrence_database_slow_fingerprint_total counter",
+      ...fpLines,
+    );
+  }
+}
+
 /** Prometheus text format; agent queue-depth gauges are per-pool. */
 function prometheusLines(collection: MetricsCollection): string[] {
   const lines: string[] = [];
-  const instance = collection.instance;
-  if (instance !== null) {
-    lines.push(
-      "# HELP terrence_users_total Registered users.",
-      "# TYPE terrence_users_total gauge",
-      `terrence_users_total ${instance.users}`,
-      "# HELP terrence_organizations_total Organizations.",
-      "# TYPE terrence_organizations_total gauge",
-      `terrence_organizations_total ${instance.organizations}`,
-      "# HELP terrence_workspaces_total Workspaces.",
-      "# TYPE terrence_workspaces_total gauge",
-      `terrence_workspaces_total ${instance.workspaces}`,
-      "# HELP terrence_runs_total Runs.",
-      "# TYPE terrence_runs_total gauge",
-      `terrence_runs_total ${instance.runs}`,
-      "# HELP tfe_run_current_count Current runs by status.",
-      "# TYPE tfe_run_current_count gauge",
-      ...Object.entries(instance.runsByStatus).map(([status, value]): string =>
-        `tfe_run_current_count{status="${prometheusLabel(status)}"} ${value}`,
-      ),
-      "# HELP terrence_database_size_bytes Database file size on disk.",
-      "# TYPE terrence_database_size_bytes gauge",
-      `terrence_database_size_bytes ${instance.database.sizeBytes}`,
-      "# HELP terrence_database_wal_size_bytes Database WAL sidecar size on disk.",
-      "# TYPE terrence_database_wal_size_bytes gauge",
-      `terrence_database_wal_size_bytes ${instance.database.walSizeBytes ?? 0}`,
-      "# HELP terrence_database_page_count Database pages.",
-      "# TYPE terrence_database_page_count gauge",
-      `terrence_database_page_count ${instance.database.pageCount}`,
-      "# HELP terrence_database_cache_size_bytes Database page-cache budget (sqlite PRAGMA cache_size; null on postgres).",
-      "# TYPE terrence_database_cache_size_bytes gauge",
-      "# HELP terrence_database_freelist_bytes Database freelist pages in bytes (sqlite bloat signal; null on postgres).",
-      "# TYPE terrence_database_freelist_bytes gauge",
-      // VCS webhook delivery queue gauges (todo 192-194).
-      "# HELP terrence_webhook_queue_depth VCS webhook deliveries waiting or in-flight, by state.",
-      "# TYPE terrence_webhook_queue_depth gauge",
-      `terrence_webhook_queue_depth{state="queued"} ${instance.webhookQueue.queued}`,
-      `terrence_webhook_queue_depth{state="processing"} ${instance.webhookQueue.processing}`,
-      "# HELP terrence_webhook_failed_total VCS webhook deliveries dead-lettered after repeated failure.",
-      "# TYPE terrence_webhook_failed_total gauge",
-      `terrence_webhook_failed_total ${instance.webhookQueue.failed}`,
-      "# HELP terrence_webhook_oldest_pending_seconds Age of the oldest delivery not yet processed.",
-      "# TYPE terrence_webhook_oldest_pending_seconds gauge",
-      `terrence_webhook_oldest_pending_seconds ${instance.webhookQueue.oldestPendingSeconds}`,
-      "# HELP terrence_outbox_queue_depth Transactional outbox events by state.",
-      "# TYPE terrence_outbox_queue_depth gauge",
-      `terrence_outbox_queue_depth{state="pending"} ${instance.outboxQueue.pending}`,
-      `terrence_outbox_queue_depth{state="processing"} ${instance.outboxQueue.processing}`,
-      `terrence_outbox_queue_depth{state="delivered"} ${instance.outboxQueue.delivered}`,
-      `terrence_outbox_queue_depth{state="dead_letter"} ${instance.outboxQueue.deadLetter}`,
-      "# HELP terrence_outbox_oldest_pending_seconds Age of the oldest pending outbox event.",
-      "# TYPE terrence_outbox_oldest_pending_seconds gauge",
-      `terrence_outbox_oldest_pending_seconds ${instance.outboxQueue.oldestPendingSeconds}`,
-      "# HELP terrence_resource_budget_queued Durable jobs waiting for capacity, by class.",
-      "# TYPE terrence_resource_budget_queued gauge",
-      ...Object.entries(instance.resourceBudgets.queuedByClass).map(([jobClass, value]): string =>
-        `terrence_resource_budget_queued{class="${prometheusLabel(jobClass)}"} ${value}`,
-      ),
-      "# HELP terrence_resource_budget_running Durable jobs consuming capacity, by class.",
-      "# TYPE terrence_resource_budget_running gauge",
-      ...Object.entries(instance.resourceBudgets.runningByClass).map(([jobClass, value]): string =>
-        `terrence_resource_budget_running{class="${prometheusLabel(jobClass)}"} ${value}`,
-      ),
-      "# HELP terrence_resource_budget_queue_limit Configured aggregate durable queue limit.",
-      "# TYPE terrence_resource_budget_queue_limit gauge",
-      `terrence_resource_budget_queue_limit ${instance.resourceBudgets.limits.globalQueue}`,
-      "# HELP terrence_resource_budget_concurrency_limit Configured aggregate durable concurrency limit.",
-      "# TYPE terrence_resource_budget_concurrency_limit gauge",
-      `terrence_resource_budget_concurrency_limit ${instance.resourceBudgets.limits.globalConcurrency}`,
-      "# HELP terrence_resource_budget_artifact_bytes_limit Configured aggregate in-flight artifact byte limit.",
-      "# TYPE terrence_resource_budget_artifact_bytes_limit gauge",
-      `terrence_resource_budget_artifact_bytes_limit ${instance.resourceBudgets.limits.artifactBytes}`,
-      "# HELP terrence_resource_budget_running_bytes In-flight estimated artifact bytes.",
-      "# TYPE terrence_resource_budget_running_bytes gauge",
-      `terrence_resource_budget_running_bytes ${instance.resourceBudgets.runningBytes}`,
-    );
-    // Backend-specific samples are omitted when the value is unavailable
-    // (postgres has no sqlite page cache/freelist) rather than emitting 0.
-    if (instance.database.cacheSizeBytes !== null) {
-      lines.push(`terrence_database_cache_size_bytes ${instance.database.cacheSizeBytes}`);
-    }
-    if (instance.database.freelistBytes !== null) {
-      lines.push(`terrence_database_freelist_bytes ${instance.database.freelistBytes}`);
-    }
-    // DB pool (todos 289,290,291)
-    {
-      const p = instance.database.pool;
-      lines.push(
-        "# HELP terrence_database_pool_pending Queries currently waiting or executing.",
-        "# TYPE terrence_database_pool_pending gauge",
-        `terrence_database_pool_pending{driver="${p.driver}"} ${p.pendingQueries}`,
-        "# HELP terrence_database_pool_exhausted_total Queries that arrived while another was pending (contention signal).",
-        "# TYPE terrence_database_pool_exhausted_total counter",
-        `terrence_database_pool_exhausted_total ${p.queriesExhausted}`,
-        "# HELP terrence_database_sqlite_write_contention_total SQLite write transactions rejected or delayed by a busy/locked database.",
-        "# TYPE terrence_database_sqlite_write_contention_total counter",
-        `terrence_database_sqlite_write_contention_total ${p.sqliteWriteContention}`,
-        "# HELP terrence_database_query_duration_ms Observed query/transaction latency (recent window).",
-        "# TYPE terrence_database_query_duration_ms gauge",
-        `terrence_database_query_duration_ms{quantile="0.5"} ${p.p50Ms ?? 0}`,
-        `terrence_database_query_duration_ms{quantile="0.95"} ${p.p95Ms ?? 0}`,
-        `terrence_database_query_duration_ms{quantile="max"} ${p.maxMs ?? 0}`,
-      );
-      for (const budget of Object.values(p.queryBudgets)) {
-        lines.push(
-          `terrence_database_query_budget_active{kind="${budget.kind}"} ${budget.active}`,
-          `terrence_database_query_budget_queued{kind="${budget.kind}"} ${budget.queued}`,
-          `terrence_database_query_budget_concurrency{kind="${budget.kind}"} ${budget.concurrency}`,
-          `terrence_database_query_budget_queue_limit{kind="${budget.kind}"} ${budget.queueLimit}`,
-          `terrence_database_query_budget_rejected_total{kind="${budget.kind}"} ${budget.rejected}`,
-          `terrence_database_query_budget_cancelled_total{kind="${budget.kind}"} ${budget.cancelled}`,
-          `terrence_database_query_budget_completed_total{kind="${budget.kind}"} ${budget.completed}`,
-        );
-      }
-      const fps = (instance.database as unknown as { slowFingerprints?: Readonly<Record<string, number>> }).slowFingerprints ?? {};
-      const fpLines = Object.entries(fps).slice(0, 10).map(([fp, count]): string =>
-        `terrence_database_slow_fingerprint_total{fingerprint="${prometheusLabel(fp)}"} ${count}`,
-      );
-      if (fpLines.length > 0) {
-        lines.push(
-          "# HELP terrence_database_slow_fingerprint_total Normalized slow-query fingerprint occurrences.",
-          "# TYPE terrence_database_slow_fingerprint_total counter",
-          ...fpLines,
-        );
-      }
-    }
-  }
+  if (collection.instance !== null) pushInstanceLines(lines, collection.instance);
   // Global latch: emitted for every collection shape (scoped tokens too).
   if (isStorageDegraded()) {
     lines.push(
@@ -398,116 +401,125 @@ function prometheusLines(collection: MetricsCollection): string[] {
       "terrence_storage_degraded 1",
     );
   }
-  if (collection.process !== null) {
-    const { snapshot, history } = collection.process;
-    lines.push(
-      "# HELP terrence_process_rss_bytes Resident set size (process memory actually held).",
-      "# TYPE terrence_process_rss_bytes gauge",
-      `terrence_process_rss_bytes ${snapshot.rss}`,
-      "# HELP terrence_process_max_rss_bytes Peak RSS observed by the OS scheduler.",
-      "# TYPE terrence_process_max_rss_bytes gauge",
-      `terrence_process_max_rss_bytes ${snapshot.maxRss}`,
-      "# HELP terrence_process_heap_used_bytes jsc heap used (informational in Bun; rss is authoritative).",
-      "# TYPE terrence_process_heap_used_bytes gauge",
-      `terrence_process_heap_used_bytes ${snapshot.heapUsed}`,
-      "# HELP terrence_process_external_bytes Memory attributed to external allocations.",
-      "# TYPE terrence_process_external_bytes gauge",
-      `terrence_process_external_bytes ${snapshot.external}`,
-      "# HELP terrence_process_uptime_seconds Process uptime.",
-      "# TYPE terrence_process_uptime_seconds gauge",
-      `terrence_process_uptime_seconds ${snapshot.uptimeSeconds}`,
-      "# HELP terrence_process_cpu_seconds_total Process CPU time by kind (user/system).",
-      "# TYPE terrence_process_cpu_seconds_total counter",
-      `terrence_process_cpu_seconds_total{kind="user"} ${snapshot.userCpuSeconds}`,
-      `terrence_process_cpu_seconds_total{kind="system"} ${snapshot.systemCpuSeconds}`,
-      "# HELP terrence_requests_total API requests started since boot.",
-      "# TYPE terrence_requests_total counter",
-      `terrence_requests_total ${snapshot.requests.total}`,
-      "# HELP terrence_requests_in_flight API requests currently being handled.",
-      "# TYPE terrence_requests_in_flight gauge",
-      `terrence_requests_in_flight ${snapshot.requests.inFlight}`,
-      "# HELP terrence_requests_errors5xx_total Responses with status >= 500.",
-      "# TYPE terrence_requests_errors5xx_total counter",
-      `terrence_requests_errors5xx_total ${snapshot.requests.errors5xx}`,
-      "# HELP terrence_request_duration_ms Server request latency by bounded user journey.",
-      "# TYPE terrence_request_duration_ms gauge",
-      "# HELP terrence_request_duration_samples Requests observed by bounded user journey.",
-      "# TYPE terrence_request_duration_samples counter",
-      ...Object.entries(snapshot.journeys).flatMap(([journey, stats]): string[] => [
-        `terrence_request_duration_samples{journey="${prometheusLabel(journey)}"} ${stats.sampleCount}`,
-        ...(stats.p50Ms === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="0.5"} ${stats.p50Ms}`]),
-        ...(stats.p95Ms === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="0.95"} ${stats.p95Ms}`]),
-        ...(stats.maxMs === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="max"} ${stats.maxMs}`]),
-      ]),
-      "# HELP terrence_event_loop_delay_ms Event-loop delay from the bounded runtime histogram.",
-      "# TYPE terrence_event_loop_delay_ms gauge",
-      "# HELP terrence_event_loop_delay_samples Event-loop histogram samples.",
-      "# TYPE terrence_event_loop_delay_samples gauge",
-      `terrence_event_loop_delay_samples ${snapshot.eventLoopDelay.sampleCount}`,
-      "# HELP terrence_failures_total Best-effort subsystem write failures (audit log, run logs).",
-      "# TYPE terrence_failures_total counter",
-      ...Object.entries(snapshot.failures).map(([kind, value]): string =>
-        `terrence_failures_total{kind="${prometheusLabel(kind)}"} ${value}`,
-      ),
-      "# HELP terrence_worker_polls_total Background queue poll cycles since boot.",
-      "# TYPE terrence_worker_polls_total counter",
-      `terrence_worker_polls_total ${snapshot.worker.polls}`,
-      "# HELP terrence_worker_last_poll_ok Whether the last poll cycle completed without an uncaught error.",
-      "# TYPE terrence_worker_last_poll_ok gauge",
-      "# HELP terrence_worker_last_poll_duration_ms Duration of the last poll cycle.",
-      "# TYPE terrence_worker_last_poll_duration_ms gauge",
-      "# HELP terrence_worker_poller_runs_total Poll cycles completed by poller.",
-      "# TYPE terrence_worker_poller_runs_total counter",
-      "# HELP terrence_worker_poller_errors_total Poll cycles that ended in error, by poller.",
-      "# TYPE terrence_worker_poller_errors_total counter",
-      "# HELP terrence_process_history_rss_growth_per_hour RSS linear-regression slope over the sample window (bytes/hour; leak detector).",
-      "# TYPE terrence_process_history_rss_growth_per_hour gauge",
-      "# HELP terrence_process_history_samples Samples currently held in the ring buffer.",
-      "# TYPE terrence_process_history_samples gauge",
-      `terrence_process_history_samples ${history.samples.length}`,
-    );
-    // Time-dependent samples are omitted before the first poll/history
-    // window exists (a 0 would read as a real measurement).
-    if (snapshot.worker.lastPollOk !== null) {
-      lines.push(`terrence_worker_last_poll_ok ${snapshot.worker.lastPollOk ? 1 : 0}`);
-    }
-    if (snapshot.worker.lastPollDurationMs !== null) {
-      lines.push(`terrence_worker_last_poll_duration_ms ${snapshot.worker.lastPollDurationMs}`);
-    }
-    if (history.stats.rss.growthPerHour !== null) {
-      lines.push(`terrence_process_history_rss_growth_per_hour ${history.stats.rss.growthPerHour}`);
-    }
-    if (snapshot.eventLoopDelay.p95Ms !== null) {
-      lines.push(
-        `terrence_event_loop_delay_ms{quantile="0.5"} ${snapshot.eventLoopDelay.meanMs ?? snapshot.eventLoopDelay.p95Ms}`,
-        `terrence_event_loop_delay_ms{quantile="0.95"} ${snapshot.eventLoopDelay.p95Ms}`,
-        ...(snapshot.eventLoopDelay.maxMs === null ? [] : [`terrence_event_loop_delay_ms{quantile="max"} ${snapshot.eventLoopDelay.maxMs}`]),
-      );
-    }
-    for (const [poller, stats] of Object.entries(snapshot.worker.pollers)) {
-      const label = `poller="${prometheusLabel(poller)}"`;
-      lines.push(
-        `terrence_worker_poller_runs_total{${label}} ${stats.runs}`,
-        `terrence_worker_poller_errors_total{${label}} ${stats.errors}`,
-      );
-    }
+  if (collection.process !== null) pushProcessLines(lines, collection.process);
+  if (collection.orgs !== null) pushOrgLines(lines, collection.orgs);
+  pushAgentPoolLines(lines, collection);
+  return lines;
+}
+
+function pushProcessLines(lines: string[], process: NonNullable<MetricsCollection["process"]>): void {
+  const { snapshot, history } = process;
+  lines.push(
+    "# HELP terrence_process_rss_bytes Resident set size (process memory actually held).",
+    "# TYPE terrence_process_rss_bytes gauge",
+    `terrence_process_rss_bytes ${snapshot.rss}`,
+    "# HELP terrence_process_max_rss_bytes Peak RSS observed by the OS scheduler.",
+    "# TYPE terrence_process_max_rss_bytes gauge",
+    `terrence_process_max_rss_bytes ${snapshot.maxRss}`,
+    "# HELP terrence_process_heap_used_bytes jsc heap used (informational in Bun; rss is authoritative).",
+    "# TYPE terrence_process_heap_used_bytes gauge",
+    `terrence_process_heap_used_bytes ${snapshot.heapUsed}`,
+    "# HELP terrence_process_external_bytes Memory attributed to external allocations.",
+    "# TYPE terrence_process_external_bytes gauge",
+    `terrence_process_external_bytes ${snapshot.external}`,
+    "# HELP terrence_process_uptime_seconds Process uptime.",
+    "# TYPE terrence_process_uptime_seconds gauge",
+    `terrence_process_uptime_seconds ${snapshot.uptimeSeconds}`,
+    "# HELP terrence_process_cpu_seconds_total Process CPU time by kind (user/system).",
+    "# TYPE terrence_process_cpu_seconds_total counter",
+    `terrence_process_cpu_seconds_total{kind="user"} ${snapshot.userCpuSeconds}`,
+    `terrence_process_cpu_seconds_total{kind="system"} ${snapshot.systemCpuSeconds}`,
+    "# HELP terrence_requests_total API requests started since boot.",
+    "# TYPE terrence_requests_total counter",
+    `terrence_requests_total ${snapshot.requests.total}`,
+    "# HELP terrence_requests_in_flight API requests currently being handled.",
+    "# TYPE terrence_requests_in_flight gauge",
+    `terrence_requests_in_flight ${snapshot.requests.inFlight}`,
+    "# HELP terrence_requests_errors5xx_total Responses with status >= 500.",
+    "# TYPE terrence_requests_errors5xx_total counter",
+    `terrence_requests_errors5xx_total ${snapshot.requests.errors5xx}`,
+    "# HELP terrence_request_duration_ms Server request latency by bounded user journey.",
+    "# TYPE terrence_request_duration_ms gauge",
+    "# HELP terrence_request_duration_samples Requests observed by bounded user journey.",
+    "# TYPE terrence_request_duration_samples counter",
+    ...Object.entries(snapshot.journeys).flatMap(([journey, stats]): string[] => [
+      `terrence_request_duration_samples{journey="${prometheusLabel(journey)}"} ${stats.sampleCount}`,
+      ...(stats.p50Ms === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="0.5"} ${stats.p50Ms}`]),
+      ...(stats.p95Ms === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="0.95"} ${stats.p95Ms}`]),
+      ...(stats.maxMs === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="max"} ${stats.maxMs}`]),
+    ]),
+    "# HELP terrence_event_loop_delay_ms Event-loop delay from the bounded runtime histogram.",
+    "# TYPE terrence_event_loop_delay_ms gauge",
+    "# HELP terrence_event_loop_delay_samples Event-loop histogram samples.",
+    "# TYPE terrence_event_loop_delay_samples gauge",
+    `terrence_event_loop_delay_samples ${snapshot.eventLoopDelay.sampleCount}`,
+    "# HELP terrence_failures_total Best-effort subsystem write failures (audit log, run logs).",
+    "# TYPE terrence_failures_total counter",
+    ...Object.entries(snapshot.failures).map(([kind, value]): string =>
+      `terrence_failures_total{kind="${prometheusLabel(kind)}"} ${value}`,
+    ),
+    "# HELP terrence_worker_polls_total Background queue poll cycles since boot.",
+    "# TYPE terrence_worker_polls_total counter",
+    `terrence_worker_polls_total ${snapshot.worker.polls}`,
+    "# HELP terrence_worker_last_poll_ok Whether the last poll cycle completed without an uncaught error.",
+    "# TYPE terrence_worker_last_poll_ok gauge",
+    "# HELP terrence_worker_last_poll_duration_ms Duration of the last poll cycle.",
+    "# TYPE terrence_worker_last_poll_duration_ms gauge",
+    "# HELP terrence_worker_poller_runs_total Poll cycles completed by poller.",
+    "# TYPE terrence_worker_poller_runs_total counter",
+    "# HELP terrence_worker_poller_errors_total Poll cycles that ended in error, by poller.",
+    "# TYPE terrence_worker_poller_errors_total counter",
+    "# HELP terrence_process_history_rss_growth_per_hour RSS linear-regression slope over the sample window (bytes/hour; leak detector).",
+    "# TYPE terrence_process_history_rss_growth_per_hour gauge",
+    "# HELP terrence_process_history_samples Samples currently held in the ring buffer.",
+    "# TYPE terrence_process_history_samples gauge",
+    `terrence_process_history_samples ${history.samples.length}`,
+  );
+  // Time-dependent samples are omitted before the first poll/history
+  // window exists (a 0 would read as a real measurement).
+  if (snapshot.worker.lastPollOk !== null) {
+    lines.push(`terrence_worker_last_poll_ok ${snapshot.worker.lastPollOk ? 1 : 0}`);
   }
-  if (collection.orgs !== null) {
+  if (snapshot.worker.lastPollDurationMs !== null) {
+    lines.push(`terrence_worker_last_poll_duration_ms ${snapshot.worker.lastPollDurationMs}`);
+  }
+  if (history.stats.rss.growthPerHour !== null) {
+    lines.push(`terrence_process_history_rss_growth_per_hour ${history.stats.rss.growthPerHour}`);
+  }
+  if (snapshot.eventLoopDelay.p95Ms !== null) {
     lines.push(
-      "# HELP terrence_org_workspaces_total Workspaces visible to the caller per org.",
-      "# TYPE terrence_org_workspaces_total gauge",
-      ...collection.orgs.map((org): string =>
-        `terrence_org_workspaces_total{org="${prometheusLabel(org.orgId)}"} ${org.workspaces}`,
-      ),
-      "# HELP tfe_run_current_count Current runs visible to the caller by org and status.",
-      "# TYPE tfe_run_current_count gauge",
-      ...collection.orgs.flatMap((org): string[] =>
-        Object.entries(org.runsByStatus).map(([status, value]): string =>
-          `tfe_run_current_count{org="${prometheusLabel(org.orgId)}",status="${prometheusLabel(status)}"} ${value}`,
-        ),
-      ),
+      `terrence_event_loop_delay_ms{quantile="0.5"} ${snapshot.eventLoopDelay.meanMs ?? snapshot.eventLoopDelay.p95Ms}`,
+      `terrence_event_loop_delay_ms{quantile="0.95"} ${snapshot.eventLoopDelay.p95Ms}`,
+      ...(snapshot.eventLoopDelay.maxMs === null ? [] : [`terrence_event_loop_delay_ms{quantile="max"} ${snapshot.eventLoopDelay.maxMs}`]),
     );
   }
+  for (const [poller, stats] of Object.entries(snapshot.worker.pollers)) {
+    const label = `poller="${prometheusLabel(poller)}"`;
+    lines.push(
+      `terrence_worker_poller_runs_total{${label}} ${stats.runs}`,
+      `terrence_worker_poller_errors_total{${label}} ${stats.errors}`,
+    );
+  }
+}
+
+function pushOrgLines(lines: string[], orgs: NonNullable<MetricsCollection["orgs"]>): void {
+  lines.push(
+    "# HELP terrence_org_workspaces_total Workspaces visible to the caller per org.",
+    "# TYPE terrence_org_workspaces_total gauge",
+    ...orgs.map((org): string =>
+      `terrence_org_workspaces_total{org="${prometheusLabel(org.orgId)}"} ${org.workspaces}`,
+    ),
+    "# HELP tfe_run_current_count Current runs visible to the caller by org and status.",
+    "# TYPE tfe_run_current_count gauge",
+    ...orgs.flatMap((org): string[] =>
+      Object.entries(org.runsByStatus).map(([status, value]): string =>
+        `tfe_run_current_count{org="${prometheusLabel(org.orgId)}",status="${prometheusLabel(status)}"} ${value}`,
+      ),
+    ),
+  );
+}
+
+function pushAgentPoolLines(lines: string[], collection: MetricsCollection): void {
   lines.push(
     "# HELP terrence_agent_pools_total Agent pools visible to the caller.",
     "# TYPE terrence_agent_pools_total gauge",
@@ -541,17 +553,34 @@ function prometheusLines(collection: MetricsCollection): string[] {
       `terrence_agent_queue_oldest_wait_seconds{${poolLabels(pool)}} ${pool.oldestQueuedWaitSeconds}`,
     );
   }
-  return lines;
+}
+
+async function resolveMetricsCollection(
+  scopes: Parameters<typeof collectScopedMetrics>[0] | null,
+  userId: Parameters<typeof collectScopedMetrics>[1],
+  tokenOrgId: Parameters<typeof collectScopedMetrics>[2],
+  teamId: Parameters<typeof collectScopedMetrics>[3],
+  allowInstanceMetrics: boolean,
+  set: MetricsCtx["set"],
+): Promise<{ collection: MetricsCollection } | { error: unknown }> {
+  const collection = scopes !== null
+    ? await collectScopedMetrics(scopes, userId, tokenOrgId, teamId)
+    : allowInstanceMetrics
+      ? await collectLegacyMetrics()
+      : null;
+  if (collection === null) {
+    (set as { status: number }).status = 403;
+    return { error: { errors: [{ status: "403", title: "Forbidden", detail: "Metrics require a bearer token with sufficient scope" }] } };
+  }
+  return { collection };
 }
 
 export const readinessNodeId = (): string => process.env["TERRENCE_NODE_ID"] ?? "terrence-node-1";
 
-async function readinessResponse(
-  set: SetCtx["set"],
-  timeoutSeconds: number,
-  request?: Readonly<{ headers: Readonly<{ get: (name: string) => string | null }> }>,
-  persistNode = false,
-): Promise<ReadinessResult | Response> {
+type ReadinessStatus = "OK" | "ERROR";
+type ReadinessOverall = "OK" | "ERROR" | "DRAINING";
+
+async function probeDatabaseReadiness(timeoutSeconds: number): Promise<ReadinessStatus> {
   const timeout = timeoutSeconds * 1000;
   // Clear the fallback timer once the database query settles: Promise.race
   // resolves as soon as either side completes, but an un-cleared setTimeout
@@ -559,7 +588,7 @@ async function readinessResponse(
   // polled by load balancers and the heartbeat loop, so stray timers would
   // accumulate.
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const database = await Promise.race([
+  return Promise.race([
     db.query.users.findFirst().then((): "OK" => "OK").catch((): "ERROR" => "ERROR"),
     new Promise<"ERROR">((resolve): void => {
       timer = setTimeout((): void => { resolve("ERROR"); }, timeout);
@@ -567,8 +596,9 @@ async function readinessResponse(
   ]).finally((): void => {
     if (timer !== undefined) clearTimeout(timer);
   });
-  const disk = isStorageDegraded() ? "ERROR" : "OK";
-  const worker = envFlag("TERRENCE_DISABLE_WORKER") ? "ERROR" : "OK";
+}
+
+function probeSandboxReadiness(): { sandboxAbiStatus: ReadinessStatus; netPolicyStatus: ReadinessStatus } {
   // Fail readiness when the sandbox is required but the host cannot
   // provide Landlock at all (issue #566); the operator policy floor
   // still applies on top for newer-ABI requirements.
@@ -587,6 +617,16 @@ async function readinessResponse(
   } catch {
     netPolicyStatus = "ERROR";
   }
+  return { sandboxAbiStatus, netPolicyStatus };
+}
+
+function resolveReadinessStatus(
+  database: ReadinessStatus,
+  disk: ReadinessStatus,
+  sandboxAbiStatus: ReadinessStatus,
+  netPolicyStatus: ReadinessStatus,
+  set: SetCtx["set"],
+): { status: ReadinessOverall; draining: boolean } {
   const maintenance = maintenanceSnapshot();
   const draining = maintenance.active || ["draining", "maintenance"].includes(integrationSetting("TERRENCE_NODE_STATUS"));
   const status =
@@ -596,7 +636,17 @@ async function readinessResponse(
         ? "DRAINING"
         : "OK";
   if (status !== "OK") (set as { status: number }).status = 503;
+  return { status, draining };
+}
 
+async function buildReadinessResult(
+  status: ReadinessOverall,
+  database: ReadinessStatus,
+  disk: ReadinessStatus,
+  worker: ReadinessStatus,
+  sandboxAbiStatus: ReadinessStatus,
+  netPolicyStatus: ReadinessStatus,
+): Promise<ReadinessResult> {
   const result: ReadinessResult = {
     node: readinessNodeId(),
     status,
@@ -621,6 +671,16 @@ async function readinessResponse(
     const schemaVersion = databaseSchemaVersion();
     if (schemaVersion !== null) result.checks.push({ check: "database-schema", status: schemaVersion });
   } catch { /* journal missing on fresh boot is not readiness failure */ }
+  return result;
+}
+
+async function persistReadinessNode(
+  database: ReadinessStatus,
+  persistNode: boolean,
+  status: ReadinessOverall,
+  draining: boolean,
+  checks: ReadinessResult["checks"],
+): Promise<void> {
   // Only the heartbeat path persists the node row. Every readiness probe
   // responding on load-balancer or orchestrator intervals would otherwise
   // write the row on each request for zero freshness gain (the heartbeat
@@ -634,7 +694,7 @@ async function readinessResponse(
       address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
       version: appVersion(),
       status: status === "ERROR" ? "error" : draining ? "draining" : "active",
-      readinessChecks: result.checks,
+      readinessChecks: checks,
       registeredAt: now,
       lastHeartbeatAt: now,
     }).onConflictDoUpdate({
@@ -644,7 +704,7 @@ async function readinessResponse(
         address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
         version: appVersion(),
         status: status === "ERROR" ? "error" : draining ? "draining" : "active",
-        readinessChecks: result.checks,
+        readinessChecks: checks,
         lastHeartbeatAt: now,
       },
     }).catch((error: unknown): void => {
@@ -653,17 +713,41 @@ async function readinessResponse(
       });
     });
   }
+}
+
+function readinessPlainText(
+  request: Readonly<{ headers: Readonly<{ get: (name: string) => string | null }> }> | undefined,
+  set: SetCtx["set"],
+  status: ReadinessOverall,
+): { response: Response } | { plain: false } {
   const accept = request?.headers.get("accept") ?? "";
   const plainText = accept.split(",").some((value): boolean => {
     const mediaType = value.split(";")[0]?.trim().toLowerCase();
     return mediaType === "text/plain" || mediaType === "text/html";
   });
-  if (plainText) {
-    const headers = new Headers();
-    for (const [key, value] of Object.entries(set.headers)) headers.set(key, String(value));
-    headers.set("Content-Type", "text/plain; charset=utf-8");
-    return new Response(status, { status: set.status === undefined ? 200 : Number(set.status), headers });
-  }
+  if (!plainText) return { plain: false };
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(set.headers)) headers.set(key, String(value));
+  headers.set("Content-Type", "text/plain; charset=utf-8");
+  return { response: new Response(status, { status: set.status === undefined ? 200 : Number(set.status), headers }) };
+}
+
+async function readinessResponse(
+  set: SetCtx["set"],
+  timeoutSeconds: number,
+  request?: Readonly<{ headers: Readonly<{ get: (name: string) => string | null }> }>,
+  persistNode = false,
+): Promise<ReadinessResult | Response> {
+  const database = await probeDatabaseReadiness(timeoutSeconds);
+  const disk = isStorageDegraded() ? "ERROR" : "OK";
+  const worker = envFlag("TERRENCE_DISABLE_WORKER") ? "ERROR" : "OK";
+  const sandbox = probeSandboxReadiness();
+  const resolved = resolveReadinessStatus(database, disk, sandbox.sandboxAbiStatus, sandbox.netPolicyStatus, set);
+
+  const result = await buildReadinessResult(resolved.status, database, disk, worker, sandbox.sandboxAbiStatus, sandbox.netPolicyStatus);
+  await persistReadinessNode(database, persistNode, resolved.status, resolved.draining, result.checks);
+  const text = readinessPlainText(request, set, resolved.status);
+  if ("response" in text) return text.response;
   return result;
 }
 
@@ -948,16 +1032,9 @@ export const healthRoutes = new Elysia({ name: "health" })
     const allowInstanceMetrics = scopes === null
       && ((systemToken !== null && systemToken !== undefined) || (isSiteAdmin && user !== null && user !== undefined));
 
-    const collection = scopes !== null
-      ? await collectScopedMetrics(scopes, user?.id, orgId, teamId)
-      : allowInstanceMetrics
-        ? await collectLegacyMetrics()
-        : null;
-
-    if (collection === null) {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: "Metrics require a bearer token with sufficient scope" }] };
-    }
+    const resolved = await resolveMetricsCollection(scopes, user?.id, orgId, teamId, allowInstanceMetrics, set);
+    if ("error" in resolved) return resolved.error;
+    const collection = resolved.collection;
 
     const format = new URL(request.url).searchParams.get("format");
     if (format !== null && format !== "" && format !== "json" && format !== "prometheus") {

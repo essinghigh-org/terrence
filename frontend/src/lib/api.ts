@@ -257,99 +257,103 @@ async function refreshAccessToken(force = false): Promise<string | null> {
   return refreshRequest;
 }
 
-async function requestApi(endpoint: string, options: ReadonlyRequestInit = {}): Promise<Response> {
-  // Absolute /api/* paths (v1 compatibility endpoints like /api/v1/metadata)
-  // are used verbatim; everything else is relative to the v2 API base.
-  const url = endpoint.startsWith("/api/")
-    ? endpoint
-    : `${API_BASE_URL}${endpoint}`;
-  const send = async (accessToken: string | null): Promise<Response> => {
-    // SAFETY: Headers accepts record and tuple-array shapes; the readonly
-    // modifiers on the stored options are compile-time only.
-    const headers = new Headers(options.headers as HeadersInit | undefined);
-    if (!headers.has("Content-Type") && (options.body === undefined || options.body === null || isString(options.body))) {
-      headers.set("Content-Type", "application/vnd.api+json");
-    }
-    if (accessToken !== null && accessToken !== "") {
-      headers.set("Authorization", `Bearer ${accessToken}`);
-    }
-    return fetch(url, {
-      // SAFETY: ReadonlyRequestInit is RequestInit with readonly modifiers;
-      // spreading it is shape-identical at runtime.
-      ...(options as RequestInit),
-      headers,
-    });
-  };
-  let token = getAuthToken();
-  const expiresAt = getAuthTokenExpiry();
-  if (
-    token !== null
-    && token !== ""
-    && expiresAt !== null
-    && expiresAt <= Date.now()
-    && isRefreshableSession()
-  ) {
-    token = await refreshAccessToken().catch((): null => null) ?? token;
+async function sendApiRequest(url: string, options: ReadonlyRequestInit = {}, token: string | null = null): Promise<Response> {
+  // SAFETY: Headers accepts record and tuple-array shapes; the readonly
+  // modifiers on the stored options are compile-time only.
+  const headers = new Headers(options.headers as HeadersInit | undefined);
+  if (!headers.has("Content-Type") && (options.body === undefined || options.body === null || isString(options.body))) {
+    headers.set("Content-Type", "application/vnd.api+json");
   }
-  let response = await send(token);
-  const canRefresh = response.status === 401
-    && token !== null
-    && token !== ""
-    && isRefreshableSession()
-    && !url.endsWith("/users/login")
-    && !url.endsWith("/users/refresh")
-    && !url.endsWith("/users/logout");
-  if (canRefresh) {
-    const refreshedToken = await refreshAccessToken().catch((): null => null);
-    if (refreshedToken !== null) {
-      response = await send(refreshedToken);
-    }
+  if (token !== null && token !== "") {
+    headers.set("Authorization", `Bearer ${token}`);
   }
+  return fetch(url, {
+    // SAFETY: ReadonlyRequestInit is RequestInit with readonly modifiers;
+    // spreading it is shape-identical at runtime.
+    ...(options as RequestInit),
+    headers,
+  });
+}
+
+function hasUsableToken(token: string | null): boolean {
+  return token !== null && token !== "";
+}
+
+function shouldRefreshBeforeRequest(token: string | null, expiresAt: number | null): boolean {
+  return hasUsableToken(token) && expiresAt !== null && expiresAt <= Date.now() && isRefreshableSession();
+}
+
+function isAuthEndpoint(url: string): boolean {
+  return url.endsWith("/users/login") || url.endsWith("/users/refresh") || url.endsWith("/users/logout");
+}
+
+function shouldRetryWorkspace404(status: number, method: string | undefined, token: string | null, url: string): boolean {
   // A stale in-memory token can yield 404 on workspace-scoped reads
   // when the principal lacks that workspace. Har review showed 5 rapid
   // 404s for /workspaces/ws-…/runs with Bearer VvQ… while the same URL
   // succeeded with HrTW… after a refresh. Retry a single 404 via the
   // refresh cookie when in a refreshable session so the correct principal
   // is picked up without surfacing "Run history may be out of date".
-  const canRefreshOnWorkspace404 = response.status === 404
-    && ["GET", "HEAD"].includes((options.method ?? "GET").toUpperCase())
-    && token !== null
-    && token !== ""
+  return status === 404
+    && ["GET", "HEAD"].includes((method ?? "GET").toUpperCase())
+    && hasUsableToken(token)
     && isRefreshableSession()
     && /\/api\/v2\/workspaces\/[^/]+\/(runs|state-versions|vars|varsets|resources|dependency-graph|current-state-version-outputs|readme)$/.test(url.split("?")[0] ?? url)
-    && !url.endsWith("/users/login")
-    && !url.endsWith("/users/refresh")
-    && !url.endsWith("/users/logout");
-  if (canRefreshOnWorkspace404) {
+    && !isAuthEndpoint(url);
+}
+
+async function throwApiError(response: ReadonlyResponse, token: string | null, url: string): Promise<never> {
+  if (response.status === 401 && token !== null && token !== "" && !url.endsWith("/users/login")) {
+    expireAuthSession();
+  }
+  const errors = await parseErrorBody(response);
+  const firstErr = errors[0];
+  const rawDetail = firstErr?.["detail"];
+  const rawTitle = firstErr?.["title"];
+  const detail = isString(rawDetail) ? rawDetail : null;
+  const title = isString(rawTitle) ? rawTitle : null;
+  const rawCode = firstErr?.["code"];
+  const code = isString(rawCode) && rawCode.trim() !== "" ? rawCode.trim() : `HTTP_${response.status}`;
+  const requestId = response.headers.get("X-Request-Id")
+    ?? response.headers.get("X-Correlation-Id");
+  throw new ApiError(
+    response.status,
+    detail ?? title ?? `API request failed (${response.status})`,
+    extractFieldErrors(errors),
+    response.headers.get("Retry-After"),
+    code,
+    requestId,
+    response.headers.get("Idempotency-Replayed") === "true",
+  );
+}
+
+async function requestApi(endpoint: string, options: ReadonlyRequestInit = {}): Promise<Response> {
+  // Absolute /api/* paths (v1 compatibility endpoints like /api/v1/metadata)
+  // are used verbatim; everything else is relative to the v2 API base.
+  const url = endpoint.startsWith("/api/")
+    ? endpoint
+    : `${API_BASE_URL}${endpoint}`;
+  let token = getAuthToken();
+  const expiresAt = getAuthTokenExpiry();
+  if (shouldRefreshBeforeRequest(token, expiresAt)) {
+    token = await refreshAccessToken().catch((): null => null) ?? token;
+  }
+  let response = await sendApiRequest(url, options, token);
+  if (response.status === 401 && hasUsableToken(token) && isRefreshableSession() && !isAuthEndpoint(url)) {
+    const refreshedToken = await refreshAccessToken().catch((): null => null);
+    if (refreshedToken !== null) {
+      response = await sendApiRequest(url, options, refreshedToken);
+    }
+  }
+  if (shouldRetryWorkspace404(response.status, options.method, token, url)) {
     const refreshedToken = await refreshAccessToken().catch((): null => null);
     if (refreshedToken !== null && refreshedToken !== token) {
-      response = await send(refreshedToken);
+      response = await sendApiRequest(url, options, refreshedToken);
     }
   }
 
   if (!response.ok) {
-    if (response.status === 401 && token !== null && token !== "" && !url.endsWith("/users/login")) {
-      expireAuthSession();
-    }
-    const errors = await parseErrorBody(response);
-    const firstErr = errors[0];
-    const rawDetail = firstErr?.["detail"];
-    const rawTitle = firstErr?.["title"];
-    const detail = isString(rawDetail) ? rawDetail : null;
-    const title = isString(rawTitle) ? rawTitle : null;
-    const rawCode = firstErr?.["code"];
-    const code = isString(rawCode) && rawCode.trim() !== "" ? rawCode.trim() : `HTTP_${response.status}`;
-    const requestId = response.headers.get("X-Request-Id")
-      ?? response.headers.get("X-Correlation-Id");
-    throw new ApiError(
-      response.status,
-      detail ?? title ?? `API request failed (${response.status})`,
-      extractFieldErrors(errors),
-      response.headers.get("Retry-After"),
-      code,
-      requestId,
-      response.headers.get("Idempotency-Replayed") === "true",
-    );
+    return throwApiError(response, token, url);
   }
 
   return response;
@@ -368,6 +372,57 @@ export async function fetchApiBlob(endpoint: string, options: ReadonlyRequestIni
 export const MAX_PAGINATED_PAGES = 100;
 export const MAX_PAGINATED_RECORDS = 10_000;
 
+type PagedCollection<T> = {
+  data?: T[];
+  meta?: { pagination?: JsonObject };
+};
+
+function checkPaginationBudget(maxPages: number, maxRecords: number, retryAttempts: number): void {
+  if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > MAX_PAGINATED_PAGES
+    || !Number.isSafeInteger(maxRecords) || maxRecords < 1 || maxRecords > MAX_PAGINATED_RECORDS
+    || !Number.isSafeInteger(retryAttempts) || retryAttempts < 0 || retryAttempts > 3) {
+    throw new Error("Invalid pagination budget.");
+  }
+}
+
+async function sleepWithAbort(delay: number, signal: Readonly<AbortSignal> | undefined): Promise<void> {
+  await new Promise<void>((resolve, reject): void => {
+    const abort = (): void => { clearTimeout(timer); reject(new DOMException("Export cancelled", "AbortError")); };
+    const timer = setTimeout((): void => { signal?.removeEventListener("abort", abort); resolve(); }, delay);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function fetchPageWithRetry<T>(pageEndpoint: string, signal: Readonly<AbortSignal> | undefined, retryAttempts: number): Promise<PagedCollection<T>> {
+  let retries = 0;
+  for (;;) {
+    try {
+      return await fetchApi(pageEndpoint, { method: "GET", ...(signal === undefined ? {} : { signal }) });
+    } catch (error: unknown) {
+      if (!isRetryableApiError(error) || retries++ >= retryAttempts) throw error;
+      const delay = retryAfterDelayMilliseconds(error.retryAfter);
+      // Long maintenance windows need a later user retry, not an export held in memory.
+      if (delay === null || !Number.isFinite(delay) || delay > 30_000) throw error;
+      signal?.throwIfAborted();
+      await sleepWithAbort(delay, signal);
+      signal?.throwIfAborted();
+    }
+  }
+}
+
+function nextPageEndpoint(pageEndpoint: string, nextPage: unknown): string | null {
+  if (nextPage === undefined || nextPage === null) return null;
+  if (!isNumber(nextPage) || !Number.isSafeInteger(nextPage) || nextPage < 1) throw new Error("The server returned invalid pagination metadata.");
+  const nextUrl: URL = new globalThis.URL(pageEndpoint, "http://terrence.local");
+  nextUrl.searchParams.set("page[number]", String(nextPage));
+  return `${nextUrl.pathname}${nextUrl.search}`;
+}
+
+function assertPageNotRepeated(alreadyVisited: boolean, visitedCount: number, maxPages: number): void {
+  if (alreadyVisited) throw new Error("The server repeated a page; the result is incomplete.");
+  if (visitedCount >= maxPages) throw new Error(`The result exceeds ${maxPages} pages. Narrow the query and try again.`);
+}
+
 /** Explicit traversal only: ordinary list views should request a single page. */
 export async function fetchAllApiPages<T>(
   endpoint: string,
@@ -383,53 +438,23 @@ export async function fetchAllApiPages<T>(
   const maxPages = options.maxPages ?? MAX_PAGINATED_PAGES;
   const maxRecords = options.maxRecords ?? MAX_PAGINATED_RECORDS;
   const retryAttempts = options.retryAttempts ?? 3;
-  if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > MAX_PAGINATED_PAGES
-    || !Number.isSafeInteger(maxRecords) || maxRecords < 1 || maxRecords > MAX_PAGINATED_RECORDS
-    || !Number.isSafeInteger(retryAttempts) || retryAttempts < 0 || retryAttempts > 3) {
-    throw new Error("Invalid pagination budget.");
-  }
+  checkPaginationBudget(maxPages, maxRecords, retryAttempts);
   const data: T[] = [];
   const visited = new Set<string>();
   let pageEndpoint = endpoint;
   for (;;) {
     signal?.throwIfAborted();
-    if (visited.has(pageEndpoint)) throw new Error("The server repeated a page; the result is incomplete.");
-    if (visited.size >= maxPages) throw new Error(`The result exceeds ${maxPages} pages. Narrow the query and try again.`);
+    assertPageNotRepeated(visited.has(pageEndpoint), visited.size, maxPages);
     visited.add(pageEndpoint);
-    let retries = 0;
-    let response: {
-      data?: T[];
-      meta?: { pagination?: JsonObject };
-    };
-    for (;;) {
-      try {
-        response = await fetchApi(pageEndpoint, { method: "GET", ...(signal === undefined ? {} : { signal }) });
-        break;
-      } catch (error: unknown) {
-        if (!isRetryableApiError(error) || retries++ >= retryAttempts) throw error;
-        const delay = retryAfterDelayMilliseconds(error.retryAfter);
-        // Long maintenance windows need a later user retry, not an export held in memory.
-        if (delay === null || !Number.isFinite(delay) || delay > 30_000) throw error;
-        signal?.throwIfAborted();
-        await new Promise<void>((resolve, reject): void => {
-          const abort = (): void => { clearTimeout(timer); reject(new DOMException("Export cancelled", "AbortError")); };
-          const timer = setTimeout((): void => { signal?.removeEventListener("abort", abort); resolve(); }, delay);
-          signal?.addEventListener("abort", abort, { once: true });
-        });
-        signal?.throwIfAborted();
-      }
-    }
+    const response = await fetchPageWithRetry<T>(pageEndpoint, signal, retryAttempts);
     signal?.throwIfAborted();
     if (!Array.isArray(response.data)) throw new Error("The server returned an invalid collection.");
     if (data.length + response.data.length > maxRecords) throw new Error(`The result exceeds ${maxRecords} records. Narrow the query and try again.`);
     data.push(...response.data);
     options.onProgress?.(data.length);
-    const nextPage = response.meta?.pagination?.["next-page"];
-    if (nextPage === undefined || nextPage === null) break;
-    if (!isNumber(nextPage) || !Number.isSafeInteger(nextPage) || nextPage < 1) throw new Error("The server returned invalid pagination metadata.");
-    const nextUrl: URL = new globalThis.URL(pageEndpoint, "http://terrence.local");
-    nextUrl.searchParams.set("page[number]", String(nextPage));
-    pageEndpoint = `${nextUrl.pathname}${nextUrl.search}`;
+    const next = nextPageEndpoint(pageEndpoint, response.meta?.pagination?.["next-page"]);
+    if (next === null) break;
+    pageEndpoint = next;
   }
   return data;
 }
@@ -514,6 +539,137 @@ export async function enqueueExplanation(runId: string, kind: ExplainKind): Prom
   return { status: "queued" };
 }
 
+async function sendExplainRequest(
+  url: string,
+  kind: ExplainKind,
+  refresh: boolean,
+  signal: Readonly<AbortSignal> | undefined,
+  accessToken: string | null,
+): Promise<Response> {
+  const headers: HeadersInit = {
+    "Content-Type": "application/vnd.api+json",
+    // NOTE: spelled with concatenation so the "`Bearer " sequence never
+    // appears; secret-redaction tooling mangles that template spelling.
+    ...(accessToken !== null ? { Authorization: "Bearer " + accessToken } : undefined),
+  };
+  // SAFETY: the request object is the same shape as RequestInit; the
+  // as-assertion only drops the readonly modifiers for fetch's signature.
+  return fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      data: {
+        type: "plan-explanations",
+        attributes: { kind, stream: true, ...(refresh ? { refresh: true } : undefined) },
+      },
+    }),
+    signal,
+  } as RequestInit);
+}
+
+/** Null when the request was aborted; callers resolve void in that case. */
+async function trySendExplainRequest(
+  url: string,
+  kind: ExplainKind,
+  refresh: boolean,
+  signal: Readonly<AbortSignal> | undefined,
+  token: string | null,
+): Promise<Response | null> {
+  try {
+    return await sendExplainRequest(url, kind, refresh, signal, token);
+  } catch (caught: unknown) {
+    if (signal?.aborted === true) return null;
+    throw new ApiError(0, caught instanceof Error ? caught.message : String(caught));
+  }
+}
+
+async function throwExplainHttpError(response: ReadonlyResponse, token: string | null): Promise<void> {
+  if (response.status === 401 && token !== null && token !== "") {
+    expireAuthSession();
+  }
+  const errors = await parseErrorBody(response);
+  const firstErr = errors[0];
+  const rawDetail = firstErr?.["detail"];
+  const rawTitle = firstErr?.["title"];
+  const detail = isString(rawDetail) ? rawDetail : null;
+  const title = isString(rawTitle) ? rawTitle : null;
+  throw new ApiError(
+    response.status,
+    detail ?? title ?? `API request failed (${response.status})`,
+    extractFieldErrors(errors),
+    response.headers.get("Retry-After"),
+    undefined,
+    response.headers.get("X-Request-Id") ?? response.headers.get("X-Correlation-Id"),
+    response.headers.get("Idempotency-Replayed") === "true",
+  );
+}
+
+/**
+ * Providers that ignore stream: true are folded into the SSE protocol
+ * backend-side, so a JSON content-type here means the backend itself broke
+ * its contract; surface it as an error event instead of hanging.
+ */
+async function replayCachedExplanation(
+  response: ReadonlyResponse,
+  kind: ExplainKind,
+  onEvent: (event: Readonly<ExplainStreamEvent>) => void,
+): Promise<boolean> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("text/event-stream")) return false;
+  // SAFETY: this branch is the backend's non-stream error path, which
+  // returns a JSON:API error document; the explanation field is
+  // typeof-checked below before it is surfaced.
+  const parsed = (await response.json().catch((): null => null)) as {
+    data?: { attributes?: { explanation?: string; model?: string; "reasoning-effort"?: string | null } };
+  } | null;
+  const attributes = parsed?.data?.attributes;
+  if (attributes?.explanation === undefined || attributes.explanation === "") {
+    throw new Error("The explainer returned an unexpected response format.");
+  }
+  const reasoningEffort = reasoningEffortValue(attributes["reasoning-effort"]);
+  onEvent({ name: "meta", data: { kind, model: attributes.model ?? "", "reasoning-effort": reasoningEffort } });
+  onEvent({ name: "content", data: { text: attributes.explanation } });
+  onEvent({ name: "done", data: { model: attributes.model ?? "", "reasoning-effort": reasoningEffort, "generated-at": new Date().toISOString() } });
+  return true;
+}
+
+/** Minimal body-reader surface for the SSE frame pump (readonly-param discipline). */
+type FrameStreamReader = Readonly<{
+  readonly read: () => Promise<ReadableStreamReadResult<Uint8Array>>;
+  readonly cancel: () => Promise<void>;
+  readonly releaseLock: () => void;
+}>;
+
+async function pumpExplainFrames(
+  reader: FrameStreamReader,
+  onEvent: (event: Readonly<ExplainStreamEvent>) => void,
+): Promise<void> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      if (frame.trim() === "") continue;
+      const event = parseExplainFrame(frame);
+      if (event === null) continue;
+      if (event.name === "done") {
+        onEvent(event);
+        await reader.cancel().catch((): null => null);
+        return;
+      }
+      if (event.name === "error") {
+        throw new ApiError(0, event.data.message);
+      }
+      onEvent(event);
+    }
+  }
+  throw new ApiError(0, "The explainer stream ended without a done event.");
+}
+
 /**
  * Stream a run explanation from the AI explainer. Always asks for
  * `stream: true`; the backend answers through the SSE envelope whether it
@@ -532,128 +688,42 @@ export async function streamExplain(
   const url = `${API_BASE_URL}/runs/${encodeURIComponent(runId)}/explain`;
   // Same refresh-and-retry semantics as fetchApi: an expired token is
   // refreshed once and the request replayed before the session is expired.
-  const send = async (accessToken: string | null): Promise<Response> => {
-    const headers: HeadersInit = {
-      "Content-Type": "application/vnd.api+json",
-      ...(accessToken !== null ? { Authorization: `Bearer ${accessToken}` } : undefined),
-    };
-    // SAFETY: the request object is the same shape as RequestInit; the
-    // as-assertion only drops the readonly modifiers for fetch's signature.
-    return fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        data: {
-          type: "plan-explanations",
-          attributes: { kind, stream: true, ...(refresh ? { refresh: true } : undefined) },
-        },
-      }),
-      signal,
-    } as RequestInit);
-  };
   let token = await prepareAuthToken();
-  let response: Response;
-  try {
-    response = await send(token);
-  } catch (caught: unknown) {
-    if (signal?.aborted === true) return;
-    throw new ApiError(0, caught instanceof Error ? caught.message : String(caught));
-  }
+  const first = await trySendExplainRequest(url, kind, refresh, signal, token);
+  if (first === null) return;
+  let response = first;
   if (response.status === 401 && token !== null && token !== "" && isRefreshableSession()) {
     const refreshedToken = await refreshAccessToken().catch((): null => null);
     if (refreshedToken !== null) {
       token = refreshedToken;
-      try {
-        response = await send(refreshedToken);
-      } catch (caught: unknown) {
-        if (signal?.aborted === true) return;
-        throw new ApiError(0, caught instanceof Error ? caught.message : String(caught));
-      }
+      const retry = await trySendExplainRequest(url, kind, refresh, signal, refreshedToken);
+      if (retry === null) return;
+      response = retry;
     }
   }
 
   if (!response.ok) {
-    if (response.status === 401 && token !== null && token !== "") {
-      expireAuthSession();
-    }
-    const errors = await parseErrorBody(response);
-    const firstErr = errors[0];
-    const rawDetail = firstErr?.["detail"];
-    const rawTitle = firstErr?.["title"];
-    const detail = isString(rawDetail) ? rawDetail : null;
-    const title = isString(rawTitle) ? rawTitle : null;
-    throw new ApiError(
-      response.status,
-      detail ?? title ?? `API request failed (${response.status})`,
-      extractFieldErrors(errors),
-      response.headers.get("Retry-After"),
-      undefined,
-      response.headers.get("X-Request-Id") ?? response.headers.get("X-Correlation-Id"),
-      response.headers.get("Idempotency-Replayed") === "true",
-    );
+    await throwExplainHttpError(response, token);
   }
 
   if (response.body === null) throw new Error("The explainer stream had no response body.");
 
-  // Providers that ignore stream: true are folded into the SSE protocol
-  // backend-side, so a JSON content-type here means the backend itself broke
-  // its contract; surface it as an error event instead of hanging.
-  const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("text/event-stream")) {
-    // SAFETY: this branch is the backend's non-stream error path, which
-    // returns a JSON:API error document; the explanation field is
-    // typeof-checked below before it is surfaced.
-    const parsed = (await response.json().catch((): null => null)) as {
-      data?: { attributes?: { explanation?: string; model?: string; "reasoning-effort"?: string | null } };
-    } | null;
-    const attributes = parsed?.data?.attributes;
-    if (attributes?.explanation !== undefined && attributes.explanation !== "") {
-      const reasoningEffort = reasoningEffortValue(attributes["reasoning-effort"]);
-      onEvent({ name: "meta", data: { kind, model: attributes.model ?? "", "reasoning-effort": reasoningEffort } });
-      onEvent({ name: "content", data: { text: attributes.explanation } });
-      onEvent({ name: "done", data: { model: attributes.model ?? "", "reasoning-effort": reasoningEffort, "generated-at": new Date().toISOString() } });
-      return;
-    }
-    throw new Error("The explainer returned an unexpected response format.");
-  }
+  if (await replayCachedExplanation(response, kind, onEvent)) return;
 
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let completed = false;
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const frames = buffer.split("\n\n");
-      buffer = frames.pop() ?? "";
-      for (const frame of frames) {
-        if (frame.trim() === "") continue;
-        const event = parseExplainFrame(frame);
-        if (event === null) continue;
-        if (event.name === "done") {
-          onEvent(event);
-          completed = true;
-          await reader.cancel().catch((): null => null);
-          return;
-        }
-        if (event.name === "error") {
-          throw new ApiError(0, event.data.message);
-        }
-        onEvent(event);
-      }
-    }
+    await pumpExplainFrames(reader, onEvent);
+    completed = true;
   } finally {
     // Cancel the underlying body on error and unexpected-end exits so the
     // connection is released; done-path cancellation is handled above.
     if (!completed) await reader.cancel().catch((): null => null);
     reader.releaseLock();
   }
-  throw new ApiError(0, "The explainer stream ended without a done event.");
 }
 
-function parseExplainFrame(frame: string): ExplainStreamEvent | null {
+function splitExplainFrame(frame: string): { name: string; raw: string | null } {
   let name = "message";
   const dataLines: string[] = [];
   for (const rawLine of frame.split("\n")) {
@@ -664,9 +734,57 @@ function parseExplainFrame(frame: string): ExplainStreamEvent | null {
       dataLines.push(line.slice(5).trim());
     }
   }
-  if (dataLines.length === 0) return null;
+  if (dataLines.length === 0) return { name, raw: null };
   const raw = dataLines.join("\n");
-  if (raw === "[DONE]") return null;
+  if (raw === "[DONE]") return { name, raw: null };
+  return { name, raw };
+}
+
+/** Unknown-valued SSE payload fields; event builders validate each field. */
+type ExplainPayloadFields = Readonly<Record<string, unknown>>;
+
+function explainTextEvent(
+  name: "thinking" | "content" | "content-reset",
+  object: ExplainPayloadFields,
+): ExplainStreamEvent | null {
+  const text = isString(object["text"]) ? object["text"] : "";
+  if (name === "thinking") return text === "" ? null : { name, data: { text } };
+  return { name, data: { text } };
+}
+
+function explainMetaEvent(object: ExplainPayloadFields): ExplainStreamEvent {
+  const model = isString(object["model"]) ? object["model"] : "";
+  const reasoningEffort = reasoningEffortValue(object["reasoning-effort"]);
+  const kind: ExplainKind = object["kind"] === "apply" ? "apply" : "plan";
+  return { name: "meta", data: { kind, model, "reasoning-effort": reasoningEffort } };
+}
+
+function explainDoneEvent(object: ExplainPayloadFields): ExplainStreamEvent {
+  const model = isString(object["model"]) ? object["model"] : "";
+  const reasoningEffort = reasoningEffortValue(object["reasoning-effort"]);
+  const generatedAt = isString(object["generated-at"]) ? object["generated-at"] : new Date().toISOString();
+  const cached = object["cached"] === true;
+  return { name: "done", data: { model, "reasoning-effort": reasoningEffort, "generated-at": generatedAt, cached } };
+}
+
+function explainErrorEvent(object: ExplainPayloadFields): ExplainStreamEvent {
+  const message = isString(object["message"]) && object["message"] !== "" ? object["message"] : "The explainer reported an unknown error";
+  return { name: "error", data: { message } };
+}
+
+function explainProgressEvent(object: ExplainPayloadFields): ExplainStreamEvent {
+  const status = isString(object["status"]) ? object["status"] : "";
+  const jobId = isString(object["job-id"]) ? object["job-id"] : "";
+  const runId = isString(object["runId"]) ? object["runId"] : "";
+  const kind: ExplainKind = object["kind"] === "apply" ? "apply" : "plan";
+  const createdAt = isString(object["created-at"]) ? object["created-at"] : "";
+  const updatedAt = isString(object["updated-at"]) ? object["updated-at"] : "";
+  return { name: "progress", data: { status, "job-id": jobId, runId, kind, "created-at": createdAt, "updated-at": updatedAt } };
+}
+
+function parseExplainFrame(frame: string): ExplainStreamEvent | null {
+  const { name, raw } = splitExplainFrame(frame);
+  if (raw === null) return null;
   let payload: unknown;
   try {
     payload = JSON.parse(raw);
@@ -676,45 +794,20 @@ function parseExplainFrame(frame: string): ExplainStreamEvent | null {
   const object = asRecordOrNull(payload);
   if (object === null) return null;
   switch (name) {
-    case "meta": {
-      const model = isString(object["model"]) ? object["model"] : "";
-      const reasoningEffort = reasoningEffortValue(object["reasoning-effort"]);
-      const kindValue = object["kind"];
-      const kind: ExplainKind = kindValue === "apply" ? "apply" : "plan";
-      return { name: "meta", data: { kind, model, "reasoning-effort": reasoningEffort } };
-    }
-    case "thinking": {
-      const text = isString(object["text"]) ? object["text"] : "";
-      return text === "" ? null : { name: "thinking", data: { text } };
-    }
-    case "content": {
-      const text = isString(object["text"]) ? object["text"] : "";
-      return { name: "content", data: { text } };
-    }
-    case "content-reset": {
-      const text = isString(object["text"]) ? object["text"] : "";
-      return { name: "content-reset", data: { text } };
-    }
-    case "done": {
-      const model = isString(object["model"]) ? object["model"] : "";
-      const reasoningEffort = reasoningEffortValue(object["reasoning-effort"]);
-      const generatedAt = isString(object["generated-at"]) ? object["generated-at"] : new Date().toISOString();
-      const cached = object["cached"] === true;
-      return { name: "done", data: { model, "reasoning-effort": reasoningEffort, "generated-at": generatedAt, cached } };
-    }
-    case "error": {
-      const message = isString(object["message"]) && object["message"] !== "" ? object["message"] : "The explainer reported an unknown error";
-      return { name: "error", data: { message } };
-    }
-    case "progress": {
-      const status = isString(object["status"]) ? object["status"] : "";
-      const jobId = isString(object["job-id"]) ? object["job-id"] : "";
-      const runId = isString(object["runId"]) ? object["runId"] : "";
-      const kind: ExplainKind = object["kind"] === "apply" ? "apply" : "plan";
-      const createdAt = isString(object["created-at"]) ? object["created-at"] : "";
-      const updatedAt = isString(object["updated-at"]) ? object["updated-at"] : "";
-      return { name: "progress", data: { status, "job-id": jobId, runId, kind, "created-at": createdAt, "updated-at": updatedAt } };
-    }
+    case "meta":
+      return explainMetaEvent(object);
+    case "thinking":
+      return explainTextEvent("thinking", object);
+    case "content":
+      return explainTextEvent("content", object);
+    case "content-reset":
+      return explainTextEvent("content-reset", object);
+    case "done":
+      return explainDoneEvent(object);
+    case "error":
+      return explainErrorEvent(object);
+    case "progress":
+      return explainProgressEvent(object);
     default:
       return null;
   }
@@ -736,6 +829,26 @@ export type RunLogTail = Readonly<{
   /** True when the stream no longer covers every row ever written. */
   truncated: boolean;
 }>;
+
+async function maybeRefreshLogResponse(
+  send: (token: string | null) => Promise<Response>,
+  token: string | null,
+  status: number,
+): Promise<Response | null> {
+  // `prepareAuthToken` only refreshes when the local clock already says the
+  // token expired. Without this retry a token revoked or expired server-side
+  // froze both log panes silently and permanently, while the rest of the page
+  // (which goes through fetchApi, and does retry) carried on working.
+  if (status !== 401 || !hasUsableToken(token) || !isRefreshableSession()) return null;
+  const refreshed = await refreshAccessToken().catch((): null => null);
+  if (refreshed === null) {
+    expireAuthSession();
+    return null;
+  }
+  const response = await send(refreshed);
+  if (response.status === 401) expireAuthSession();
+  return response;
+}
 
 /**
  * Read a phase log forward from a byte offset.
@@ -777,18 +890,8 @@ export async function fetchRunLogTail(
   };
 
   const token = await prepareAuthToken();
-  let response = await send(token);
-  // `prepareAuthToken` only refreshes when the local clock already says the
-  // token expired. Without this retry a token revoked or expired server-side
-  // froze both log panes silently and permanently, while the rest of the page
-  // (which goes through fetchApi, and does retry) carried on working.
-  if (response.status === 401 && token !== null && token !== "" && isRefreshableSession()) {
-    const refreshed = await refreshAccessToken().catch((): null => null);
-    if (refreshed !== null) {
-      response = await send(refreshed);
-    }
-    if (response.status === 401) expireAuthSession();
-  }
+  const first = await send(token);
+  const response = await maybeRefreshLogResponse(send, token, first.status) ?? first;
 
   if (!response.ok) {
     throw new ApiError(response.status, `Could not read the ${phase} log (${response.status})`);

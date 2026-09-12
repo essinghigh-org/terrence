@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { fetchApi } from "../lib/api";
 import { formatDateTime } from "@/lib/utils";
 import { Button } from "../components/ui/button";
@@ -21,6 +21,51 @@ type LoggingSettings = {
   "syslog-format"?: string | null;
 };
 
+function emptyToNull(value: string): string | null {
+  return value === "" ? null : value;
+}
+
+function buildLoggingAttributes(
+  loggingEnabled: boolean,
+  loggingLevel: string,
+  syslogLevel: string,
+  syslogTargets: string,
+  syslogHostname: string,
+  syslogApp: string,
+  syslogFormat: string,
+): Record<string, unknown> {
+  const targets = syslogTargets.split(/[\r\n,]+/u).map((target): string => target.trim()).filter(Boolean);
+  return {
+    enabled: loggingEnabled,
+    "log-level": emptyToNull(loggingLevel),
+    "syslog-level": emptyToNull(syslogLevel),
+    "syslog-targets": targets.length === 0 ? null : targets,
+    "syslog-hostname": emptyToNull(syslogHostname),
+    "syslog-app": emptyToNull(syslogApp),
+    "syslog-format": emptyToNull(syslogFormat),
+  };
+}
+
+type LoggingStateSetters = Readonly<{
+  setLoggingEnabled: (value: boolean) => void;
+  setLoggingLevel: (value: string) => void;
+  setSyslogLevel: (value: string) => void;
+  setSyslogTargets: (value: string) => void;
+  setSyslogHostname: (value: string) => void;
+  setSyslogApp: (value: string) => void;
+  setSyslogFormat: (value: string) => void;
+}>;
+
+function applyLoggingSettings(logging: LoggingSettings, setters: LoggingStateSetters): void {
+  setters.setLoggingEnabled(logging.enabled !== false);
+  setters.setLoggingLevel(logging["log-level"] ?? "");
+  setters.setSyslogLevel(logging["syslog-level"] ?? "");
+  setters.setSyslogTargets((logging["syslog-targets"] ?? []).join("\n"));
+  setters.setSyslogHostname(logging["syslog-hostname"] ?? "");
+  setters.setSyslogApp(logging["syslog-app"] ?? "");
+  setters.setSyslogFormat(logging["syslog-format"] ?? "");
+}
+
 export function AdminLoggingSettings(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -38,6 +83,17 @@ export function AdminLoggingSettings(): React.JSX.Element {
   const [savedAt, setSavedAt] = useState("");
   const [saveError, setSaveError] = useState("");
 
+  const setters: LoggingStateSetters = useMemo((): LoggingStateSetters => ({
+    setLoggingEnabled,
+    setLoggingLevel,
+    setSyslogLevel,
+    setSyslogTargets,
+    setSyslogHostname,
+    setSyslogApp,
+    setSyslogFormat,
+  }), []);
+  const controlsDisabled = !loggingLoaded || saving;
+
   useEffect((): void => {
     const loadLoggingSettings = async (): Promise<void> => {
       setLoading(true);
@@ -45,14 +101,7 @@ export function AdminLoggingSettings(): React.JSX.Element {
       setLoggingLoaded(false);
       try {
         const response = await fetchApi("/admin/logging-settings") as { data?: { attributes?: LoggingSettings } };
-        const logging = response.data?.attributes ?? {};
-        setLoggingEnabled(logging.enabled !== false);
-        setLoggingLevel(logging["log-level"] ?? "");
-        setSyslogLevel(logging["syslog-level"] ?? "");
-        setSyslogTargets((logging["syslog-targets"] ?? []).join("\n"));
-        setSyslogHostname(logging["syslog-hostname"] ?? "");
-        setSyslogApp(logging["syslog-app"] ?? "");
-        setSyslogFormat(logging["syslog-format"] ?? "");
+        applyLoggingSettings(response.data?.attributes ?? {}, setters);
         setLoggingLoaded(true);
       } catch (caught: unknown) {
         const message = caught instanceof Error ? caught.message : String(caught);
@@ -62,39 +111,31 @@ export function AdminLoggingSettings(): React.JSX.Element {
       }
     };
     void loadLoggingSettings();
-  }, [loadAttempt]);
+  }, [loadAttempt, setters]);
 
   const saveLogging = async (): Promise<void> => {
     if (!loggingLoaded) return;
     setSaving(true);
     setSaveError("");
     setSavedAt("");
-    const targets = syslogTargets.split(/[\r\n,]+/u).map((target): string => target.trim()).filter(Boolean);
     try {
       const response = await fetchApi("/admin/logging-settings", {
         method: "PATCH",
         body: JSON.stringify({
           data: {
-            attributes: {
-              enabled: loggingEnabled,
-              "log-level": loggingLevel === "" ? null : loggingLevel,
-              "syslog-level": syslogLevel === "" ? null : syslogLevel,
-              "syslog-targets": targets.length === 0 ? null : targets,
-              "syslog-hostname": syslogHostname === "" ? null : syslogHostname,
-              "syslog-app": syslogApp === "" ? null : syslogApp,
-              "syslog-format": syslogFormat === "" ? null : syslogFormat,
-            },
+            attributes: buildLoggingAttributes(
+              loggingEnabled,
+              loggingLevel,
+              syslogLevel,
+              syslogTargets,
+              syslogHostname,
+              syslogApp,
+              syslogFormat,
+            ),
           },
         }),
       }) as { data?: { attributes?: LoggingSettings } };
-      const logging = response.data?.attributes ?? {};
-      setLoggingEnabled(logging.enabled !== false);
-      setLoggingLevel(logging["log-level"] ?? "");
-      setSyslogLevel(logging["syslog-level"] ?? "");
-      setSyslogTargets((logging["syslog-targets"] ?? []).join("\n"));
-      setSyslogHostname(logging["syslog-hostname"] ?? "");
-      setSyslogApp(logging["syslog-app"] ?? "");
-      setSyslogFormat(logging["syslog-format"] ?? "");
+      applyLoggingSettings(response.data?.attributes ?? {}, setters);
       setSavedAt(formatDateTime(new Date()));
     } catch (caught: unknown) {
       setSaveError(caught instanceof Error ? caught.message : String(caught));
@@ -163,14 +204,14 @@ export function AdminLoggingSettings(): React.JSX.Element {
               id="logging-enabled"
               checked={loggingEnabled}
               onCheckedChange={setLoggingEnabled}
-              disabled={!loggingLoaded || saving}
+              disabled={controlsDisabled}
               aria-label="Remote syslog"
             />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <label htmlFor="logging-level" className="block text-sm font-medium text-foreground">Local log level</label>
-              <Select id="logging-level" value={loggingLevel} disabled={!loggingLoaded || saving} onValueChange={setLoggingLevel}>
+              <Select id="logging-level" value={loggingLevel} disabled={controlsDisabled} onValueChange={setLoggingLevel}>
                 <SelectItem value="">Environment fallback</SelectItem>
                 <SelectItem value="error">error</SelectItem>
                 <SelectItem value="warn">warn</SelectItem>
@@ -180,7 +221,7 @@ export function AdminLoggingSettings(): React.JSX.Element {
             </div>
             <div className="space-y-1.5">
               <label htmlFor="syslog-level" className="block text-sm font-medium text-foreground">Remote syslog level</label>
-              <Select id="syslog-level" value={syslogLevel} disabled={!loggingLoaded || saving} onValueChange={setSyslogLevel}>
+              <Select id="syslog-level" value={syslogLevel} disabled={controlsDisabled} onValueChange={setSyslogLevel}>
                 <SelectItem value="">Local level fallback</SelectItem>
                 <SelectItem value="error">error</SelectItem>
                 <SelectItem value="warn">warn</SelectItem>
@@ -191,7 +232,7 @@ export function AdminLoggingSettings(): React.JSX.Element {
           </div>
           <div className="space-y-1.5">
             <label htmlFor="syslog-format" className="block text-sm font-medium text-foreground">Syslog message format</label>
-            <Select id="syslog-format" value={syslogFormat} disabled={!loggingLoaded || saving} onValueChange={setSyslogFormat}>
+            <Select id="syslog-format" value={syslogFormat} disabled={controlsDisabled} onValueChange={setSyslogFormat}>
               <SelectItem value="">Environment fallback</SelectItem>
               <SelectItem value="rfc5424">RFC 5424 structured data</SelectItem>
               <SelectItem value="json">JSON message body</SelectItem>
@@ -203,7 +244,7 @@ export function AdminLoggingSettings(): React.JSX.Element {
             <Textarea
               id="syslog-targets"
               value={syslogTargets}
-              disabled={!loggingLoaded || saving}
+              disabled={controlsDisabled}
               onInput={(event): void => { setSyslogTargets(event.currentTarget.value); }}
               placeholder={"udp://collector.example.com:514\ntcp://collector.example.com:601"}
               rows={3}
@@ -214,11 +255,11 @@ export function AdminLoggingSettings(): React.JSX.Element {
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <label htmlFor="syslog-hostname" className="block text-sm font-medium text-foreground">Syslog hostname (optional)</label>
-              <Input id="syslog-hostname" value={syslogHostname} disabled={!loggingLoaded || saving} onInput={(event): void => { setSyslogHostname(event.currentTarget.value); }} placeholder="Environment fallback" />
+              <Input id="syslog-hostname" value={syslogHostname} disabled={controlsDisabled} onInput={(event): void => { setSyslogHostname(event.currentTarget.value); }} placeholder="Environment fallback" />
             </div>
             <div className="space-y-1.5">
               <label htmlFor="syslog-app" className="block text-sm font-medium text-foreground">Syslog app name</label>
-              <Input id="syslog-app" value={syslogApp} disabled={!loggingLoaded || saving} onInput={(event): void => { setSyslogApp(event.currentTarget.value); }} placeholder="terrence" />
+              <Input id="syslog-app" value={syslogApp} disabled={controlsDisabled} onInput={(event): void => { setSyslogApp(event.currentTarget.value); }} placeholder="terrence" />
             </div>
           </div>
         </CardContent>
@@ -227,7 +268,7 @@ export function AdminLoggingSettings(): React.JSX.Element {
             {saveError !== "" && <span className="text-destructive">{saveError}</span>}
             {savedAt !== "" && <span className="text-success">Logging settings saved at {savedAt}.</span>}
           </span>
-          <Button type="button" onClick={(): void => { void saveLogging(); }} disabled={!loggingLoaded || saving}>
+          <Button type="button" onClick={(): void => { void saveLogging(); }} disabled={controlsDisabled}>
             {saving && <Spinner data-icon="inline-start" className="size-4" />}
             {saving ? "Saving…" : "Save changes"}
           </Button>

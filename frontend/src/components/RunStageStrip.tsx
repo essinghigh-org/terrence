@@ -43,6 +43,71 @@ const TERMINAL_STAGE_OF_STATUS: Readonly<Record<string, typeof STAGE_ORDER[numbe
   policy_hard_failed: "policy",
 };
 
+/** First recorded timestamp key wins, in lifecycle order. */
+const STAGE_START_KEYS: Readonly<Record<typeof STAGE_ORDER[number], readonly string[]>> = {
+  queue: ["pending-at"],
+  plan: ["pre-plan-running-at", "planning-at"],
+  policy: ["cost-estimating-at", "policy-checking-at"],
+  apply: ["confirmed-at", "applying-at"],
+};
+
+const STAGE_FINISH_KEYS: Readonly<Record<typeof STAGE_ORDER[number], readonly string[]>> = {
+  queue: ["pre-plan-running-at", "planning-at"],
+  plan: ["cost-estimating-at", "policy-checking-at", "planned-at", "planned-and-finished-at", "planned-and-saved-at"],
+  policy: ["confirmed-at", "apply-queued-at", "applying-at", "policy-checked-at", "post-plan-completed-at"],
+  apply: ["applied-at", "errored-at", "unreachable-at", "canceled-at", "force-canceled-at"],
+};
+
+function firstTimestamp(
+  timestamps: Readonly<Record<string, string>>,
+  keys: readonly string[],
+): string | undefined {
+  return keys
+    .map((key): string | undefined => timestamps[key])
+    .find((value): value is string => value !== undefined);
+}
+
+type StageReachedFlags = Readonly<{
+  planReached: boolean;
+  planDone: boolean;
+  policyReached: boolean;
+  applyReached: boolean;
+}>;
+
+function stageReachedFlags(timestamps: Readonly<Record<string, string>>): StageReachedFlags {
+  const reached = (key: string): boolean => typeof timestamps[key] === "string";
+  return {
+    planReached: reached("planning-at") || reached("pre-plan-running-at"),
+    planDone: reached("planned-at") || reached("planned-and-finished-at") || reached("planned-and-saved-at"),
+    policyReached: reached("policy-checking-at") || reached("cost-estimating-at") || reached("post-plan-running-at"),
+    applyReached: reached("confirmed-at") || reached("apply-queued-at") || reached("applying-at"),
+  };
+}
+
+function furthestStage(
+  currentStage: typeof STAGE_ORDER[number] | undefined,
+  flags: StageReachedFlags,
+): typeof STAGE_ORDER[number] {
+  if (currentStage !== undefined) return currentStage;
+  if (flags.applyReached) return "apply";
+  if (flags.policyReached) return "policy";
+  if (flags.planReached || flags.planDone) return "plan";
+  return "queue";
+}
+
+function policyStageDone(
+  status: string,
+  applyReached: boolean,
+  reached: (key: string) => boolean,
+): boolean {
+  if (["policy_checking", "cost_estimating", "post_plan_running"].includes(status)) return false;
+  return applyReached
+    || status === "planned_and_finished"
+    || reached("policy-checked-at")
+    || reached("post-plan-completed-at")
+    || ["policy_checked", "post_plan_completed", "needs_confirmation", "planned_and_saved"].includes(status);
+}
+
 /**
  * Build the stage strip.
  *
@@ -77,10 +142,8 @@ export function resolveStages(
   // so waits still land on the visible checks stage.
   const displayStage: typeof STAGE_ORDER[number] = display.stage === "checks" ? "policy" : display.stage;
   const reached = (key: string): boolean => typeof timestamps[key] === "string";
-  const planReached = reached("planning-at") || reached("pre-plan-running-at");
-  const planDone = reached("planned-at") || reached("planned-and-finished-at") || reached("planned-and-saved-at");
-  const policyReached = reached("policy-checking-at") || reached("cost-estimating-at") || reached("post-plan-running-at");
-  const applyReached = reached("confirmed-at") || reached("apply-queued-at") || reached("applying-at");
+  const flags = stageReachedFlags(timestamps);
+  const { planReached, planDone, policyReached, applyReached } = flags;
 
   const stopped = FAILED_STATUSES.has(status) || STOPPED_STATUSES.has(status);
   const failed = FAILED_STATUSES.has(status);
@@ -89,21 +152,12 @@ export function resolveStages(
   const currentStage = stopped ? TERMINAL_STAGE_OF_STATUS[status] : displayStage;
 
   // Where the run got to, for a terminal status with no stage of its own.
-  const furthest: typeof STAGE_ORDER[number] = currentStage ?? (applyReached
-    ? "apply"
-    : policyReached
-      ? "policy"
-      : planReached || planDone
-        ? "plan"
-        : "queue");
+  const furthest = furthestStage(currentStage, flags);
 
   const stageDone: Readonly<Record<typeof STAGE_ORDER[number], boolean>> = {
     queue: planReached || planDone || policyReached || applyReached,
     plan: resolvePhaseStatus(status, "plan", timestamps) === "finished",
-    policy: !["policy_checking", "cost_estimating", "post_plan_running"].includes(status)
-      && (applyReached || status === "planned_and_finished"
-        || reached("policy-checked-at") || reached("post-plan-completed-at")
-        || ["policy_checked", "post_plan_completed", "needs_confirmation", "planned_and_saved"].includes(status)),
+    policy: policyStageDone(status, applyReached, reached),
     apply: resolvePhaseStatus(status, "apply", timestamps) === "finished",
   };
 
@@ -128,20 +182,8 @@ export function resolveStages(
   };
 
   const timeFor = (id: typeof STAGE_ORDER[number]): Readonly<{ startedAt: string | null; finishedAt: string | null }> => {
-    const startedAt = id === "queue"
-      ? timestamps["pending-at"]
-      : id === "plan"
-        ? timestamps["pre-plan-running-at"] ?? timestamps["planning-at"]
-        : id === "policy"
-          ? timestamps["cost-estimating-at"] ?? timestamps["policy-checking-at"]
-          : timestamps["confirmed-at"] ?? timestamps["applying-at"];
-    const finishedAt = id === "queue"
-      ? timestamps["pre-plan-running-at"] ?? timestamps["planning-at"]
-      : id === "plan"
-        ? timestamps["cost-estimating-at"] ?? timestamps["policy-checking-at"] ?? timestamps["planned-at"] ?? timestamps["planned-and-finished-at"] ?? timestamps["planned-and-saved-at"]
-        : id === "policy"
-          ? timestamps["confirmed-at"] ?? timestamps["apply-queued-at"] ?? timestamps["applying-at"] ?? timestamps["policy-checked-at"] ?? timestamps["post-plan-completed-at"]
-          : timestamps["applied-at"] ?? timestamps["errored-at"] ?? timestamps["unreachable-at"] ?? timestamps["canceled-at"] ?? timestamps["force-canceled-at"];
+    const startedAt = firstTimestamp(timestamps, STAGE_START_KEYS[id]);
+    const finishedAt = firstTimestamp(timestamps, STAGE_FINISH_KEYS[id]);
     return { startedAt: startedAt ?? null, finishedAt: finishedAt ?? null };
   };
   const durationFor = (startedAt: string | null, finishedAt: string | null, state: StageState): string | null => {
