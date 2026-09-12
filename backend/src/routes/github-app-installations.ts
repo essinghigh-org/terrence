@@ -636,21 +636,21 @@ function workspaceSlug(record: RepositoryRecord): string | null {
   return stringValue(recordValue(record["workspace"])?.["slug"]);
 }
 
-async function discoverBitbucketRepositories(
+async function collectBitbucketWorkspaces(
   base: URL,
   token: string,
+  budget: { remaining: number },
   serviceProviderUser: string | null,
-): Promise<RepositoryResource[]> {
-  const requestBudget = { remaining: MAX_BITBUCKET_REQUESTS };
+): Promise<Set<string>> {
   const workspaceSlugs = new Set<string>();
   let workspaceUrl = repositoryEndpoint(base, "user/workspaces", { pagelen: String(REPOSITORY_PAGE_SIZE) });
   const seenWorkspaceUrls = new Set<string>();
   for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
-    if (requestBudget.remaining === 0) break;
+    if (budget.remaining === 0) break;
     const urlKey = workspaceUrl.toString();
     if (seenWorkspaceUrls.has(urlKey)) break;
     seenWorkspaceUrls.add(urlKey);
-    requestBudget.remaining -= 1;
+    budget.remaining -= 1;
     const response = await fetchRepositoryPage(workspaceUrl, token);
     if (response === null) break;
     const parsed = repositoryPage(response.body, "bitbucket");
@@ -668,33 +668,52 @@ async function discoverBitbucketRepositories(
     const fallbackWorkspace = stringValue(serviceProviderUser);
     if (fallbackWorkspace !== null) workspaceSlugs.add(fallbackWorkspace);
   }
+  return workspaceSlugs;
+}
 
+async function collectBitbucketWorkspaceRepositories(
+  base: URL,
+  token: string,
+  budget: { remaining: number },
+  workspace: string,
+  repositories: Map<string, RepositoryResource>,
+): Promise<void> {
+  let url = repositoryEndpoint(base, `repositories/${encodeURIComponent(workspace)}`, {
+    pagelen: String(REPOSITORY_PAGE_SIZE),
+    sort: "-updated_on",
+  });
+  const seenUrls = new Set<string>();
+  for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
+    if (budget.remaining === 0) break;
+    const urlKey = url.toString();
+    if (seenUrls.has(urlKey)) break;
+    seenUrls.add(urlKey);
+    budget.remaining -= 1;
+    const response = await fetchRepositoryPage(url, token);
+    if (response === null) break;
+    const parsed = repositoryPage(response.body, "bitbucket");
+    if (parsed === null) break;
+    for (const record of parsed.records) {
+      const repository = normalizedRepository(record, "bitbucket");
+      if (repository !== null) repositories.set(repository.id, repository);
+    }
+    const next = safeNextRepositoryUrl(parsed.nextUrl, base);
+    if (next === null) break;
+    url = next;
+  }
+}
+
+async function discoverBitbucketRepositories(
+  base: URL,
+  token: string,
+  serviceProviderUser: string | null,
+): Promise<RepositoryResource[]> {
+  const requestBudget = { remaining: MAX_BITBUCKET_REQUESTS };
+  const workspaceSlugs = await collectBitbucketWorkspaces(base, token, requestBudget, serviceProviderUser);
   const repositories = new Map<string, RepositoryResource>();
   for (const workspace of workspaceSlugs) {
     if (requestBudget.remaining === 0) break;
-    let url = repositoryEndpoint(base, `repositories/${encodeURIComponent(workspace)}`, {
-      pagelen: String(REPOSITORY_PAGE_SIZE),
-      sort: "-updated_on",
-    });
-    const seenUrls = new Set<string>();
-    for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
-      if (requestBudget.remaining === 0) break;
-      const urlKey = url.toString();
-      if (seenUrls.has(urlKey)) break;
-      seenUrls.add(urlKey);
-      requestBudget.remaining -= 1;
-      const response = await fetchRepositoryPage(url, token);
-      if (response === null) break;
-      const parsed = repositoryPage(response.body, "bitbucket");
-      if (parsed === null) break;
-      for (const record of parsed.records) {
-        const repository = normalizedRepository(record, "bitbucket");
-        if (repository !== null) repositories.set(repository.id, repository);
-      }
-      const next = safeNextRepositoryUrl(parsed.nextUrl, base);
-      if (next === null) break;
-      url = next;
-    }
+    await collectBitbucketWorkspaceRepositories(base, token, requestBudget, workspace, repositories);
   }
   return [...repositories.values()];
 }
