@@ -858,6 +858,32 @@ function coerceUploadText(body: unknown): string | null {
   return null;
 }
 
+async function upsertTagSelector(policySetId: string, item: unknown): Promise<boolean> {
+  if (item === null || typeof item !== "object") return true;
+  const rec = item as Record<string, unknown>;
+  const key = typeof rec["tag-key"] === "string" ? rec["tag-key"] : "";
+  if (key === "") return false;
+  const value = typeof rec["tag-value"] === "string" ? rec["tag-value"] : null;
+  const isExclude = rec["is-exclude"] === true;
+  const existing = await db.query.policySetTagSelectors.findFirst({
+    where: and(eq(policySetTagSelectors.policySetId, policySetId), eq(policySetTagSelectors.key, key), value === null ? isNull(policySetTagSelectors.value) : eq(policySetTagSelectors.value, value), eq(policySetTagSelectors.isExclude, isExclude)),
+  });
+  if (existing === undefined) {
+    await db.insert(policySetTagSelectors).values({ id: crypto.randomUUID(), policySetId, key, value, isExclude });
+  }
+  return true;
+}
+
+async function deleteTagSelector(policySetId: string, item: unknown): Promise<void> {
+  if (item === null || typeof item !== "object") return;
+  const rec = item as Record<string, unknown>;
+  const key = typeof rec["tag-key"] === "string" ? rec["tag-key"] : "";
+  if (key === "") return;
+  const value = typeof rec["tag-value"] === "string" ? rec["tag-value"] : null;
+  const isExclude = rec["is-exclude"] === true;
+  await db.delete(policySetTagSelectors).where(and(eq(policySetTagSelectors.policySetId, policySetId), eq(policySetTagSelectors.key, key), value === null ? isNull(policySetTagSelectors.value) : eq(policySetTagSelectors.value, value), eq(policySetTagSelectors.isExclude, isExclude)));
+}
+
 export const policyRoutes = new Elysia({ name: "policies" })
   .use(authPlugin)
   // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
@@ -1437,18 +1463,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const items = payload["data"];
     if (!Array.isArray(items)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
     for (const item of items) {
-      if (item === null || typeof item !== "object") continue;
-      const rec = item as Record<string, unknown>;
-      const key = typeof rec["tag-key"] === "string" ? rec["tag-key"] : "";
-      if (key === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
-      const value = typeof rec["tag-value"] === "string" ? rec["tag-value"] : null;
-      const isExclude = rec["is-exclude"] === true;
-      const existing = await db.query.policySetTagSelectors.findFirst({
-        where: and(eq(policySetTagSelectors.policySetId, policySetId), eq(policySetTagSelectors.key, key), value === null ? isNull(policySetTagSelectors.value) : eq(policySetTagSelectors.value, value), eq(policySetTagSelectors.isExclude, isExclude)),
-      });
-      if (existing === undefined) {
-        await db.insert(policySetTagSelectors).values({ id: crypto.randomUUID(), policySetId, key, value, isExclude });
-      }
+      if (!(await upsertTagSelector(policySetId, item))) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
     }
     (set as { status: number }).status = 204;
     return {};
@@ -1461,13 +1476,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const items = payload["data"];
     if (Array.isArray(items)) {
       for (const item of items) {
-        if (item === null || typeof item !== "object") continue;
-        const rec = item as Record<string, unknown>;
-        const key = typeof rec["tag-key"] === "string" ? rec["tag-key"] : "";
-        if (key === "") continue;
-        const value = typeof rec["tag-value"] === "string" ? rec["tag-value"] : null;
-        const isExclude = rec["is-exclude"] === true;
-        await db.delete(policySetTagSelectors).where(and(eq(policySetTagSelectors.policySetId, policySetId), eq(policySetTagSelectors.key, key), value === null ? isNull(policySetTagSelectors.value) : eq(policySetTagSelectors.value, value), eq(policySetTagSelectors.isExclude, isExclude)));
+        await deleteTagSelector(policySetId, item);
       }
     }
     (set as { status: number }).status = 204;
