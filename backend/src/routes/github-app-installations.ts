@@ -176,6 +176,18 @@ function mergeValidatedAppConfiguration(
   };
 }
 
+function resolvePendingInstallation<P extends { flowId: string }>(
+  pending: P | null | undefined,
+  statePendingId: string,
+  installationId: number | null,
+  setupAction: string,
+): { pending: P; installationId: number } | null {
+  if (pending === null || pending === undefined || pending.flowId !== statePendingId || installationId === null || (setupAction !== "install" && setupAction !== "update")) {
+    return null;
+  }
+  return { pending, installationId };
+}
+
 async function manifestConversion(code: string): Promise<Readonly<{ configuration: GitHubAppConfiguration; htmlUrl: string | null }> | null> {
   const apiUrl = manifestGitHubApiUrl();
   const controller = new AbortController();
@@ -1455,12 +1467,16 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     manifestInstallStates.delete(stateId);
     if (!(await siteAdminManifestStateAuthorized(state))) return flowError(set, 403, "Forbidden", "Site administrator authorization is no longer valid");
     const record = await getGitHubAppRecord();
-    const pending = record?.pending;
-    const installationId = positiveInteger(stringQuery(query, "installation_id"));
-    const setupAction = stringQuery(query, "setup_action");
-    if (pending === null || pending === undefined || pending.flowId !== state.pendingId || installationId === null || (setupAction !== "install" && setupAction !== "update")) {
+    const resolved = resolvePendingInstallation(
+      record?.pending,
+      state.pendingId,
+      positiveInteger(stringQuery(query, "installation_id")),
+      stringQuery(query, "setup_action"),
+    );
+    if (resolved === null) {
       return flowError(set, 400, "Invalid GitHub App Installation Callback", "GitHub returned an invalid installation or no pending replacement exists");
     }
+    const { pending, installationId } = resolved;
     const config: GitHubAppConfig = { ...pending.configuration, installUrl: new URL(`/apps/${encodeURIComponent(pending.configuration.slug)}/installations/new`, pending.configuration.httpUrl).toString() };
     const verified = await fetchInstallation(config, installationId);
     if (verified === null || !(await validatePendingInstallation(config, installationId))) {
