@@ -452,31 +452,51 @@ function membershipCatalogResource(row: Readonly<{
   };
 }
 
+function aggregateEqualityPredicate(operator: string, expression: SQL, bound: number): SQL | undefined {
+  switch (operator) {
+    case "is": return Number.isFinite(bound) ? sql`${expression} = ${bound}` : sql`1 = 0`;
+    case "not-is":
+    case "is_not": return Number.isFinite(bound) ? sql`${expression} <> ${bound}` : sql`1 = 1`;
+    default: return undefined;
+  }
+}
+
+function aggregateOrderingPredicate(operator: string, expression: SQL, bound: number): SQL | undefined {
+  const finite = Number.isFinite(bound);
+  switch (operator) {
+    case "greater-than":
+    case "gt":
+    case "is_after": return finite ? sql`${expression} > ${bound}` : sql`1 = 0`;
+    case "less-than":
+    case "lt":
+    case "is_before": return finite ? sql`${expression} < ${bound}` : sql`1 = 0`;
+    case "gteq": return finite ? sql`${expression} >= ${bound}` : sql`1 = 0`;
+    case "lteq": return finite ? sql`${expression} <= ${bound}` : sql`1 = 0`;
+    default: return undefined;
+  }
+}
+
+function aggregateTextPredicate(operator: string, expression: SQL, value: string): SQL | undefined {
+  switch (operator) {
+    case "contains": return sql`CAST(${expression} AS TEXT) LIKE ${`%${value}%`}`;
+    case "does not contain": return sql`CAST(${expression} AS TEXT) NOT LIKE ${`%${value}%`}`;
+    case "is-null":
+    case "is_empty": return sql`(${expression} IS NULL OR CAST(${expression} AS TEXT) = '')`;
+    case "is-not-null":
+    case "is_not_empty": return sql`(${expression} IS NOT NULL AND CAST(${expression} AS TEXT) <> '')`;
+    default: return undefined;
+  }
+}
+
 function aggregateFilter(expression: SQL, filter: ExplorerFilter): SQL {
   const values = filter.value.length === 0 ? [""] : filter.value;
   const make = (value: string): SQL => {
     const numeric = Number(value);
     const bound = Number.isFinite(numeric) ? numeric : Number.NaN;
-    switch (filter.operator) {
-      case "is": return Number.isFinite(bound) ? sql`${expression} = ${bound}` : sql`1 = 0`;
-      case "not-is":
-      case "is_not": return Number.isFinite(bound) ? sql`${expression} <> ${bound}` : sql`1 = 1`;
-      case "greater-than":
-      case "gt":
-      case "is_after": return Number.isFinite(bound) ? sql`${expression} > ${bound}` : sql`1 = 0`;
-      case "less-than":
-      case "lt":
-      case "is_before": return Number.isFinite(bound) ? sql`${expression} < ${bound}` : sql`1 = 0`;
-      case "gteq": return Number.isFinite(bound) ? sql`${expression} >= ${bound}` : sql`1 = 0`;
-      case "lteq": return Number.isFinite(bound) ? sql`${expression} <= ${bound}` : sql`1 = 0`;
-      case "contains": return sql`CAST(${expression} AS TEXT) LIKE ${`%${value}%`}`;
-      case "does not contain": return sql`CAST(${expression} AS TEXT) NOT LIKE ${`%${value}%`}`;
-      case "is-null":
-      case "is_empty": return sql`(${expression} IS NULL OR CAST(${expression} AS TEXT) = '')`;
-      case "is-not-null":
-      case "is_not_empty": return sql`(${expression} IS NOT NULL AND CAST(${expression} AS TEXT) <> '')`;
-      default: return sql`1 = 1`;
-    }
+    return aggregateEqualityPredicate(filter.operator, expression, bound)
+      ?? aggregateOrderingPredicate(filter.operator, expression, bound)
+      ?? aggregateTextPredicate(filter.operator, expression, value)
+      ?? sql`1 = 1`;
   };
   return values.length === 1 ? make(values[0] ?? "") : sql`(${sql.join(values.map(make), negativeFilterOperators.has(filter.operator) ? sql` AND ` : sql` OR `)})`;
 }
