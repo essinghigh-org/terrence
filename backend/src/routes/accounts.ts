@@ -556,6 +556,177 @@ function parseInitialAdminPayload(body: unknown): { username: string; email: str
   return { username, email, password };
 }
 
+function parseLoginCredentials(
+  body: unknown,
+  set: SetObj,
+): { username: string; password: string; browserSession: boolean } | { error: unknown } {
+  let payload: DataPayload | undefined;
+  if (typeof body === "string") {
+    try {
+      payload = JSON.parse(body) as DataPayload;
+    } catch {
+      (set as { status: number }).status = 400;
+      return { error: { errors: [{ status: "400", title: "Bad Request", detail: "Invalid JSON string" }] } };
+    }
+  } else if (body !== null && typeof body === "object") {
+    payload = body as DataPayload;
+  }
+
+  const attrs = payload?.data?.attributes ?? {};
+  const username = typeof attrs["username"] === "string" ? attrs["username"] : "";
+  const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
+  const browserSession = attrs["browser-session"] === true;
+
+  if (username === "" || password === "") {
+    (set as { status: number }).status = 400;
+    return { error: { errors: [{ status: "400", title: "Bad Request", detail: "Missing credentials" }] } };
+  }
+  return { username, password, browserSession };
+}
+
+type LdapLoginUser = NonNullable<Awaited<ReturnType<typeof authenticateLdapWithCircuitBreaker>>["user"]>;
+
+async function attemptLdapAuthentication(
+  ldap: Parameters<typeof authenticateLdapWithCircuitBreaker>[0],
+  username: string,
+  password: string,
+): Promise<{ user: LdapLoginUser | null; unavailable: boolean }> {
+  try {
+    const ldapResult = await authenticateLdapWithCircuitBreaker(ldap, username, password);
+    return { user: ldapResult.user, unavailable: ldapResult.unavailable };
+  } catch (error: unknown) {
+    log.warn("LDAP authentication probe failed; continuing with local authentication", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { user: null, unavailable: true };
+  }
+}
+
+async function provisionLdapUser(
+  ldapUser: LdapLoginUser,
+  allowEmailLinking: boolean,
+  username: string,
+  set: SetObj,
+): Promise<{ user: typeof users.$inferSelect } | { error: unknown }> {
+  try {
+    const provisioned = await provisionSsoUser({
+      provider: "ldap",
+      subject: ldapUser.dn,
+      username: ldapUser.username,
+      email: ldapUser.email,
+      // Directory attributes are operator-controlled; the bind against
+      // the user DN already authenticated the caller.
+      emailVerified: true,
+      allowEmailLinking,
+    });
+    return { user: provisioned.user };
+  } catch (error: unknown) {
+    if (error instanceof SsoConflictError) {
+      // Do not reveal whether a local account owns the username; log
+      // the specifics server-side only.
+      log.warn("LDAP provisioning conflict", { username });
+      (set as { status: number }).status = 401;
+      return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "This account cannot be provisioned from the directory" }] } };
+    }
+    throw error;
+  }
+}
+
+async function authenticateLocalLogin(
+  username: string,
+  password: string,
+  localAuthEnabled: boolean,
+  ldapUnavailable: boolean,
+  set: SetObj,
+): Promise<{ user: typeof users.$inferSelect } | { error: unknown }> {
+  if (ldapUnavailable && !localAuthEnabled) {
+    (set as { status: number }).status = 503;
+    return { error: { errors: [{ status: "503", title: "Service Unavailable", detail: "The LDAP directory is temporarily unavailable." }] } };
+  }
+  if (!localAuthEnabled) {
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] } };
+  }
+  const loginEmail = normalizeEmail(username);
+  const found = await db.query.users.findFirst({
+    where: loginEmail === null
+      ? eq(users.username, username)
+      : or(eq(users.username, username), eq(users.email, loginEmail)),
+  });
+  if (found !== undefined && isLoginLocked(found)) {
+    // Preserve the dummy-hash timing path without changing lockout behavior.
+    await passwordMatches(password, found.passwordHash);
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] } };
+  }
+  const passwordValid = found === undefined
+    ? await passwordMatches(password)
+    : await verifyAndUpgradePassword(found.id, password, found.passwordHash);
+  if (found === undefined || !passwordValid) {
+    if (found !== undefined && !isUserLoginBlocked(found)) {
+      const failure = await recordFailedLogin(found.id);
+      if (failure.lockedUntil !== null) {
+        log.warn("Account locked after repeated failed login attempts", {
+          userId: found.id,
+          failedAttempts: failure.failedAttempts,
+          lockedUntil: failure.lockedUntil,
+        });
+      }
+    }
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] } };
+  }
+  return { user: found };
+}
+
+async function checkPostLoginState(
+  user: typeof users.$inferSelect,
+  localPasswordAuthenticated: boolean,
+  set: SetObj,
+): Promise<unknown | null> {
+  if (localPasswordAuthenticated && isLoginLocked(user)) {
+    (set as { status: number }).status = 401;
+    return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+  }
+  if (user.isProvisional === true) {
+    (set as { status: number }).status = 401;
+    return { errors: [{ status: "401", title: "Unauthorized", detail: "This invitation has not been accepted yet" }] };
+  }
+  if (isUserLoginBlocked(user)) {
+    (set as { status: number }).status = 401;
+    return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+  }
+  // Keep the compare-and-clear even when the stale user row appears clean:
+  // a failed login can set a lock while password verification is in flight.
+  if (localPasswordAuthenticated && !(await clearLoginFailures(user.id))) {
+    (set as { status: number }).status = 401;
+    return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+  }
+  return null;
+}
+
+async function mfaChallengeResponse(
+  user: Readonly<typeof users.$inferSelect>,
+): Promise<unknown | null> {
+  // If MFA is enabled for this account, issue a short-lived challenge token
+  // instead of an access token. The client completes login via
+  // POST /users/login/mfa with a valid TOTP code.
+  const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
+  if (mfa !== undefined && mfa.enabled === true) {
+    const challengeToken = await issueMfaChallenge(user.id);
+    return {
+      data: {
+        type: "users",
+        attributes: {
+          "mfa-required": true,
+          "mfa-challenge-token": challengeToken,
+        },
+      },
+    };
+  }
+  return null;
+}
+
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
   .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
@@ -632,27 +803,9 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     return { status: "created", token };
   })
   .post("/api/v2/users/login", async ({ body, request, set, server }: ReqCtx): Promise<unknown> => {
-    let payload: DataPayload | undefined;
-    if (typeof body === "string") {
-      try {
-        payload = JSON.parse(body) as DataPayload;
-      } catch {
-        (set as { status: number }).status = 400;
-        return { errors: [{ status: "400", title: "Bad Request", detail: "Invalid JSON string" }] };
-      }
-    } else if (body !== null && typeof body === "object") {
-      payload = body;
-    }
-
-    const attrs = payload?.data?.attributes ?? {};
-    const username = typeof attrs["username"] === "string" ? attrs["username"] : "";
-    const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
-    const browserSession = attrs["browser-session"] === true;
-
-    if (username === "" || password === "") {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Missing credentials" }] };
-    }
+    const parsed = parseLoginCredentials(body, set);
+    if ("error" in parsed) return parsed.error;
+    const { username, password, browserSession } = parsed;
 
     const [sso, ldap] = await Promise.all([ssoSettingsSnapshot(), ldapSettings()]);
     const localAuthEnabled = sso.localAuthEnabled;
@@ -666,119 +819,27 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     let localPasswordAuthenticated = false;
     let ldapUnavailable = false;
     if (ldap.enabled) {
-      let ldapUser: Awaited<ReturnType<typeof authenticateLdapWithCircuitBreaker>>["user"] = null;
-      try {
-        const ldapResult = await authenticateLdapWithCircuitBreaker(ldap, username, password);
-        ldapUser = ldapResult.user;
-        ldapUnavailable = ldapResult.unavailable;
-      } catch (error: unknown) {
-        ldapUnavailable = true;
-        log.warn("LDAP authentication probe failed; continuing with local authentication", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-      if (ldapUser !== null) {
-        try {
-          const provisioned = await provisionSsoUser({
-            provider: "ldap",
-            subject: ldapUser.dn,
-            username: ldapUser.username,
-            email: ldapUser.email,
-            // Directory attributes are operator-controlled; the bind against
-            // the user DN already authenticated the caller.
-            emailVerified: true,
-            allowEmailLinking: ldap.allowEmailLinking,
-          });
-          user = provisioned.user;
-        } catch (error: unknown) {
-          if (error instanceof SsoConflictError) {
-            // Do not reveal whether a local account owns the username; log
-            // the specifics server-side only.
-            log.warn("LDAP provisioning conflict", { username });
-            (set as { status: number }).status = 401;
-            return { errors: [{ status: "401", title: "Unauthorized", detail: "This account cannot be provisioned from the directory" }] };
-          }
-          throw error;
-        }
+      const attempt = await attemptLdapAuthentication(ldap, username, password);
+      ldapUnavailable = attempt.unavailable;
+      if (attempt.user !== null) {
+        const provisioned = await provisionLdapUser(attempt.user, ldap.allowEmailLinking, username, set);
+        if ("error" in provisioned) return provisioned.error;
+        user = provisioned.user;
       }
     }
 
     if (user === null) {
-      if (ldapUnavailable && !localAuthEnabled) {
-        (set as { status: number }).status = 503;
-        return { errors: [{ status: "503", title: "Service Unavailable", detail: "The LDAP directory is temporarily unavailable." }] };
-      }
-      if (!localAuthEnabled) {
-        (set as { status: number }).status = 401;
-        return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
-      }
-      const loginEmail = normalizeEmail(username);
-      const found = await db.query.users.findFirst({
-        where: loginEmail === null
-          ? eq(users.username, username)
-          : or(eq(users.username, username), eq(users.email, loginEmail)),
-      });
-      if (found !== undefined && isLoginLocked(found)) {
-        // Preserve the dummy-hash timing path without changing lockout behavior.
-        await passwordMatches(password, found.passwordHash);
-        (set as { status: number }).status = 401;
-        return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
-      }
-      const passwordValid = found === undefined
-        ? await passwordMatches(password)
-        : await verifyAndUpgradePassword(found.id, password, found.passwordHash);
-      if (found === undefined || !passwordValid) {
-        if (found !== undefined && !isUserLoginBlocked(found)) {
-          const failure = await recordFailedLogin(found.id);
-          if (failure.lockedUntil !== null) {
-            log.warn("Account locked after repeated failed login attempts", {
-              userId: found.id,
-              failedAttempts: failure.failedAttempts,
-              lockedUntil: failure.lockedUntil,
-            });
-          }
-        }
-        (set as { status: number }).status = 401;
-        return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
-      }
-      user = found;
+      const local = await authenticateLocalLogin(username, password, localAuthEnabled, ldapUnavailable, set);
+      if ("error" in local) return local.error;
+      user = local.user;
       localPasswordAuthenticated = true;
     }
 
-    if (localPasswordAuthenticated && isLoginLocked(user)) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
-    }
-    if (user.isProvisional === true) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "This invitation has not been accepted yet" }] };
-    }
-    if (isUserLoginBlocked(user)) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
-    }
-    // Keep the compare-and-clear even when the stale user row appears clean:
-    // a failed login can set a lock while password verification is in flight.
-    if (localPasswordAuthenticated && !(await clearLoginFailures(user.id))) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
-    }
-    // If MFA is enabled for this account, issue a short-lived challenge token
-    // instead of an access token. The client completes login via
-    // POST /users/login/mfa with a valid TOTP code.
-    const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
-    if (mfa !== undefined && mfa.enabled === true) {
-      const challengeToken = await issueMfaChallenge(user.id);
-      return {
-        data: {
-          type: "users",
-          attributes: {
-            "mfa-required": true,
-            "mfa-challenge-token": challengeToken,
-          },
-        },
-      };
-    }
+    const blocked = await checkPostLoginState(user, localPasswordAuthenticated, set);
+    if (blocked !== null) return blocked;
+
+    const challenge = await mfaChallengeResponse(user);
+    if (challenge !== null) return challenge;
 
     return issueLoginSession(user, browserSession, set, request, server);
   })
