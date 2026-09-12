@@ -196,7 +196,6 @@ export default tseslint.config(
       'frontend/src/components/CreateWorkspaceModal.tsx',
       'frontend/src/components/ShortcutsHelpModal.tsx',
       'frontend/src/components/WorkspaceVcs.tsx',
-      'frontend/src/views/Registry.tsx',
       'frontend/src/views/RunList.tsx',
     ],
     rules: {
