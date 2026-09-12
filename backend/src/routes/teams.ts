@@ -10,6 +10,7 @@ import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
 const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 
 import { auditLog, checkOrganizationPermission, checkOrgPermission, checkWorkspacePermission, pageRequest, pagination } from "../lib/utils";
+import type { RequestWithUrl } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { orgMembershipResource } from "../lib/response";
 import { cachedOrgByName } from "../lib/cached-lookups";
@@ -353,6 +354,74 @@ async function requirePolicyOverrideGrant(
   return null;
 }
 
+async function resolveCallerTeamVisibility(
+  orgId: string,
+  callerUserId: string | null,
+  callerIsSiteAdmin: boolean,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+): Promise<{ callerTeamIds: Set<string> | null; callerCanSeeSecret: boolean }> {
+  const callerIsOwner = callerUserId !== null && (await db.query.organizationMemberships.findFirst({ where: and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.userId, callerUserId), eq(organizationMemberships.role, "owner"), eq(organizationMemberships.status, "active")) })) !== undefined;
+  // A team token identifies one team; it is not an organization-wide secret
+  // roster token. Keep its visibility limited to public teams plus itself.
+  let callerTeamIds: Set<string> | null = tokenTeamId === null ? null : new Set([tokenTeamId]);
+  let callerCanSeeSecret = callerIsOwner || callerIsSiteAdmin || (tokenOrgId !== null && tokenOrgId === orgId);
+  if (callerUserId !== null) {
+    const rows = await db.query.teamMemberships.findMany({ where: eq(teamMemberships.userId, callerUserId), columns: { teamId: true } });
+    const memberTeamIds = rows.map((r: { teamId: string }): string => r.teamId);
+    const callerTeams = memberTeamIds.length === 0
+      ? []
+      : await db.query.teams.findMany({ where: and(eq(teams.orgId, orgId), inArray(teams.id, memberTeamIds)), columns: { id: true, organizationAccess: true } });
+    callerTeamIds = new Set(callerTeams.map((tm): string => tm.id));
+    if (!callerCanSeeSecret) {
+      callerCanSeeSecret = callerTeams.some((tm): boolean => (tm.organizationAccess as Record<string, unknown> | undefined)?.["access-secret-teams"] === true);
+    }
+  }
+  return { callerTeamIds, callerCanSeeSecret };
+}
+
+function buildVisibleTeamWhere(orgId: string, callerCanSeeSecret: boolean, callerTeamIds: Set<string> | null) {
+  if (callerCanSeeSecret) return eq(teams.orgId, orgId);
+  if (callerTeamIds !== null && callerTeamIds.size > 0) {
+    return and(eq(teams.orgId, orgId), or(eq(teams.visibility, "organization"), inArray(teams.id, [...callerTeamIds])))!;
+  }
+  return and(eq(teams.orgId, orgId), eq(teams.visibility, "organization"))!;
+}
+
+async function loadTeamListAssociations(teamIds: string[], scimEnabled: boolean): Promise<{
+  membersByTeam: Map<string, { id: string; type: string }[]>;
+  mappingByTeam: Map<string, Readonly<{ scimGroupId: string; syncPaused: boolean; updatedAt: number }>>;
+  groupById: Map<string, string | null>;
+}> {
+  const [membershipRows, mappingRows] = teamIds.length === 0
+    ? [[], []]
+    : await Promise.all([
+      db.query.teamMemberships.findMany({ where: inArray(teamMemberships.teamId, teamIds), columns: { teamId: true, userId: true } }),
+      scimEnabled ? db.query.teamScimGroupMappings.findMany({ where: inArray(teamScimGroupMappings.teamId, teamIds) }) : [],
+    ]);
+  const groupIds = [...new Set(mappingRows.map((m: Readonly<{ readonly scimGroupId: string }>): string => m.scimGroupId))];
+  const groupRows = groupIds.length === 0 ? [] : await db.query.scimGroups.findMany({ where: inArray(scimGroups.id, groupIds) });
+  const groupById = new Map(groupRows.map((g: Readonly<{ readonly id: string; readonly name: string | null }>): [string, string | null] => [g.id, g.name]));
+  const membersByTeam = new Map<string, { id: string; type: string }[]>();
+  for (const m of membershipRows) {
+    const refs = membersByTeam.get(m.teamId) ?? [];
+    refs.push({ id: m.userId, type: "users" });
+    membersByTeam.set(m.teamId, refs);
+  }
+  const mappingByTeam = new Map(mappingRows.map((m: Readonly<{ readonly teamId: string; readonly scimGroupId: string; readonly syncPaused: boolean | null; readonly updatedAt: number }>): [string, Readonly<{ scimGroupId: string; syncPaused: boolean; updatedAt: number }>] => [m.teamId, { scimGroupId: m.scimGroupId, syncPaused: m.syncPaused ?? false, updatedAt: m.updatedAt }]));
+  return { membersByTeam, mappingByTeam, groupById };
+}
+
+async function teamListResponse(
+  request: RequestWithUrl,
+  number: number,
+  size: number,
+  countRows: Readonly<{ total: number }>[],
+  data: Promise<Record<string, unknown>>[],
+): Promise<unknown> {
+  return { data: await Promise.all(data), ...pagination(request, number, size, countRows[0]?.total ?? 0) };
+}
+
 export const teamRoutes = new Elysia({ name: "teams" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/team-tokens", async ({ params, request, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -407,50 +476,15 @@ export const teamRoutes = new Elysia({ name: "teams" })
     ]);
     const { number, size } = pageRequest(request);
     const callerUserId = user?.id ?? null;
-    const callerIsOwner = callerUserId !== null && (await db.query.organizationMemberships.findFirst({ where: and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.userId, callerUserId), eq(organizationMemberships.role, "owner"), eq(organizationMemberships.status, "active")) })) !== undefined;
-    const callerIsSiteAdmin = user?.isSiteAdmin === true;
-    // A team token identifies one team; it is not an organization-wide secret
-    // roster token. Keep its visibility limited to public teams plus itself.
-    let callerTeamIds: Set<string> | null = tokenTeamId === null ? null : new Set([tokenTeamId]);
-    let callerCanSeeSecret = callerIsOwner || callerIsSiteAdmin || (tokenOrgId !== null && tokenOrgId === org.id);
-    if (callerUserId !== null) {
-      const rows = await db.query.teamMemberships.findMany({ where: eq(teamMemberships.userId, callerUserId), columns: { teamId: true } });
-      const memberTeamIds = rows.map((r: { teamId: string }): string => r.teamId);
-      const callerTeams = memberTeamIds.length === 0
-        ? []
-        : await db.query.teams.findMany({ where: and(eq(teams.orgId, org.id), inArray(teams.id, memberTeamIds)), columns: { id: true, organizationAccess: true } });
-      callerTeamIds = new Set(callerTeams.map((tm): string => tm.id));
-      if (!callerCanSeeSecret) {
-        callerCanSeeSecret = callerTeams.some((tm): boolean => (tm.organizationAccess as Record<string, unknown> | undefined)?.["access-secret-teams"] === true);
-      }
-    }
-    const visibleTeamWhere = callerCanSeeSecret
-      ? eq(teams.orgId, org.id)
-      : callerTeamIds !== null && callerTeamIds.size > 0
-        ? and(eq(teams.orgId, org.id), or(eq(teams.visibility, "organization"), inArray(teams.id, [...callerTeamIds])))!
-        : and(eq(teams.orgId, org.id), eq(teams.visibility, "organization"))!;
+    const { callerTeamIds, callerCanSeeSecret } = await resolveCallerTeamVisibility(org.id, callerUserId, user?.isSiteAdmin === true, tokenOrgId, tokenTeamId);
+    const visibleTeamWhere = buildVisibleTeamWhere(org.id, callerCanSeeSecret, callerTeamIds);
     const [teamList, countRows] = await Promise.all([
       db.query.teams.findMany({ where: visibleTeamWhere, orderBy: [asc(teams.id)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(teams).where(visibleTeamWhere),
     ]);
     const teamIds = teamList.map((t: TeamItem): string => t.id);
     const scimEnabled = (await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") }))?.enabled === true;
-    const [membershipRows, mappingRows] = teamIds.length === 0
-      ? [[], []]
-      : await Promise.all([
-        db.query.teamMemberships.findMany({ where: inArray(teamMemberships.teamId, teamIds), columns: { teamId: true, userId: true } }),
-        scimEnabled ? db.query.teamScimGroupMappings.findMany({ where: inArray(teamScimGroupMappings.teamId, teamIds) }) : [],
-      ]);
-    const groupIds = [...new Set(mappingRows.map((m: Readonly<{ readonly scimGroupId: string }>): string => m.scimGroupId))];
-    const groupRows = groupIds.length === 0 ? [] : await db.query.scimGroups.findMany({ where: inArray(scimGroups.id, groupIds) });
-    const groupById = new Map(groupRows.map((g: Readonly<{ readonly id: string; readonly name: string | null }>): [string, string | null] => [g.id, g.name]));
-    const membersByTeam = new Map<string, { id: string; type: string }[]>();
-    for (const m of membershipRows) {
-      const refs = membersByTeam.get(m.teamId) ?? [];
-      refs.push({ id: m.userId, type: "users" });
-      membersByTeam.set(m.teamId, refs);
-    }
-    const mappingByTeam = new Map(mappingRows.map((m: Readonly<{ readonly teamId: string; readonly scimGroupId: string; readonly syncPaused: boolean | null; readonly updatedAt: number }>): [string, Readonly<{ scimGroupId: string; syncPaused: boolean; updatedAt: number }>] => [m.teamId, { scimGroupId: m.scimGroupId, syncPaused: m.syncPaused ?? false, updatedAt: m.updatedAt }]));
+    const { membersByTeam, mappingByTeam, groupById } = await loadTeamListAssociations(teamIds, scimEnabled);
     const data = teamList.map(async (t: TeamItem): Promise<Record<string, unknown>> => {
       const userRefs = canReadMembers ? (membersByTeam.get(t.id) ?? []) : [];
       const mapping = mappingByTeam.get(t.id);
@@ -459,8 +493,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
         : undefined;
       return teamResource(t, userRefs.length, { users: userRefs }, scim, { canUpdate: canManageTeams, canDestroy: canManageTeams });
     });
-    const totalCount = countRows[0]?.total ?? 0;
-    return { data: await Promise.all(data), ...pagination(request, number, size, totalCount) };
+    return teamListResponse(request, number, size, countRows, data);
   })
   .post("/api/v2/organizations/:org_name/teams", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
