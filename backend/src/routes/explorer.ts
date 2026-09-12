@@ -125,9 +125,7 @@ function fieldValue(row: ExplorerRow, field: string): unknown {
   return key === undefined ? undefined : row.attributes[key];
 }
 
-function filterMatch(value: unknown, operator: string, expected: string[]): boolean {
-  const values = expected.map((item) => item.toLocaleLowerCase());
-  const actual = value === null || value === undefined ? "" : String(value).toLocaleLowerCase();
+function textFilterMatch(operator: string, values: string[], actual: string): boolean | undefined {
   switch (operator) {
     case "contains": return values.some((item) => actual.includes(item));
     case "does not contain": return values.every((item) => !actual.includes(item));
@@ -136,10 +134,22 @@ function filterMatch(value: unknown, operator: string, expected: string[]): bool
     case "is": return values.some((item) => actual === item);
     case "not-is":
     case "is_not": return values.every((item) => actual !== item);
+    default: return undefined;
+  }
+}
+
+function nullFilterMatch(operator: string, actual: string, value: unknown): boolean | undefined {
+  switch (operator) {
     case "is-null":
     case "is_empty": return value === null || value === undefined || actual === "";
     case "is-not-null":
     case "is_not_empty": return value !== null && value !== undefined && actual !== "";
+    default: return undefined;
+  }
+}
+
+function numericFilterMatch(operator: string, values: string[], value: unknown): boolean | undefined {
+  switch (operator) {
     case "greater-than":
     case "gt":
     case "is_after": return values.some((item) => compare(value, item) > 0);
@@ -148,8 +158,17 @@ function filterMatch(value: unknown, operator: string, expected: string[]): bool
     case "is_before": return values.some((item) => compare(value, item) < 0);
     case "gteq": return values.some((item) => compare(value, item) >= 0);
     case "lteq": return values.some((item) => compare(value, item) <= 0);
-    default: return false;
+    default: return undefined;
   }
+}
+
+function filterMatch(value: unknown, operator: string, expected: string[]): boolean {
+  const values = expected.map((item) => item.toLocaleLowerCase());
+  const actual = value === null || value === undefined ? "" : String(value).toLocaleLowerCase();
+  return textFilterMatch(operator, values, actual)
+    ?? nullFilterMatch(operator, actual, value)
+    ?? numericFilterMatch(operator, values, value)
+    ?? false;
 }
 
 function compare(value: unknown, expected: string): number {
