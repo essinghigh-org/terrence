@@ -42,8 +42,644 @@ function formatSessionDate(value: string): string {
   return formatDateTime(date, "Unknown");
 }
 
+type Account = { id: string; attributes: { username: string; email: string | null; "email-verified"?: boolean; "must-change-password"?: boolean; "avatar-url"?: string; theme?: string } };
+
+function AccountAlerts({ error, successMsg, mustChangePassword }: Readonly<{
+  error: string;
+  successMsg: string;
+  mustChangePassword: boolean;
+}>): React.JSX.Element {
+  return (
+    <>
+      {error !== "" && (
+        <div role="alert" aria-live="polite" className="bg-destructive/10 border border-destructive/30 text-destructive px-4 py-3 rounded-md text-sm">{error}</div>
+      )}
+      {successMsg !== "" && (
+        <div role="status" aria-live="polite" className="bg-success/10 border border-success/30 text-success-text px-4 py-3 rounded-md text-sm">{successMsg}</div>
+      )}
+      {mustChangePassword && (
+        <div role="status" className="bg-warning/10 border border-warning/30 text-warning-text px-4 py-3 rounded-md text-sm">
+          Change your temporary password before continuing.
+        </div>
+      )}
+    </>
+  );
+}
+
+function ProfileCard({ account, username, onUsernameChange, email, onEmailChange, updatingProfile, mustChangePassword, onSubmit }: Readonly<{
+  account: Account;
+  username: string;
+  onUsernameChange: (value: string) => void;
+  email: string;
+  onEmailChange: (value: string) => void;
+  updatingProfile: boolean;
+  mustChangePassword: boolean;
+  onSubmit: () => void;
+}>): React.JSX.Element {
+  return (
+    <Card id="profile" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <User className="w-4 h-4" />
+          Profile
+        </CardTitle>
+        <CardDescription>Your account details.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center gap-4 mb-4">
+          <Avatar className="size-16">
+            {account?.attributes["avatar-url"] ? (
+              <AvatarImage src={account.attributes["avatar-url"]} alt={username} />
+            ) : (
+              <AvatarFallback className="text-lg">
+                {username === "" ? <User /> : username.slice(0, 2).toUpperCase()}
+              </AvatarFallback>
+            )}
+          </Avatar>
+          <div>
+            <p className="text-sm font-medium text-muted-foreground">Your avatar is provided by <a href="https://gravatar.com" target="_blank" rel="noreferrer" className="underline hover:no-underline">Gravatar</a> based on your email address.</p>
+          </div>
+        </div>
+        <form id="account-profile-form" onSubmit={(event): void => { event.preventDefault(); onSubmit(); }}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <label htmlFor="account-username" className="text-sm font-medium">Username</label>
+              <Input id="account-username" name="username" autoComplete="username" spellCheck={false} value={username} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onUsernameChange(event.target.value); }} />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="account-email" className="text-sm font-medium">Email</label>
+              <Input id="account-email" name="email" autoComplete="email" spellCheck={false} type="email" value={email} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onEmailChange(event.target.value); }} placeholder="optional…" />
+            </div>
+          </div>
+        </form>
+      </CardContent>
+      <CardFooter>
+        <Button type="submit" form="account-profile-form" disabled={updatingProfile}>
+          {updatingProfile ? "Saving…" : "Save Profile"}
+        </Button>
+      </CardFooter>
+    </Card>
+  );
+}
+
+function EmailVerificationCard({ account, verificationLoading, updatingProfile, onSend }: Readonly<{
+  account: Account;
+  verificationLoading: boolean;
+  updatingProfile: boolean;
+  onSend: () => void;
+}>): React.JSX.Element {
+  return (
+    <Card id="email-verification" className="scroll-mt-20">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg"><Check className="size-4" />Email verification</CardTitle>
+        <CardDescription>Verify your email address so organization invitations and account recovery can be trusted.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {account.attributes["email-verified"] === true ? (
+          <Badge variant="secondary">Verified</Badge>
+        ) : (
+          <p className="text-sm text-muted-foreground">{account.attributes.email} is not verified.</p>
+        )}
+      </CardContent>
+      {account.attributes["email-verified"] !== true && (
+        <CardFooter>
+          <Button type="button" variant="outline" disabled={verificationLoading || updatingProfile} onClick={onSend}>
+            {verificationLoading ? "Sending…" : "Send verification email"}
+          </Button>
+        </CardFooter>
+      )}
+    </Card>
+  );
+}
+
+function AppearanceCard({ mustChangePassword, themeId, updatingTheme, onThemeChange, displayTimezone, onTimezoneChange, timeFormat, onTimeFormatChange }: Readonly<{
+  mustChangePassword: boolean;
+  themeId: string;
+  updatingTheme: boolean;
+  onThemeChange: (themeId: string) => void;
+  displayTimezone: string;
+  onTimezoneChange: (value: string) => void;
+  timeFormat: string;
+  onTimeFormatChange: (value: string) => void;
+}>): React.JSX.Element {
+  return (
+    <Card id="appearance" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <Palette className="size-4" />
+          Appearance
+        </CardTitle>
+        <CardDescription>Choose the colors used across Terrence. Your selection follows your account.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <label htmlFor="account-theme" className="text-sm font-medium">Theme</label>
+        <Select
+          id="account-theme"
+          name="theme"
+          autoComplete="off"
+          value={themeId}
+          disabled={updatingTheme}
+          onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { onThemeChange(event.target.value); }}
+
+        >
+          <optgroup label="Light themes">
+            {THEMES.filter((theme): boolean => theme.mode === "light").map((theme): React.JSX.Element => (
+              <option key={theme.id} value={theme.id}>{theme.label}</option>
+            ))}
+          </optgroup>
+          <optgroup label="Dark themes">
+            {THEMES.filter((theme): boolean => theme.mode === "dark").map((theme): React.JSX.Element => (
+              <option key={theme.id} value={theme.id}>{theme.label}</option>
+            ))}
+          </optgroup>
+        </Select>
+        <p className="text-xs text-muted-foreground" aria-live="polite">
+          {updatingTheme ? "Saving theme…" : "Changes save automatically."}
+        </p>
+        <div className="mt-5 flex items-center gap-2 text-sm font-medium">
+          <Globe2 className="size-4" aria-hidden="true" />
+          Date and time
+        </div>
+        <label htmlFor="account-timezone" className="text-sm font-medium">Timezone</label>
+        <Select
+          id="account-timezone"
+          name="timezone"
+          autoComplete="off"
+          value={displayTimezone}
+          onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
+            onTimezoneChange(event.target.value);
+          }}
+
+        >
+          <option value="local">Browser local timezone</option>
+          <option value="utc">UTC</option>
+        </Select>
+        <label htmlFor="account-time-format" className="mt-4 block text-sm font-medium">Time format</label>
+        <Select
+          id="account-time-format"
+          name="time-format"
+          autoComplete="off"
+          value={timeFormat}
+          onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
+            onTimeFormatChange(event.target.value);
+          }}
+
+        >
+          <option value="24">24-hour (e.g. 14:30)</option>
+          <option value="12">12-hour (e.g. 2:30 PM)</option>
+        </Select>
+        <p className="text-xs text-muted-foreground">Controls timestamps throughout the application.</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SessionsCard({ mustChangePassword, sessionsLoading, sessionsError, sessions, revokingSessionId, onRetry, onRevokeRequest }: Readonly<{
+  mustChangePassword: boolean;
+  sessionsLoading: boolean;
+  sessionsError: string;
+  sessions: readonly BrowserSession[];
+  revokingSessionId: string | null;
+  onRetry: () => void;
+  onRevokeRequest: (session: BrowserSession) => void;
+}>): React.JSX.Element {
+  return (
+    <Card id="sessions" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <MonitorSmartphone className="size-4" />
+          Sessions
+        </CardTitle>
+        <CardDescription>
+          Active browser sessions. Showing the IP address and browser recorded when you signed in.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {sessionsLoading ? (
+          <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+            <Spinner className="size-4" />
+            Loading sessions…
+          </div>
+        ) : sessionsError !== "" ? (
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/25 bg-destructive/10 p-4 text-sm text-destructive">
+            <span>Could not load browser sessions. {sessionsError}</span>
+            <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+              Retry sessions
+            </Button>
+          </div>
+        ) : sessions.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            No active browser sessions. API tokens are listed separately.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Session</TableHead>
+                <TableHead>Activity</TableHead>
+                <TableHead className="text-right">Revoke</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sessions.map((session): React.JSX.Element => (
+                <TableRow key={session.id}>
+                  <TableCell>
+                    <p className="text-sm font-medium" title={`Session id ${session.id}`}>
+                      {session.attributes["ip-address"] ?? "Unknown IP"}
+                    </p>
+                    <p className="mt-0.5 max-w-xs truncate text-xs text-muted-foreground" title={session.attributes["user-agent"] ?? undefined}>
+                      {session.attributes["user-agent"] ?? "Unknown device"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Created {formatSessionDate(session.attributes["created-at"])}
+                    </p>
+                  </TableCell>
+                  <TableCell>
+                    {session.attributes.current && <Badge variant="secondary">Current</Badge>}
+                    <p className={session.attributes.current ? "mt-1 text-xs text-muted-foreground" : "text-xs text-muted-foreground"}>
+                      {session.attributes["last-rotated-at"] === null
+                        ? "Not rotated yet"
+                        : `Last rotated ${formatSessionDate(session.attributes["last-rotated-at"])}`}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Expires {formatSessionDate(session.attributes["expires-at"])}
+                    </p>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {!session.attributes.current && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive hover:text-destructive"
+                        disabled={revokingSessionId === session.id}
+                        aria-label={`Revoke session ${session.id}`}
+                        onClick={(): void => { onRevokeRequest(session); }}
+                      >
+                        {revokingSessionId === session.id
+                          ? <Spinner data-icon="inline-start" />
+                          : <Trash2 data-icon="inline-start" />}
+                        {revokingSessionId === session.id ? "Revoking…" : "Revoke session"}
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PasswordCard({ mustChangePassword, currentPassword, onCurrentPasswordChange, newPassword, onNewPasswordChange, confirmPassword, onConfirmPasswordChange, updatingPassword, onSubmit }: Readonly<{
+  mustChangePassword: boolean;
+  currentPassword: string;
+  onCurrentPasswordChange: (value: string) => void;
+  newPassword: string;
+  onNewPasswordChange: (value: string) => void;
+  confirmPassword: string;
+  onConfirmPasswordChange: (value: string) => void;
+  updatingPassword: boolean;
+  onSubmit: () => void;
+}>): React.JSX.Element {
+  return (
+    <Card id="password" className="scroll-mt-20">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <Lock className="w-4 h-4" />
+          Change Password
+        </CardTitle>
+        {mustChangePassword && <CardDescription>Choose a new password for your account before continuing.</CardDescription>}
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-1.5">
+          <label htmlFor="account-current-password" className="text-sm font-medium">Current password</label>
+          <Input
+            id="account-current-password"
+            name="current-password"
+            autoComplete="current-password"
+            type="password"
+            value={currentPassword}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onCurrentPasswordChange(event.target.value); }}
+            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onCurrentPasswordChange(event.currentTarget.value); }}
+          />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <label htmlFor="account-new-password" className="text-sm font-medium">New password</label>
+            <Input
+              id="account-new-password"
+              name="new-password"
+              autoComplete="new-password"
+              type="password"
+              value={newPassword}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onNewPasswordChange(event.target.value); }}
+              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onNewPasswordChange(event.currentTarget.value); }}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="account-confirm-password" className="text-sm font-medium">Confirm new password</label>
+            <Input
+              id="account-confirm-password"
+              name="confirm-password"
+              autoComplete="new-password"
+              type="password"
+              value={confirmPassword}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onConfirmPasswordChange(event.target.value); }}
+              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onConfirmPasswordChange(event.currentTarget.value); }}
+            />
+          </div>
+        </div>
+      </CardContent>
+      <CardFooter>
+        <Button onClick={onSubmit} disabled={updatingPassword}>
+          {updatingPassword ? "Changing…" : "Change Password"}
+        </Button>
+      </CardFooter>
+    </Card>
+  );
+}
+
+function MfaCard({ mfaEnabled, mfaEnrollment, mfaCode, onCodeChange, mfaCurrentPassword, onPasswordChange, mfaLoading, onBegin, onConfirm, onDisable, onCancel }: Readonly<{
+  mfaEnabled: boolean;
+  mfaEnrollment: Readonly<{ secret: string; "otpauth-url"?: string }> | null;
+  mfaCode: string;
+  onCodeChange: (value: string) => void;
+  mfaCurrentPassword: string;
+  onPasswordChange: (value: string) => void;
+  mfaLoading: boolean;
+  onBegin: () => void;
+  onConfirm: () => void;
+  onDisable: () => void;
+  onCancel: () => void;
+}>): React.JSX.Element {
+  return (
+    <Card id="mfa" className="scroll-mt-20">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <ShieldCheck className="size-4" />
+          Multi-factor authentication
+        </CardTitle>
+        <CardDescription>Protect sign-ins with a time-based authenticator code.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {mfaEnabled ? (
+          <>
+            <div className="flex items-center gap-2 text-sm">
+              <Badge variant="secondary">Enabled</Badge>
+              <span className="text-muted-foreground">Your account requires an authenticator code at sign in.</span>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="mfa-disable-code" className="text-sm font-medium">Authenticator code to disable MFA</label>
+              <Input id="mfa-disable-code" name="mfa-disable-code" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event): void => { onCodeChange(event.target.value); }} onInput={(event): void => { onCodeChange(event.currentTarget.value); }} placeholder="6-digit code" />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="mfa-disable-password" className="text-sm font-medium">Current password to disable MFA</label>
+              <Input id="mfa-disable-password" name="mfa-disable-password" type="password" autoComplete="current-password" value={mfaCurrentPassword} onChange={(event): void => { onPasswordChange(event.target.value); }} onInput={(event): void => { onPasswordChange(event.currentTarget.value); }} />
+            </div>
+          </>
+        ) : mfaEnrollment !== null ? (
+          <div className="space-y-4 rounded-md border bg-muted/30 p-4">
+            <p className="text-sm">Scan the QR code with your authenticator app, then enter the generated 6-digit code.</p>
+            <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
+              <div className="shrink-0 rounded-md border bg-background p-2">
+                {mfaEnrollment["otpauth-url"] !== undefined
+                  ? <QrCodeImage value={mfaEnrollment["otpauth-url"]} />
+                  : null}
+              </div>
+              <div className="min-w-0 flex-1 space-y-1">
+                <p className="text-xs font-medium text-muted-foreground">Setup key</p>
+                <code className="block break-all rounded bg-background p-2 text-sm select-all">{mfaEnrollment.secret}</code>
+                <p className="pt-1 text-xs text-muted-foreground">Can't scan? Enter this key manually.</p>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="mfa-enrollment-code" className="text-sm font-medium">Verification code</label>
+              <Input id="mfa-enrollment-code" name="mfa-enrollment-code" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event): void => { onCodeChange(event.target.value); }} onInput={(event): void => { onCodeChange(event.currentTarget.value); }} placeholder="6-digit code" />
+            </div>
+          </div>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">MFA is not enabled on this account.</p>
+            <div className="space-y-1.5">
+              <label htmlFor="mfa-enrollment-password" className="text-sm font-medium">Current password to set up MFA</label>
+              <Input id="mfa-enrollment-password" name="mfa-enrollment-password" type="password" autoComplete="current-password" value={mfaCurrentPassword} onChange={(event): void => { onPasswordChange(event.target.value); }} onInput={(event): void => { onPasswordChange(event.currentTarget.value); }} />
+            </div>
+          </>
+        )}
+      </CardContent>
+      <CardFooter className="gap-2">
+        {mfaEnabled ? (
+          <Button type="button" variant="destructive" disabled={mfaLoading || mfaCode.trim() === "" || mfaCurrentPassword.trim() === ""} onClick={onDisable}>Disable MFA</Button>
+        ) : mfaEnrollment !== null ? (
+          <>
+            <Button type="button" disabled={mfaLoading || mfaCode.trim() === ""} onClick={onConfirm}>{mfaLoading ? "Verifying…" : "Verify and enable MFA"}</Button>
+            <Button type="button" variant="outline" disabled={mfaLoading} onClick={onCancel}>Cancel</Button>
+          </>
+        ) : (
+          <Button type="button" disabled={mfaLoading || mfaCurrentPassword.trim() === ""} onClick={onBegin}>{mfaLoading ? "Preparing…" : "Set up MFA"}</Button>
+        )}
+      </CardFooter>
+    </Card>
+  );
+}
+
+function TokensCard({ mustChangePassword, tokens, deletingTokenId, tokenDialogOpen, onTokenDialogOpenChange, onTokenCreated, createdTokenSecret, copiedToken, onCopyToken, onDismissTokenSecret, onDeleteRequest }: Readonly<{
+  mustChangePassword: boolean;
+  tokens: readonly { id: string; attributes: JsonObject }[];
+  deletingTokenId: string | null;
+  tokenDialogOpen: boolean;
+  onTokenDialogOpenChange: (open: boolean) => void;
+  onTokenCreated: (created: { id: string; attributes: JsonObject }) => Promise<void>;
+  createdTokenSecret: string | null;
+  copiedToken: boolean;
+  onCopyToken: () => void;
+  onDismissTokenSecret: () => void;
+  onDeleteRequest: (token: { id: string; attributes: JsonObject }) => void;
+}>): React.JSX.Element {
+  return (
+    <Card id="api-tokens" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <KeyRound className="w-4 h-4" />
+          API Tokens
+        </CardTitle>
+        <CardDescription>Manage your personal API tokens.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">Create a token for API access. Fine-grained tokens restrict access to selected resources and actions.</p>
+          <Button onClick={(): void => { onTokenDialogOpenChange(true); }}>
+            <Plus className="w-4 h-4 mr-1" />
+            New token
+          </Button>
+        </div>
+
+        <TokenScopeDialog
+          open={tokenDialogOpen}
+          onOpenChange={onTokenDialogOpenChange}
+          onCreated={onTokenCreated}
+        />
+
+        {createdTokenSecret != null && (
+          <div className="bg-primary/10 border border-primary/30 text-primary px-4 py-3 rounded-md text-sm space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="font-semibold flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4" />
+                Token created. Copy it now; it won't be shown again.
+              </p>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs gap-1 bg-background text-foreground"
+                  onClick={onCopyToken}
+                >
+                  {copiedToken ? <Check className="w-3.5 h-3.5 text-primary" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedToken ? "Copied" : "Copy token"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-muted-foreground hover:text-foreground"
+                  onClick={onDismissTokenSecret}
+                  aria-label="Dismiss token notification"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </div>
+            <code className="block bg-background/80 border border-border/60 px-3 py-2 rounded text-xs font-mono break-all select-all text-foreground">
+              {createdTokenSecret}
+            </code>
+            <p className="text-xs text-muted-foreground">
+              This secret is shown once. Use the token table below to review last use or revoke it later.
+            </p>
+          </div>
+        )}
+
+        {tokens.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            No personal API tokens.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Description</TableHead>
+                <TableHead>Created</TableHead>
+                <TableHead>Last Used</TableHead>
+                <TableHead>Expires</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {tokens.map((token): React.JSX.Element => (
+                <TableRow key={token.id}>
+                  <TableCell className="font-medium">
+                    <div>
+                      <span>
+                        {isString(token.attributes["description"]) && token.attributes["description"].trim() !== ""
+                          ? token.attributes["description"]
+                          : "No description"}
+                        {token.attributes["scopes"] !== null && token.attributes["scopes"] !== undefined && (
+                          <Badge variant="outline" className="ml-2 align-middle">fine-grained</Badge>
+                        )}
+                      </span>
+                      <p className="mt-1 max-w-xl break-words text-xs font-normal text-muted-foreground">
+                        {summarizeTokenScopes(token.attributes["scopes"], token.attributes["expired-at"])}
+                      </p>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {isString(token.attributes["created-at"])
+                      ? formatSessionDate(token.attributes["created-at"])
+                      : "Unknown"}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {isString(token.attributes["last-used-at"])
+                      ? formatSessionDate(token.attributes["last-used-at"])
+                      : "Never"}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {isString(token.attributes["expired-at"])
+                      ? formatSessionDate(token.attributes["expired-at"])
+                      : "Never"}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      aria-label={`Delete token ${token.id}`}
+                      title="Revoke token"
+                      disabled={deletingTokenId === token.id}
+                      onClick={(): void => { onDeleteRequest(token); }}
+                    >
+                      {deletingTokenId === token.id ? (
+                        <Spinner className="w-3 h-3" />
+                      ) : (
+                        <Trash2 className="w-3 h-3" />
+                      )}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AccountConfirmDialogs({ sessionToRevoke, revokingSessionId, onClearSession, onConfirmSession, tokenToDelete, deletingTokenId, onClearToken, onConfirmToken }: Readonly<{
+  sessionToRevoke: BrowserSession | null;
+  revokingSessionId: string | null;
+  onClearSession: () => void;
+  onConfirmSession: (session: BrowserSession) => Promise<void>;
+  tokenToDelete: { id: string; desc: string } | null;
+  deletingTokenId: string | null;
+  onClearToken: () => void;
+  onConfirmToken: (token: { id: string; desc: string }) => Promise<void>;
+}>): React.JSX.Element {
+  return (
+    <>
+      <ConfirmDialog
+        open={sessionToRevoke !== null}
+        onOpenChange={(open): void => { if (!open) onClearSession(); }}
+        title="Revoke Browser Session"
+        description="Are you sure you want to revoke this browser session? You will be signed out from that device."
+        confirmText="Revoke Session"
+        confirmVariant="destructive"
+        loading={revokingSessionId !== null}
+        onConfirm={async (): Promise<void> => {
+          if (sessionToRevoke !== null) {
+            await onConfirmSession(sessionToRevoke);
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={tokenToDelete !== null}
+        onOpenChange={(open): void => { if (!open) onClearToken(); }}
+        title="Delete API Token"
+        description={`Are you sure you want to delete the token "${tokenToDelete?.desc ?? ""}"? Any automated workflow using this token will stop working.`}
+        confirmText="Delete Token"
+        confirmVariant="destructive"
+        loading={deletingTokenId !== null}
+        onConfirm={async (): Promise<void> => {
+          if (tokenToDelete !== null) {
+            await onConfirmToken(tokenToDelete);
+          }
+        }}
+      />
+    </>
+  );
+}
+
 export function AccountSettings(): React.JSX.Element {
-  type Account = { id: string; attributes: { username: string; email: string | null; "email-verified"?: boolean; "must-change-password"?: boolean; "avatar-url"?: string; theme?: string } };
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const layoutContext = useOutletContext<LayoutOutletContext | null>();
@@ -447,6 +1083,47 @@ export function AccountSettings(): React.JSX.Element {
     }
   }
 
+  function handleSessionRevokeRequest(session: BrowserSession): void {
+    const isTestEnv = window?.navigator.userAgent.includes("jsdom") ?? false;
+    if (isTestEnv) {
+      void handleRevokeSession(session);
+    } else {
+      setSessionToRevoke(session);
+    }
+  }
+
+  function handleTokenDeleteRequest(token: { id: string; attributes: JsonObject }): void {
+    const isTestEnv = window?.navigator.userAgent.includes("jsdom") ?? false;
+    if (isTestEnv) {
+      void handleDeleteToken(token.id);
+    } else {
+      // SAFETY: the token description attribute is a string per the API contract.
+      setTokenToDelete({ id: token.id, desc: (token.attributes["description"] as string) ?? token.id });
+    }
+  }
+
+  async function handleConfirmTokenDelete(token: { id: string; desc: string }): Promise<void> {
+    await handleDeleteToken(token.id);
+    setTokenToDelete(null);
+  }
+
+  function handleCopyToken(): void {
+    if (createdTokenSecret === null) return;
+    void copyTextToClipboard(createdTokenSecret).then((didCopy): void => {
+      if (!mountedRef.current) return;
+      if (didCopy) {
+        setCopiedToken(true);
+        if (copiedTokenResetTimerRef.current !== undefined) window.clearTimeout(copiedTokenResetTimerRef.current);
+        copiedTokenResetTimerRef.current = window.setTimeout((): void => {
+          copiedTokenResetTimerRef.current = undefined;
+          setCopiedToken(false);
+        }, 2000);
+        return;
+      }
+      toast.add({ title: "Could not copy token", type: "error" });
+    });
+  }
+
   if (loading) {
     return (
       <PageShell variant="form">
@@ -483,563 +1160,106 @@ export function AccountSettings(): React.JSX.Element {
       />
 
       {/* Error / Success */}
-      {error !== "" && (
-        <div role="alert" aria-live="polite" className="bg-destructive/10 border border-destructive/30 text-destructive px-4 py-3 rounded-md text-sm">{error}</div>
-      )}
-      {successMsg !== "" && (
-        <div role="status" aria-live="polite" className="bg-success/10 border border-success/30 text-success-text px-4 py-3 rounded-md text-sm">{successMsg}</div>
-      )}
-      {mustChangePassword && (
-        <div role="status" className="bg-warning/10 border border-warning/30 text-warning-text px-4 py-3 rounded-md text-sm">
-          Change your temporary password before continuing.
-        </div>
-      )}
+      <AccountAlerts error={error} successMsg={successMsg} mustChangePassword={mustChangePassword} />
 
       {/* ── 1. Profile ── */}
-      <Card id="profile" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <User className="w-4 h-4" />
-            Profile
-          </CardTitle>
-          <CardDescription>Your account details.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center gap-4 mb-4">
-            <Avatar className="size-16">
-              {account?.attributes["avatar-url"] ? (
-                <AvatarImage src={account.attributes["avatar-url"]} alt={username} />
-              ) : (
-                <AvatarFallback className="text-lg">
-                  {username === "" ? <User /> : username.slice(0, 2).toUpperCase()}
-                </AvatarFallback>
-              )}
-            </Avatar>
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Your avatar is provided by <a href="https://gravatar.com" target="_blank" rel="noreferrer" className="underline hover:no-underline">Gravatar</a> based on your email address.</p>
-            </div>
-          </div>
-          <form id="account-profile-form" onSubmit={(event): void => { event.preventDefault(); void handleProfileSave(); }}>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label htmlFor="account-username" className="text-sm font-medium">Username</label>
-                <Input id="account-username" name="username" autoComplete="username" spellCheck={false} value={username} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setUsername(event.target.value); }} />
-              </div>
-              <div className="space-y-1.5">
-                <label htmlFor="account-email" className="text-sm font-medium">Email</label>
-                <Input id="account-email" name="email" autoComplete="email" spellCheck={false} type="email" value={email} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setEmail(event.target.value); }} placeholder="optional…" />
-              </div>
-            </div>
-          </form>
-        </CardContent>
-        <CardFooter>
-          <Button type="submit" form="account-profile-form" disabled={updatingProfile}>
-            {updatingProfile ? "Saving…" : "Save Profile"}
-          </Button>
-        </CardFooter>
-      </Card>
+      <ProfileCard
+        account={account}
+        username={username}
+        onUsernameChange={setUsername}
+        email={email}
+        onEmailChange={setEmail}
+        updatingProfile={updatingProfile}
+        mustChangePassword={mustChangePassword}
+        onSubmit={(): void => { void handleProfileSave(); }}
+      />
 
       {!mustChangePassword && account?.attributes.email !== null && account?.attributes.email !== undefined && account.attributes.email !== "" && (
-        <Card id="email-verification" className="scroll-mt-20">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg"><Check className="size-4" />Email verification</CardTitle>
-            <CardDescription>Verify your email address so organization invitations and account recovery can be trusted.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {account.attributes["email-verified"] === true ? (
-              <Badge variant="secondary">Verified</Badge>
-            ) : (
-              <p className="text-sm text-muted-foreground">{account.attributes.email} is not verified.</p>
-            )}
-          </CardContent>
-          {account.attributes["email-verified"] !== true && (
-            <CardFooter>
-              <Button type="button" variant="outline" disabled={verificationLoading || updatingProfile} onClick={(): void => { void handleRequestEmailVerification(); }}>
-                {verificationLoading ? "Sending…" : "Send verification email"}
-              </Button>
-            </CardFooter>
-          )}
-        </Card>
+        <EmailVerificationCard
+          account={account}
+          verificationLoading={verificationLoading}
+          updatingProfile={updatingProfile}
+          onSend={(): void => { void handleRequestEmailVerification(); }}
+        />
       )}
 
-      <Card id="appearance" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <Palette className="size-4" />
-            Appearance
-          </CardTitle>
-          <CardDescription>Choose the colors used across Terrence. Your selection follows your account.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <label htmlFor="account-theme" className="text-sm font-medium">Theme</label>
-          <Select
-            id="account-theme"
-            name="theme"
-            autoComplete="off"
-            value={themeId}
-            disabled={updatingTheme}
-            onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { void handleThemeChange(event.target.value); }}
-
-          >
-            <optgroup label="Light themes">
-              {THEMES.filter((theme): boolean => theme.mode === "light").map((theme): React.JSX.Element => (
-                <option key={theme.id} value={theme.id}>{theme.label}</option>
-              ))}
-            </optgroup>
-            <optgroup label="Dark themes">
-              {THEMES.filter((theme): boolean => theme.mode === "dark").map((theme): React.JSX.Element => (
-                <option key={theme.id} value={theme.id}>{theme.label}</option>
-              ))}
-            </optgroup>
-          </Select>
-          <p className="text-xs text-muted-foreground" aria-live="polite">
-            {updatingTheme ? "Saving theme…" : "Changes save automatically."}
-          </p>
-          <div className="mt-5 flex items-center gap-2 text-sm font-medium">
-            <Globe2 className="size-4" aria-hidden="true" />
-            Date and time
-          </div>
-          <label htmlFor="account-timezone" className="text-sm font-medium">Timezone</label>
-          <Select
-            id="account-timezone"
-            name="timezone"
-            autoComplete="off"
-            value={displayTimezone}
-            onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
-              setDisplayTimezone(event.target.value === "utc" ? "utc" : "local");
-            }}
-
-          >
-            <option value="local">Browser local timezone</option>
-            <option value="utc">UTC</option>
-          </Select>
-          <label htmlFor="account-time-format" className="mt-4 block text-sm font-medium">Time format</label>
-          <Select
-            id="account-time-format"
-            name="time-format"
-            autoComplete="off"
-            value={timeFormat}
-            onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
-              setDisplayTimeFormat(event.target.value === "12" ? "12" : "24");
-            }}
-
-          >
-            <option value="24">24-hour (e.g. 14:30)</option>
-            <option value="12">12-hour (e.g. 2:30 PM)</option>
-          </Select>
-          <p className="text-xs text-muted-foreground">Controls timestamps throughout the application.</p>
-        </CardContent>
-      </Card>
+      <AppearanceCard
+        mustChangePassword={mustChangePassword}
+        themeId={themeId}
+        updatingTheme={updatingTheme}
+        onThemeChange={(nextThemeId: string): void => { void handleThemeChange(nextThemeId); }}
+        displayTimezone={displayTimezone}
+        onTimezoneChange={(value: string): void => { setDisplayTimezone(value === "utc" ? "utc" : "local"); }}
+        timeFormat={timeFormat}
+        onTimeFormatChange={(value: string): void => { setDisplayTimeFormat(value === "12" ? "12" : "24"); }}
+      />
 
       {/* ── 2. Sessions ── */}
-      <Card id="sessions" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <MonitorSmartphone className="size-4" />
-            Sessions
-          </CardTitle>
-          <CardDescription>
-            Active browser sessions. Showing the IP address and browser recorded when you signed in.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {sessionsLoading ? (
-            <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-              <Spinner className="size-4" />
-              Loading sessions…
-            </div>
-          ) : sessionsError !== "" ? (
-            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/25 bg-destructive/10 p-4 text-sm text-destructive">
-              <span>Could not load browser sessions. {sessionsError}</span>
-              <Button type="button" size="sm" variant="outline" onClick={(): void => { void loadSessions(); }}>
-                Retry sessions
-              </Button>
-            </div>
-          ) : sessions.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">
-              No active browser sessions. API tokens are listed separately.
-            </p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Session</TableHead>
-                  <TableHead>Activity</TableHead>
-                  <TableHead className="text-right">Revoke</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sessions.map((session): React.JSX.Element => (
-                  <TableRow key={session.id}>
-                    <TableCell>
-                      <p className="text-sm font-medium" title={`Session id ${session.id}`}>
-                        {session.attributes["ip-address"] ?? "Unknown IP"}
-                      </p>
-                      <p className="mt-0.5 max-w-xs truncate text-xs text-muted-foreground" title={session.attributes["user-agent"] ?? undefined}>
-                        {session.attributes["user-agent"] ?? "Unknown device"}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Created {formatSessionDate(session.attributes["created-at"])}
-                      </p>
-                    </TableCell>
-                    <TableCell>
-                      {session.attributes.current && <Badge variant="secondary">Current</Badge>}
-                      <p className={session.attributes.current ? "mt-1 text-xs text-muted-foreground" : "text-xs text-muted-foreground"}>
-                        {session.attributes["last-rotated-at"] === null
-                          ? "Not rotated yet"
-                          : `Last rotated ${formatSessionDate(session.attributes["last-rotated-at"])}`}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Expires {formatSessionDate(session.attributes["expires-at"])}
-                      </p>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {!session.attributes.current && (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="text-destructive hover:text-destructive"
-                          disabled={revokingSessionId === session.id}
-                          aria-label={`Revoke session ${session.id}`}
-                          onClick={(): void => {
-                            const isTestEnv = window?.navigator.userAgent.includes("jsdom") ?? false;
-                            if (isTestEnv) {
-                              void handleRevokeSession(session);
-                            } else {
-                              setSessionToRevoke(session);
-                            }
-                          }}
-                        >
-                          {revokingSessionId === session.id
-                            ? <Spinner data-icon="inline-start" />
-                            : <Trash2 data-icon="inline-start" />}
-                          {revokingSessionId === session.id ? "Revoking…" : "Revoke session"}
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      <SessionsCard
+        mustChangePassword={mustChangePassword}
+        sessionsLoading={sessionsLoading}
+        sessionsError={sessionsError}
+        sessions={sessions}
+        revokingSessionId={revokingSessionId}
+        onRetry={(): void => { void loadSessions(); }}
+        onRevokeRequest={handleSessionRevokeRequest}
+      />
 
       {/* ── 3. Password ── */}
-      <Card id="password" className="scroll-mt-20">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <Lock className="w-4 h-4" />
-            Change Password
-          </CardTitle>
-          {mustChangePassword && <CardDescription>Choose a new password for your account before continuing.</CardDescription>}
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-1.5">
-            <label htmlFor="account-current-password" className="text-sm font-medium">Current password</label>
-            <Input
-              id="account-current-password"
-              name="current-password"
-              autoComplete="current-password"
-              type="password"
-              value={currentPassword}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setCurrentPassword(event.target.value); }}
-              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setCurrentPassword(event.currentTarget.value); }}
-            />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label htmlFor="account-new-password" className="text-sm font-medium">New password</label>
-              <Input
-                id="account-new-password"
-                name="new-password"
-                autoComplete="new-password"
-                type="password"
-                value={newPassword}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewPassword(event.target.value); }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setNewPassword(event.currentTarget.value); }}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label htmlFor="account-confirm-password" className="text-sm font-medium">Confirm new password</label>
-              <Input
-                id="account-confirm-password"
-                name="confirm-password"
-                autoComplete="new-password"
-                type="password"
-                value={confirmPassword}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setConfirmPassword(event.target.value); }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setConfirmPassword(event.currentTarget.value); }}
-              />
-            </div>
-          </div>
-        </CardContent>
-        <CardFooter>
-          <Button onClick={handlePasswordChange} disabled={updatingPassword}>
-            {updatingPassword ? "Changing…" : "Change Password"}
-          </Button>
-        </CardFooter>
-      </Card>
+      <PasswordCard
+        mustChangePassword={mustChangePassword}
+        currentPassword={currentPassword}
+        onCurrentPasswordChange={setCurrentPassword}
+        newPassword={newPassword}
+        onNewPasswordChange={setNewPassword}
+        confirmPassword={confirmPassword}
+        onConfirmPasswordChange={setConfirmPassword}
+        updatingPassword={updatingPassword}
+        onSubmit={(): void => { void handlePasswordChange(); }}
+      />
 
       {/* ── 4. Multi-factor authentication ── */}
       {!mustChangePassword && mfaLoaded && (
-        <Card id="mfa" className="scroll-mt-20">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <ShieldCheck className="size-4" />
-              Multi-factor authentication
-            </CardTitle>
-            <CardDescription>Protect sign-ins with a time-based authenticator code.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {mfaEnabled ? (
-              <>
-                <div className="flex items-center gap-2 text-sm">
-                  <Badge variant="secondary">Enabled</Badge>
-                  <span className="text-muted-foreground">Your account requires an authenticator code at sign in.</span>
-                </div>
-                <div className="space-y-1.5">
-                  <label htmlFor="mfa-disable-code" className="text-sm font-medium">Authenticator code to disable MFA</label>
-                  <Input id="mfa-disable-code" name="mfa-disable-code" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event): void => { setMfaCode(event.target.value); }} onInput={(event): void => { setMfaCode(event.currentTarget.value); }} placeholder="6-digit code" />
-                </div>
-                <div className="space-y-1.5">
-                  <label htmlFor="mfa-disable-password" className="text-sm font-medium">Current password to disable MFA</label>
-                  <Input id="mfa-disable-password" name="mfa-disable-password" type="password" autoComplete="current-password" value={mfaCurrentPassword} onChange={(event): void => { setMfaCurrentPassword(event.target.value); }} onInput={(event): void => { setMfaCurrentPassword(event.currentTarget.value); }} />
-                </div>
-              </>
-            ) : mfaEnrollment !== null ? (
-              <div className="space-y-4 rounded-md border bg-muted/30 p-4">
-                <p className="text-sm">Scan the QR code with your authenticator app, then enter the generated 6-digit code.</p>
-                <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
-                  <div className="shrink-0 rounded-md border bg-background p-2">
-                    {mfaEnrollment["otpauth-url"] !== undefined
-                      ? <QrCodeImage value={mfaEnrollment["otpauth-url"]} />
-                      : null}
-                  </div>
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <p className="text-xs font-medium text-muted-foreground">Setup key</p>
-                    <code className="block break-all rounded bg-background p-2 text-sm select-all">{mfaEnrollment.secret}</code>
-                    <p className="pt-1 text-xs text-muted-foreground">Can't scan? Enter this key manually.</p>
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <label htmlFor="mfa-enrollment-code" className="text-sm font-medium">Verification code</label>
-                  <Input id="mfa-enrollment-code" name="mfa-enrollment-code" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event): void => { setMfaCode(event.target.value); }} onInput={(event): void => { setMfaCode(event.currentTarget.value); }} placeholder="6-digit code" />
-                </div>
-              </div>
-            ) : (
-              <>
-                <p className="text-sm text-muted-foreground">MFA is not enabled on this account.</p>
-                <div className="space-y-1.5">
-                  <label htmlFor="mfa-enrollment-password" className="text-sm font-medium">Current password to set up MFA</label>
-                  <Input id="mfa-enrollment-password" name="mfa-enrollment-password" type="password" autoComplete="current-password" value={mfaCurrentPassword} onChange={(event): void => { setMfaCurrentPassword(event.target.value); }} onInput={(event): void => { setMfaCurrentPassword(event.currentTarget.value); }} />
-                </div>
-              </>
-            )}
-          </CardContent>
-          <CardFooter className="gap-2">
-            {mfaEnabled ? (
-              <Button type="button" variant="destructive" disabled={mfaLoading || mfaCode.trim() === "" || mfaCurrentPassword.trim() === ""} onClick={(): void => { void handleDisableMfa(); }}>Disable MFA</Button>
-            ) : mfaEnrollment !== null ? (
-              <>
-                <Button type="button" disabled={mfaLoading || mfaCode.trim() === ""} onClick={(): void => { void handleConfirmMfaEnrollment(); }}>{mfaLoading ? "Verifying…" : "Verify and enable MFA"}</Button>
-                <Button type="button" variant="outline" disabled={mfaLoading} onClick={(): void => { handleCancelEnrollment(); }}>Cancel</Button>
-              </>
-            ) : (
-              <Button type="button" disabled={mfaLoading || mfaCurrentPassword.trim() === ""} onClick={(): void => { void handleBeginMfaEnrollment(); }}>{mfaLoading ? "Preparing…" : "Set up MFA"}</Button>
-            )}
-          </CardFooter>
-        </Card>
+        <MfaCard
+          mfaEnabled={mfaEnabled}
+          mfaEnrollment={mfaEnrollment}
+          mfaCode={mfaCode}
+          onCodeChange={setMfaCode}
+          mfaCurrentPassword={mfaCurrentPassword}
+          onPasswordChange={setMfaCurrentPassword}
+          mfaLoading={mfaLoading}
+          onBegin={(): void => { void handleBeginMfaEnrollment(); }}
+          onConfirm={(): void => { void handleConfirmMfaEnrollment(); }}
+          onDisable={(): void => { void handleDisableMfa(); }}
+          onCancel={handleCancelEnrollment}
+        />
       )}
 
       {/* ── 5. Tokens ── */}
-      <Card id="api-tokens" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <KeyRound className="w-4 h-4" />
-            API Tokens
-          </CardTitle>
-          <CardDescription>Manage your personal API tokens.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* New token button */}
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Create a token for API access. Fine-grained tokens restrict access to selected resources and actions.</p>
-            <Button onClick={(): void => { setTokenDialogOpen(true); }}>
-              <Plus className="w-4 h-4 mr-1" />
-              New token
-            </Button>
-          </div>
-
-          <TokenScopeDialog
-            open={tokenDialogOpen}
-            onOpenChange={setTokenDialogOpen}
-            onCreated={async (created): Promise<void> => handleTokenCreated(created)}
-          />
-
-          {createdTokenSecret != null && (
-            <div className="bg-primary/10 border border-primary/30 text-primary px-4 py-3 rounded-md text-sm space-y-2">
-              <div className="flex items-center justify-between">
-                <p className="font-semibold flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4" />
-                  Token created. Copy it now; it won't be shown again.
-                </p>
-                <div className="flex items-center gap-1.5">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 text-xs gap-1 bg-background text-foreground"
-                    onClick={(): void => {
-                      void copyTextToClipboard(createdTokenSecret).then((didCopy): void => {
-                        if (!mountedRef.current) return;
-                        if (didCopy) {
-                          setCopiedToken(true);
-                          if (copiedTokenResetTimerRef.current !== undefined) window.clearTimeout(copiedTokenResetTimerRef.current);
-                          copiedTokenResetTimerRef.current = window.setTimeout((): void => {
-                            copiedTokenResetTimerRef.current = undefined;
-                            setCopiedToken(false);
-                          }, 2000);
-                          return;
-                        }
-                        toast.add({ title: "Could not copy token", type: "error" });
-                      });
-                    }}
-                  >
-                    {copiedToken ? <Check className="w-3.5 h-3.5 text-primary" /> : <Copy className="w-3.5 h-3.5" />}
-                    {copiedToken ? "Copied" : "Copy token"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 px-2 text-muted-foreground hover:text-foreground"
-                    onClick={(): void => { setCreatedTokenSecret(null); }}
-                    aria-label="Dismiss token notification"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </Button>
-                </div>
-              </div>
-              <code className="block bg-background/80 border border-border/60 px-3 py-2 rounded text-xs font-mono break-all select-all text-foreground">
-                {createdTokenSecret}
-              </code>
-              <p className="text-xs text-muted-foreground">
-                This secret is shown once. Use the token table below to review last use or revoke it later.
-              </p>
-            </div>
-          )}
-
-          {/* Token list */}
-          {tokens.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">
-              No personal API tokens.
-            </p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead>Last Used</TableHead>
-                  <TableHead>Expires</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {tokens.map((token): React.JSX.Element => (
-                  <TableRow key={token.id}>
-                    <TableCell className="font-medium">
-                      <div>
-                        <span>
-                          {isString(token.attributes["description"]) && token.attributes["description"].trim() !== ""
-                            ? token.attributes["description"]
-                            : "No description"}
-                          {token.attributes["scopes"] !== null && token.attributes["scopes"] !== undefined && (
-                            <Badge variant="outline" className="ml-2 align-middle">fine-grained</Badge>
-                          )}
-                        </span>
-                        <p className="mt-1 max-w-xl break-words text-xs font-normal text-muted-foreground">
-                          {summarizeTokenScopes(token.attributes["scopes"], token.attributes["expired-at"])}
-                        </p>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {isString(token.attributes["created-at"])
-                        ? formatSessionDate(token.attributes["created-at"])
-                        : "Unknown"}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {isString(token.attributes["last-used-at"])
-                        ? formatSessionDate(token.attributes["last-used-at"])
-                        : "Never"}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {isString(token.attributes["expired-at"])
-                        ? formatSessionDate(token.attributes["expired-at"])
-                        : "Never"}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        aria-label={`Delete token ${token.id}`}
-                        title="Revoke token"
-                        disabled={deletingTokenId === token.id}
-                        onClick={(): void => {
-                          const isTestEnv = window?.navigator.userAgent.includes("jsdom") ?? false;
-                          if (isTestEnv) {
-                            void handleDeleteToken(token.id);
-                          } else {
-                            // SAFETY: the token description attribute is a string per the API contract.
-                            setTokenToDelete({ id: token.id, desc: (token.attributes["description"] as string) ?? token.id });
-                          }
-                        }}
-                      >
-                        {deletingTokenId === token.id ? (
-                          <Spinner className="w-3 h-3" />
-                        ) : (
-                          <Trash2 className="w-3 h-3" />
-                        )}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Confirmation Modals */}
-      <ConfirmDialog
-        open={sessionToRevoke !== null}
-        onOpenChange={(open): void => { if (!open) setSessionToRevoke(null); }}
-        title="Revoke Browser Session"
-        description="Are you sure you want to revoke this browser session? You will be signed out from that device."
-        confirmText="Revoke Session"
-        confirmVariant="destructive"
-        loading={revokingSessionId !== null}
-        onConfirm={async (): Promise<void> => {
-          if (sessionToRevoke !== null) {
-            await handleRevokeSession(sessionToRevoke);
-          }
-        }}
+      <TokensCard
+        mustChangePassword={mustChangePassword}
+        tokens={tokens}
+        deletingTokenId={deletingTokenId}
+        tokenDialogOpen={tokenDialogOpen}
+        onTokenDialogOpenChange={setTokenDialogOpen}
+        onTokenCreated={handleTokenCreated}
+        createdTokenSecret={createdTokenSecret}
+        copiedToken={copiedToken}
+        onCopyToken={handleCopyToken}
+        onDismissTokenSecret={(): void => { setCreatedTokenSecret(null); }}
+        onDeleteRequest={handleTokenDeleteRequest}
       />
 
-      <ConfirmDialog
-        open={tokenToDelete !== null}
-        onOpenChange={(open): void => { if (!open) setTokenToDelete(null); }}
-        title="Delete API Token"
-        description={`Are you sure you want to delete the token "${tokenToDelete?.desc ?? ""}"? Any automated workflow using this token will stop working.`}
-        confirmText="Delete Token"
-        confirmVariant="destructive"
-        loading={deletingTokenId !== null}
-        onConfirm={async (): Promise<void> => {
-          if (tokenToDelete !== null) {
-            await handleDeleteToken(tokenToDelete.id);
-            setTokenToDelete(null);
-          }
-        }}
+      {/* Confirmation Modals */}
+      <AccountConfirmDialogs
+        sessionToRevoke={sessionToRevoke}
+        revokingSessionId={revokingSessionId}
+        onClearSession={(): void => { setSessionToRevoke(null); }}
+        onConfirmSession={handleRevokeSession}
+        tokenToDelete={tokenToDelete}
+        deletingTokenId={deletingTokenId}
+        onClearToken={(): void => { setTokenToDelete(null); }}
+        onConfirmToken={handleConfirmTokenDelete}
       />
     </PageShell>
   );
