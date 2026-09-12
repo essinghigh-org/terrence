@@ -369,6 +369,27 @@ function buildAgentPoolUpdates(attrs: Record<string, unknown>): Partial<typeof a
   return updates;
 }
 
+// tfc-agent never sends iac-binaries; a tofu-capable agent (terrence-agent)
+// declares it so the claim path only hands it matching jobs. Absent means
+// terraform-only, preserving the pre-capability contract.
+function parseAgentIacBinaries(
+  attrs: Record<string, unknown>,
+  set: SetObj,
+): { iacBinaries: string[] } | { error: unknown } {
+  const rawIacBinaries = attrs["iac-binaries"];
+  if (rawIacBinaries === undefined) return { iacBinaries: ["terraform"] };
+  if (
+    !Array.isArray(rawIacBinaries)
+    || rawIacBinaries.length === 0
+    || rawIacBinaries.some((binary: unknown): boolean =>
+      typeof binary !== "string" || (binary !== "tofu" && binary !== "terraform"))
+  ) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binaries must be a non-empty array of 'tofu' or 'terraform'" }] } };
+  }
+  return { iacBinaries: [...new Set(rawIacBinaries as string[])] };
+}
+
 function completionResourceCounts(
   attrs: Record<string, unknown>,
   status: string,
@@ -841,23 +862,9 @@ export const agentRoutes = new Elysia({ name: "agents" })
     const ipAddress = typeof attrs["ip-address"] === "string" ? attrs["ip-address"] : null;
     const version = typeof attrs["version"] === "string" ? attrs["version"] : null;
     const architecture = typeof attrs["architecture"] === "string" ? attrs["architecture"] : null;
-    // tfc-agent never sends iac-binaries; a tofu-capable agent (terrence-agent)
-    // declares it so the claim path only hands it matching jobs. Absent means
-    // terraform-only, preserving the pre-capability contract.
-    const rawIacBinaries = attrs["iac-binaries"];
-    let iacBinaries: string[] = ["terraform"];
-    if (rawIacBinaries !== undefined) {
-      if (
-        !Array.isArray(rawIacBinaries)
-        || rawIacBinaries.length === 0
-        || rawIacBinaries.some((binary: unknown): boolean =>
-          typeof binary !== "string" || (binary !== "tofu" && binary !== "terraform"))
-      ) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binaries must be a non-empty array of 'tofu' or 'terraform'" }] };
-      }
-      iacBinaries = [...new Set(rawIacBinaries as string[])];
-    }
+    const parsedBinaries = parseAgentIacBinaries(attrs, set);
+    if ("error" in parsedBinaries) return parsedBinaries.error;
+    const iacBinaries = parsedBinaries.iacBinaries;
     await db.insert(agents).values({ id: agentId, agentPoolId: pool.id, name, status, ipAddress, version, protocolVersion: AGENT_PROTOCOL_VERSION, capabilities: [...AGENT_PROTOCOL_CAPABILITIES], artifactFormats: ["tar.gz", "json", "text"], architecture, iacBinaries, lastPingAt: now, createdAt: now });
     (set as { status: number }).status = 201;
     return { data: { id: agentId, type: "agents", attributes: { name, status, "ip-address": ipAddress, version, "protocol-version": AGENT_PROTOCOL_VERSION, capabilities: [...AGENT_PROTOCOL_CAPABILITIES], "artifact-formats": ["tar.gz", "json", "text"], architecture, "iac-binaries": iacBinaries, "last-ping-at": new Date(now).toISOString() }, relationships: { "agent-pool": { data: { id: pool.id, type: "agent-pools" } } } } };
