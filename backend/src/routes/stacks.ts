@@ -92,6 +92,15 @@ type StackVcsAttributes = Readonly<{
   triggerDisabled: boolean;
 }>;
 
+function vcsRepoString(repo: Record<string, unknown>, key: string): string {
+  const value = repo[key];
+  return typeof value === "string" ? value : "";
+}
+
+function nullIfEmpty(value: string): string | null {
+  return value === "" ? null : value;
+}
+
 function stackVcsRepoAttributes(attributes: Record<string, unknown>): StackVcsAttributes {
   const vcs = attributes["vcs-repo"];
   if (vcs === null || typeof vcs !== "object" || Array.isArray(vcs)) {
@@ -102,43 +111,45 @@ function stackVcsRepoAttributes(attributes: Record<string, unknown>): StackVcsAt
     };
   }
   const repo = vcs as Record<string, unknown>;
-  const identifier = typeof repo["identifier"] === "string" ? repo["identifier"].trim() : "";
-  const branch = typeof repo["branch"] === "string" ? repo["branch"] : "";
+  const identifier = vcsRepoString(repo, "identifier").trim();
+  const branch = vcsRepoString(repo, "branch");
   const serviceProvider = typeof repo["service-provider"] === "string"
-    ? repo["service-provider"]
-    : typeof attributes["service-provider"] === "string" ? attributes["service-provider"] : "";
-  const tagsRegex = typeof repo["tags-regex"] === "string" ? repo["tags-regex"] : "";
-  const displayIdentifier = typeof repo["display-identifier"] === "string" ? repo["display-identifier"] : "";
-  const repositoryHttpUrl = typeof repo["repository-http-url"] === "string" ? repo["repository-http-url"] : "";
-  const sparseCheckoutPattern = typeof repo["sparse-checkout-pattern"] === "string" ? repo["sparse-checkout-pattern"] : "";
-  const oauthTokenId = typeof repo["oauth-token-id"] === "string" ? repo["oauth-token-id"] : "";
-  const ghaId = typeof repo["github-app-installation-id"] === "string" ? repo["github-app-installation-id"] : "";
+    ? repo["service-provider"] as string
+    : vcsRepoString(attributes, "service-provider");
+  const tagsRegex = vcsRepoString(repo, "tags-regex");
+  const displayIdentifier = vcsRepoString(repo, "display-identifier");
+  const repositoryHttpUrl = vcsRepoString(repo, "repository-http-url");
+  const sparseCheckoutPattern = vcsRepoString(repo, "sparse-checkout-pattern");
+  const oauthTokenId = vcsRepoString(repo, "oauth-token-id");
+  const ghaId = vcsRepoString(repo, "github-app-installation-id");
   return {
-    vcsIdentifier: identifier === "" ? null : identifier,
-    vcsServiceProvider: serviceProvider === "" ? null : serviceProvider,
-    vcsBranch: branch === "" ? null : branch,
-    vcsTagsRegex: tagsRegex === "" ? null : tagsRegex,
-    vcsDisplayIdentifier: displayIdentifier === "" ? null : displayIdentifier,
-    vcsRepositoryHttpUrl: repositoryHttpUrl === "" ? null : repositoryHttpUrl,
-    vcsSparseCheckoutPattern: sparseCheckoutPattern === "" ? null : sparseCheckoutPattern,
-    vcsOAuthTokenId: oauthTokenId === "" ? null : oauthTokenId,
-    vcsGhaInstallationId: ghaId === "" ? null : ghaId,
+    vcsIdentifier: nullIfEmpty(identifier),
+    vcsServiceProvider: nullIfEmpty(serviceProvider),
+    vcsBranch: nullIfEmpty(branch),
+    vcsTagsRegex: nullIfEmpty(tagsRegex),
+    vcsDisplayIdentifier: nullIfEmpty(displayIdentifier),
+    vcsRepositoryHttpUrl: nullIfEmpty(repositoryHttpUrl),
+    vcsSparseCheckoutPattern: nullIfEmpty(sparseCheckoutPattern),
+    vcsOAuthTokenId: nullIfEmpty(oauthTokenId),
+    vcsGhaInstallationId: nullIfEmpty(ghaId),
     triggerDisabled: repo["trigger-disabled"] === true || attributes["trigger-disabled"] === true,
   };
 }
 
 const stackServiceProviders = new Set(["github", "github_enterprise", "gitlab_hosted", "gitlab_community_edition", "gitlab_enterprise_edition", "ado_server"]);
 
+function validRepositoryHttpUrl(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 async function validStackVcs(vcs: StackVcsAttributes, orgId: string): Promise<string | null> {
   if (vcs.vcsServiceProvider !== null && !stackServiceProviders.has(vcs.vcsServiceProvider)) return "Invalid Stack VCS service provider";
-  if (vcs.vcsRepositoryHttpUrl !== null) {
-    try {
-      const protocol = new URL(vcs.vcsRepositoryHttpUrl).protocol;
-      if (protocol !== "http:" && protocol !== "https:") return "Invalid Stack repository-http-url";
-    } catch {
-      return "Invalid Stack repository-http-url";
-    }
-  }
+  if (vcs.vcsRepositoryHttpUrl !== null && !validRepositoryHttpUrl(vcs.vcsRepositoryHttpUrl)) return "Invalid Stack repository-http-url";
   if (vcs.vcsTagsRegex !== null) {
     if (!isValidTagsRegex(vcs.vcsTagsRegex)) return "Invalid Stack VCS tags-regex";
   }
