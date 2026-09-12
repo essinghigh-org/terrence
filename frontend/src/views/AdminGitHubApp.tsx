@@ -26,6 +26,68 @@ type GitHubAppAttributes = Readonly<{
 
 type GitHubAppDocument = Readonly<{ data?: { attributes?: GitHubAppAttributes } }>;
 
+function RegistrationDetails({ attributes }: Readonly<{
+  attributes: GitHubAppAttributes;
+}>): React.JSX.Element {
+  return (
+    <dl className="grid gap-2 text-sm">
+      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">App ID</dt><dd>{isNumber(attributes["app-id"]) ? attributes["app-id"] : "—"}</dd></div>
+      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Slug</dt><dd>{attributes.slug ?? "—"}</dd></div>
+      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Owner</dt><dd>{attributes.owner ?? "—"}</dd></div>
+    </dl>
+  );
+}
+
+function RegistrationCard({
+  loading,
+  status,
+  attributes,
+  missingOwners,
+  busy,
+  onStartManifest,
+  onValidate,
+  onRegistrationDeleted,
+}: Readonly<{
+  loading: boolean;
+  status: string;
+  attributes: GitHubAppAttributes;
+  missingOwners: string[];
+  busy: string;
+  onStartManifest: () => void;
+  onValidate: () => void;
+  onRegistrationDeleted: () => void;
+}>): React.JSX.Element {
+  const registrationUrl = attributes["registration-url"] ?? null;
+  const source = attributes.source ?? null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><GitBranch className="size-5" />Current registration</CardTitle>
+        <CardDescription>The active App remains in place while a replacement is being installed and checked.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {loading ? <Spinner className="size-6 text-primary" /> : (
+          <>
+            <div className="flex items-center gap-2"><Badge variant={status === "active" ? "secondary" : "outline"}>{status}</Badge>{source !== null && <span className="text-sm text-muted-foreground">{source}</span>}</div>
+            {status === "invalid" && attributes["invalid-reason"] !== null && attributes["invalid-reason"] !== undefined && <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{attributes["invalid-reason"]}</p>}
+            <RegistrationDetails attributes={attributes} />
+            {missingOwners.length > 0 && <p className="rounded-md bg-muted p-3 text-sm">Install the replacement App for: <strong>{missingOwners.join(", ")}</strong>.</p>}
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={onStartManifest} disabled={busy !== ""}><ShieldCheck data-icon="inline-start" />{busy === "manifest" ? "Opening GitHub…" : "Create or replace with GitHub"}</Button>
+              <Button variant="outline" onClick={onValidate} disabled={busy !== ""}>Validate credentials</Button>
+              {registrationUrl !== null && <>
+                <a className={buttonVariants({ variant: "outline" })} href={registrationUrl} target="_blank" rel="noreferrer"><ExternalLink data-icon="inline-start" />GitHub settings</a>
+                <Button variant="outline" onClick={onRegistrationDeleted} disabled={busy !== ""}>I deleted it on GitHub</Button>
+              </>}
+            </div>
+            {registrationUrl !== null && <p className="text-xs text-muted-foreground">Deleting the registration in GitHub uninstalls it everywhere. Terrence leaves that action to you; return here and validate the credentials afterward to confirm the connection state.</p>}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function authorizationUrl(payload: unknown): string {
   const root = payload !== null && typeof payload === "object" ? payload as Record<string, unknown> : {};
   const data = root["data"] !== null && typeof root["data"] === "object" ? root["data"] as Record<string, unknown> : {};
@@ -144,35 +206,16 @@ export function AdminGitHubApp(): React.JSX.Element {
       {saved && <div className="mb-4 rounded-md bg-primary/10 p-4 text-sm font-medium text-primary">GitHub App settings updated.</div>}
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2"><GitBranch className="size-5" />Current registration</CardTitle>
-            <CardDescription>The active App remains in place while a replacement is being installed and checked.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {loading ? <Spinner className="size-6 text-primary" /> : (
-              <>
-                <div className="flex items-center gap-2"><Badge variant={status === "active" ? "secondary" : "outline"}>{status}</Badge>{attributes.source !== null && attributes.source !== undefined && <span className="text-sm text-muted-foreground">{attributes.source}</span>}</div>
-                {status === "invalid" && attributes["invalid-reason"] !== null && attributes["invalid-reason"] !== undefined && <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{attributes["invalid-reason"]}</p>}
-                <dl className="grid gap-2 text-sm">
-                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">App ID</dt><dd>{isNumber(attributes["app-id"]) ? attributes["app-id"] : "—"}</dd></div>
-                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Slug</dt><dd>{attributes.slug ?? "—"}</dd></div>
-                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Owner</dt><dd>{attributes.owner ?? "—"}</dd></div>
-                </dl>
-                {missingOwners.length > 0 && <p className="rounded-md bg-muted p-3 text-sm">Install the replacement App for: <strong>{missingOwners.join(", ")}</strong>.</p>}
-                <div className="flex flex-wrap gap-2">
-                  <Button onClick={(): void => { void startManifest(); }} disabled={busy !== ""}><ShieldCheck data-icon="inline-start" />{busy === "manifest" ? "Opening GitHub…" : "Create or replace with GitHub"}</Button>
-                  <Button variant="outline" onClick={(): void => { void action("validate"); }} disabled={busy !== ""}>Validate credentials</Button>
-                  {attributes["registration-url"] !== null && attributes["registration-url"] !== undefined && <>
-                    <a className={buttonVariants({ variant: "outline" })} href={attributes["registration-url"]} target="_blank" rel="noreferrer"><ExternalLink data-icon="inline-start" />GitHub settings</a>
-                    <Button variant="outline" onClick={(): void => { setRegistrationDeletedDialogOpen(true); }} disabled={busy !== ""}>I deleted it on GitHub</Button>
-                  </>}
-                </div>
-                {attributes["registration-url"] !== null && attributes["registration-url"] !== undefined && <p className="text-xs text-muted-foreground">Deleting the registration in GitHub uninstalls it everywhere. Terrence leaves that action to you; return here and validate the credentials afterward to confirm the connection state.</p>}
-              </>
-            )}
-          </CardContent>
-        </Card>
+        <RegistrationCard
+          loading={loading}
+          status={status}
+          attributes={attributes}
+          missingOwners={missingOwners}
+          busy={busy}
+          onStartManifest={(): void => { void startManifest(); }}
+          onValidate={(): void => { void action("validate"); }}
+          onRegistrationDeleted={(): void => { setRegistrationDeletedDialogOpen(true); }}
+        />
 
         <Card>
           <CardHeader>
