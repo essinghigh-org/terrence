@@ -422,6 +422,43 @@ async function teamListResponse(
   return { data: await Promise.all(data), ...pagination(request, number, size, countRows[0]?.total ?? 0) };
 }
 
+type NewTeamFields = Readonly<{
+  name: string;
+  description: string | null;
+  visibility: string;
+  ssoTeamId: string | null;
+  allowMemberTokenManagement: boolean;
+  organizationAccess: Record<string, boolean>;
+}>;
+
+function resolveNewTeamColumnFields(
+  attributes: Record<string, unknown>,
+  rawOrgAccess: Record<string, unknown>,
+): Omit<NewTeamFields, "name" | "organizationAccess"> {
+  return {
+    description: typeof attributes["description"] === "string" ? attributes["description"] : null,
+    visibility: typeof attributes["visibility"] === "string" ? attributes["visibility"] : (typeof rawOrgAccess["visibility"] === "string" ? rawOrgAccess["visibility"] : "organization"),
+    ssoTeamId: typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : (typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null),
+    allowMemberTokenManagement: typeof attributes["allow-member-token-management"] === "boolean" ? attributes["allow-member-token-management"] : typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false,
+  };
+}
+
+function buildNewTeamFields(
+  attributes: Record<string, unknown>,
+): Readonly<{ value: NewTeamFields }> | Readonly<{ error: Extract<TeamPatchError, { status: 422 }> }> {
+  const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
+  if (name === "") return { error: { status: 422, detail: "Name is required" } };
+  if (attributes["allow-member-token-management"] !== undefined && typeof attributes["allow-member-token-management"] !== "boolean") {
+    return { error: { status: 422 } };
+  }
+  const rawOrgAccess = attributes["organization-access"] !== undefined && typeof attributes["organization-access"] === "object" && attributes["organization-access"] !== null
+    ? attributes["organization-access"] as Record<string, unknown>
+    : {};
+  const organizationAccess = parseOrganizationAccess(rawOrgAccess);
+  if ("error" in organizationAccess) return { error: { status: 422, detail: organizationAccess.error } };
+  return { value: { name, ...resolveNewTeamColumnFields(attributes, rawOrgAccess), organizationAccess: organizationAccess.value } };
+}
+
 export const teamRoutes = new Elysia({ name: "teams" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/team-tokens", async ({ params, request, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -499,31 +536,20 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
-    if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
-    if (attributes["allow-member-token-management"] !== undefined && typeof attributes["allow-member-token-management"] !== "boolean") {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    const attributes = parseTeamPatchAttributes(body);
+    const fields = buildNewTeamFields(attributes);
+    if ("error" in fields) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", ...("detail" in fields.error && fields.error.detail !== undefined ? { detail: fields.error.detail } : {}) }] };
     }
     const id = newResourceId("team");
-    const rawOrgAccess = attributes["organization-access"] !== undefined && typeof attributes["organization-access"] === "object" && attributes["organization-access"] !== null
-      ? attributes["organization-access"] as Record<string, unknown>
-      : {};
-    const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
-    const visibility = typeof attributes["visibility"] === "string" ? attributes["visibility"] : (typeof rawOrgAccess["visibility"] === "string" ? rawOrgAccess["visibility"] : "organization");
-    const ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : (typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null);
-    const allowMemberTokenManagement = typeof attributes["allow-member-token-management"] === "boolean" ? attributes["allow-member-token-management"] : typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
-    const organizationAccess = parseOrganizationAccess(rawOrgAccess);
-    if ("error" in organizationAccess) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: organizationAccess.error }] }; }
     if (
       (attributes["organization-access"] !== undefined || attributes["allow-member-token-management"] !== undefined)
       && !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"))
     ) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const newTeam = { id, orgId: org.id, name, description, visibility, ssoTeamId, allowMemberTokenManagement, organizationAccess: organizationAccess.value, createdAt: Date.now() };
+    const newTeam = { id, orgId: org.id, ...fields.value, createdAt: Date.now() };
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
       await t.insert(teams).values(newTeam);
