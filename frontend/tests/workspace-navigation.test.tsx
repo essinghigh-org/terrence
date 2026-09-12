@@ -5,6 +5,7 @@ import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom
 import { Layout } from "../src/components/Layout";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { isString } from "../src/lib/type-guards";
+import { getRecentWorkspaces, recordWorkspaceVisit } from "../src/lib/workspace-shortcuts";
 import { formatDateTime } from "../src/lib/utils";
 import type { JsonObject, JsonValue } from "../src/lib/json";
 
@@ -805,4 +806,78 @@ test("confirms workspace locking and unlocking before sending mutations", async 
     expect(fetchMock.mock.calls.some(([input, init]): boolean =>
       getUrl(input) === "/api/v2/workspaces/ws-1/actions/unlock" && init?.method === "POST")).toBe(true);
   });
+});
+
+test("drops a sidebar recent when the workspace detail fetch 404s", async () => {
+  // Layout records the visit from the route before the detail fetch resolves.
+  recordWorkspaceVisit("acme", "ghost");
+  recordWorkspaceVisit("acme", "production");
+  expect(getRecentWorkspaces().map((visit) => visit.workspaceName)).toEqual(["production", "ghost"]);
+
+  const fetchMock = mock(async (
+    input: string | URL | Request,
+  ): Promise<Response> => {
+    const url = getUrl(input);
+    if (url === "/api/v2/organizations/acme/workspaces/ghost") {
+      return new Response(JSON.stringify({ errors: [{ status: "404", title: "Not Found" }] }), {
+        status: 404,
+        headers: { "Content-Type": "application/vnd.api+json" },
+      });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/ghost"]}>
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName"
+          element={<WorkspaceDetail section="overview" />}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(getRecentWorkspaces().map((visit) => visit.workspaceName)).toEqual(["production"]);
+  });
+  view.unmount();
+});
+
+test("keeps a sidebar recent when the workspace detail fetch fails without a 404", async () => {
+  recordWorkspaceVisit("acme", "ghost");
+  const fetchMock = mock(async (
+    input: string | URL | Request,
+  ): Promise<Response> => {
+    const url = getUrl(input);
+    if (url === "/api/v2/organizations/acme/workspaces/ghost") {
+      return new Response(JSON.stringify({ errors: [{ status: "403", title: "Forbidden" }] }), {
+        status: 403,
+        headers: { "Content-Type": "application/vnd.api+json" },
+      });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/ghost"]}>
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName"
+          element={<WorkspaceDetail section="overview" />}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
+  });
+  await act(async (): Promise<void> => {
+    await new Promise<void>((resolve): void => { window.setTimeout(resolve, 0); });
+  });
+  expect(getRecentWorkspaces().map((visit) => visit.workspaceName)).toEqual(["ghost"]);
+  view.unmount();
 });
