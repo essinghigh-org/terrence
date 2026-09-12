@@ -156,6 +156,55 @@ async function persistAdminUserUpdates(
   return { persisted: true };
 }
 
+function checkResetEligibility(
+  target: typeof users.$inferSelect,
+  userId: string,
+  set: ParamCtx["set"],
+): { ok: true } | { error: unknown } {
+  if (target.id === userId || target.ssoProvider !== null || target.passwordHash.startsWith("$disabled$")) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: target.id === userId
+      ? "Change your own password in account settings."
+      : "Reset this user's password through their identity provider." }] } };
+  }
+  return { ok: true };
+}
+
+function checkResetPasswordInput(
+  body: unknown,
+  username: string,
+  set: ParamCtx["set"],
+): { password: string } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
+  const policy = checkPasswordPolicy(loadPasswordPolicy(), password, username);
+  if (!policy.ok || password !== attrs["password-confirmation"]) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: !policy.ok ? policy.errors.join(" ") : "Passwords do not match." }] } };
+  }
+  return { password };
+}
+
+async function applyPasswordReset(
+  userId: string,
+  targetPasswordHash: string,
+  passwordHash: string,
+): Promise<UserItem | undefined> {
+  return db.transaction(async (tx: unknown): Promise<UserItem | undefined> => {
+    const t = tx as typeof db;
+    const [changed] = await t.update(users).set({ passwordHash, mustChangePassword: true })
+      .where(and(eq(users.id, userId), eq(users.passwordHash, targetPasswordHash), isNull(users.deletedAt)))
+      .returning();
+    if (changed === undefined) return undefined;
+    await t.delete(apiTokens).where(eq(apiTokens.userId, userId));
+    await t.update(refreshSessions).set({ revokedAt: Date.now() })
+      .where(and(eq(refreshSessions.userId, userId), isNull(refreshSessions.revokedAt)));
+    return changed;
+  });
+}
+
 export const usersRoutes = new Elysia({ name: "admin-users" })
   .use(authPlugin)
   .get("/api/v2/admin/users", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
@@ -317,33 +366,12 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     const userId = params["user_id"] ?? "";
     const target = await db.query.users.findFirst({ where: and(eq(users.id, userId), isNull(users.deletedAt)) });
     if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (target.id === user.id || target.ssoProvider !== null || target.passwordHash.startsWith("$disabled$")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: target.id === user.id
-        ? "Change your own password in account settings."
-        : "Reset this user's password through their identity provider." }] };
-    }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
-    const policy = checkPasswordPolicy(loadPasswordPolicy(), password, target.username);
-    if (!policy.ok || password !== attrs["password-confirmation"]) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: !policy.ok ? policy.errors.join(" ") : "Passwords do not match." }] };
-    }
-    const passwordHash = await hashPassword(password);
-    const updated = await db.transaction(async (tx: unknown): Promise<UserItem | undefined> => {
-      const t = tx as typeof db;
-      const [changed] = await t.update(users).set({ passwordHash, mustChangePassword: true })
-        .where(and(eq(users.id, userId), eq(users.passwordHash, target.passwordHash), isNull(users.deletedAt)))
-        .returning();
-      if (changed === undefined) return undefined;
-      await t.delete(apiTokens).where(eq(apiTokens.userId, userId));
-      await t.update(refreshSessions).set({ revokedAt: Date.now() })
-        .where(and(eq(refreshSessions.userId, userId), isNull(refreshSessions.revokedAt)));
-      return changed;
-    });
+    const eligible = checkResetEligibility(target, user.id, set);
+    if ("error" in eligible) return eligible.error;
+    const input = checkResetPasswordInput(body, target.username, set);
+    if ("error" in input) return input.error;
+    const passwordHash = await hashPassword(input.password);
+    const updated = await applyPasswordReset(userId, target.passwordHash, passwordHash);
     if (updated === undefined) {
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "This account changed while resetting its password. Reload and try again." }] };
