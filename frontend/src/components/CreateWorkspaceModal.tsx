@@ -19,7 +19,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
-import { useAgentPools } from "@/hooks/useAgentPools";
+import { useAgentPools, type AgentPoolLoadState } from "@/hooks/useAgentPools";
 import { isString } from "../lib/type-guards";
 
 type CreateWorkspaceModalProps = {
@@ -39,6 +39,312 @@ type VcsRepoOption = {
   name: string;
   owner?: string;
 };
+
+function executionModeDescription(executionMode: string): string {
+  return executionMode === "inherit"
+    ? "Use the execution mode and agent pool configured for the selected project."
+    : executionMode === "agent"
+    ? "Runs wait for an agent pool to pick them up."
+    : executionMode === "local"
+      ? "Runs execute on your CLI; the server only tracks state."
+      : "Runs execute on the built-in Terrence server worker.";
+}
+
+function executionModeHint(executionMode: string, autoApply: boolean): string {
+  if (executionMode === "inherit") {
+    return `Execution follows your project settings. ${autoApply ? "Changes apply automatically for remote runs." : "Remote plans require your approval before applying changes."}`;
+  }
+  if (executionMode === "local") {
+    return "Runs stay on your computer; Terrence stores the state.";
+  }
+  return `${executionMode === "agent" ? "An agent" : "Terrence"} runs your plans. ${autoApply ? "Changes apply automatically." : "You review each plan before applying changes."}`;
+}
+
+function VcsSourceFields({
+  vcsConnectionValue,
+  onVcsConnectionChange,
+  loading,
+  vcsConnectionsLoading,
+  vcsConnections,
+  vcsConnectionsError,
+  orgName,
+  vcsReposLoading,
+  vcsIdentifier,
+  onVcsIdentifierChange,
+  vcsRepositories,
+}: Readonly<{
+  vcsConnectionValue: string;
+  onVcsConnectionChange: (value: string) => void;
+  loading: boolean;
+  vcsConnectionsLoading: boolean;
+  vcsConnections: VcsConnection[];
+  vcsConnectionsError: string;
+  orgName: string;
+  vcsReposLoading: boolean;
+  vcsIdentifier: string;
+  onVcsIdentifierChange: (value: string) => void;
+  vcsRepositories: VcsRepoOption[];
+}>): React.JSX.Element {
+  return (
+    <div className="grid gap-4">
+      <div className="flex flex-col gap-2">
+        <label htmlFor="vcs-connection" className="text-sm font-medium leading-none">VCS connection</label>
+        <Select
+          id="vcs-connection"
+          name="vcs-connection"
+          value={vcsConnectionValue}
+          onValueChange={onVcsConnectionChange}
+          disabled={loading || vcsConnectionsLoading}
+        >
+          <SelectItem value="">
+            {vcsConnectionsLoading ? "Loading registered connections…" : "Select a registered connection"}
+          </SelectItem>
+          {vcsConnections.map((connection: VcsConnection): React.JSX.Element => (
+            <SelectItem key={connection.value} value={connection.value}>{connection.label}</SelectItem>
+          ))}
+        </Select>
+        {vcsConnectionsError !== "" ? (
+          <p role="alert" className="text-xs text-destructive">{vcsConnectionsError}</p>
+        ) : vcsConnections.length === 0 && !vcsConnectionsLoading ? (
+          // Named the place to go without linking to it, which left
+          // the user to find "organization VCS settings" themselves.
+          <p className="text-xs text-muted-foreground">
+            No connections are set up yet.{" "}
+            <Link
+              to={`/app/${encodeURIComponent(orgName)}/settings?tab=vcs`}
+              className="font-medium text-primary underline hover:no-underline"
+            >
+              Connect GitHub, GitLab or Bitbucket
+            </Link>
+            {" "}to run from a repository.
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Choose a connection first, then search repositories by organization or name.
+          </p>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-1">
+          <label htmlFor="vcs-identifier" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+            Repository Identifier
+          </label>
+          <HelpTooltip content="Select from accessible repositories or type a repository path (e.g. 'org/repo-name')." />
+        </div>
+
+        {vcsReposLoading ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
+            <Spinner className="size-3.5" /> Loading accessible repositories…
+          </div>
+        ) : (
+          <VcsRepoSelector
+            id="vcs-identifier"
+            value={vcsIdentifier}
+            onValueChange={onVcsIdentifierChange}
+            repositories={vcsRepositories}
+            loading={vcsReposLoading}
+            disabled={loading}
+            placeholder="e.g. organization/repository"
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LocalSourceHint({
+  orgName,
+  projectId,
+  name,
+}: Readonly<{
+  orgName: string;
+  projectId: string;
+  name: string;
+}>): React.JSX.Element {
+  return (
+    <p className="text-sm text-muted-foreground">
+      Code will be loaded from <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">/app/backend/storage/local/{orgName}/{projectId === "" ? "default" : projectId}/{name.trim() === "" ? "{name}" : name.trim()}</code>. Make sure to bind mount this path to your Terraform code.
+    </p>
+  );
+}
+
+function AgentPoolFields({
+  executionMode,
+  agentPools,
+  agentPoolId,
+  onAgentPoolChange,
+  orgName,
+}: Readonly<{
+  executionMode: string;
+  agentPools: AgentPoolLoadState;
+  agentPoolId: string;
+  onAgentPoolChange: (value: string) => void;
+  orgName: string;
+}>): React.JSX.Element | null {
+  if (executionMode !== "agent") return null;
+  return (
+    <>
+      {agentPools.pools.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="create-agent-pool" className="text-sm font-medium">Agent pool</label>
+          <Select id="create-agent-pool" value={agentPoolId} onValueChange={onAgentPoolChange}>
+            <SelectItem value="">Choose an agent pool</SelectItem>
+            {agentPools.pools.map((pool) => <SelectItem key={pool.id} value={pool.id}>{pool.attributes.name}</SelectItem>)}
+          </Select>
+        </div>
+      )}
+      {agentPools.loading && (
+        <p className="text-xs text-muted-foreground">Checking organization agent pools…</p>
+      )}
+      {!agentPools.loading && agentPools.error !== "" && (
+        <p role="alert" className="text-xs text-destructive">{agentPools.error}</p>
+      )}
+      {!agentPools.loading && agentPools.error === "" && agentPools.pools.length === 0 && (
+        <Callout tone="warning" className="p-3 text-xs">
+          <p>
+            No agent pools are available.{" "}
+            <Link
+              to={`/app/${encodeURIComponent(orgName)}/settings?tab=agent-pools`}
+              className="font-medium text-primary underline hover:no-underline"
+            >
+              Create a pool in organization settings
+            </Link>
+            , or choose server or local execution.
+          </p>
+        </Callout>
+      )}
+    </>
+  );
+}
+
+function ExecutionModeFields({
+  executionMode,
+  onExecutionModeChange,
+  agentPools,
+  agentPoolId,
+  onAgentPoolChange,
+  orgName,
+}: Readonly<{
+  executionMode: string;
+  onExecutionModeChange: (value: string) => void;
+  agentPools: AgentPoolLoadState;
+  agentPoolId: string;
+  onAgentPoolChange: (value: string) => void;
+  orgName: string;
+}>): React.JSX.Element {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-1">
+        <label htmlFor="exec-mode" className="text-sm font-medium">Execution mode</label>
+        <HelpTooltip content="Remote runs execute on the built-in Terrence server worker, agent runs execute in an agent pool, and local runs execute on your CLI." />
+      </div>
+      <Select
+        id="exec-mode"
+        name="execution-mode"
+        value={executionMode}
+        onValueChange={onExecutionModeChange}
+      >
+        <SelectItem value="inherit">Use project default</SelectItem>
+        <SelectItem value="remote">Terrence server (Remote)</SelectItem>
+        <SelectItem value="agent">Agent pool</SelectItem>
+        <SelectItem value="local">Your computer (Local)</SelectItem>
+      </Select>
+      <p className="text-xs text-muted-foreground">
+        {executionModeDescription(executionMode)}
+      </p>
+      <AgentPoolFields
+        executionMode={executionMode}
+        agentPools={agentPools}
+        agentPoolId={agentPoolId}
+        onAgentPoolChange={onAgentPoolChange}
+        orgName={orgName}
+      />
+    </div>
+  );
+}
+
+function EngineVersionFields({
+  terraformVersion,
+  onTerraformVersionChange,
+  availableVersions,
+  versionsLoading,
+}: Readonly<{
+  terraformVersion: string;
+  onTerraformVersionChange: (value: string) => void;
+  availableVersions: string[];
+  versionsLoading: boolean;
+}>): React.JSX.Element {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor="tf-version" className="text-sm font-medium">Engine version</label>
+      <Select
+        id="tf-version"
+        name="terraform-version"
+        value={terraformVersion}
+        onValueChange={onTerraformVersionChange}
+      >
+        <SelectItem value="latest">Latest available</SelectItem>
+        {terraformVersion !== "latest" && !availableVersions.includes(terraformVersion) && (
+          <SelectItem value={terraformVersion}>{terraformVersion} (organization default)</SelectItem>
+        )}
+        {availableVersions.map((version): React.JSX.Element => <SelectItem key={version} value={version}>{version}</SelectItem>)}
+      </Select>
+      <p className="text-xs text-muted-foreground">{versionsLoading ? "Loading supported versions…" : "Versions are fetched from the selected engine release catalog."}</p>
+    </div>
+  );
+}
+
+function resolveVcsRepo(
+  sourceType: string,
+  vcsIdentifier: string,
+  vcsConnections: VcsConnection[],
+  vcsConnectionValue: string,
+): { ok: true; vcsRepo: { identifier: string; "github-app-installation-id"?: string; "oauth-token-id"?: string } | undefined } | { ok: false } {
+  if (sourceType !== "vcs") return { ok: true, vcsRepo: undefined };
+  const identifier = vcsIdentifier.trim();
+  const connection = vcsConnections.find((candidate): boolean => candidate.value === vcsConnectionValue);
+  if (identifier === "" || connection === undefined) return { ok: false };
+  return {
+    ok: true,
+    vcsRepo: {
+      identifier,
+      ...(connection.kind === "github-app"
+        ? { "github-app-installation-id": connection.id }
+        : { "oauth-token-id": connection.id }),
+    },
+  };
+}
+
+function buildCreatePayload(input: Readonly<{
+  workspaceName: string;
+  autoApply: boolean;
+  executionMode: string;
+  agentPoolId: string;
+  iacBinary: string;
+  normalizedVersion: string;
+  sourceType: string;
+  vcsRepo: { identifier: string; "github-app-installation-id"?: string; "oauth-token-id"?: string } | undefined;
+  projectId: string;
+}>): Record<string, unknown> {
+  const data: Record<string, unknown> = {
+    attributes: {
+      name: input.workspaceName,
+      "auto-apply": input.autoApply,
+      ...(input.executionMode === "inherit" ? {} : { "execution-mode": input.executionMode }),
+      ...(input.executionMode === "agent" ? { "agent-pool-id": input.agentPoolId } : {}),
+      "iac-binary": input.iacBinary,
+      "terraform-version": input.normalizedVersion,
+      source: input.sourceType === "vcs" ? "tfe-api" : input.sourceType,
+      "vcs-repo": input.vcsRepo,
+    },
+    type: "workspaces",
+  };
+  if (input.projectId !== "") {
+    data["relationships"] = { project: { data: { id: input.projectId, type: "projects" } } };
+  }
+  return data;
+}
 
 export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>): React.JSX.Element {
   const {
@@ -172,11 +478,8 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
       setSubmitError("Choose an agent pool before creating the workspace.");
       return;
     }
-    const normalizedVcsIdentifier = vcsIdentifier.trim();
-    const selectedConnection = vcsConnections.find(
-      (connection: VcsConnection): boolean => connection.value === vcsConnectionValue,
-    );
-    if (sourceType === "vcs" && (normalizedVcsIdentifier === "" || selectedConnection === undefined)) {
+    const vcs = resolveVcsRepo(sourceType, vcsIdentifier, vcsConnections, vcsConnectionValue);
+    if (!vcs.ok) {
       toast.add({
         title: "Incomplete VCS connection",
         description: "Choose a registered VCS connection and enter a repository identifier.",
@@ -188,35 +491,20 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
     setLoading(true);
     const normalizedVersion = terraformVersion.trim() !== "" ? terraformVersion.trim() : "latest";
     try {
-      const vcsRepo = sourceType === "vcs" && selectedConnection !== undefined
-        ? {
-            identifier: normalizedVcsIdentifier,
-            ...(selectedConnection.kind === "github-app"
-              ? { "github-app-installation-id": selectedConnection.id }
-              : { "oauth-token-id": selectedConnection.id }),
-          }
-        : undefined;
-
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces`, {
         method: "POST",
         body: JSON.stringify({
-          data: {
-            attributes: {
-              name: workspaceName,
-              "auto-apply": autoApply,
-              ...(executionMode === "inherit" ? {} : { "execution-mode": executionMode }),
-              ...(executionMode === "agent" ? { "agent-pool-id": agentPoolId } : {}),
-              "iac-binary": iacBinary,
-              "terraform-version": normalizedVersion,
-              source: sourceType === "vcs" ? "tfe-api" : sourceType,
-              "vcs-repo": vcsRepo,
-            },
-            type: "workspaces",
-            ...(projectId === ""
-              ? undefined
-              : { relationships: { project: { data: { id: projectId, type: "projects" } } } }),
-          },
+          data: buildCreatePayload({
+            workspaceName,
+            autoApply,
+            executionMode,
+            agentPoolId,
+            iacBinary,
+            normalizedVersion,
+            sourceType,
+            vcsRepo: vcs.vcsRepo,
+            projectId,
+          }),
         }),
       }) as { data: { id: string } };
       onCreated({ id: res.data.id, name: workspaceName });
@@ -294,76 +582,23 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
               <p className="text-sm text-muted-foreground">Use your existing Terraform or OpenTofu workflow. Connect your CLI after creating the workspace.</p>
             )}
             {sourceType === "vcs" && (
-              <div className="grid gap-4">
-                <div className="flex flex-col gap-2">
-                  <label htmlFor="vcs-connection" className="text-sm font-medium leading-none">VCS connection</label>
-                  <Select
-                    id="vcs-connection"
-                    name="vcs-connection"
-                    value={vcsConnectionValue}
-                    onValueChange={setVcsConnectionValue}
-                    disabled={loading || vcsConnectionsLoading}
-                  >
-                    <SelectItem value="">
-                      {vcsConnectionsLoading ? "Loading registered connections…" : "Select a registered connection"}
-                    </SelectItem>
-                    {vcsConnections.map((connection: VcsConnection): React.JSX.Element => (
-                      <SelectItem key={connection.value} value={connection.value}>{connection.label}</SelectItem>
-                    ))}
-                  </Select>
-                  {vcsConnectionsError !== "" ? (
-                    <p role="alert" className="text-xs text-destructive">{vcsConnectionsError}</p>
-                  ) : vcsConnections.length === 0 && !vcsConnectionsLoading ? (
-                    // Named the place to go without linking to it, which left
-                    // the user to find "organization VCS settings" themselves.
-                    <p className="text-xs text-muted-foreground">
-                      No connections are set up yet.{" "}
-                      <Link
-                        to={`/app/${encodeURIComponent(orgName)}/settings?tab=vcs`}
-                        className="font-medium text-primary underline hover:no-underline"
-                      >
-                        Connect GitHub, GitLab or Bitbucket
-                      </Link>
-                      {" "}to run from a repository.
-                    </p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      Choose a connection first, then search repositories by organization or name.
-                    </p>
-                  )}
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-1">
-                    <label htmlFor="vcs-identifier" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                      Repository Identifier
-                    </label>
-                    <HelpTooltip content="Select from accessible repositories or type a repository path (e.g. 'org/repo-name')." />
-                  </div>
-
-                  {vcsReposLoading ? (
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
-                      <Spinner className="size-3.5" /> Loading accessible repositories…
-                    </div>
-                  ) : (
-                    <VcsRepoSelector
-                      id="vcs-identifier"
-                      value={vcsIdentifier}
-                      onValueChange={setVcsIdentifier}
-                      repositories={vcsRepositories}
-                      loading={vcsReposLoading}
-                      disabled={loading}
-                      placeholder="e.g. organization/repository"
-                    />
-                  )}
-                </div>
-              </div>
+              <VcsSourceFields
+                vcsConnectionValue={vcsConnectionValue}
+                onVcsConnectionChange={setVcsConnectionValue}
+                loading={loading}
+                vcsConnectionsLoading={vcsConnectionsLoading}
+                vcsConnections={vcsConnections}
+                vcsConnectionsError={vcsConnectionsError}
+                orgName={orgName}
+                vcsReposLoading={vcsReposLoading}
+                vcsIdentifier={vcsIdentifier}
+                onVcsIdentifierChange={setVcsIdentifier}
+                vcsRepositories={vcsRepositories}
+              />
             )}
 
             {sourceType === "local" && (
-              <p className="text-sm text-muted-foreground">
-                Code will be loaded from <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">/app/backend/storage/local/{orgName}/{projectId === "" ? "default" : projectId}/{name.trim() === "" ? "{name}" : name.trim()}</code>. Make sure to bind mount this path to your Terraform code.
-              </p>
+              <LocalSourceHint orgName={orgName} projectId={projectId} name={name} />
             )}
           </div>
           <details className="group rounded-lg border border-border">
@@ -392,78 +627,21 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             </div>
           )}
 
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center gap-1">
-              <label htmlFor="exec-mode" className="text-sm font-medium">Execution mode</label>
-              <HelpTooltip content="Remote runs execute on the built-in Terrence server worker, agent runs execute in an agent pool, and local runs execute on your CLI." />
-            </div>
-            <Select
-              id="exec-mode"
-              name="execution-mode"
-              value={executionMode}
-              onValueChange={setExecutionMode}
-            >
-              <SelectItem value="inherit">Use project default</SelectItem>
-              <SelectItem value="remote">Terrence server (Remote)</SelectItem>
-              <SelectItem value="agent">Agent pool</SelectItem>
-              <SelectItem value="local">Your computer (Local)</SelectItem>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              {executionMode === "inherit"
-                ? "Use the execution mode and agent pool configured for the selected project."
-                : executionMode === "agent"
-                ? "Runs wait for an agent pool to pick them up."
-                : executionMode === "local"
-                  ? "Runs execute on your CLI; the server only tracks state."
-                  : "Runs execute on the built-in Terrence server worker."}
-            </p>
-            {executionMode === "agent" && agentPools.pools.length > 0 && (
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="create-agent-pool" className="text-sm font-medium">Agent pool</label>
-                <Select id="create-agent-pool" value={agentPoolId} onValueChange={setAgentPoolId}>
-                  <SelectItem value="">Choose an agent pool</SelectItem>
-                  {agentPools.pools.map((pool) => <SelectItem key={pool.id} value={pool.id}>{pool.attributes.name}</SelectItem>)}
-                </Select>
-              </div>
-            )}
-            {executionMode === "agent" && agentPools.loading && (
-              <p className="text-xs text-muted-foreground">Checking organization agent pools…</p>
-            )}
-            {executionMode === "agent" && !agentPools.loading && agentPools.error !== "" && (
-              <p role="alert" className="text-xs text-destructive">{agentPools.error}</p>
-            )}
-            {executionMode === "agent" && !agentPools.loading && agentPools.error === "" && agentPools.pools.length === 0 && (
-              <Callout tone="warning" className="p-3 text-xs">
-                <p>
-                  No agent pools are available.{" "}
-                  <Link
-                    to={`/app/${encodeURIComponent(orgName)}/settings?tab=agent-pools`}
-                    className="font-medium text-primary underline hover:no-underline"
-                  >
-                    Create a pool in organization settings
-                  </Link>
-                  , or choose server or local execution.
-                </p>
-              </Callout>
-            )}
-          </div>
+          <ExecutionModeFields
+            executionMode={executionMode}
+            onExecutionModeChange={setExecutionMode}
+            agentPools={agentPools}
+            agentPoolId={agentPoolId}
+            onAgentPoolChange={setAgentPoolId}
+            orgName={orgName}
+          />
 
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="tf-version" className="text-sm font-medium">Engine version</label>
-            <Select
-              id="tf-version"
-              name="terraform-version"
-              value={terraformVersion}
-              onValueChange={setTerraformVersion}
-            >
-              <SelectItem value="latest">Latest available</SelectItem>
-              {terraformVersion !== "latest" && !availableVersions.includes(terraformVersion) && (
-                <SelectItem value={terraformVersion}>{terraformVersion} (organization default)</SelectItem>
-              )}
-              {availableVersions.map((version): React.JSX.Element => <SelectItem key={version} value={version}>{version}</SelectItem>)}
-            </Select>
-            <p className="text-xs text-muted-foreground">{versionsLoading ? "Loading supported versions…" : "Versions are fetched from the selected engine release catalog."}</p>
-          </div>
+          <EngineVersionFields
+            terraformVersion={terraformVersion}
+            onTerraformVersionChange={setTerraformVersion}
+            availableVersions={availableVersions}
+            versionsLoading={versionsLoading}
+          />
 
           <div className="flex items-center gap-2 mt-1">
             <Checkbox id="auto-apply" checked={autoApply} onCheckedChange={(c: boolean): void => { setAutoApply(c); }} />
@@ -475,11 +653,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             </div>
           </details>
           <p className="text-xs text-muted-foreground" role="status">
-            {executionMode === "inherit"
-              ? `Execution follows your project settings. ${autoApply ? "Changes apply automatically for remote runs." : "Remote plans require your approval before applying changes."}`
-              : executionMode === "local"
-              ? "Runs stay on your computer; Terrence stores the state."
-              : `${executionMode === "agent" ? "An agent" : "Terrence"} runs your plans. ${autoApply ? "Changes apply automatically." : "You review each plan before applying changes."}`}
+            {executionModeHint(executionMode, autoApply)}
           </p>
           {submitError !== "" && <p role="alert" className="text-sm text-destructive">{submitError}</p>}
           <DialogFooter className="mt-4">
