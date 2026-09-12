@@ -63,7 +63,7 @@ function paramSafeKey(key: string): string {
 const MAX_FLATTEN_DEPTH = 5;
 const MAX_FLATTEN_PARAMS = 128;
 
-function pushScalarMetaParam(key: string, value: unknown, out: Array<readonly [string, string]>): boolean {
+function pushScalarMetaParam(key: string, value: unknown, out: (readonly [string, string])[]): boolean {
   if (typeof value === "string") {
     out.push([key, value]);
     return true;
@@ -75,7 +75,7 @@ function pushScalarMetaParam(key: string, value: unknown, out: Array<readonly [s
   return false;
 }
 
-function pushJsonMetaParam(key: string, value: unknown, out: Array<readonly [string, string]>): void {
+function pushJsonMetaParam(key: string, value: unknown, out: (readonly [string, string])[]): void {
   try {
     const json = JSON.stringify(value) ?? NIL;
     out.push([key, json]);
@@ -95,7 +95,7 @@ function flattenMetaParam(
   value: unknown,
   depth: number,
   ancestors: ReadonlySet<object>,
-  out: Array<readonly [string, string]>,
+  out: (readonly [string, string])[],
 ): void {
   if (out.length >= MAX_FLATTEN_PARAMS || value === null || value === undefined) return;
   if (pushScalarMetaParam(key, value, out)) return;
@@ -189,7 +189,7 @@ function stringifySyslogBody(value: Record<string, unknown>): string {
 
 /** Byte length of a JSON-encoded string value including its quotes. */
 function jsonStringBytes(value: string): number {
-  return Buffer.byteLength(JSON.stringify(value) as string, "utf8");
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
 
 /** Return the smallest useful JSON value that fits an unusually small cap.
@@ -232,7 +232,7 @@ function fitJsonBody(body: Record<string, unknown>, maxBytes: number): string {
   if (baseBytes > maxBytes) return fallbackJsonBody(maxBytes);
   const budget = maxBytes - baseBytes;
   // 2. Binary-search the longest message prefix (plus marker) that fits.
-  const message = typeof shortened["message"] === "string" ? (shortened["message"] as string) : "";
+  const message = typeof shortened["message"] === "string" ? (shortened["message"]) : "";
   let lo = 0;
   let hi = message.length;
   while (lo < hi) {
@@ -308,7 +308,7 @@ function rfc5424SyslogMessage(entry: SyslogEntryInput, header: string): string {
   if (meta === undefined || Object.keys(meta).length === 0) {
     return `${header} ${NIL} ${entry.message}`;
   }
-  const params: Array<readonly [string, string]> = [];
+  const params: (readonly [string, string])[] = [];
   for (const [rawKey, rawValue] of Object.entries(meta)) {
     flattenMetaParam(paramSafeKey(rawKey), rawValue, 0, new Set(), params);
   }

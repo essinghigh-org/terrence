@@ -1041,7 +1041,7 @@ export const app = new Elysia()
     beginAuditRequest(correlationId, method, pathname);
     // Issue #648: remember the socket peer so generated links only honor
     // X-Forwarded-Host/Proto from a configured trusted proxy.
-    recordRequestPeer(request as unknown as object, socketPeerAddress(request, server));
+    recordRequestPeer(request, socketPeerAddress(request, server));
     (set.headers as Record<string, string | number>)["X-Request-Id"] = correlationId;
     requestStarted();
 
@@ -1335,7 +1335,7 @@ export const systemApiApp = new Elysia({ name: "system-api-listener" })
 setTimeout((): void => {
   let loggingRefreshFailureReported = false;
   const refreshLoggingSettings = (): void => {
-    void import("./lib/settings").then(({ getSettings }): Promise<void> =>
+    void import("./lib/settings").then(async ({ getSettings }): Promise<void> =>
       getSettings("logging").then(applyLoggingSettings),
     ).then((): void => {
       loggingRefreshFailureReported = false;

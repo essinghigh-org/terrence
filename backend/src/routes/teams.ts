@@ -747,7 +747,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       attributes,
       team,
       linked,
-      (): Promise<boolean> => checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"),
+      async (): Promise<boolean> => checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"),
       updates,
     );
     if (patchError !== null) {

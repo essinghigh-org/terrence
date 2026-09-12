@@ -406,9 +406,9 @@ async function readSavedPlanMetadata(runId: string): Promise<SavedPlanMetadata |
   }
   return {
     sha256: value["sha256"],
-    stateId: stateId as string | null,
+    stateId: stateId,
     stateSerial: value["stateSerial"],
-    configurationVersionId: configurationVersionId as string | null,
+    configurationVersionId: configurationVersionId,
   };
 }
 
@@ -2111,7 +2111,7 @@ async function waitForVcsConfigurationDownload(
 /** Tracked wrapper: shutdown drain waits for in-flight run executions. */
 export async function executeRun(runId: string): Promise<void> {
   prepareRunCgroup(runId);
-  return trackLocalRunExecution(runId, () => trackLocalExecution(
+  return trackLocalRunExecution(runId, async () => trackLocalExecution(
     executeRunImpl(runId)
       .catch(async (error: unknown): Promise<void> => {
         if (!(await runWasCanceled(runId))) {
@@ -2380,7 +2380,7 @@ async function executeRunImpl(runId: string): Promise<void> {
 export async function executeApply(runId: string): Promise<void> {
   const ownsCgroup = getRunCgroup(runId) === null;
   if (ownsCgroup) prepareRunCgroup(runId);
-  return trackLocalRunExecution(runId, () => trackLocalExecution(
+  return trackLocalRunExecution(runId, async () => trackLocalExecution(
     executeApplyImpl(runId).catch(async (error: unknown): Promise<void> => {
       if (!(await runWasCanceled(runId))) {
         try {
@@ -6412,7 +6412,7 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
   type CleanupEntry = Readonly<{ name: string; isDirectory(): boolean }>;
   const readCleanupEntries = async (root: string, message: string): Promise<readonly CleanupEntry[] | null> => {
     try {
-      return await readdir(root, { withFileTypes: true, encoding: "utf8" }) as unknown as CleanupEntry[];
+      return await readdir(root, { withFileTypes: true, encoding: "utf8" });
     } catch (error: unknown) {
       if (!isMissingFileError(error)) logBestEffortFailure(message, { root }, error);
       return null;

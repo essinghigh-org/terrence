@@ -2,12 +2,13 @@ import { Elysia } from "elysia";
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { db } from "../db";
+import type {
+  organizations} from "../db/schema";
 import {
   assessmentCheckResults,
   assessmentResults,
   configurationVersions,
   durableJobs,
-  organizations,
   runs,
   stateVersions,
   type users,
@@ -69,7 +70,7 @@ function attributesFrom(body: unknown): Record<string, unknown> {
 
 function stringAttribute(attrs: Record<string, unknown>, ...keys: string[]): string | null {
   for (const key of keys) {
-    if (typeof attrs[key] === "string" && attrs[key].trim() !== "") return (attrs[key] as string).trim();
+    if (typeof attrs[key] === "string" && attrs[key].trim() !== "") return (attrs[key]).trim();
   }
   return null;
 }
@@ -364,7 +365,7 @@ function incidentResolutionError(attrs: Record<string, unknown>, status: string)
 function parseIncidentSnooze(attrs: Record<string, unknown>, status: string): { snoozeUntil: number | null } | { error: { detail: string } } {
   const until = attrs["snooze-until"] ?? attrs["snoozeUntil"];
   const snoozeUntil = status === "snoozed" ? typeof until === "string" ? Date.parse(until) : typeof until === "number" ? until : Number.NaN : null;
-  if (status === "snoozed" && (!Number.isFinite(snoozeUntil) || (snoozeUntil as number) <= Date.now() || (snoozeUntil as number) > Date.now() + 30 * 86_400_000)) {
+  if (status === "snoozed" && (!Number.isFinite(snoozeUntil) || (snoozeUntil!) <= Date.now() || (snoozeUntil!) > Date.now() + 30 * 86_400_000)) {
     return { error: { detail: "snooze-until must be between now and 30 days from now" } };
   }
   return { snoozeUntil };
@@ -550,7 +551,7 @@ export const platformRoutes = new Elysia({ name: "platform" })
     const attrs = attributesFrom(context.body);
     const row = await db.query.durableJobs.findFirst({ where: and(eq(durableJobs.id, context.params["incident_id"] ?? ""), eq(durableJobs.kind, "drift-incident")) });
     if (row === undefined || typeof row.payload["organizationId"] !== "string") return notFound(context.set);
-    const organizationId = row.payload["organizationId"] as string;
+    const organizationId = row.payload["organizationId"];
     const artifact = row as PlatformArtifact;
     const workspaceId = typeof row.payload["workspaceId"] === "string" ? row.payload["workspaceId"] : "";
     if (await workspaceByPermission(workspaceId, context, "run-tasks") === undefined) return notFound(context.set);
@@ -616,7 +617,7 @@ export const platformRoutes = new Elysia({ name: "platform" })
   .post("/api/v2/dependency-impact-previews/:preview_id/queue", async (context: ParamContext): Promise<unknown> => {
     const row = await db.query.durableJobs.findFirst({ where: and(eq(durableJobs.id, context.params["preview_id"] ?? ""), eq(durableJobs.kind, "dependency-impact")) });
     if (row === undefined || typeof row.payload["organizationId"] !== "string") return notFound(context.set);
-    const organizationId = row.payload["organizationId"] as string;
+    const organizationId = row.payload["organizationId"];
     const workspaceId = typeof row.payload["workspaceId"] === "string" ? row.payload["workspaceId"] : "";
     const root = await workspaceByPermission(workspaceId, context, "plan");
     if (root === undefined) return notFound(context.set);
@@ -682,7 +683,7 @@ export const platformRoutes = new Elysia({ name: "platform" })
     const manifest = payload["manifest"];
     if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest)) return errorDocument(context.set, 409, "The preview has no immutable selection manifest");
     const manifestRecord = manifest as Record<string, unknown>;
-    const expectedDigest = typeof manifestRecord["selection-digest"] === "string" ? manifestRecord["selection-digest"] as string : "";
+    const expectedDigest = typeof manifestRecord["selection-digest"] === "string" ? manifestRecord["selection-digest"] : "";
     const suppliedDigest = stringAttribute(attrs, "selection-digest", "selectionDigest");
     if (suppliedDigest !== null && suppliedDigest !== expectedDigest) return errorDocument(context.set, 409, "The selection manifest digest does not match the preview", "Selection Changed");
     return errorDocument(context.set, 501, "Fleet execution is not implemented. This manifest remains a preview; no target actions have been queued or completed.", "Fleet Execution Unavailable");

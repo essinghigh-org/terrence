@@ -114,7 +114,7 @@ function stackVcsRepoAttributes(attributes: Record<string, unknown>): StackVcsAt
   const identifier = vcsRepoString(repo, "identifier").trim();
   const branch = vcsRepoString(repo, "branch");
   const serviceProvider = typeof repo["service-provider"] === "string"
-    ? repo["service-provider"] as string
+    ? repo["service-provider"]
     : vcsRepoString(attributes, "service-provider");
   const tagsRegex = vcsRepoString(repo, "tags-regex");
   const displayIdentifier = vcsRepoString(repo, "display-identifier");

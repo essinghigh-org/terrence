@@ -344,8 +344,8 @@ function agentPoolScopeContainmentError(
   organizationScoped: boolean,
   allowedWorkspaceIds: readonly string[],
   allowedProjectIds: readonly string[],
-  assignedWorkspaces: ReadonlyArray<Readonly<{ id: string; projectId: string | null }>>,
-  defaultProjects: ReadonlyArray<Readonly<{ id: string }>>,
+  assignedWorkspaces: readonly Readonly<{ id: string; projectId: string | null }>[],
+  defaultProjects: readonly Readonly<{ id: string }>[],
   set: SetObj,
 ): unknown | null {
   if (organizationScoped) return null;
@@ -535,7 +535,7 @@ function nullableStringField(value: unknown, maxLength?: number): string | null 
   return value;
 }
 
-function allJsonParseable(values: ReadonlyArray<string | null>): boolean {
+function allJsonParseable(values: readonly (string | null)[]): boolean {
   for (const json of values) {
     if (json === null) continue;
     try {

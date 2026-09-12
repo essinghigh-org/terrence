@@ -294,7 +294,7 @@ function parseProjectPatch(body: unknown, set: SetObj): {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"] as Record<string, unknown> | undefined;
   const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-  if (data !== null && typeof data === "object" && "type" in data && (data as Record<string, unknown>)["type"] !== undefined && (data as Record<string, unknown>)["type"] !== "projects") {
+  if (data !== null && typeof data === "object" && "type" in data && (data)["type"] !== undefined && (data)["type"] !== "projects") {
     (set as { status: number }).status = 422;
     return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid type" }] } };
   }

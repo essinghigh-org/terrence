@@ -686,7 +686,7 @@ async function collectTagScopedIds(scope: TokenScopes, orgId: string): Promise<r
     columns: { id: true },
   })).map((row): string => row.id);
   if (orgWorkspaceIds.length === 0) return [];
-  const tagRows: Array<{ workspaceId: string; key: string; value: string | null }> = [];
+  const tagRows: { workspaceId: string; key: string; value: string | null }[] = [];
   for (let offset = 0; offset < orgWorkspaceIds.length; offset += DELETE_ID_CHUNK_SIZE) {
     const chunk = orgWorkspaceIds.slice(offset, offset + DELETE_ID_CHUNK_SIZE);
     const rows = await db.query.workspaceTags.findMany({
@@ -1901,7 +1901,7 @@ async function cleanupWorkspaceDeletionArtifacts(manifestPath: string): Promise<
   const flush = async (): Promise<void> => {
     if (cleanupOperations.length === 0) return;
     const batch = cleanupOperations.splice(0, DELETION_ARTIFACT_BATCH_SIZE);
-    const results = await Promise.allSettled(batch.map((cleanup): Promise<void> => cleanup()));
+    const results = await Promise.allSettled(batch.map(async (cleanup): Promise<void> => cleanup()));
     for (const result of results) {
       if (result.status === "rejected") log.error("Workspace deletion artifact cleanup failed", { error: result.reason });
     }
@@ -1925,7 +1925,7 @@ async function cleanupWorkspaceDeletionArtifacts(manifestPath: string): Promise<
           continue;
         }
         if (parsed.kind === "configuration") {
-          cleanupOperations.push((): Promise<void> => rm(parsed.value, { force: true }));
+          cleanupOperations.push(async (): Promise<void> => rm(parsed.value, { force: true }));
         } else {
           cleanupOperations.push(async (): Promise<void> => { await deleteRunLogArchive(parsed.value); });
           cleanupOperations.push(async (): Promise<void> => { await deletePlanJsonArtifact(parsed.value); });
@@ -2083,8 +2083,8 @@ export async function safeDeleteWorkspace(workspaceId: string): Promise<boolean>
 export async function promoteIntermediateStateVersion(workspaceId: string): Promise<string | null> {
   await db.transaction(async (tx) => {
     const workspace = await tx.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
-    if (workspace !== undefined && await fenceStateWorkspace(tx as unknown as typeof db, workspace)) {
-      await pruneStateReservations(tx as unknown as typeof db, workspace);
+    if (workspace !== undefined && await fenceStateWorkspace(tx, workspace)) {
+      await pruneStateReservations(tx, workspace);
     }
   });
   const snapshot = await db.query.stateVersions.findFirst({

@@ -385,10 +385,10 @@ function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<
 }
 
 export const log = {
-  error: (msg: string, meta?: Readonly<Record<string, unknown>>): void => structuredLog("error", msg, meta),
-  warn: (msg: string, meta?: Readonly<Record<string, unknown>>): void => structuredLog("warn", msg, meta),
-  info: (msg: string, meta?: Readonly<Record<string, unknown>>): void => structuredLog("info", msg, meta),
-  debug: (msg: string, meta?: Readonly<Record<string, unknown>>): void => structuredLog("debug", msg, meta),
+  error: (msg: string, meta?: Readonly<Record<string, unknown>>): void => { structuredLog("error", msg, meta); },
+  warn: (msg: string, meta?: Readonly<Record<string, unknown>>): void => { structuredLog("warn", msg, meta); },
+  info: (msg: string, meta?: Readonly<Record<string, unknown>>): void => { structuredLog("info", msg, meta); },
+  debug: (msg: string, meta?: Readonly<Record<string, unknown>>): void => { structuredLog("debug", msg, meta); },
 };
 
 /** Test/shutdown hook: close UDP socket and TCP connections. */

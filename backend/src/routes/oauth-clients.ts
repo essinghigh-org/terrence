@@ -655,7 +655,7 @@ function applyOAuthClientFieldUpdates(
   return null;
 }
 
-interface OAuthConnectContext {
+type OAuthConnectContext = {
   projectId: string | null;
   tokenOrgId: string | null;
   tokenTeamId: string | null;

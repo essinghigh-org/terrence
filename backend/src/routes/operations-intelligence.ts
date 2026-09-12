@@ -398,7 +398,7 @@ function resolveBlueprintReferenceIds(parameters: Record<string, unknown>, error
 }
 
 function trimmedParameter(parameters: Record<string, unknown>, key: string): string | null {
-  return typeof parameters[key] === "string" ? (parameters[key] as string).trim() : null;
+  return typeof parameters[key] === "string" ? (parameters[key]).trim() : null;
 }
 
 function blueprintPreview(blueprint: BlueprintDefinition, attributes: Readonly<Record<string, unknown>>): Readonly<{ valid: boolean; errors: readonly string[]; configuration: Record<string, unknown> }> {

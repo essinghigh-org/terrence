@@ -140,7 +140,7 @@ function selectTruncationBoundary(message: string, boundaries: number[], maxByte
   let hi = boundaries.length;
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
-    const candidate = `${message.slice(0, boundaries[mid - 1] as number)}${JSON_TRUNCATION_SUFFIX}`;
+    const candidate = `${message.slice(0, boundaries[mid - 1])}${JSON_TRUNCATION_SUFFIX}`;
     if (Buffer.byteLength(candidate, "utf8") <= maxBytes) lo = mid;
     else hi = mid - 1;
   }
@@ -157,7 +157,7 @@ function truncateJsonMessage(message: string, maxBytes: number): string {
   const boundaries = jsonDepth1Boundaries(message);
   const lo = selectTruncationBoundary(message, boundaries, maxBytes);
   if (lo === 0) return fallback;
-  return `${message.slice(0, boundaries[lo - 1] as number)}${JSON_TRUNCATION_SUFFIX}`;
+  return `${message.slice(0, boundaries[lo - 1])}${JSON_TRUNCATION_SUFFIX}`;
 }
 
 function truncateSyslogFrame(frame: string, jsonBody: boolean): Buffer {

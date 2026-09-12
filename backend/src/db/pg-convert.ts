@@ -310,7 +310,7 @@ const isPrimaryKeyItem = (item: unknown): item is { columns: readonly AnyColumn[
   item !== null &&
   typeof item === "object" &&
   "columns" in item &&
-  Array.isArray((item as { columns: unknown }).columns);
+  Array.isArray((item).columns);
 
 function buildExtraConfig(
   table: SqliteTable,
@@ -475,7 +475,7 @@ function applyJsonbDriverFix(pgTableValue: unknown): void {
   // Drizzle's jsonb mapper stringifies values for drivers such as postgres.js.
   // Bun.SQL accepts objects directly and would stringify that string again,
   // storing a JSON string instead of a JSON object.
-  const pgColumns = (pgTableValue as unknown as Record<PropertyKey, unknown>)[COLS] as Record<
+  const pgColumns = (pgTableValue as Record<PropertyKey, unknown>)[COLS] as Record<
     string,
     { columnType?: string; mapToDriverValue?: (value: unknown) => unknown }
   >;

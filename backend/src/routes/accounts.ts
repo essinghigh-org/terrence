@@ -569,7 +569,7 @@ function parseLoginCredentials(
       return { error: { errors: [{ status: "400", title: "Bad Request", detail: "Invalid JSON string" }] } };
     }
   } else if (body !== null && typeof body === "object") {
-    payload = body as DataPayload;
+    payload = body;
   }
 
   const attrs = payload?.data?.attributes ?? {};
@@ -739,7 +739,7 @@ function parseMfaChallengeRequest(
       payload = undefined;
     }
   } else if (body !== null && typeof body === "object") {
-    payload = body as DataPayload;
+    payload = body;
   }
   const attrs = payload?.data?.attributes ?? {};
   const challengeToken = typeof attrs["challenge-token"] === "string" ? attrs["challenge-token"] : "";

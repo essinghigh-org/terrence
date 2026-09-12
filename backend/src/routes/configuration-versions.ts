@@ -152,7 +152,7 @@ async function beginConfigVersionIdempotency(
     `configuration-versions:${workspaceId}`,
     idempotencyPrincipal({ userId, orgId, teamId }),
     payload,
-    set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    set,
   );
   if (idempotency === "invalid") {
     return { error: { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] } };
@@ -160,7 +160,7 @@ async function beginConfigVersionIdempotency(
   const idempotencyBegin = await beginIdempotency(
     idempotency,
     "configuration-versions",
-    set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    set,
   );
   if (idempotencyBegin.kind === "replay") {
     const replayed = idempotencyBegin.resourceId === null

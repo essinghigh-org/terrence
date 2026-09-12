@@ -44,7 +44,7 @@ function inV4Cidr(n: number, base: number, bits: number): boolean {
 }
 
 /** RFC1918 + loopback + link-local + CGNAT + cloud-metadata + multicast + reserved. */
-const PRIVATE_V4_CIDRS: ReadonlyArray<readonly [base: number, bits: number]> = [
+const PRIVATE_V4_CIDRS: readonly (readonly [base: number, bits: number])[] = [
   [0x7F000000, 8], // loopback 127/8
   [0x0A000000, 8], // RFC1918 10/8
   [0xAC100000, 12], // RFC1918 172.16/12

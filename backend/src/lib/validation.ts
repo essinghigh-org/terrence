@@ -458,7 +458,7 @@ export function decodeStatePayload(state: unknown): string {
     JSON.parse(plaintext);
     return plaintext;
   }
-  let plaintext = state;
+  const plaintext = state;
   try {
     JSON.parse(plaintext);
     return plaintext;

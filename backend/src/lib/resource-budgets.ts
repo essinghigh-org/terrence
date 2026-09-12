@@ -168,7 +168,7 @@ function readBudgetInput(value: unknown, name: string, allowed: readonly string[
   if (Object.keys(value).some((key): boolean => !allowedKeys.has(key))) {
     throw new Error(`Unsupported resource budget key for ${name}`);
   }
-  return value as BudgetInput;
+  return value;
 }
 
 function boundedOrganization(value: BudgetInput | undefined, fallback: OrganizationBudget, name: string): OrganizationBudget {
@@ -194,7 +194,7 @@ function parseConfigInput(raw: string): ConfigInput {
   if (Object.keys(parsed).some((key): boolean => !["global", "organization", "classes", "organizations"].includes(key))) {
     throw new Error(`Unsupported resource budget key`);
   }
-  return parsed as ConfigInput;
+  return parsed;
 }
 
 function parseGlobalBudget(raw: BudgetInput | undefined): ResourceBudgetConfig["global"] {

@@ -56,7 +56,7 @@ function validSummaryCounts(value: Record<string, unknown>): boolean {
 function validSummaryIdentity(value: Record<string, unknown>): boolean {
   if (typeof value["md5"] !== "string" || !/^[a-f0-9]{32}$/.test(value["md5"])) return false;
   for (const key of ["lineage", "terraformVersion"]) {
-    if (value[key] !== null && (typeof value[key] !== "string" || (value[key] as string).length > 256)) return false;
+    if (value[key] !== null && (typeof value[key] !== "string" || (value[key]).length > 256)) return false;
   }
   return value["stateVersion"] === null || value["stateVersion"] === 4;
 }

@@ -1523,7 +1523,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const totalCount = countRows[0]?.total ?? 0;
     const orgName = await organizationName(ps.orgId);
     return {
-      data: await Promise.all(polList.map((p: PolItem): Promise<Record<string, unknown>> => policyResource(p, orgName))),
+      data: await Promise.all(polList.map(async (p: PolItem): Promise<Record<string, unknown>> => policyResource(p, orgName))),
       ...pagination(request, number, size, totalCount),
     };
   })

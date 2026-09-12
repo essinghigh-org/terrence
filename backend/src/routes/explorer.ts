@@ -420,7 +420,7 @@ async function createBulkActionRecords(
   for (let i = 0; i < records.length; i += EXPLORER_NOTIFICATION_CONCURRENCY) {
     await Promise.all(records
       .slice(i, i + EXPLORER_NOTIFICATION_CONCURRENCY)
-      .map((record): Promise<void> => queueExplorerBulkActionNotification(record.id)));
+      .map(async (record): Promise<void> => queueExplorerBulkActionNotification(record.id)));
   }
   (set as { status: number }).status = 201;
   return {

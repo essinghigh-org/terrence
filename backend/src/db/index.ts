@@ -70,7 +70,7 @@ function patchNestedSqliteTransaction(tx: TerrenceSQLiteTransaction): TerrenceSQ
       "sync",
       transaction.dialect,
       transaction.session,
-      transaction.schema as never,
+      transaction.schema,
       transaction.nestedIndex + 1,
     ));
     transaction.session.run(sql.raw(`savepoint ${savepointName}`));
@@ -120,7 +120,7 @@ function gateSqlitePreparedQuery<T extends object>(query: T): T {
         return completion.then(execute);
       };
     },
-  }) as T;
+  });
 }
 
 if (!isPostgres) {
@@ -377,7 +377,7 @@ if (!isPostgres) {
       try {
         client.run(`BEGIN${behavior}`);
         began = true;
-        const result = await sqliteTransactionContext.run(Symbol("sqlite-transaction"), () => fn(tx));
+        const result = await sqliteTransactionContext.run(Symbol("sqlite-transaction"), async () => fn(tx));
         client.run('COMMIT');
         return result;
       } catch (err) {

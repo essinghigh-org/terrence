@@ -180,7 +180,7 @@ const INGRESS_STRING_FIELDS = [
 
 function resolveTriggerReason(source: string, ingress: ConfigurationVersionItem["ingressAttributes"]): string {
   if (!VCS_RUN_SOURCES.has(source)) return "manual";
-  if ((ingress as Record<string, unknown> | null)?.["manualTrigger"] === true) return "manual";
+  if ((ingress)?.manualTrigger === true) return "manual";
   if (typeof ingress?.pullRequestNumber === "number") return "pull_request";
   if (typeof ingress?.tag === "string" && ingress.tag !== "") return "tag";
   return "push";
@@ -312,9 +312,9 @@ function commentResource(
 
 async function enrichCommentsWithActors(
   comments: readonly (CommentItem | Readonly<{ id: string; runId: string; body: string; userId: string | null; createdAt: number }>)[],
-): Promise<ReadonlyArray<CommentItem & { username?: string | null; avatarUrl?: string | null }>> {
+): Promise<readonly (CommentItem & { username?: string | null; avatarUrl?: string | null })[]> {
   const userIds = [...new Set(comments.map((c): string | null => c.userId).filter((v): v is string => v !== null && v !== ""))];
-  if (userIds.length === 0) return comments as never;
+  if (userIds.length === 0) return comments;
   const userList = await db.query.users.findMany({
     where: inArray(users.id, userIds),
     columns: { id: true, username: true, email: true },
@@ -323,7 +323,7 @@ async function enrichCommentsWithActors(
   return comments.map((c): CommentItem & { username?: string | null; avatarUrl?: string | null } => {
     const u = c.userId !== null ? byId.get(c.userId) : undefined;
     return {
-      ...(c as CommentItem),
+      ...(c),
       username: u?.username ?? null,
       avatarUrl: u !== undefined ? gravatarUrl(u.email) : null,
     };
@@ -1622,7 +1622,7 @@ function resolveRunCreateIdempotency(
     scope,
     idempotencyPrincipal({ userId, orgId, teamId }),
     payload,
-    set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    set,
   );
   if (idempotency === "invalid") {
     return { failure: { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] } };
@@ -2064,7 +2064,7 @@ export async function createRun(
   const idempotencyBegin = await beginIdempotency(
     idempotency,
     "runs",
-    set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    set,
   );
   const guardCheck = await checkRunCreationGuards(workspace, user?.id, teamId, { isDestroy, requestedAutoApply, allowEmptyApply, operation }, idempotencyBegin, set);
   if ("failure" in guardCheck) return guardCheck.failure;

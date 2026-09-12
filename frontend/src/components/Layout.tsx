@@ -940,7 +940,7 @@ function OrgNav({
 
   // Sidebar shortcuts are re-read on every navigation (visitsRevision
   // bumps when a workspace is visited, so the list stays current).
-  void visitsRevision;
+  visitsRevision;
   const pinned = getPinnedWorkspaces().filter((entry): boolean => entry.orgName === orgName);
   const recent = getRecentWorkspaces()
     .filter((entry): boolean => entry.orgName === orgName)
