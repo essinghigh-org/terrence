@@ -981,6 +981,76 @@ async function classifyRefreshFailure(
   return refreshUnauthorized(set, request, "Refresh session is invalid", server);
 }
 
+function parseSignupCredentials(
+  body: unknown,
+  set: SetObj,
+): { username: string; password: string; email: unknown } | { error: unknown } {
+  const attrs = extractAttrs(body) ?? {};
+  const username = typeof attrs["username"] === "string" ? normalizeUsername(attrs["username"]) ?? "" : "";
+  const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
+
+  if (username === "" || password === "") {
+    (set as { status: number }).status = 400;
+    return { error: { errors: [{ status: "400", title: "Bad Request", detail: "Missing username or password" }] } };
+  }
+
+  const policyCheck = checkPasswordPolicy(loadPasswordPolicy(), password, username);
+  if (!policyCheck.ok) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyCheck.errors.join(" ") }] } };
+  }
+  return { username, password, email: attrs["email"] };
+}
+
+function resolveSignupEmail(email: unknown, username: string, set: SetObj): { email: string } | { error: unknown } {
+  // Bounded email matcher. The full RFC-5322 grammar embeds nested
+  // quantifiers that admit catastrophic backtracking (ReDoS); this
+  // pragmatic pattern scans in linear time and is sufficient for signup.
+  const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+
+  const emailStr = typeof email === "string" && email.trim() !== "" ? normalizeEmail(email) ?? "" : `${username}@example.com`;
+  if (!EMAIL_REGEX.test(emailStr)) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email address is required" }] } };
+  }
+  return { email: emailStr };
+}
+
+async function createLocalSignupUser(
+  id: string,
+  username: string,
+  normalizedEmail: string,
+  passwordHash: string,
+  set: SetObj,
+): Promise<unknown> {
+  // Local signup NEVER elects a site admin. The first user on a fresh
+  // instance must come from the ADMIN_PASSWORD (or installer IACT)
+  // bootstrap, whose count-then-insert runs under a serialized first-user
+  // lock. Letting signup elect admins from a plain count raced two
+  // concurrent signups into two site admins on PostgreSQL.
+  try {
+    await db.insert(users).values({ id, username, email: normalizedEmail, passwordHash, isSiteAdmin: false });
+    await auditLog("create", "users", id, null, null, { username });
+    (set as { status: number }).status = 201;
+    return localSignupAcknowledgement(id, username, normalizedEmail);
+  } catch (e: unknown) {
+    if (isUniqueConstraintError(e)) {
+      // A concurrent request may win the unique-key race after the lookup;
+      // answer with the same idempotent acknowledgement rather than exposing
+      // a distinct conflict response.
+      const raced = await db.query.users.findFirst({
+        where: or(eq(users.username, username), eq(users.email, normalizedEmail)),
+      });
+      (set as { status: number }).status = 201;
+      if (raced !== undefined && raced.username === username && raced.email === normalizedEmail) {
+        return localSignupAcknowledgement(raced.id, raced.username, raced.email);
+      }
+      return localSignupAcknowledgement(id, username, normalizedEmail);
+    }
+    throw e;
+  }
+}
+
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
   .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
@@ -1160,79 +1230,34 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Registration is disabled on this instance. Ask a site administrator to create an account or enable registration in authentication settings." }] };
     }
-    const attrs = extractAttrs(body) ?? {};
-    const username = typeof attrs["username"] === "string" ? normalizeUsername(attrs["username"]) ?? "" : "";
-    const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
-    const email = attrs["email"];
+    const parsed = parseSignupCredentials(body, set);
+    if ("error" in parsed) return parsed.error;
 
-    if (username === "" || password === "") {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Missing username or password" }] };
-    }
-
-    const policyCheck = checkPasswordPolicy(loadPasswordPolicy(), password, username);
-    if (!policyCheck.ok) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyCheck.errors.join(" ") }] };
-    }
-    // Bounded email matcher. The full RFC-5322 grammar embeds nested
-    // quantifiers that admit catastrophic backtracking (ReDoS); this
-    // pragmatic pattern scans in linear time and is sufficient for signup.
-    const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
-
-    const emailStr = typeof email === "string" && email.trim() !== "" ? normalizeEmail(email) ?? "" : `${username}@example.com`;
-    if (!EMAIL_REGEX.test(emailStr)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email address is required" }] };
-    }
+    const resolved = resolveSignupEmail(parsed.email, parsed.username, set);
+    if ("error" in resolved) return resolved.error;
 
     // Hash before the lookup so duplicate and new registrations do not expose
     // username existence through a cheap-vs-expensive timing difference.
-    const passwordHash = await hashPassword(password);
+    const passwordHash = await hashPassword(parsed.password);
     const id = newResourceId("user");
-    const normalizedEmail = emailStr;
+    const normalizedEmail = resolved.email;
     const existing = await db.query.users.findFirst({
-      where: or(eq(users.username, username), eq(users.email, normalizedEmail)),
+      where: or(eq(users.username, parsed.username), eq(users.email, normalizedEmail)),
     });
     if (existing !== undefined) {
       // An exact replay is idempotent, so return the persisted identity. For a
       // partial username/email collision, keep the 201 response shape but do
       // not disclose which stored identity caused the collision.
-      if (existing.username === username && existing.email === normalizedEmail) {
+      if (existing.username === parsed.username && existing.email === normalizedEmail) {
         (set as { status: number }).status = 201;
         return localSignupAcknowledgement(existing.id, existing.username, existing.email);
       }
       (set as { status: number }).status = 201;
-      return localSignupAcknowledgement(id, username, normalizedEmail);
+      return localSignupAcknowledgement(id, parsed.username, normalizedEmail);
     }
 
 
-    // Local signup NEVER elects a site admin. The first user on a fresh
-    // instance must come from the ADMIN_PASSWORD (or installer IACT)
-    // bootstrap, whose count-then-insert runs under a serialized first-user
-    // lock. Letting signup elect admins from a plain count raced two
-    // concurrent signups into two site admins on PostgreSQL.
-    try {
-      await db.insert(users).values({ id, username, email: normalizedEmail, passwordHash, isSiteAdmin: false });
-      await auditLog("create", "users", id, null, null, { username });
-      (set as { status: number }).status = 201;
-      return localSignupAcknowledgement(id, username, normalizedEmail);
-    } catch (e: unknown) {
-      if (isUniqueConstraintError(e)) {
-        // A concurrent request may win the unique-key race after the lookup;
-        // answer with the same idempotent acknowledgement rather than exposing
-        // a distinct conflict response.
-        const raced = await db.query.users.findFirst({
-          where: or(eq(users.username, username), eq(users.email, normalizedEmail)),
-        });
-        (set as { status: number }).status = 201;
-        if (raced !== undefined && raced.username === username && raced.email === normalizedEmail) {
-          return localSignupAcknowledgement(raced.id, raced.username, raced.email);
-        }
-        return localSignupAcknowledgement(id, username, normalizedEmail);
-      }
-      throw e;
-    }
+    return createLocalSignupUser(id, parsed.username, normalizedEmail, passwordHash, set);
   })
   .use(authPlugin)
   .get("/api/v2/account/details", async ({ user, orgId, teamId, tokenError, set }: AuthReqCtx): Promise<unknown> => {
