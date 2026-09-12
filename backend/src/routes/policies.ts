@@ -816,6 +816,37 @@ function groupByPolicySetId<T extends { policySetId: string | null }>(rows: read
   return bySet;
 }
 
+function resolveSetPolicyCreateScalars(
+  attributes: Record<string, unknown>,
+  setKind: string,
+): Readonly<{ value: PolicyCreateScalars }> | Readonly<{ error: string }> {
+  const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
+  if (name === "") return { error: "Name is required" };
+  const kind = setKind === "opa" ? "opa" : "sentinel";
+  const source = typeof attributes["policy"] === "string"
+    ? attributes["policy"]
+    : typeof attributes["source"] === "string" ? attributes["source"] : null;
+  const query = kind === "opa"
+    ? typeof attributes["query"] === "string" && attributes["query"].trim() !== "" ? attributes["query"].trim() : "data"
+    : null;
+  const enforcementLevel = requestedPolicyEnforcementLevel(attributes)
+    ?? (kind === "opa" ? "mandatory" : "soft-mandatory");
+  const allowedLevels = policyEnforcementLevels(kind);
+  if (!allowedLevels.includes(enforcementLevel)) {
+    return { error: `enforcement-level must be ${allowedLevels.join(", ")}` };
+  }
+  return {
+    value: {
+      name,
+      description: typeof attributes["description"] === "string" ? attributes["description"] : null,
+      kind,
+      source,
+      query,
+      enforcementLevel,
+    },
+  };
+}
+
 export const policyRoutes = new Elysia({ name: "policies" })
   .use(authPlugin)
   // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
@@ -1473,28 +1504,16 @@ export const policyRoutes = new Elysia({ name: "policies" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const { data, attributes } = parsePatchPayload(body);
     if (data?.["type"] !== "policies") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be policies" }] }; }
-    const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
-    if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
-    const id = newResourceId("pol");
-    const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
-    const kind = ps.kind === "opa" ? "opa" : "sentinel";
-    const enforcementLevel = requestedPolicyEnforcementLevel(attributes) ?? (kind === "opa" ? "mandatory" : "soft-mandatory");
-    const allowedLevels = policyEnforcementLevels(kind);
-    if (!allowedLevels.includes(enforcementLevel)) {
+    const scalars = resolveSetPolicyCreateScalars(attributes, ps.kind);
+    if ("error" in scalars) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `enforcement-level must be ${allowedLevels.join(", ")}` }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: scalars.error }] };
     }
-    const source = typeof attributes["policy"] === "string"
-      ? attributes["policy"]
-      : typeof attributes["source"] === "string" ? attributes["source"] : null;
-    const query = kind === "opa"
-      ? typeof attributes["query"] === "string" && attributes["query"].trim() !== "" ? attributes["query"].trim() : "data"
-      : null;
+    const id = newResourceId("pol");
     const createdAt = Date.now();
+    const { name, description, kind, enforcementLevel, query, source } = scalars.value;
     await db.insert(policies).values({ id, orgId: ps.orgId, policySetId, name, description, kind, enforcementLevel, query, source, createdAt });
     (set as { status: number }).status = 201;
     return { data: await policyResource({ id, orgId: ps.orgId, policySetId, policySetVersionId: null, name, description, kind, enforcementLevel, query, source, sourcePath: null, createdAt }, await organizationName(ps.orgId)) };
