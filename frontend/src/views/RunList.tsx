@@ -106,6 +106,280 @@ function parseAddressList(value: string): string[] | null {
   return parts.length > 0 ? [...new Set(parts)] : null;
 }
 
+function RunSourceLine({
+  run,
+  externalSource,
+}: Readonly<{
+  run: RunItem;
+  externalSource: boolean;
+}>): React.JSX.Element {
+  return (
+    <>
+      {externalSource && run.attributes.branch !== null && run.attributes.branch !== undefined && (
+        <><span aria-hidden="true">·</span><span>{`branch ${run.attributes.branch}`}</span></>
+      )}
+      {externalSource && run.attributes["commit-sha"] !== null && run.attributes["commit-sha"] !== undefined && run.attributes["commit-sha"] !== "" && (
+        <>
+          <span aria-hidden="true">·</span>
+          {isString(run.attributes["commit-url"]) && safeHttpUrl(run.attributes["commit-url"]) !== null ? (
+            <a
+              href={safeHttpUrl(run.attributes["commit-url"]) ?? undefined}
+              target="_blank"
+              rel="noreferrer"
+              title={run.attributes["commit-sha"]}
+              className="inline-flex items-center gap-0.5 font-mono text-2xs text-primary hover:underline"
+            >
+              {run.attributes["commit-sha"].slice(0, 7)}
+              <ArrowUpRight className="size-3" aria-hidden="true" />
+            </a>
+          ) : (
+            <span className="font-mono text-2xs" title={run.attributes["commit-sha"]}>{run.attributes["commit-sha"].slice(0, 7)}</span>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+function runCreator(
+  run: RunItem,
+  usersMap: ReadonlyMap<string, IncludedUser>,
+): { username: string; avatarUrl: string } {
+  const creatorId = run.relationships?.["created-by"]?.data?.id;
+  const creatorUser = creatorId !== undefined ? usersMap.get(creatorId) : undefined;
+  return {
+    username: creatorUser?.attributes.username ?? run.attributes["triggered-by"] ?? "System",
+    avatarUrl: creatorUser?.attributes["avatar-url"] ?? run.attributes["triggered-by-avatar-url"] ?? "",
+  };
+}
+
+function RunRow({
+  run,
+  orgName,
+  workspaceName,
+  usersMap,
+  canStartRun,
+  onClone,
+}: Readonly<{
+  run: RunItem;
+  orgName: string;
+  workspaceName: string;
+  usersMap: ReadonlyMap<string, IncludedUser>;
+  canStartRun: boolean;
+  onClone: (run: RunItem) => void;
+}>): React.JSX.Element {
+  const { username, avatarUrl } = runCreator(run, usersMap);
+  const isVcsSource = isVcsRunSource(run.attributes.source, run.attributes["trigger-reason"]);
+  const sourceLabel = formatRunSource(run.attributes.source, run.attributes["trigger-reason"]);
+// SAFETY: the fixed source list matches the VCS source union the UI renders.
+  const externalSource = isVcsSource;
+  return (
+    <article
+      className="flex flex-col md:flex-row md:items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-muted/30"
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <Link
+            to={`/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceName)}/runs/${encodeURIComponent(run.id)}`}
+            className="truncate text-sm font-medium text-foreground hover:text-primary hover:underline"
+          >
+            {run.attributes.message ?? "Triggered via UI"}
+          </Link>
+        </div>
+        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+          <span className="font-mono text-2xs text-muted-foreground/90" title={run.id}>{shortRunId(run.id)}</span>
+          {run.attributes.operation !== undefined && run.attributes.operation !== "plan_and_apply" && (
+            <><span aria-hidden="true">·</span><span className="text-foreground/80">{run.attributes.operation.replace(/_/g, " ")}</span></>
+          )}
+          <span aria-hidden="true">·</span>
+          <span className="flex items-center gap-1">
+            {avatarUrl !== "" && (
+              <Avatar className="inline-flex size-3.5 rounded-full">
+                <AvatarImage src={avatarUrl} alt={username} className="rounded-full object-cover" />
+              </Avatar>
+            )}
+            <span>{username}</span>
+          </span>
+          <span aria-hidden="true">·</span>
+          <span>via {sourceLabel}</span>
+          <RunSourceLine run={run} externalSource={externalSource} />
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-4">
+        <span aria-live="polite" aria-atomic="true" className="flex flex-col items-end gap-0.5">
+          <span className="sr-only">
+            Run {shortRunId(run.id)} ({run.attributes.message ?? "Triggered via UI"}): {" "}
+          </span>
+          <StatusBadge status={run.attributes.status} />
+        </span>
+        <div className="text-right text-xs text-muted-foreground min-w-[5.5rem]">
+          <RelativeTime value={run.attributes["created-at"]} />
+        </div>
+        {canStartRun && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={(): void => { onClone(run); }}
+            aria-label="Clone run"
+            title="Clone this run's settings"
+          >
+            <Copy className="size-4" aria-hidden="true" />
+          </Button>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function RunEmptyState({
+  hasFilter,
+  canStartRun,
+  onNewRun,
+}: Readonly<{
+  hasFilter: boolean;
+  canStartRun: boolean;
+  onNewRun: () => void;
+}>): React.JSX.Element {
+  if (hasFilter) {
+    return (
+      <EmptyState
+        compact
+        title="No matching runs"
+        description="Try a different ID, message, status, source, or creator."
+      />
+    );
+  }
+  return (
+    <EmptyState
+      illustration="guide"
+      title="No runs yet"
+      description={canStartRun
+        ? "There is no run history for this workspace."
+        : "There is no run history for this workspace, and you do not have permission to start one."}
+      {...(canStartRun ? { actionLabel: "Start new run", onAction: onNewRun } : {})}
+      docsHref="/app/docs/runs"
+    />
+  );
+}
+
+type RunSortColumn = "created-at" | "status";
+
+function RunHistoryList({
+  error,
+  runs,
+  debouncedFilter,
+  canStartRun,
+  totalCount,
+  sort,
+  onToggleSort,
+  renderSortArrows,
+  orgName,
+  workspaceName,
+  usersMap,
+  onClone,
+  nextPage,
+  loadingMore,
+  onLoadMore,
+  onRetry,
+  onNewRun,
+}: Readonly<{
+  error: string;
+  runs: RunItem[];
+  debouncedFilter: string;
+  canStartRun: boolean;
+  totalCount: number | null;
+  sort: "" | "created-at" | "-created-at" | "status" | "-status";
+  onToggleSort: (column: RunSortColumn) => void;
+  renderSortArrows: (column: RunSortColumn) => React.JSX.Element | null;
+  orgName: string;
+  workspaceName: string;
+  usersMap: ReadonlyMap<string, IncludedUser>;
+  onClone: (run: RunItem) => void;
+  nextPage: number | null;
+  loadingMore: boolean;
+  onLoadMore: () => Promise<void>;
+  onRetry: () => void;
+  onNewRun: () => void;
+}>): React.JSX.Element {
+  const hasFilter = debouncedFilter.trim() !== "";
+  return (
+    <>
+      {error !== "" && runs.length > 0 && (
+        <DegradedBanner
+          title="Run history may be out of date."
+          actionLabel="Try again"
+          onAction={onRetry}
+        />
+      )}
+
+      <div className="overflow-hidden rounded-lg border border-border bg-card">
+        {runs.length === 0 ? (
+          <RunEmptyState hasFilter={hasFilter} canStartRun={canStartRun} onNewRun={onNewRun} />
+        ) : (
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3 sm:px-4 sm:py-3 border-b border-border bg-muted/20">
+              <div>
+                <h2 className="text-sm font-semibold text-foreground">Run history</h2>
+                <p className="text-xs text-muted-foreground">
+                  Showing {runs.length} of {totalCount ?? runs.length} runs
+                  {hasFilter && ` matching "${debouncedFilter.trim()}"`}
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span>Sort by</span>
+                <button
+                  type="button"
+                  onClick={(): void => { onToggleSort("status"); }}
+                  className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={`Sort runs by status, currently ${sort === "status" ? "ascending" : sort === "-status" ? "descending" : "not sorted"}`}
+                >
+                  Status
+                  {renderSortArrows("status")}
+                </button>
+                <button
+                  type="button"
+                  onClick={(): void => { onToggleSort("created-at"); }}
+                  className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={`Sort runs by created date, currently ${sort === "created-at" ? "ascending" : sort === "-created-at" ? "descending" : "not sorted"}`}
+                >
+                  Created
+                  {renderSortArrows("created-at")}
+                </button>
+              </div>
+            </div>
+            <div className="divide-y divide-border">
+              {runs.map((run: RunItem): React.JSX.Element => (
+                <RunRow
+                  key={run.id}
+                  run={run}
+                  orgName={orgName}
+                  workspaceName={workspaceName}
+                  usersMap={usersMap}
+                  canStartRun={canStartRun}
+                  onClone={onClone}
+                />
+              ))}
+            </div>
+            {nextPage !== null && (
+              <div className="flex justify-center border-t border-border p-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={loadingMore}
+                  onClick={(): void => { void onLoadMore(); }}
+                >
+                  {loadingMore ? "Loading…" : `Load more (${runs.length} of ${totalCount ?? runs.length} shown)`}
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
 export function RunList({
   workspaceId,
   orgName: propOrgName,
@@ -301,6 +575,8 @@ export function RunList({
     setDialogOpen(true);
   };
 
+  const retryRuns = (): void => { setRefreshVersion((value: number): number => value + 1); };
+
   /**
    * Cycle a sortable column: first click sorts descending (newest/highest
    * first, matching the default created-at order), second click ascending,
@@ -441,171 +717,25 @@ export function RunList({
         )}
       </div>
 
-      {error !== "" && runs.length > 0 && (
-        <DegradedBanner
-          title="Run history may be out of date."
-          actionLabel="Try again"
-          onAction={(): void => { setRefreshVersion((value): number => value + 1); }}
-        />
-      )}
-
-      <div className="overflow-hidden rounded-lg border border-border bg-card">
-        {runs.length === 0 ? (
-          debouncedFilter.trim() !== "" ? (
-            <EmptyState
-              compact
-              title="No matching runs"
-              description="Try a different ID, message, status, source, or creator."
-            />
-          ) : (
-            <EmptyState
-              illustration="guide"
-              title="No runs yet"
-              description={canStartRun
-                ? "There is no run history for this workspace."
-                : "There is no run history for this workspace, and you do not have permission to start one."}
-              {...(canStartRun ? { actionLabel: "Start new run", onAction: openNewRunDialog } : {})}
-              docsHref="/app/docs/runs"
-            />
-          )
-        ) : (
-          <div>
-            <div className="flex flex-wrap items-center justify-between gap-3 p-3 sm:px-4 sm:py-3 border-b border-border bg-muted/20">
-              <div>
-                <h2 className="text-sm font-semibold text-foreground">Run history</h2>
-                <p className="text-xs text-muted-foreground">
-                  Showing {runs.length} of {totalCount ?? runs.length} runs
-                  {debouncedFilter.trim() !== "" && ` matching "${debouncedFilter.trim()}"`}
-                </p>
-              </div>
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <span>Sort by</span>
-                <button
-                  type="button"
-                  onClick={(): void => { toggleSort("status"); }}
-                  className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  aria-label={`Sort runs by status, currently ${sort === "status" ? "ascending" : sort === "-status" ? "descending" : "not sorted"}`}
-                >
-                  Status
-                  {sortArrows("status")}
-                </button>
-                <button
-                  type="button"
-                  onClick={(): void => { toggleSort("created-at"); }}
-                  className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  aria-label={`Sort runs by created date, currently ${sort === "created-at" ? "ascending" : sort === "-created-at" ? "descending" : "not sorted"}`}
-                >
-                  Created
-                  {sortArrows("created-at")}
-                </button>
-              </div>
-            </div>
-            <div className="divide-y divide-border">
-              {runs.map((run: RunItem): React.JSX.Element => {
-                const creatorId = run.relationships?.["created-by"]?.data?.id;
-                const creatorUser = creatorId !== undefined ? usersMap.get(creatorId) : undefined;
-                const username = creatorUser?.attributes.username ?? run.attributes["triggered-by"] ?? "System";
-                const avatarUrl = creatorUser?.attributes["avatar-url"] ?? run.attributes["triggered-by-avatar-url"] ?? "";
-                const isVcsSource = isVcsRunSource(run.attributes.source, run.attributes["trigger-reason"]);
-                const sourceLabel = formatRunSource(run.attributes.source, run.attributes["trigger-reason"]);
-// SAFETY: the fixed source list matches the VCS source union the UI renders.
-                const externalSource = isVcsSource;
-                return (
-                  <article
-                    key={run.id}
-                    className="flex flex-col md:flex-row md:items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-muted/30"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <Link
-                          to={`/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceName)}/runs/${encodeURIComponent(run.id)}`}
-                          className="truncate text-sm font-medium text-foreground hover:text-primary hover:underline"
-                        >
-                          {run.attributes.message ?? "Triggered via UI"}
-                        </Link>
-                      </div>
-                      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
-                        <span className="font-mono text-2xs text-muted-foreground/90" title={run.id}>{shortRunId(run.id)}</span>
-                        {run.attributes.operation !== undefined && run.attributes.operation !== "plan_and_apply" && (
-                          <><span aria-hidden="true">·</span><span className="text-foreground/80">{run.attributes.operation.replace(/_/g, " ")}</span></>
-                        )}
-                        <span aria-hidden="true">·</span>
-                        <span className="flex items-center gap-1">
-                          {avatarUrl !== "" && (
-                            <Avatar className="inline-flex size-3.5 rounded-full">
-                              <AvatarImage src={avatarUrl} alt={username} className="rounded-full object-cover" />
-                            </Avatar>
-                          )}
-                          <span>{username}</span>
-                        </span>
-                        <span aria-hidden="true">·</span>
-                        <span>via {sourceLabel}</span>
-                        {externalSource && run.attributes.branch !== null && run.attributes.branch !== undefined && (
-                          <><span aria-hidden="true">·</span><span>{`branch ${run.attributes.branch}`}</span></>
-                        )}
-                        {externalSource && run.attributes["commit-sha"] !== null && run.attributes["commit-sha"] !== undefined && run.attributes["commit-sha"] !== "" && (
-                          <>
-                            <span aria-hidden="true">·</span>
-                            {isString(run.attributes["commit-url"]) && safeHttpUrl(run.attributes["commit-url"]) !== null ? (
-                              <a
-                                href={safeHttpUrl(run.attributes["commit-url"]) ?? undefined}
-                                target="_blank"
-                                rel="noreferrer"
-                                title={run.attributes["commit-sha"]}
-                                className="inline-flex items-center gap-0.5 font-mono text-2xs text-primary hover:underline"
-                              >
-                                {run.attributes["commit-sha"].slice(0, 7)}
-                                <ArrowUpRight className="size-3" aria-hidden="true" />
-                              </a>
-                            ) : (
-                              <span className="font-mono text-2xs" title={run.attributes["commit-sha"]}>{run.attributes["commit-sha"].slice(0, 7)}</span>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-4">
-                      <span aria-live="polite" aria-atomic="true" className="flex flex-col items-end gap-0.5">
-                        <span className="sr-only">
-                          Run {shortRunId(run.id)} ({run.attributes.message ?? "Triggered via UI"}): {" "}
-                        </span>
-                        <StatusBadge status={run.attributes.status} />
-                      </span>
-                      <div className="text-right text-xs text-muted-foreground min-w-[5.5rem]">
-                        <RelativeTime value={run.attributes["created-at"]} />
-                      </div>
-                      {canStartRun && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={(): void => { cloneRunSettings(run); }}
-                          aria-label="Clone run"
-                          title="Clone this run's settings"
-                        >
-                          <Copy className="size-4" aria-hidden="true" />
-                        </Button>
-                      )}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-            {nextPage !== null && (
-              <div className="flex justify-center border-t border-border p-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={loadingMore}
-                  onClick={(): void => { void loadMoreRuns(); }}
-                >
-                  {loadingMore ? "Loading…" : `Load more (${runs.length} of ${totalCount ?? runs.length} shown)`}
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      <RunHistoryList
+        error={error}
+        runs={runs}
+        debouncedFilter={debouncedFilter}
+        canStartRun={canStartRun}
+        totalCount={totalCount}
+        sort={sort}
+        onToggleSort={toggleSort}
+        renderSortArrows={sortArrows}
+        orgName={orgName}
+        workspaceName={workspaceName}
+        usersMap={usersMap}
+        onClone={cloneRunSettings}
+        nextPage={nextPage}
+        loadingMore={loadingMore}
+        onLoadMore={loadMoreRuns}
+        onRetry={retryRuns}
+        onNewRun={openNewRunDialog}
+      />
 
       {canStartRun && <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[520px]">
