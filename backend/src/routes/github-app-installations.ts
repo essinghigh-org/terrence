@@ -1137,6 +1137,21 @@ async function discoverConnectionRepositories(connectionId: string, orgId: strin
   }
 }
 
+function parseInstallationPayload(body: unknown): { name: string; installationId: unknown } {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
+  return { name, installationId: attributes["installation-id"] };
+}
+
+function installationPayloadError(name: string, installationId: unknown): string | null {
+  if (name === "" || typeof installationId !== "number" || !Number.isSafeInteger(installationId) || installationId <= 0) {
+    return "Name and a positive integer installation ID are required";
+  }
+  return null;
+}
+
 export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstallations" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/vcs-connections/:connection_id/repositories", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -1216,17 +1231,15 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
-    const installationId = attributes["installation-id"];
-    if (name === "" || typeof installationId !== "number" || !Number.isSafeInteger(installationId) || installationId <= 0) {
+    const { name, installationId } = parseInstallationPayload(body);
+    const payloadError = installationPayloadError(name, installationId);
+    if (payloadError !== null) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name and a positive integer installation ID are required" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: payloadError }] };
     }
+    const numericInstallationId = installationId as number;
     const existing = await db.query.githubAppInstallations.findFirst({
-      where: and(eq(githubAppInstallations.orgId, org.id), eq(githubAppInstallations.installationId, installationId)),
+      where: and(eq(githubAppInstallations.orgId, org.id), eq(githubAppInstallations.installationId, numericInstallationId)),
     });
     if (existing !== undefined) {
       (set as { status: number }).status = 409;
@@ -1236,7 +1249,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       id: newResourceId("ghain"),
       orgId: org.id,
       name,
-      installationId,
+      installationId: numericInstallationId,
       createdAt: Date.now(),
     };
     await db.insert(githubAppInstallations).values(installation);
