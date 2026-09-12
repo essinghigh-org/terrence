@@ -314,6 +314,365 @@ function SearchControl({
   );
 }
 
+function RegistryTabs({
+  activeTab,
+  registryPath,
+  moduleCount,
+  providerCount,
+}: Readonly<{
+  activeTab: RegistryTab;
+  registryPath: string;
+  moduleCount: number | null;
+  providerCount: number | null;
+}>): React.JSX.Element {
+  return (
+    <nav aria-label="Registry sections" className="flex gap-6 border-b">
+      <Link
+        aria-current={activeTab === "modules" ? "page" : undefined}
+        aria-label="Modules"
+        className={cn(
+          "-mb-px flex cursor-pointer items-center gap-2 border-b-2 px-1 pb-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          activeTab === "modules" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+        )}
+        to={registryPath}
+      >
+        <Package aria-hidden="true" />
+        <span>Modules</span>
+        <span aria-hidden="true" className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[0.7rem] text-muted-foreground">
+          {moduleCount ?? "…"}
+        </span>
+      </Link>
+      <Link
+        aria-current={activeTab === "providers" ? "page" : undefined}
+        aria-label="Providers"
+        className={cn(
+          "-mb-px flex cursor-pointer items-center gap-2 border-b-2 px-1 pb-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          activeTab === "providers" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+        )}
+        to={`${registryPath}?tab=providers`}
+      >
+        <Globe2 aria-hidden="true" />
+        <span>Providers</span>
+        <span aria-hidden="true" className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[0.7rem] text-muted-foreground">
+          {providerCount ?? "…"}
+        </span>
+      </Link>
+    </nav>
+  );
+}
+
+function RegistryToolbar({
+  activeTab,
+  search,
+  providerFilter,
+  publishingFilter,
+  providerOptions,
+  sort,
+  onBrowseParam,
+}: Readonly<{
+  activeTab: RegistryTab;
+  search: string;
+  providerFilter: string;
+  publishingFilter: string;
+  providerOptions: string[];
+  sort: RegistrySort;
+  onBrowseParam: (key: string, value: string) => void;
+}>): React.JSX.Element {
+  return (
+    <section aria-label="Registry browse controls" className="flex flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm xl:flex-row xl:items-center">
+      <SearchControl
+        activeTab={activeTab}
+        value={search}
+        onChange={(value): void => { onBrowseParam("q", value); }}
+        onClear={(): void => { onBrowseParam("q", ""); }}
+      />
+      <div className="grid gap-2 sm:grid-cols-2 lg:flex lg:shrink-0">
+        {activeTab === "modules" && (
+          <>
+            <Select
+              aria-label="Filter by provider"
+              className="h-10 lg:w-44"
+              value={providerFilter}
+              onValueChange={(value): void => { onBrowseParam("provider", value); }}
+            >
+              <SelectItem value="">All providers</SelectItem>
+              {providerOptions.map((provider): React.JSX.Element => <SelectItem key={provider} value={provider}>{provider}</SelectItem>)}
+            </Select>
+            <Select
+              aria-label="Filter by publishing type"
+              className="h-10 lg:w-44"
+              value={publishingFilter}
+              onValueChange={(value): void => { onBrowseParam("publishing", value); }}
+            >
+              <SelectItem value="">All sources</SelectItem>
+              <SelectItem value="vcs">VCS</SelectItem>
+              <SelectItem value="manual">Manual / API</SelectItem>
+            </Select>
+          </>
+        )}
+        <Select
+          aria-label={activeTab === "modules" ? "Sort registry" : "Sort providers"}
+          className="h-10 lg:w-44"
+          value={activeTab === "providers" && sort === "provider" ? "name" : sort}
+          onValueChange={(value): void => { onBrowseParam("sort", value === "updated" ? "" : value); }}
+        >
+          <SelectItem value="updated">Recently updated</SelectItem>
+          <SelectItem value="name">Name</SelectItem>
+          {activeTab === "modules" && <SelectItem value="provider">Provider</SelectItem>}
+        </Select>
+      </div>
+    </section>
+  );
+}
+
+function RegistryResultSummary({
+  modulesLength,
+  moduleCount,
+  activeFilters,
+  onClearFilters,
+}: Readonly<{
+  modulesLength: number;
+  moduleCount: number | null;
+  activeFilters: boolean;
+  onClearFilters: () => void;
+}>): React.JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+      <p>Showing {modulesLength} of {moduleCount ?? modulesLength} modules</p>
+      {activeFilters && (
+        <Button size="sm" type="button" variant="ghost" onClick={onClearFilters}>
+          Clear filters
+          <X aria-hidden="true" data-icon="inline-end" />
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function RegistryPagination({
+  page,
+  totalPages,
+  onPage,
+}: Readonly<{
+  page: number;
+  totalPages: number;
+  onPage: (page: number) => void;
+}>): React.JSX.Element {
+  return (
+    <nav aria-label="Registry pagination" className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+      <Button
+        disabled={page <= 1}
+        type="button"
+        variant="outline"
+        onClick={(): void => { onPage(Math.max(1, page - 1)); }}
+      >
+        <ChevronLeft aria-hidden="true" data-icon="inline-start" />
+        Previous
+      </Button>
+      <span className="font-mono text-xs text-muted-foreground">Page {page} of {totalPages}</span>
+      <Button
+        disabled={page >= totalPages}
+        type="button"
+        variant="outline"
+        onClick={(): void => { onPage(page + 1); }}
+      >
+        Next
+        <ChevronRight aria-hidden="true" data-icon="inline-end" />
+      </Button>
+    </nav>
+  );
+}
+
+function RegistryLoadError({
+  activeTab,
+  error,
+  onRetry,
+}: Readonly<{
+  activeTab: RegistryTab;
+  error: string;
+  onRetry: () => void;
+}>): React.JSX.Element {
+  return (
+    <Empty role="alert" className="min-h-64 border">
+      <EmptyHeader>
+        <Terrence pose="failed" className="w-36" />
+        <EmptyTitle>{activeTab === "modules" ? "Modules" : "Providers"} unavailable</EmptyTitle>
+        <EmptyDescription>{error}</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button type="button" onClick={onRetry}>Try again</Button>
+      </EmptyContent>
+    </Empty>
+  );
+}
+
+function RegistryEmptyState({
+  activeTab,
+  activeFilters,
+  modulesLength,
+  moduleCount,
+  page,
+  onPreviousPage,
+}: Readonly<{
+  activeTab: RegistryTab;
+  activeFilters: boolean;
+  modulesLength: number;
+  moduleCount: number | null;
+  page: number;
+  onPreviousPage: () => void;
+}>): React.JSX.Element {
+  const pageHasNoResults = activeTab === "modules" && modulesLength === 0 && page > 1 && (moduleCount ?? 0) > 0;
+  return (
+    <Empty className="min-h-64 border">
+      <EmptyHeader>
+        {!activeFilters && !pageHasNoResults ? <Terrence pose="empty" className="w-40" /> : <EmptyMedia variant="icon"><SearchX aria-hidden="true" /></EmptyMedia>}
+        <EmptyTitle>
+          {pageHasNoResults
+            ? "No modules on this page"
+            : activeFilters
+              ? `No ${activeTab} match your filters`
+              : `No private ${activeTab}`}
+        </EmptyTitle>
+        <EmptyDescription>
+          {pageHasNoResults
+            ? "Return to the previous page to continue browsing."
+            : activeFilters
+              ? "Try a different search or filter."
+              : `This organization has no published private ${activeTab}.`}
+        </EmptyDescription>
+      </EmptyHeader>
+      {pageHasNoResults && (
+        <EmptyContent>
+          <Button type="button" variant="outline" onClick={onPreviousPage}>
+            <ChevronLeft aria-hidden="true" data-icon="inline-start" />
+            Previous page
+          </Button>
+        </EmptyContent>
+      )}
+    </Empty>
+  );
+}
+
+function RegistryResults({
+  loading,
+  error,
+  activeTab,
+  isEmpty,
+  modules,
+  visibleProviders,
+  orgName,
+  registryPath,
+  activeFilters,
+  moduleCount,
+  page,
+  onRetry,
+  onPreviousPage,
+}: Readonly<{
+  loading: boolean;
+  error: string | null;
+  activeTab: RegistryTab;
+  isEmpty: boolean;
+  modules: RegistryModule[];
+  visibleProviders: RegistryProvider[];
+  orgName: string;
+  registryPath: string;
+  activeFilters: boolean;
+  moduleCount: number | null;
+  page: number;
+  onRetry: () => void;
+  onPreviousPage: () => void;
+}>): React.JSX.Element {
+  if (loading) {
+    return (
+      <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-muted-foreground" role="status">
+        <Spinner />
+        Loading registry…
+      </div>
+    );
+  }
+  if (error !== null) {
+    return <RegistryLoadError activeTab={activeTab} error={error} onRetry={onRetry} />;
+  }
+  if (isEmpty) {
+    return (
+      <RegistryEmptyState
+        activeTab={activeTab}
+        activeFilters={activeFilters}
+        modulesLength={modules.length}
+        moduleCount={moduleCount}
+        page={page}
+        onPreviousPage={onPreviousPage}
+      />
+    );
+  }
+  if (activeTab === "modules") {
+    return (
+      <div className="grid gap-4 xl:grid-cols-2">
+        {modules.map((module): React.JSX.Element => <ModuleCard key={module.id} module={module} orgName={orgName} />)}
+      </div>
+    );
+  }
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      {visibleProviders.map((provider): React.JSX.Element => <ProviderCard key={provider.id} provider={provider} registryPath={registryPath} />)}
+    </div>
+  );
+}
+
+function renderRegistryPublishAction(activeTab: RegistryTab, canPublish: boolean, onPublish: () => void): React.JSX.Element | undefined {
+  if (activeTab !== "modules" || !canPublish) return undefined;
+  return (
+    <Button type="button" onClick={onPublish}>
+      <Upload aria-hidden="true" data-icon="inline-start" />
+      Publish module
+    </Button>
+  );
+}
+
+type RegistryVisibility = {
+  showToolbar: boolean;
+  showSummary: boolean;
+  showPagination: boolean;
+  activeFilters: boolean;
+};
+
+function resolveRegistryVisibility({
+  activeTab,
+  loading,
+  error,
+  collectionHasItems,
+  normalizedSearch,
+  providerFilter,
+  publishingFilter,
+  totalPages,
+}: Readonly<{
+  activeTab: RegistryTab;
+  loading: boolean;
+  error: string | null;
+  collectionHasItems: boolean;
+  normalizedSearch: string;
+  providerFilter: string;
+  publishingFilter: string;
+  totalPages: number;
+}>): RegistryVisibility {
+  const activeFilters = normalizedSearch !== "" || providerFilter !== "" || publishingFilter !== "";
+  const showToolbar = loading || collectionHasItems || activeFilters;
+  const showSummary = showToolbar && activeTab === "modules" && !loading && error === null;
+  const showPagination = activeTab === "modules" && !loading && error === null && totalPages > 1;
+  return { showToolbar, showSummary, showPagination, activeFilters };
+}
+
+function registryCollectionHasItems(
+  activeTab: RegistryTab,
+  moduleCount: number | null,
+  providerCount: number | null,
+  modulesLength: number,
+  providersLength: number,
+): boolean {
+  const collectionCount = activeTab === "modules" ? moduleCount : providerCount;
+  return (collectionCount ?? (activeTab === "modules" ? modulesLength : providersLength)) > 0;
+}
+
 export function Registry(): React.JSX.Element {
   const { orgName = "" } = useParams<{ orgName?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -415,196 +774,71 @@ export function Registry(): React.JSX.Element {
       if (sort === "updated") return Date.parse(right.createdAt) - Date.parse(left.createdAt);
       return left.name.localeCompare(right.name) || left.namespace.localeCompare(right.namespace);
     });
-  const activeFilters = normalizedSearch !== "" || providerFilter !== "" || publishingFilter !== "";
-  const collectionCount = activeTab === "modules" ? moduleCount : providerCount;
-  const collectionHasItems = (collectionCount ?? (activeTab === "modules" ? modules.length : providers.length)) > 0;
-  const showToolbar = loading || collectionHasItems || activeFilters;
+  const collectionHasItems = registryCollectionHasItems(activeTab, moduleCount, providerCount, modules.length, providers.length);
   const canPublish = permissions.loaded && permissions.has("can-manage-modules");
   const visibleItems = activeTab === "modules" ? modules : visibleProviders;
-  const pageHasNoResults = activeTab === "modules" && modules.length === 0 && page > 1 && (moduleCount ?? 0) > 0;
+  const { showToolbar, showSummary, showPagination, activeFilters } = resolveRegistryVisibility({
+    activeTab,
+    loading,
+    error,
+    collectionHasItems,
+    normalizedSearch,
+    providerFilter,
+    publishingFilter,
+    totalPages,
+  });
 
   return (
     <PageShell>
       <PageHeader
-        action={activeTab === "modules" && canPublish ? (
-          <Button type="button" onClick={(): void => { setPublishOpen(true); }}>
-            <Upload aria-hidden="true" data-icon="inline-start" />
-            Publish module
-          </Button>
-        ) : undefined}
+        action={renderRegistryPublishAction(activeTab, canPublish, (): void => { setPublishOpen(true); })}
         description="Discover and publish trusted Terraform and OpenTofu building blocks."
         eyebrow="Private infrastructure / catalog"
         title="Private registry"
       />
       {canPublish && <PublishModuleDialog open={publishOpen} orgName={orgName} onOpenChange={setPublishOpen} />}
 
-      <nav aria-label="Registry sections" className="flex gap-6 border-b">
-        <Link
-          aria-current={activeTab === "modules" ? "page" : undefined}
-          aria-label="Modules"
-          className={cn(
-            "-mb-px flex cursor-pointer items-center gap-2 border-b-2 px-1 pb-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            activeTab === "modules" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
-          )}
-          to={registryPath}
-        >
-          <Package aria-hidden="true" />
-          <span>Modules</span>
-          <span aria-hidden="true" className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[0.7rem] text-muted-foreground">
-            {moduleCount ?? "…"}
-          </span>
-        </Link>
-        <Link
-          aria-current={activeTab === "providers" ? "page" : undefined}
-          aria-label="Providers"
-          className={cn(
-            "-mb-px flex cursor-pointer items-center gap-2 border-b-2 px-1 pb-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            activeTab === "providers" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
-          )}
-          to={`${registryPath}?tab=providers`}
-        >
-          <Globe2 aria-hidden="true" />
-          <span>Providers</span>
-          <span aria-hidden="true" className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[0.7rem] text-muted-foreground">
-            {providerCount ?? "…"}
-          </span>
-        </Link>
-      </nav>
+      <RegistryTabs activeTab={activeTab} registryPath={registryPath} moduleCount={moduleCount} providerCount={providerCount} />
 
       {showToolbar && (
-        <section aria-label="Registry browse controls" className="flex flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm xl:flex-row xl:items-center">
-          <SearchControl
-            activeTab={activeTab}
-            value={search}
-            onChange={(value): void => { updateBrowseParam("q", value); }}
-            onClear={(): void => { updateBrowseParam("q", ""); }}
-          />
-          <div className="grid gap-2 sm:grid-cols-2 lg:flex lg:shrink-0">
-            {activeTab === "modules" && (
-              <>
-                <Select
-                  aria-label="Filter by provider"
-                  className="h-10 lg:w-44"
-                  value={providerFilter}
-                  onValueChange={(value): void => { updateBrowseParam("provider", value); }}
-                >
-                  <SelectItem value="">All providers</SelectItem>
-                  {providerOptions.map((provider): React.JSX.Element => <SelectItem key={provider} value={provider}>{provider}</SelectItem>)}
-                </Select>
-                <Select
-                  aria-label="Filter by publishing type"
-                  className="h-10 lg:w-44"
-                  value={publishingFilter}
-                  onValueChange={(value): void => { updateBrowseParam("publishing", value); }}
-                >
-                  <SelectItem value="">All sources</SelectItem>
-                  <SelectItem value="vcs">VCS</SelectItem>
-                  <SelectItem value="manual">Manual / API</SelectItem>
-                </Select>
-              </>
-            )}
-            <Select
-              aria-label={activeTab === "modules" ? "Sort registry" : "Sort providers"}
-              className="h-10 lg:w-44"
-              value={activeTab === "providers" && sort === "provider" ? "name" : sort}
-              onValueChange={(value): void => { updateBrowseParam("sort", value === "updated" ? "" : value); }}
-            >
-              <SelectItem value="updated">Recently updated</SelectItem>
-              <SelectItem value="name">Name</SelectItem>
-              {activeTab === "modules" && <SelectItem value="provider">Provider</SelectItem>}
-            </Select>
-          </div>
-        </section>
+        <RegistryToolbar
+          activeTab={activeTab}
+          search={search}
+          providerFilter={providerFilter}
+          publishingFilter={publishingFilter}
+          providerOptions={providerOptions}
+          sort={sort}
+          onBrowseParam={updateBrowseParam}
+        />
       )}
 
-      {showToolbar && activeTab === "modules" && !loading && error === null && (
-        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-          <p>Showing {modules.length} of {moduleCount ?? modules.length} modules</p>
-          {activeFilters && (
-            <Button size="sm" type="button" variant="ghost" onClick={clearFilters}>
-              Clear filters
-              <X aria-hidden="true" data-icon="inline-end" />
-            </Button>
-          )}
-        </div>
+      {showSummary && (
+        <RegistryResultSummary
+          modulesLength={modules.length}
+          moduleCount={moduleCount}
+          activeFilters={activeFilters}
+          onClearFilters={clearFilters}
+        />
       )}
 
-      {loading ? (
-        <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-muted-foreground" role="status">
-          <Spinner />
-          Loading registry…
-        </div>
-      ) : error !== null ? (
-        <Empty role="alert" className="min-h-64 border">
-          <EmptyHeader>
-            <Terrence pose="failed" className="w-36" />
-            <EmptyTitle>{activeTab === "modules" ? "Modules" : "Providers"} unavailable</EmptyTitle>
-            <EmptyDescription>{error}</EmptyDescription>
-          </EmptyHeader>
-          <EmptyContent>
-            <Button type="button" onClick={(): void => { setReload((value): number => value + 1); }}>Try again</Button>
-          </EmptyContent>
-        </Empty>
-      ) : visibleItems.length === 0 ? (
-        <Empty className="min-h-64 border">
-          <EmptyHeader>
-            {!activeFilters && !pageHasNoResults ? <Terrence pose="empty" className="w-40" /> : <EmptyMedia variant="icon"><SearchX aria-hidden="true" /></EmptyMedia>}
-            <EmptyTitle>
-              {pageHasNoResults
-                ? "No modules on this page"
-                : activeFilters
-                  ? `No ${activeTab} match your filters`
-                  : `No private ${activeTab}`}
-            </EmptyTitle>
-            <EmptyDescription>
-              {pageHasNoResults
-                ? "Return to the previous page to continue browsing."
-                : activeFilters
-                  ? "Try a different search or filter."
-                  : `This organization has no published private ${activeTab}.`}
-            </EmptyDescription>
-          </EmptyHeader>
-          {pageHasNoResults && (
-            <EmptyContent>
-              <Button type="button" variant="outline" onClick={(): void => { updateBrowseParam("page", String(Math.max(1, page - 1)), false); }}>
-                <ChevronLeft aria-hidden="true" data-icon="inline-start" />
-                Previous page
-              </Button>
-            </EmptyContent>
-          )}
-        </Empty>
-      ) : activeTab === "modules" ? (
-        <div className="grid gap-4 xl:grid-cols-2">
-          {modules.map((module): React.JSX.Element => <ModuleCard key={module.id} module={module} orgName={orgName} />)}
-        </div>
-      ) : (
-        <div className="grid gap-4 xl:grid-cols-2">
-          {visibleProviders.map((provider): React.JSX.Element => <ProviderCard key={provider.id} provider={provider} registryPath={registryPath} />)}
-        </div>
-      )}
+      <RegistryResults
+        loading={loading}
+        error={error}
+        activeTab={activeTab}
+        isEmpty={visibleItems.length === 0}
+        modules={modules}
+        visibleProviders={visibleProviders}
+        orgName={orgName}
+        registryPath={registryPath}
+        activeFilters={activeFilters}
+        moduleCount={moduleCount}
+        page={page}
+        onRetry={(): void => { setReload((value): number => value + 1); }}
+        onPreviousPage={(): void => { updateBrowseParam("page", String(Math.max(1, page - 1)), false); }}
+      />
 
-      {activeTab === "modules" && !loading && error === null && totalPages > 1 && (
-        <nav aria-label="Registry pagination" className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
-          <Button
-            disabled={page <= 1}
-            type="button"
-            variant="outline"
-            onClick={(): void => { updateBrowseParam("page", String(Math.max(1, page - 1)), false); }}
-          >
-            <ChevronLeft aria-hidden="true" data-icon="inline-start" />
-            Previous
-          </Button>
-          <span className="font-mono text-xs text-muted-foreground">Page {page} of {totalPages}</span>
-          <Button
-            disabled={page >= totalPages}
-            type="button"
-            variant="outline"
-            onClick={(): void => { updateBrowseParam("page", String(page + 1), false); }}
-          >
-            Next
-            <ChevronRight aria-hidden="true" data-icon="inline-end" />
-          </Button>
-        </nav>
+      {showPagination && (
+        <RegistryPagination page={page} totalPages={totalPages} onPage={(next): void => { updateBrowseParam("page", String(next), false); }} />
       )}
     </PageShell>
   );
