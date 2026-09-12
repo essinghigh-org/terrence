@@ -60,7 +60,7 @@ type LoggingValidation = Readonly<
   | { ok: false; error: string }
 >;
 
-function validateLoggingAttributes(
+function checkLoggingScalars(
   attrs: Readonly<Record<string, unknown>>,
 ): LoggingValidation {
   const enabled = attrs["enabled"];
@@ -73,17 +73,28 @@ function validateLoggingAttributes(
       return { ok: false, error: `${key} must be one of: ${LOG_LEVELS.join(", ")} or null` };
     }
   }
+  return { ok: true, values: {} };
+}
+
+function checkSyslogTargets(
+  attrs: Readonly<Record<string, unknown>>,
+): LoggingValidation {
   const targets = attrs["syslog-targets"];
-  if (targets !== undefined && targets !== null) {
-    if (!Array.isArray(targets) || targets.length > 16) {
-      return { ok: false, error: "syslog-targets must be an array of at most 16 targets or null" };
-    }
-    for (const value of targets) {
-      if (typeof value !== "string" || parseSyslogTarget(value) === null) {
-        return { ok: false, error: "syslog-targets entries must be udp://host:port or tcp://host:port" };
-      }
+  if (targets === undefined || targets === null) return { ok: true, values: {} };
+  if (!Array.isArray(targets) || targets.length > 16) {
+    return { ok: false, error: "syslog-targets must be an array of at most 16 targets or null" };
+  }
+  for (const value of targets) {
+    if (typeof value !== "string" || parseSyslogTarget(value) === null) {
+      return { ok: false, error: "syslog-targets entries must be udp://host:port or tcp://host:port" };
     }
   }
+  return { ok: true, values: {} };
+}
+
+function normalizeSyslogFields(
+  attrs: Readonly<Record<string, unknown>>,
+): LoggingValidation {
   const normalized: Record<string, unknown> = { ...attrs };
   const rawFormat = attrs["syslog-format"];
   if (rawFormat !== undefined && rawFormat !== null) {
@@ -104,6 +115,16 @@ function validateLoggingAttributes(
     normalized[key] = trimmed;
   }
   return { ok: true, values: normalized };
+}
+
+function validateLoggingAttributes(
+  attrs: Readonly<Record<string, unknown>>,
+): LoggingValidation {
+  const scalars = checkLoggingScalars(attrs);
+  if (!scalars.ok) return scalars;
+  const targets = checkSyslogTargets(attrs);
+  if (!targets.ok) return targets;
+  return normalizeSyslogFields(attrs);
 }
 
 export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
