@@ -16,6 +16,57 @@ type ParamCtx = Readonly<{
   set: SetObj;
 }>;
 
+type OutcomeListQuery = Readonly<{
+  filterStatus: string | null;
+  filterEnforcement: string | null;
+  pageNumber: number;
+  pageSize: number;
+}>;
+
+async function resolveOutcomeEvaluation(
+  evalId: string,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+  set: SetObj,
+): Promise<{ found: true } | { error: unknown }> {
+  const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
+  if (evalRecord === undefined) { (set as { status: number }).status = 404; return { error: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
+    const authorized = await findAuthorizedRun(evalRecord.runId, userId, orgId, teamId);
+    if (authorized === undefined) { (set as { status: number }).status = 404; return { error: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  }
+  return { found: true };
+}
+
+function parseOutcomeListParams(request: Readonly<{ url: string }>): OutcomeListQuery {
+  const url = new URL(request.url);
+  const filterStatus = url.searchParams.get("filter[status]");
+  const filterEnforcement = url.searchParams.get("filter[enforcement-level]") ?? url.searchParams.get("filter[enforcementLevel]");
+  const pageParam = Number.parseInt(url.searchParams.get("page[number]") ?? "1", 10);
+  const sizeParam = Number.parseInt(url.searchParams.get("page[size]") ?? "20", 10);
+  const pageNumber = Number.isSafeInteger(pageParam) && pageParam > 0 ? pageParam : 1;
+  const pageSize = Number.isSafeInteger(sizeParam) && sizeParam > 0 ? Math.min(sizeParam, 100) : 20;
+  return { filterStatus, filterEnforcement, pageNumber, pageSize };
+}
+
+async function fetchOutcomePage(
+  evalId: string,
+  query: OutcomeListQuery,
+): Promise<{ rows: (typeof policySetOutcomes.$inferSelect)[]; totalCount: number; totalPages: number }> {
+  const conditions = [eq(policySetOutcomes.policyEvaluationId, evalId)];
+  if (query.filterStatus !== null && query.filterStatus !== "") conditions.push(eq(policySetOutcomes.status, query.filterStatus));
+  if (query.filterEnforcement !== null && query.filterEnforcement !== "") conditions.push(eq(policySetOutcomes.enforcementLevel, query.filterEnforcement));
+  const where = and(...conditions);
+  const [rows, countRows] = await Promise.all([
+    db.select().from(policySetOutcomes).where(where).limit(query.pageSize).offset((query.pageNumber - 1) * query.pageSize),
+    db.select({ total: count() }).from(policySetOutcomes).where(where),
+  ]);
+  const totalCount = countRows[0]?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / query.pageSize));
+  return { rows, totalCount, totalPages };
+}
+
 function evaluationResource(evalRecord: Readonly<typeof policyEvaluations.$inferSelect>): Record<string, unknown> {
   return {
     id: evalRecord.id,
@@ -229,37 +280,18 @@ export const policyEvaluationRoutes = new Elysia({ name: "policyEvaluations" })
     // GETs (with page + filter[status]/filter[enforcement-level] support) so
     // the CLI renders per-stage TF policy outcomes instead of skipping them.
     const evalId = params["tf_policy_evaluation_id"] ?? "";
-    const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
-    if (evalRecord === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
-      const authorized = await findAuthorizedRun(evalRecord.runId, user?.id, orgId, teamId);
-      if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    }
-    const url = new URL(request.url);
-    const filterStatus = url.searchParams.get("filter[status]");
-    const filterEnforcement = url.searchParams.get("filter[enforcement-level]") ?? url.searchParams.get("filter[enforcementLevel]");
-    const pageParam = Number.parseInt(url.searchParams.get("page[number]") ?? "1", 10);
-    const sizeParam = Number.parseInt(url.searchParams.get("page[size]") ?? "20", 10);
-    const pageNumber = Number.isSafeInteger(pageParam) && pageParam > 0 ? pageParam : 1;
-    const pageSize = Number.isSafeInteger(sizeParam) && sizeParam > 0 ? Math.min(sizeParam, 100) : 20;
-    const conditions = [eq(policySetOutcomes.policyEvaluationId, evalId)];
-    if (filterStatus !== null && filterStatus !== "") conditions.push(eq(policySetOutcomes.status, filterStatus));
-    if (filterEnforcement !== null && filterEnforcement !== "") conditions.push(eq(policySetOutcomes.enforcementLevel, filterEnforcement));
-    const where = and(...conditions);
-    const [rows, countRows] = await Promise.all([
-      db.select().from(policySetOutcomes).where(where).limit(pageSize).offset((pageNumber - 1) * pageSize),
-      db.select({ total: count() }).from(policySetOutcomes).where(where),
-    ]);
-    const totalCount = countRows[0]?.total ?? 0;
-    const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+    const resolved = await resolveOutcomeEvaluation(evalId, user?.id, orgId, teamId, set);
+    if ("error" in resolved) return resolved.error;
+    const query = parseOutcomeListParams(request);
+    const page = await fetchOutcomePage(evalId, query);
     return {
-      data: rows.map(tfPolicySetOutcomeResource),
+      data: page.rows.map(tfPolicySetOutcomeResource),
       meta: {
         pagination: {
-          "current-page": pageNumber,
-          "page-size": pageSize,
-          "total-pages": totalPages,
-          "total-count": totalCount,
+          "current-page": query.pageNumber,
+          "page-size": query.pageSize,
+          "total-pages": page.totalPages,
+          "total-count": page.totalCount,
         },
       },
     };
