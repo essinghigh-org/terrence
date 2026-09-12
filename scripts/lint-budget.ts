@@ -59,12 +59,12 @@ const errors = reports.reduce(
   (total, report): number => total + report.errorCount,
   0,
 );
-// Complexity is intentionally warning-only while the existing hot-spot backlog
-// is split. Keep those warnings visible in the baseline report without making
-// the debt budget fail every build; all other warnings remain budgeted.
+// Complexity hot-spot backlog is fully split (zero warnings at limit 15),
+// so complexity warnings are budgeted like every other warning: any new
+// over-limit function fails the gate.
 const warnings = reports.reduce(
   (total, report): number =>
-    total + report.messages.filter(({ ruleId, severity }): boolean => severity === 1 && ruleId !== "complexity").length,
+    total + report.messages.filter(({ severity }): boolean => severity === 1).length,
   0,
 );
 console.log(
