@@ -450,29 +450,35 @@ function appendApiPath(base: URL, suffix: string): URL {
   return url;
 }
 
-function repositoryApiTarget(client: Readonly<typeof oauthClients.$inferSelect>): { base: URL; provider: RepositoryProvider } | null {
-  const provider = repositoryProvider(client.serviceProvider);
-  if (provider === null) return null;
-
+function explicitApiUrlTarget(
+  client: Readonly<typeof oauthClients.$inferSelect>,
+): Readonly<{ base: URL }> | null | undefined {
   const configuredApiUrl = client.apiUrl?.trim() ?? "";
-  if (configuredApiUrl !== "") {
-    const base = validRepositoryApiUrl(configuredApiUrl);
-    return base === null ? null : { base, provider };
-  }
+  if (configuredApiUrl === "") return undefined;
+  const base = validRepositoryApiUrl(configuredApiUrl);
+  return base === null ? null : { base };
+}
 
+function httpUrlApiTarget(
+  client: Readonly<typeof oauthClients.$inferSelect>,
+  provider: RepositoryProvider,
+): Readonly<{ base: URL }> | null | undefined {
   const configuredHttpUrl = client.httpUrl?.trim() ?? "";
-  if (configuredHttpUrl !== "") {
-    const httpUrl = validRepositoryApiUrl(configuredHttpUrl);
-    if (httpUrl === null) return null;
-    return {
-      base: appendApiPath(
-        httpUrl,
-        provider === "github" ? "/api/v3" : provider === "gitlab" ? "/api/v4" : "/2.0",
-      ),
-      provider,
-    };
-  }
+  if (configuredHttpUrl === "") return undefined;
+  const httpUrl = validRepositoryApiUrl(configuredHttpUrl);
+  if (httpUrl === null) return null;
+  return {
+    base: appendApiPath(
+      httpUrl,
+      provider === "github" ? "/api/v3" : provider === "gitlab" ? "/api/v4" : "/2.0",
+    ),
+  };
+}
 
+function defaultApiUrlTarget(
+  client: Readonly<typeof oauthClients.$inferSelect>,
+  provider: RepositoryProvider,
+): Readonly<{ base: URL }> | null {
   const defaultApiUrl = provider === "github"
     ? client.serviceProvider === "github" ? "https://api.github.com" : null
     : provider === "gitlab"
@@ -480,7 +486,18 @@ function repositoryApiTarget(client: Readonly<typeof oauthClients.$inferSelect>)
       : "https://api.bitbucket.org/2.0";
   if (defaultApiUrl === null) return null;
   const base = validRepositoryApiUrl(defaultApiUrl);
-  return base === null ? null : { base, provider };
+  return base === null ? null : { base };
+}
+
+function repositoryApiTarget(client: Readonly<typeof oauthClients.$inferSelect>): { base: URL; provider: RepositoryProvider } | null {
+  const provider = repositoryProvider(client.serviceProvider);
+  if (provider === null) return null;
+  const explicit = explicitApiUrlTarget(client);
+  if (explicit !== undefined) return explicit === null ? null : { ...explicit, provider };
+  const derived = httpUrlApiTarget(client, provider);
+  if (derived !== undefined) return derived === null ? null : { ...derived, provider };
+  const fallback = defaultApiUrlTarget(client, provider);
+  return fallback === null ? null : { ...fallback, provider };
 }
 
 function repositoryEndpoint(base: URL, path: string, parameters: Readonly<Record<string, string>>): URL {
