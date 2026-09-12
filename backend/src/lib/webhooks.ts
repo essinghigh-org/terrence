@@ -249,18 +249,9 @@ function validateGithubPushFields(ref: string | undefined, commitSha: string | u
   return undefined;
 }
 
-function parseGithubPushWebhook(payload: WebhookPayload, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined; sourceIdentity: VcsSourceIdentity }>): WebhookDetails | undefined {
-  const ref = requiredString(payload["ref"]);
-  const commitSha = requiredString(payload["after"]);
-  const headCommit = asRecord(payload["head_commit"]);
-  const commitMessage = requiredString(headCommit?.["message"]);
-  const commitUrl = requiredString(headCommit?.["url"]);
-  const filesChanged = changedFiles(payload);
-  if (validateGithubPushFields(ref, commitSha, commitMessage, commitUrl, filesChanged) !== undefined) return undefined;
-  if (ref === undefined || commitSha === undefined || commitMessage === undefined || commitUrl === undefined || filesChanged === undefined) return undefined;
-  const branchTag = parseRefBranchTag(ref);
-  if (branchTag === undefined) return undefined;
-  if (branchTag.branch !== undefined && filesChanged.size === 0) return undefined;
+type WebhookBase = DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined; sourceIdentity: VcsSourceIdentity }>;
+
+function buildGithubPushDetails(branchTag: { branch?: string; tag?: string }, base: WebhookBase, commitMessage: string, commitSha: string, commitUrl: string, filesChanged: ReadonlySet<string>): WebhookDetails {
   return {
     ...(branchTag.branch === undefined ? {} : { branch: branchTag.branch }),
     cloneUrl: base.cloneUrl,
@@ -275,6 +266,21 @@ function parseGithubPushWebhook(payload: WebhookPayload, base: DeepReadonly<{ cl
     sourceIdentity: base.sourceIdentity,
     ...(branchTag.tag === undefined ? {} : { tag: branchTag.tag }),
   };
+}
+
+function parseGithubPushWebhook(payload: WebhookPayload, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined; sourceIdentity: VcsSourceIdentity }>): WebhookDetails | undefined {
+  const ref = requiredString(payload["ref"]);
+  const commitSha = requiredString(payload["after"]);
+  const headCommit = asRecord(payload["head_commit"]);
+  const commitMessage = requiredString(headCommit?.["message"]);
+  const commitUrl = requiredString(headCommit?.["url"]);
+  const filesChanged = changedFiles(payload);
+  if (validateGithubPushFields(ref, commitSha, commitMessage, commitUrl, filesChanged) !== undefined) return undefined;
+  if (ref === undefined || commitSha === undefined || commitMessage === undefined || commitUrl === undefined || filesChanged === undefined) return undefined;
+  const branchTag = parseRefBranchTag(ref);
+  if (branchTag === undefined) return undefined;
+  if (branchTag.branch !== undefined && filesChanged.size === 0) return undefined;
+  return buildGithubPushDetails(branchTag, base, commitMessage, commitSha, commitUrl, filesChanged);
 }
 
 function validateGithubPrFields(branch: string | undefined, commitSha: string | undefined, commitMessage: string | undefined, commitUrl: string | undefined, pullRequestNumber: unknown): string | undefined {
