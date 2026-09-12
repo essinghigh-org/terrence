@@ -127,6 +127,67 @@ function validateLoggingAttributes(
   return normalizeSyslogFields(attrs);
 }
 
+function smtpTestRecipient(body: unknown): string | null {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  return typeof attrs["email"] === "string" ? normalizeEmail(attrs["email"]) : null;
+}
+
+function smtpTestSender(settings: Record<string, unknown>): { host: string; senderEmail: string } {
+  return {
+    host: typeof settings["host"] === "string" ? settings["host"].trim() : "",
+    senderEmail: typeof settings["sender-email"] === "string" ? settings["sender-email"].trim() : "",
+  };
+}
+
+function resolveSmtpTestConfig(
+  body: unknown,
+  settings: Record<string, unknown>,
+  set: ParamCtx["set"],
+): { config: Parameters<typeof sendEmail>[0]; recipient: string } | { error: unknown } {
+  const recipient = smtpTestRecipient(body);
+  const { host, senderEmail } = smtpTestSender(settings);
+  if (settings["enabled"] !== true || host === "" || senderEmail === "" || recipient === null) {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SMTP must be enabled and configured, and a valid email is required" }] } };
+  }
+  return {
+    config: {
+      host,
+      port: typeof settings["port"] === "number" ? settings["port"] : 25,
+      username: typeof settings["username"] === "string" && settings["username"] !== "" ? settings["username"] : null,
+      password: typeof settings["password"] === "string" ? settings["password"] : null,
+      senderEmail,
+      auth: settings["auth"] === "none" || settings["auth"] === "login" || settings["auth"] === "plain" ? settings["auth"] : "plain",
+      encryption: isSmtpEncryption(settings["encryption"]) ? settings["encryption"] : null,
+    },
+    recipient,
+  };
+}
+
+async function deliverSmtpTest(
+  config: Parameters<typeof sendEmail>[0],
+  recipient: string,
+  set: ParamCtx["set"],
+): Promise<{ sent: true } | { error: unknown }> {
+  try {
+    await sendEmail(
+      config,
+      {
+        to: [recipient],
+        subject: "Terrence SMTP test",
+        text: "This is a test message from Terrence SMTP settings.",
+        html: "<html><body><p>This is a test message from Terrence SMTP settings.</p></body></html>",
+      },
+    );
+  } catch {
+    (set as { status: number }).status = 502;
+    return { error: { errors: [{ status: "502", title: "Bad Gateway", detail: "SMTP test delivery failed" }] } };
+  }
+  return { sent: true };
+}
+
 export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .use(authPlugin)
   .get("/api/v2/admin/logging-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -193,38 +254,10 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .post("/api/v2/admin/smtp-settings/test", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
     const settings = await getSettings("smtp");
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const recipient = typeof attrs["email"] === "string" ? normalizeEmail(attrs["email"]) : null;
-    const host = typeof settings["host"] === "string" ? settings["host"].trim() : "";
-    const senderEmail = typeof settings["sender-email"] === "string" ? settings["sender-email"].trim() : "";
-    if (settings["enabled"] !== true || host === "" || senderEmail === "" || recipient === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SMTP must be enabled and configured, and a valid email is required" }] };
-    }
-    try {
-      await sendEmail(
-        {
-          host,
-          port: typeof settings["port"] === "number" ? settings["port"] : 25,
-          username: typeof settings["username"] === "string" && settings["username"] !== "" ? settings["username"] : null,
-          password: typeof settings["password"] === "string" ? settings["password"] : null,
-          senderEmail,
-          auth: settings["auth"] === "none" || settings["auth"] === "login" || settings["auth"] === "plain" ? settings["auth"] : "plain",
-          encryption: isSmtpEncryption(settings["encryption"]) ? settings["encryption"] : null,
-        },
-        {
-          to: [recipient],
-          subject: "Terrence SMTP test",
-          text: "This is a test message from Terrence SMTP settings.",
-          html: "<html><body><p>This is a test message from Terrence SMTP settings.</p></body></html>",
-        },
-      );
-    } catch {
-      (set as { status: number }).status = 502;
-      return { errors: [{ status: "502", title: "Bad Gateway", detail: "SMTP test delivery failed" }] };
-    }
+    const resolved = resolveSmtpTestConfig(body, settings, set);
+    if ("error" in resolved) return resolved.error;
+    const delivered = await deliverSmtpTest(resolved.config, resolved.recipient, set);
+    if ("error" in delivered) return delivered.error;
     (set as { status: number }).status = 204;
     return {};
   })
