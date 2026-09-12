@@ -74,6 +74,99 @@ function splitTableRow(line: string): string[] {
   return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell): string => cell.trim());
 }
 
+function readHeading(line: string): { level: 1 | 2 | 3 | 4 | 5 | 6; text: string } | null {
+  const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+  if (heading === null) return null;
+// SAFETY: the markdown heading level is capped at 6 by the parsing regex above.
+  return { level: (heading[1] ?? "").length as 1 | 2 | 3 | 4 | 5 | 6, text: heading[2] ?? "" };
+}
+
+function isTableStart(line: string, nextLine: string | undefined): boolean {
+  return line.trim().startsWith("|") && isTableSeparator(nextLine ?? "");
+}
+
+function readCodeBlock(lines: readonly string[], startIndex: number): { text: string; nextIndex: number } {
+  const code: string[] = [];
+  let index = startIndex;
+  while (index < lines.length) {
+    const current = lines[index] ?? "";
+    if (current.trim().startsWith("```")) break;
+    code.push(current);
+    index += 1;
+  }
+  if (index < lines.length) index += 1;
+  return { text: code.join("\n"), nextIndex: index };
+}
+
+function readTableRows(lines: readonly string[], startIndex: number): { rows: string[][]; nextIndex: number } {
+  const rows: string[][] = [];
+  let index = startIndex;
+  while (index < lines.length) {
+    const current = lines[index] ?? "";
+    if (!current.trim().startsWith("|")) break;
+    rows.push(splitTableRow(current));
+    index += 1;
+  }
+  return { rows, nextIndex: index };
+}
+
+function readListBlock(lines: readonly string[], startIndex: number): { ordered: boolean; items: { text: string; children: string[] }[]; nextIndex: number } {
+  const firstLine = lines[startIndex] ?? "";
+  const ordered = /^\s*\d+\.\s+/.test(firstLine);
+  const firstItem = /^(\s*)(?:[-*+]|\d+\.)\s+(.*)$/.exec(firstLine);
+  const baseIndent = (firstItem?.[1] ?? "").length;
+  const items: { text: string; children: string[] }[] = [];
+  let index = startIndex;
+  while (index < lines.length) {
+    const current = lines[index] ?? "";
+    const itemMatch = /^(\s*)(?:[-*+]|\d+\.)\s+(.*)$/.exec(current);
+    if (itemMatch === null) break;
+    const indent = (itemMatch[1] ?? "").length;
+    if (indent > baseIndent) {
+      // A deeper-indented line continues the previous item as a nested list.
+      if (items.length > 0) {
+        items[items.length - 1]?.children.push(itemMatch[2] ?? "");
+        index += 1;
+        continue;
+      }
+      break;
+    }
+    if (indent < baseIndent) break;
+    items.push({ text: itemMatch[2] ?? "", children: [] });
+    index += 1;
+  }
+  return { ordered, items, nextIndex: index };
+}
+
+function readQuoteBlock(lines: readonly string[], startIndex: number): { text: string; nextIndex: number } {
+  const quote: string[] = [];
+  let index = startIndex;
+  while (index < lines.length) {
+    const current = lines[index] ?? "";
+    if (!current.startsWith("> ")) break;
+    quote.push(current.slice(2));
+    index += 1;
+  }
+  return { text: quote.join(" "), nextIndex: index };
+}
+
+function readParagraph(lines: readonly string[], startIndex: number): { text: string; nextIndex: number } {
+  const paragraph: string[] = [];
+  let index = startIndex;
+  while (index < lines.length) {
+    const current = lines[index] ?? "";
+    if (current.trim() === ""
+      || current.trim().startsWith("```")
+      || /^(#{1,6})\s+.+$/.test(current)
+      || /^\s*(?:[-*+]|\d+\.)\s+/.test(current)
+      || current.startsWith("> ")
+      || (current.trim().startsWith("|") && isTableSeparator(lines[index + 1] ?? ""))) break;
+    paragraph.push(current);
+    index += 1;
+  }
+  return { text: paragraph.join(" "), nextIndex: index };
+}
+
 export function parseMarkdown(markdown: string): MarkdownBlock[] {
   if (markdown.length > MARKDOWN_PARSER_LIMITS.maxSourceCharacters) {
     throw new MarkdownParseError(
@@ -96,88 +189,39 @@ export function parseMarkdown(markdown: string): MarkdownBlock[] {
       continue;
     }
     if (line.trim().startsWith("```")) {
-      const code: string[] = [];
-      index += 1;
-      while (index < lines.length) {
-        const current = lines[index] ?? "";
-        if (current.trim().startsWith("```")) break;
-        code.push(current);
-        index += 1;
-      }
-      if (index < lines.length) index += 1;
-      blocks.push({ kind: "code", text: code.join("\n") });
+      const code = readCodeBlock(lines, index + 1);
+      blocks.push({ kind: "code", text: code.text });
+      index = code.nextIndex;
       continue;
     }
-    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    const heading = readHeading(line);
     if (heading !== null) {
-// SAFETY: the markdown heading level is capped at 6 by the parsing regex above.
-      blocks.push({ kind: "heading", level: (heading[1] ?? "").length as 1 | 2 | 3 | 4 | 5 | 6, text: heading[2] ?? "" });
+      blocks.push({ kind: "heading", level: heading.level, text: heading.text });
       index += 1;
       continue;
     }
-    if (line.trim().startsWith("|") && isTableSeparator(lines[index + 1] ?? "")) {
+    if (isTableStart(line, lines[index + 1])) {
       const headers = splitTableRow(line);
-      index += 2; // header row + separator row
-      const rows: string[][] = [];
-      while (index < lines.length) {
-        const current = lines[index] ?? "";
-        if (!current.trim().startsWith("|")) break;
-        rows.push(splitTableRow(current));
-        index += 1;
-      }
-      blocks.push({ kind: "table", headers, rows });
+      const table = readTableRows(lines, index + 2); // header row + separator row
+      blocks.push({ kind: "table", headers, rows: table.rows });
+      index = table.nextIndex;
       continue;
     }
     if (/^\s*(?:[-*+]|\d+\.)\s+/.test(line)) {
-      const ordered = /^\s*\d+\.\s+/.test(line);
-      const firstItem = /^(\s*)(?:[-*+]|\d+\.)\s+(.*)$/.exec(line);
-      const baseIndent = (firstItem?.[1] ?? "").length;
-      const items: { text: string; children: string[] }[] = [];
-      while (index < lines.length) {
-        const current = lines[index] ?? "";
-        const itemMatch = /^(\s*)(?:[-*+]|\d+\.)\s+(.*)$/.exec(current);
-        if (itemMatch === null) break;
-        const indent = (itemMatch[1] ?? "").length;
-        if (indent > baseIndent) {
-          // A deeper-indented line continues the previous item as a nested list.
-          if (items.length > 0) {
-            items[items.length - 1]?.children.push(itemMatch[2] ?? "");
-            index += 1;
-            continue;
-          }
-          break;
-        }
-        if (indent < baseIndent) break;
-        items.push({ text: itemMatch[2] ?? "", children: [] });
-        index += 1;
-      }
-      blocks.push({ kind: "list", ordered, items });
+      const list = readListBlock(lines, index);
+      blocks.push({ kind: "list", ordered: list.ordered, items: list.items });
+      index = list.nextIndex;
       continue;
     }
     if (line.startsWith("> ")) {
-      const quote: string[] = [];
-      while (index < lines.length) {
-        const current = lines[index] ?? "";
-        if (!current.startsWith("> ")) break;
-        quote.push(current.slice(2));
-        index += 1;
-      }
-      blocks.push({ kind: "quote", text: quote.join(" ") });
+      const quote = readQuoteBlock(lines, index);
+      blocks.push({ kind: "quote", text: quote.text });
+      index = quote.nextIndex;
       continue;
     }
-    const paragraph: string[] = [];
-    while (index < lines.length) {
-      const current = lines[index] ?? "";
-      if (current.trim() === ""
-        || current.trim().startsWith("```")
-        || /^(#{1,6})\s+.+$/.test(current)
-        || /^\s*(?:[-*+]|\d+\.)\s+/.test(current)
-        || current.startsWith("> ")
-        || (current.trim().startsWith("|") && isTableSeparator(lines[index + 1] ?? ""))) break;
-      paragraph.push(current);
-      index += 1;
-    }
-    blocks.push({ kind: "paragraph", text: paragraph.join(" ") });
+    const paragraph = readParagraph(lines, index);
+    blocks.push({ kind: "paragraph", text: paragraph.text });
+    index = paragraph.nextIndex;
   }
   return blocks;
 }
