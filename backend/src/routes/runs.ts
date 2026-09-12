@@ -180,7 +180,14 @@ const INGRESS_STRING_FIELDS = [
 
 function resolveTriggerReason(source: string, ingress: ConfigurationVersionItem["ingressAttributes"]): string {
   if (!VCS_RUN_SOURCES.has(source)) return "manual";
-  if ((ingress)?.manualTrigger === true) return "manual";
+  // manualTrigger is written at runtime (see webhooks ingestion) but is not
+  // part of the column type; `in`-narrowing reads it without an assertion.
+  if (
+    typeof ingress === "object" &&
+    ingress !== null &&
+    "manualTrigger" in ingress &&
+    ingress.manualTrigger === true
+  ) return "manual";
   if (typeof ingress?.pullRequestNumber === "number") return "pull_request";
   if (typeof ingress?.tag === "string" && ingress.tag !== "") return "tag";
   return "push";
