@@ -35,6 +35,114 @@ type ResItem = Readonly<{
 }>;
 
 
+function varsetListParams(request: ParamCtx["request"]): { search: string; projectFilter: string } {
+  const url = new URL(request.url);
+  return {
+    search: url.searchParams.get("q")?.trim() ?? "",
+    projectFilter: url.searchParams.get("filter[project][id]")?.trim() ?? "",
+  };
+}
+
+function varsetScopeDenied(scopes: ReturnType<typeof currentTokenScopes>, orgId: string): boolean {
+  return scopes !== null && (!scopeCoversOrg(scopes, orgId) || !scopeGrants(scopes, "varsets:read"));
+}
+
+async function scopedVarsetIds(
+  scopes: NonNullable<ReturnType<typeof currentTokenScopes>>,
+  orgId: string,
+): Promise<string[] | null> {
+  const workspaceIds = await scopeWorkspaceIdsForOrg(scopes, orgId);
+  if (workspaceIds === null) return null;
+  const scopedProjects = new Set<string>(scopes.projects ?? []);
+  if (workspaceIds.length > 0) {
+    const workspaceRows = await db.query.workspaces.findMany({
+      where: inArray(workspaces.id, [...workspaceIds]),
+      columns: { projectId: true },
+    });
+    for (const workspace of workspaceRows) {
+      if (workspace.projectId !== null) scopedProjects.add(workspace.projectId);
+    }
+  }
+  const [workspaceLinks, projectLinks, ownedSets, globalSets] = await Promise.all([
+    workspaceIds.length === 0 ? [] : db.query.variableSetWorkspaces.findMany({
+      where: inArray(variableSetWorkspaces.workspaceId, [...workspaceIds]),
+      columns: { variableSetId: true },
+    }),
+    scopedProjects.size === 0 ? [] : db.query.variableSetProjects.findMany({
+      where: inArray(variableSetProjects.projectId, [...scopedProjects]),
+      columns: { variableSetId: true },
+    }),
+    scopedProjects.size === 0 ? [] : db.query.variableSets.findMany({
+      where: and(eq(variableSets.orgId, orgId), inArray(variableSets.parentProjectId, [...scopedProjects])),
+      columns: { id: true },
+    }),
+    db.query.variableSets.findMany({
+      where: and(eq(variableSets.orgId, orgId), eq(variableSets.global, true)),
+      columns: { id: true },
+    }),
+  ]);
+  return [...new Set<string>([
+    ...workspaceLinks.map((row): string => row.variableSetId),
+    ...projectLinks.map((row): string => row.variableSetId),
+    ...ownedSets.map((row): string => row.id),
+    ...globalSets.map((row): string => row.id),
+  ])];
+}
+
+async function projectVarsetIds(projectFilter: string): Promise<string[] | null> {
+  // Project-scoped variable sets: those owned by the project
+  // (parent_project_id) plus org-owned sets explicitly applied to it.
+  const owned = await db.query.variableSets.findMany({
+    where: eq(variableSets.parentProjectId, projectFilter),
+    columns: { id: true },
+  });
+  const applied = await db.query.variableSetProjects.findMany({
+    where: eq(variableSetProjects.projectId, projectFilter),
+    columns: { variableSetId: true },
+  });
+  const ids = new Set<string>([
+    ...owned.map((v): string => v.id),
+    ...applied.map((l): string => l.variableSetId),
+  ]);
+  if (ids.size === 0) return null;
+  return [...ids];
+}
+
+async function hydrateVarsetRecords(
+  records: VarSetItem[],
+  orgName: string,
+): Promise<Record<string, unknown>[]> {
+  // Batch the per-row N+1 (workspace/project/variable links + org name):
+  // three queries for the whole page instead of three per variable set.
+  const setIds = records.map((r: VarSetItem): string => r.id);
+  const [workspaceLinkRows, projectLinkRows, variableRows] = setIds.length === 0
+    ? [[], [], []]
+    : await Promise.all([
+      db.query.variableSetWorkspaces.findMany({ where: inArray(variableSetWorkspaces.variableSetId, setIds) }),
+      db.query.variableSetProjects.findMany({ where: inArray(variableSetProjects.variableSetId, setIds) }),
+      db.query.variableSetVariables.findMany({ where: inArray(variableSetVariables.variableSetId, setIds) }),
+    ]);
+  const groupBySetId = <T extends { variableSetId: string }>(rows: readonly T[]): Map<string, T[]> => {
+    const grouped = new Map<string, T[]>();
+    for (const row of rows) {
+      const list = grouped.get(row.variableSetId) ?? [];
+      list.push(row);
+      grouped.set(row.variableSetId, list);
+    }
+    return grouped;
+  };
+  const workspaceLinksBySet = groupBySetId(workspaceLinkRows);
+  const projectLinksBySet = groupBySetId(projectLinkRows);
+  const variablesBySet = groupBySetId(variableRows);
+  return Promise.all(records.map(async (r: VarSetItem): Promise<Record<string, unknown>> =>
+    variableSetResource(r, {
+      orgName,
+      workspaceLinks: workspaceLinksBySet.get(r.id) ?? [],
+      projectLinks: projectLinksBySet.get(r.id) ?? [],
+      variables: variablesBySet.get(r.id) ?? [],
+    })));
+}
+
 export const varsetRoutes = new Elysia({ name: "varsets" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/varsets", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -44,76 +152,27 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const { number, size } = pageRequest(request);
-    const url = new URL(request.url);
-    const search = url.searchParams.get("q")?.trim() ?? "";
-    const projectFilter = url.searchParams.get("filter[project][id]")?.trim() ?? "";
+    const { search, projectFilter } = varsetListParams(request);
     const scopes = currentTokenScopes();
-    if (scopes !== null && (!scopeCoversOrg(scopes, org.id) || !scopeGrants(scopes, "varsets:read"))) {
+    if (varsetScopeDenied(scopes, org.id)) {
       return { data: [], ...pagination(request, number, size, 0) };
     }
     const scope = eq(variableSets.orgId, org.id);
     const conditions: (typeof scope)[] = [scope];
     if (search !== "") conditions.push(caseInsensitiveLike(variableSets.name, `%${search}%`));
     if (scopes !== null) {
-      const workspaceIds = await scopeWorkspaceIdsForOrg(scopes, org.id);
-      if (workspaceIds !== null) {
-        const scopedProjects = new Set<string>(scopes.projects ?? []);
-        if (workspaceIds.length > 0) {
-          const workspaceRows = await db.query.workspaces.findMany({
-            where: inArray(workspaces.id, [...workspaceIds]),
-            columns: { projectId: true },
-          });
-          for (const workspace of workspaceRows) {
-            if (workspace.projectId !== null) scopedProjects.add(workspace.projectId);
-          }
-        }
-        const [workspaceLinks, projectLinks, ownedSets, globalSets] = await Promise.all([
-          workspaceIds.length === 0 ? [] : db.query.variableSetWorkspaces.findMany({
-            where: inArray(variableSetWorkspaces.workspaceId, [...workspaceIds]),
-            columns: { variableSetId: true },
-          }),
-          scopedProjects.size === 0 ? [] : db.query.variableSetProjects.findMany({
-            where: inArray(variableSetProjects.projectId, [...scopedProjects]),
-            columns: { variableSetId: true },
-          }),
-          scopedProjects.size === 0 ? [] : db.query.variableSets.findMany({
-            where: and(eq(variableSets.orgId, org.id), inArray(variableSets.parentProjectId, [...scopedProjects])),
-            columns: { id: true },
-          }),
-          db.query.variableSets.findMany({
-            where: and(eq(variableSets.orgId, org.id), eq(variableSets.global, true)),
-            columns: { id: true },
-          }),
-        ]);
-        const visibleIds = new Set<string>([
-          ...workspaceLinks.map((row): string => row.variableSetId),
-          ...projectLinks.map((row): string => row.variableSetId),
-          ...ownedSets.map((row): string => row.id),
-          ...globalSets.map((row): string => row.id),
-        ]);
-        if (visibleIds.size === 0) return { data: [], ...pagination(request, number, size, 0) };
-        conditions.push(inArray(variableSets.id, [...visibleIds]));
+      const scoped = await scopedVarsetIds(scopes, org.id);
+      if (scoped !== null) {
+        if (scoped.length === 0) return { data: [], ...pagination(request, number, size, 0) };
+        conditions.push(inArray(variableSets.id, scoped));
       }
     }
     if (projectFilter !== "") {
-      // Project-scoped variable sets: those owned by the project
-      // (parent_project_id) plus org-owned sets explicitly applied to it.
-      const owned = await db.query.variableSets.findMany({
-        where: eq(variableSets.parentProjectId, projectFilter),
-        columns: { id: true },
-      });
-      const applied = await db.query.variableSetProjects.findMany({
-        where: eq(variableSetProjects.projectId, projectFilter),
-        columns: { variableSetId: true },
-      });
-      const ids = new Set<string>([
-        ...owned.map((v): string => v.id),
-        ...applied.map((l): string => l.variableSetId),
-      ]);
-      if (ids.size === 0) {
+      const ids = await projectVarsetIds(projectFilter);
+      if (ids === null) {
         return { data: [], ...pagination(request, number, size, 0) };
       }
-      conditions.push(inArray(variableSets.id, [...ids]));
+      conditions.push(inArray(variableSets.id, ids));
     }
     const where = and(...conditions);
     const [records, countRows] = await Promise.all([
@@ -121,35 +180,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       db.select({ total: count() }).from(variableSets).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    // Batch the per-row N+1 (workspace/project/variable links + org name):
-    // three queries for the whole page instead of three per variable set.
-    const setIds = records.map((r: VarSetItem): string => r.id);
-    const [workspaceLinkRows, projectLinkRows, variableRows] = setIds.length === 0
-      ? [[], [], []]
-      : await Promise.all([
-        db.query.variableSetWorkspaces.findMany({ where: inArray(variableSetWorkspaces.variableSetId, setIds) }),
-        db.query.variableSetProjects.findMany({ where: inArray(variableSetProjects.variableSetId, setIds) }),
-        db.query.variableSetVariables.findMany({ where: inArray(variableSetVariables.variableSetId, setIds) }),
-      ]);
-    const groupBySetId = <T extends { variableSetId: string }>(rows: readonly T[]): Map<string, T[]> => {
-      const grouped = new Map<string, T[]>();
-      for (const row of rows) {
-        const list = grouped.get(row.variableSetId) ?? [];
-        list.push(row);
-        grouped.set(row.variableSetId, list);
-      }
-      return grouped;
-    };
-    const workspaceLinksBySet = groupBySetId(workspaceLinkRows);
-    const projectLinksBySet = groupBySetId(projectLinkRows);
-    const variablesBySet = groupBySetId(variableRows);
-    const data = await Promise.all(records.map(async (r: VarSetItem): Promise<Record<string, unknown>> =>
-      variableSetResource(r, {
-        orgName: org.name,
-        workspaceLinks: workspaceLinksBySet.get(r.id) ?? [],
-        projectLinks: projectLinksBySet.get(r.id) ?? [],
-        variables: variablesBySet.get(r.id) ?? [],
-      })));
+    const data = await hydrateVarsetRecords(records, org.name);
     return { data, ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/organizations/:org_name/varsets", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<unknown> => {
