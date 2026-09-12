@@ -67,59 +67,90 @@ function smtpMessage(to: string, verificationUrl: string): Readonly<{ to: readon
   };
 }
 
+async function checkVerificationEligibility(
+  user: Ctx["user"],
+  set: SetObj,
+): Promise<{ email: string } | { early: unknown } | { error: unknown }> {
+  if (user === null || user === undefined) return { error: error(set, 404, "Not Found") };
+  if (user.deletedAt !== null || user.isSuspended === true) return { error: error(set, 403, "Suspended accounts cannot verify email") };
+  const email = normalizeEmail(user.email);
+  if (email === null) return { error: error(set, 422, "A valid email address is required") };
+  if (user.emailVerifiedAt !== null) {
+    return { early: { data: { type: "email-verification", attributes: { verified: true } } } };
+  }
+  const recent = await db.query.emailVerificationTokens.findFirst({
+    where: and(eq(emailVerificationTokens.userId, user.id), gt(emailVerificationTokens.createdAt, Date.now() - REQUEST_COOLDOWN_MS), isNull(emailVerificationTokens.usedAt)),
+  });
+  if (recent !== undefined) return { error: error(set, 429, "A verification email was sent recently") };
+  return { email };
+}
+
+async function resolveVerificationSmtp(set: SetObj): Promise<{ config: Parameters<typeof sendEmail>[0] } | { error: unknown }> {
+  const smtp = await getSettings("smtp");
+  const host = typeof smtp["host"] === "string" ? smtp["host"].trim() : "";
+  const senderEmail = typeof smtp["sender-email"] === "string" ? smtp["sender-email"].trim() : "";
+  if (smtp["enabled"] !== true || host === "" || senderEmail === "") return { error: error(set, 503, "Email delivery is not configured") };
+  return {
+    config: {
+      host,
+      port: typeof smtp["port"] === "number" ? smtp["port"] : 25,
+      username: typeof smtp["username"] === "string" && smtp["username"] !== "" ? smtp["username"] : null,
+      password: typeof smtp["password"] === "string" ? smtp["password"] : null,
+      senderEmail,
+      auth: smtp["auth"] === "none" || smtp["auth"] === "login" || smtp["auth"] === "plain" ? smtp["auth"] : "plain",
+      encryption: isSmtpEncryption(smtp["encryption"]) ? smtp["encryption"] : null,
+    },
+  };
+}
+
+async function storeVerificationToken(userId: string, email: string, tokenHash: string, now: number): Promise<void> {
+  await db.transaction(async (tx: unknown): Promise<void> => {
+    const t = tx as typeof db;
+    await t.delete(emailVerificationTokens).where(eq(emailVerificationTokens.userId, userId));
+    await t.insert(emailVerificationTokens).values({
+      id: newResourceId("emailverify"),
+      userId,
+      email,
+      tokenHash,
+      expiresAt: now + TOKEN_TTL_MS,
+      createdAt: now,
+      usedAt: null,
+    });
+  });
+}
+
+async function deliverVerificationEmail(
+  config: Parameters<typeof sendEmail>[0],
+  email: string,
+  verificationUrl: string,
+  tokenHash: string,
+  set: SetObj,
+): Promise<{ sent: true } | { error: unknown }> {
+  try {
+    await sendEmail(config, smtpMessage(email, verificationUrl));
+  } catch {
+    await db.delete(emailVerificationTokens).where(eq(emailVerificationTokens.tokenHash, tokenHash));
+    return { error: error(set, 502, "Verification email could not be sent") };
+  }
+  return { sent: true };
+}
+
 export const emailVerificationRoutes = new Elysia({ name: "email-verification" })
   .use(authPlugin)
   .post("/api/v2/account/email/verification", async ({ user, request, set }: Ctx): Promise<unknown> => {
-    if (user === null || user === undefined) return error(set, 404, "Not Found");
-    if (user.deletedAt !== null || user.isSuspended === true) return error(set, 403, "Suspended accounts cannot verify email");
-    const email = normalizeEmail(user.email);
-    if (email === null) return error(set, 422, "A valid email address is required");
-    if (user.emailVerifiedAt !== null) {
-      return { data: { type: "email-verification", attributes: { verified: true } } };
-    }
-    const recent = await db.query.emailVerificationTokens.findFirst({
-      where: and(eq(emailVerificationTokens.userId, user.id), gt(emailVerificationTokens.createdAt, Date.now() - REQUEST_COOLDOWN_MS), isNull(emailVerificationTokens.usedAt)),
-    });
-    if (recent !== undefined) return error(set, 429, "A verification email was sent recently");
-    const smtp = await getSettings("smtp");
-    const host = typeof smtp["host"] === "string" ? smtp["host"].trim() : "";
-    const senderEmail = typeof smtp["sender-email"] === "string" ? smtp["sender-email"].trim() : "";
-    if (smtp["enabled"] !== true || host === "" || senderEmail === "") return error(set, 503, "Email delivery is not configured");
+    const eligible = await checkVerificationEligibility(user, set);
+    if ("error" in eligible) return eligible.error;
+    if ("early" in eligible) return eligible.early;
+    const smtp = await resolveVerificationSmtp(set);
+    if ("error" in smtp) return smtp.error;
     const rawToken = generateAuthenticationToken("email");
     const tokenHash = hashAuthenticationToken(rawToken);
     const now = Date.now();
-    await db.transaction(async (tx: unknown): Promise<void> => {
-      const t = tx as typeof db;
-      await t.delete(emailVerificationTokens).where(eq(emailVerificationTokens.userId, user.id));
-      await t.insert(emailVerificationTokens).values({
-        id: newResourceId("emailverify"),
-        userId: user.id,
-        email,
-        tokenHash,
-        expiresAt: now + TOKEN_TTL_MS,
-        createdAt: now,
-        usedAt: null,
-      });
-    });
+    await storeVerificationToken(user?.id ?? "", eligible.email, tokenHash, now);
     const verificationUrl = apiURL(request, `/api/v2/account/email/verify?token=${encodeURIComponent(rawToken)}`);
-    try {
-      await sendEmail(
-        {
-          host,
-          port: typeof smtp["port"] === "number" ? smtp["port"] : 25,
-          username: typeof smtp["username"] === "string" && smtp["username"] !== "" ? smtp["username"] : null,
-          password: typeof smtp["password"] === "string" ? smtp["password"] : null,
-          senderEmail,
-          auth: smtp["auth"] === "none" || smtp["auth"] === "login" || smtp["auth"] === "plain" ? smtp["auth"] : "plain",
-          encryption: isSmtpEncryption(smtp["encryption"]) ? smtp["encryption"] : null,
-        },
-        smtpMessage(email, verificationUrl),
-      );
-    } catch {
-      await db.delete(emailVerificationTokens).where(eq(emailVerificationTokens.tokenHash, tokenHash));
-      return error(set, 502, "Verification email could not be sent");
-    }
-    await auditLog("request", "email-verification", user.id, user.id, null, { email });
+    const delivered = await deliverVerificationEmail(smtp.config, eligible.email, verificationUrl, tokenHash, set);
+    if ("error" in delivered) return delivered.error;
+    await auditLog("request", "email-verification", user?.id ?? "", user?.id ?? "", null, { email: eligible.email });
     return { data: { type: "email-verification", attributes: { verified: false, "expires-at": new Date(now + TOKEN_TTL_MS).toISOString() } } };
   })
   .get("/api/v2/account/email/verify", async (ctx: Ctx): Promise<Response> => {
