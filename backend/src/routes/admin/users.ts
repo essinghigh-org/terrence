@@ -205,6 +205,30 @@ async function applyPasswordReset(
   });
 }
 
+async function endImpersonationSession(
+  token: ParamCtx["token"],
+  set: ParamCtx["set"],
+): Promise<{ ended: true } | { error: unknown }> {
+  const tokenId = token?.id;
+  const impersonationToken = tokenId !== undefined && isImpersonationTokenId(tokenId)
+    ? await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) })
+    : undefined;
+  if (impersonationToken === undefined) { (set as { status: number }).status = 404; return { error: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  const impersonatorName = /^Impersonation by (.+)$/.exec(impersonationToken.description ?? "")?.[1];
+  const impersonator = impersonatorName === undefined
+    ? undefined
+    : await db.query.users.findFirst({ where: eq(users.username, impersonatorName), columns: { id: true } });
+  await db.delete(apiTokens).where(eq(apiTokens.id, impersonationToken.id));
+  await auditLog("unimpersonate", "users", impersonationToken.userId, impersonationToken.userId, null, {
+    targetUserId: impersonationToken.userId,
+    impersonatorUserId: impersonator?.id ?? null,
+    effectiveUserId: impersonationToken.userId,
+    impersonationTokenId: impersonationToken.id,
+  }, { effectiveUserId: impersonationToken.userId });
+  (set as { status: number }).status = 204;
+  return { ended: true };
+}
+
 export const usersRoutes = new Elysia({ name: "admin-users" })
   .use(authPlugin)
   .get("/api/v2/admin/users", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
@@ -521,23 +545,8 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   })
   .post("/api/v2/admin/users/actions/unimpersonate", async ({ user, token, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) {
-      const tokenId = token?.id;
-      const impersonationToken = tokenId !== undefined && isImpersonationTokenId(tokenId)
-        ? await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) })
-        : undefined;
-      if (impersonationToken === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-      const impersonatorName = /^Impersonation by (.+)$/.exec(impersonationToken.description ?? "")?.[1];
-      const impersonator = impersonatorName === undefined
-        ? undefined
-        : await db.query.users.findFirst({ where: eq(users.username, impersonatorName), columns: { id: true } });
-      await db.delete(apiTokens).where(eq(apiTokens.id, impersonationToken.id));
-      await auditLog("unimpersonate", "users", impersonationToken.userId, impersonationToken.userId, null, {
-        targetUserId: impersonationToken.userId,
-        impersonatorUserId: impersonator?.id ?? null,
-        effectiveUserId: impersonationToken.userId,
-        impersonationTokenId: impersonationToken.id,
-      }, { effectiveUserId: impersonationToken.userId });
-      (set as { status: number }).status = 204;
+      const ended = await endImpersonationSession(token, set);
+      if ("error" in ended) return ended.error;
       return {};
     }
     await auditLog("unimpersonate", "users", user?.id ?? null, user?.id ?? null, null, { reason: "not-an-impersonation-session" }, { result: "denied", immutable: true });
