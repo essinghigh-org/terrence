@@ -7,6 +7,22 @@ import { eq, desc, count } from "drizzle-orm";
 import { pageRequest, pagination } from "../../lib/utils";
 import type { ParamCtx } from "./types";
 import { type VerItem, versionResource } from "./helpers";
+function fillVersionUpdates<T extends {
+  version?: string | undefined;
+  url?: string | null | undefined;
+  sha?: string | null | undefined;
+  deprecated?: boolean | null | undefined;
+  isDefault?: boolean | null | undefined;
+  enabled?: boolean | null | undefined;
+}>(attrs: Record<string, unknown>, updates: T): void {
+  if (typeof attrs["version"] === "string") updates.version = attrs["version"];
+  if (attrs["url"] !== undefined) updates.url = typeof attrs["url"] === "string" ? attrs["url"] : null;
+  if (attrs["sha"] !== undefined) updates.sha = typeof attrs["sha"] === "string" ? attrs["sha"] : null;
+  if (typeof attrs["deprecated"] === "boolean") updates.deprecated = attrs["deprecated"];
+  if (typeof attrs["default"] === "boolean") updates.isDefault = attrs["default"];
+  if (typeof attrs["enabled"] === "boolean") updates.enabled = attrs["enabled"];
+}
+
 export const versionsRoutes = new Elysia({ name: "admin-versions" })
   .use(authPlugin)
   .get("/api/v2/admin/terraform-versions", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
@@ -52,12 +68,7 @@ export const versionsRoutes = new Elysia({ name: "admin-versions" })
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const updates: Partial<typeof adminTerraformVersions.$inferInsert> = {};
-    if (typeof attrs["version"] === "string") updates.version = attrs["version"];
-    if (attrs["url"] !== undefined) updates.url = typeof attrs["url"] === "string" ? attrs["url"] : null;
-    if (attrs["sha"] !== undefined) updates.sha = typeof attrs["sha"] === "string" ? attrs["sha"] : null;
-    if (typeof attrs["deprecated"] === "boolean") updates.deprecated = attrs["deprecated"];
-    if (typeof attrs["default"] === "boolean") updates.isDefault = attrs["default"];
-    if (typeof attrs["enabled"] === "boolean") updates.enabled = attrs["enabled"];
+    fillVersionUpdates(attrs, updates);
     if (Object.keys(updates).length > 0) await db.update(adminTerraformVersions).set(updates).where(eq(adminTerraformVersions.id, versionId));
     const updated = await db.query.adminTerraformVersions.findFirst({ where: eq(adminTerraformVersions.id, versionId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -116,12 +127,7 @@ export const versionsRoutes = new Elysia({ name: "admin-versions" })
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const updates: Partial<typeof adminSentinelVersions.$inferInsert> = {};
-    if (typeof attrs["version"] === "string") updates.version = attrs["version"];
-    if (attrs["url"] !== undefined) updates.url = typeof attrs["url"] === "string" ? attrs["url"] : null;
-    if (attrs["sha"] !== undefined) updates.sha = typeof attrs["sha"] === "string" ? attrs["sha"] : null;
-    if (typeof attrs["deprecated"] === "boolean") updates.deprecated = attrs["deprecated"];
-    if (typeof attrs["default"] === "boolean") updates.isDefault = attrs["default"];
-    if (typeof attrs["enabled"] === "boolean") updates.enabled = attrs["enabled"];
+    fillVersionUpdates(attrs, updates);
     if (Object.keys(updates).length > 0) await db.update(adminSentinelVersions).set(updates).where(eq(adminSentinelVersions.id, versionId));
     const updated = await db.query.adminSentinelVersions.findFirst({ where: eq(adminSentinelVersions.id, versionId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -180,12 +186,7 @@ export const versionsRoutes = new Elysia({ name: "admin-versions" })
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const updates: Partial<typeof adminOpaVersions.$inferInsert> = {};
-    if (typeof attrs["version"] === "string") updates.version = attrs["version"];
-    if (attrs["url"] !== undefined) updates.url = typeof attrs["url"] === "string" ? attrs["url"] : null;
-    if (attrs["sha"] !== undefined) updates.sha = typeof attrs["sha"] === "string" ? attrs["sha"] : null;
-    if (typeof attrs["deprecated"] === "boolean") updates.deprecated = attrs["deprecated"];
-    if (typeof attrs["default"] === "boolean") updates.isDefault = attrs["default"];
-    if (typeof attrs["enabled"] === "boolean") updates.enabled = attrs["enabled"];
+    fillVersionUpdates(attrs, updates);
     if (Object.keys(updates).length > 0) await db.update(adminOpaVersions).set(updates).where(eq(adminOpaVersions.id, versionId));
     const updated = await db.query.adminOpaVersions.findFirst({ where: eq(adminOpaVersions.id, versionId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
