@@ -410,6 +410,60 @@ async function resolveRunTriggerSource(srcId: string, orgId: string, workspaceId
   return { name: srcWs.name };
 }
 
+async function verifyApprovalWebhookRequest(
+  secret: unknown,
+  request: Request,
+  body: unknown,
+  set: SetObj,
+): Promise<Readonly<{ rawBody: string }> | Readonly<{ error: unknown }>> {
+  if (typeof secret !== "string" || secret === "") {
+    return { error: webhookUnauthorized(set, "Approval webhook secret is not configured") };
+  }
+  const rawBody = typeof body === "string" ? body : await request.text().catch((): string => "");
+  const signature = request.headers.get("x-terrence-signature");
+  if (signature === null) {
+    (set as { status: number }).status = 401;
+    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Missing signature" }] } };
+  }
+  const expected = Buffer.from(createHmac("sha256", secret).update(rawBody).digest("hex"));
+  const provided = Buffer.from(signature);
+  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+    return { error: webhookUnauthorized(set, "Invalid approval webhook signature") };
+  }
+  return { rawBody };
+}
+
+function parseApprovalWebhookPayload(rawBody: string, set: SetObj): Readonly<{ runId: string }> | Readonly<{ error: unknown }> {
+  let parsed: Readonly<Record<string, unknown>> = {};
+  try {
+    const value: unknown = JSON.parse(rawBody);
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) parsed = value as Readonly<Record<string, unknown>>;
+  } catch {
+    return { error: webhookUnprocessable(set, "Invalid JSON payload") };
+  }
+  const runId = typeof parsed["run"] === "string" ? parsed["run"] : typeof parsed["run_id"] === "string" ? parsed["run_id"] : "";
+  if (runId === "") return { error: webhookUnprocessable(set, "Missing run id") };
+  const action = typeof parsed["action"] === "string" ? parsed["action"] : "";
+  if (action !== "confirm") {
+    return { error: webhookUnprocessable(set, "Invalid action; expected \"confirm\"") };
+  }
+  return { runId };
+}
+
+async function confirmRunApplyForWebhook(runId: string, set: SetObj): Promise<unknown> {
+  // The HMAC is the actor for this path; do not leave the event looking like
+  // an anonymous browser request merely because the webhook has no bearer.
+  setAuditPrincipal({ userId: null, credentialClass: "system-token", authenticated: true });
+  const outcome = await confirmRunForApply(runId, { isWebhookApproval: true });
+  if (!outcome.ok) {
+    await auditLog("apply", "runs", runId, null, null, { source: "approval-webhook", reason: outcome.reason ?? "apply could not be started" }, { result: "denied", immutable: true });
+    (set as { status: number }).status = 409;
+    return { errors: [{ status: "409", title: "Conflict", detail: outcome.reason ?? "Apply could not be started" }] };
+  }
+  log.info(`Approval webhook confirmed apply for run ${runId}`);
+  return { data: { id: runId, type: "runs", attributes: { status: outcome.status } } };
+}
+
 export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
@@ -523,45 +577,11 @@ export const miscRoutes = new Elysia({ name: "misc" })
     if (settings["enabled"] !== true) {
       return webhookUnprocessable(set, "External apply approval is not enabled");
     }
-    const secret = settings["secret"];
-    if (typeof secret !== "string" || secret === "") {
-      return webhookUnauthorized(set, "Approval webhook secret is not configured");
-    }
-    const rawBody = typeof body === "string" ? body : await request.text().catch((): string => "");
-    const signature = request.headers.get("x-terrence-signature");
-    if (signature === null) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Missing signature" }] };
-    }
-    const expected = Buffer.from(createHmac("sha256", secret).update(rawBody).digest("hex"));
-    const provided = Buffer.from(signature);
-    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
-      return webhookUnauthorized(set, "Invalid approval webhook signature");
-    }
-    let parsed: Readonly<Record<string, unknown>> = {};
-    try {
-      const value: unknown = JSON.parse(rawBody);
-      if (value !== null && typeof value === "object" && !Array.isArray(value)) parsed = value as Readonly<Record<string, unknown>>;
-    } catch {
-      return webhookUnprocessable(set, "Invalid JSON payload");
-    }
-    const runId = typeof parsed["run"] === "string" ? parsed["run"] : typeof parsed["run_id"] === "string" ? parsed["run_id"] : "";
-    if (runId === "") return webhookUnprocessable(set, "Missing run id");
-    const action = typeof parsed["action"] === "string" ? parsed["action"] : "";
-    if (action !== "confirm") {
-      return webhookUnprocessable(set, "Invalid action; expected \"confirm\"");
-    }
-    // The HMAC is the actor for this path; do not leave the event looking like
-    // an anonymous browser request merely because the webhook has no bearer.
-    setAuditPrincipal({ userId: null, credentialClass: "system-token", authenticated: true });
-    const outcome = await confirmRunForApply(runId, { isWebhookApproval: true });
-    if (!outcome.ok) {
-      await auditLog("apply", "runs", runId, null, null, { source: "approval-webhook", reason: outcome.reason ?? "apply could not be started" }, { result: "denied", immutable: true });
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: outcome.reason ?? "Apply could not be started" }] };
-    }
-    log.info(`Approval webhook confirmed apply for run ${runId}`);
-    return { data: { id: runId, type: "runs", attributes: { status: outcome.status } } };
+    const verified = await verifyApprovalWebhookRequest(settings["secret"], request, body, set);
+    if ("error" in verified) return verified.error;
+    const parsedRequest = parseApprovalWebhookPayload(verified.rawBody, set);
+    if ("error" in parsedRequest) return parsedRequest.error;
+    return confirmRunApplyForWebhook(parsedRequest.runId, set);
   })
   // --- Entitlements ---
   .get("/api/v2/entitlements", async ({ user, set }: ParamCtx): Promise<unknown> => {
