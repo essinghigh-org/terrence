@@ -5,6 +5,144 @@ import { copyTextToClipboard } from "../lib/utils";
 
 type LogPhase = "plan" | "apply";
 
+function phaseLabel(phase: LogPhase): string {
+  return phase === "plan" ? "Plan" : "Apply";
+}
+
+function matchSummaryText(normalizedSearch: string, matchCount: number): string {
+  if (normalizedSearch === "") return "";
+  return `${matchCount} match${matchCount === 1 ? "" : "es"}`;
+}
+
+function newLinesSuffix(newLines: number): string {
+  if (newLines <= 0) return "";
+  return ` · ${newLines} new line${newLines === 1 ? "" : "s"}`;
+}
+
+function LogToolbar({
+  phase,
+  toolbarLabel,
+  following,
+  newLines,
+  search,
+  onSearchChange,
+  matchSummary,
+  copied,
+  onCopy,
+  onToggleFollowing,
+  onJumpToLatest,
+  onToggleWrap,
+  wrap,
+  safeLogUrl,
+  onPhaseChange,
+}: Readonly<{
+  phase: LogPhase;
+  toolbarLabel: string;
+  following: boolean;
+  newLines: number;
+  search: string;
+  onSearchChange: (value: string) => void;
+  matchSummary: string;
+  copied: boolean;
+  onCopy: () => void;
+  onToggleFollowing: () => void;
+  onJumpToLatest: () => void;
+  onToggleWrap: (() => void) | undefined;
+  wrap: boolean;
+  safeLogUrl: string | null;
+  onPhaseChange: ((phase: LogPhase) => void) | undefined;
+}>): React.JSX.Element {
+  return (
+    <div role="toolbar" aria-label={toolbarLabel} className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/40 px-3 py-2 text-xs">
+      {onPhaseChange !== undefined && (
+        <label className="inline-flex items-center gap-1.5 font-medium text-muted-foreground">
+          <span>Phase</span>
+          <select
+            aria-label="Log phase"
+            value={phase}
+            onChange={(event): void => {
+              const next = event.currentTarget.value;
+              if (next === "plan" || next === "apply") onPhaseChange(next);
+            }}
+            className="h-7 rounded border border-input bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <option value="plan">Plan</option>
+            <option value="apply">Apply</option>
+          </select>
+        </label>
+      )}
+      <button
+        type="button"
+        aria-pressed={following}
+        aria-label={following ? "Pause following log" : "Follow log output"}
+        onClick={onToggleFollowing}
+        className="inline-flex h-7 items-center gap-1.5 rounded border border-input bg-background px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {following ? <Pause className="size-3.5" aria-hidden="true" /> : <Play className="size-3.5" aria-hidden="true" />}
+        {following ? "Following" : "Paused"}
+      </button>
+      <button
+        type="button"
+        aria-label="Jump to latest log output"
+        onClick={onJumpToLatest}
+        className="inline-flex h-7 items-center gap-1.5 rounded border border-input bg-background px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <ArrowDownToLine className="size-3.5" aria-hidden="true" />
+        Jump to latest{newLinesSuffix(newLines)}
+      </button>
+      <label className="ml-auto inline-flex min-w-[180px] flex-1 items-center gap-1.5 text-muted-foreground sm:flex-none">
+        <span className="sr-only">Search loaded log output</span>
+        <input
+          type="search"
+          value={search}
+          onInput={(event): void => { onSearchChange(event.currentTarget.value); }}
+          placeholder="Search loaded output…"
+          aria-label="Search loaded log output"
+          className="h-7 w-full rounded border border-input bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+        <span aria-live="polite" className="shrink-0 tabular-nums text-muted-foreground">
+          {matchSummary}
+        </span>
+      </label>
+      <button
+        type="button"
+        aria-label={copied ? "Log copied" : "Copy loaded log"}
+        onClick={onCopy}
+        className="inline-flex h-7 items-center gap-1.5 rounded border border-input bg-background px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Copy className="size-3.5" aria-hidden="true" />
+        {copied ? "Copied" : "Copy"}
+      </button>
+      {onToggleWrap !== undefined && (
+        <button
+          type="button"
+          aria-pressed={wrap}
+          onClick={onToggleWrap}
+          className="inline-flex h-7 items-center rounded border border-input bg-background px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Wrap {wrap ? "on" : "off"}
+        </button>
+      )}
+      {safeLogUrl !== null && (
+        <>
+          <a
+            href={safeLogUrl}
+            download
+            aria-label="Download raw log"
+            title="Provider output may contain secrets; Terrence applies best-effort masking."
+            className="inline-flex h-7 items-center rounded border border-input bg-background px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Download raw log
+          </a>
+          <span className="text-warning-text" title="Provider output may contain secrets; Terrence applies best-effort masking.">
+            May contain secrets
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function RunLogOutput({
   active,
   children,
@@ -97,98 +235,29 @@ export function RunLogOutput({
   };
 
   const safeLogUrl = safeHttpUrl(logUrl);
-  const toolbarLabel = phase === undefined ? "Log controls" : `${phase === "plan" ? "Plan" : "Apply"} log controls`;
+  const toolbarLabel = phase === undefined ? "Log controls" : `${phaseLabel(phase)} log controls`;
+  const matchSummary = matchSummaryText(normalizedSearch, matchCount);
 
   return (
     <div className="flex min-w-0 flex-col">
       {phase !== undefined && showControls && (
-        <div role="toolbar" aria-label={toolbarLabel} className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/40 px-3 py-2 text-xs">
-          {onPhaseChange !== undefined && (
-            <label className="inline-flex items-center gap-1.5 font-medium text-muted-foreground">
-              <span>Phase</span>
-              <select
-                aria-label="Log phase"
-                value={phase}
-                onChange={(event): void => {
-                  const next = event.currentTarget.value;
-                  if (next === "plan" || next === "apply") onPhaseChange(next);
-                }}
-                className="h-7 rounded border border-input bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option value="plan">Plan</option>
-                <option value="apply">Apply</option>
-              </select>
-            </label>
-          )}
-          <button
-            type="button"
-            aria-pressed={following}
-            aria-label={following ? "Pause following log" : "Follow log output"}
-            onClick={toggleFollowing}
-            className="inline-flex h-7 items-center gap-1.5 rounded border border-input bg-background px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {following ? <Pause className="size-3.5" aria-hidden="true" /> : <Play className="size-3.5" aria-hidden="true" />}
-            {following ? "Following" : "Paused"}
-          </button>
-          <button
-            type="button"
-            aria-label="Jump to latest log output"
-            onClick={jumpToLatest}
-            className="inline-flex h-7 items-center gap-1.5 rounded border border-input bg-background px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <ArrowDownToLine className="size-3.5" aria-hidden="true" />
-            Jump to latest{newLines > 0 ? ` · ${newLines} new line${newLines === 1 ? "" : "s"}` : ""}
-          </button>
-          <label className="ml-auto inline-flex min-w-[180px] flex-1 items-center gap-1.5 text-muted-foreground sm:flex-none">
-            <span className="sr-only">Search loaded log output</span>
-            <input
-              type="search"
-              value={search}
-              onInput={(event): void => { setSearch(event.currentTarget.value); }}
-              placeholder="Search loaded output…"
-              aria-label="Search loaded log output"
-              className="h-7 w-full rounded border border-input bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-            <span aria-live="polite" className="shrink-0 tabular-nums text-muted-foreground">
-              {normalizedSearch === "" ? "" : `${matchCount} match${matchCount === 1 ? "" : "es"}`}
-            </span>
-          </label>
-          <button
-            type="button"
-            aria-label={copied ? "Log copied" : "Copy loaded log"}
-            onClick={copyLog}
-            className="inline-flex h-7 items-center gap-1.5 rounded border border-input bg-background px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <Copy className="size-3.5" aria-hidden="true" />
-            {copied ? "Copied" : "Copy"}
-          </button>
-          {onToggleWrap !== undefined && (
-            <button
-              type="button"
-              aria-pressed={wrap}
-              onClick={onToggleWrap}
-              className="inline-flex h-7 items-center rounded border border-input bg-background px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              Wrap {wrap ? "on" : "off"}
-            </button>
-          )}
-          {safeLogUrl !== null && (
-            <>
-              <a
-                href={safeLogUrl}
-                download
-                aria-label="Download raw log"
-                title="Provider output may contain secrets; Terrence applies best-effort masking."
-                className="inline-flex h-7 items-center rounded border border-input bg-background px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                Download raw log
-              </a>
-              <span className="text-warning-text" title="Provider output may contain secrets; Terrence applies best-effort masking.">
-                May contain secrets
-              </span>
-            </>
-          )}
-        </div>
+        <LogToolbar
+          phase={phase}
+          toolbarLabel={toolbarLabel}
+          following={following}
+          newLines={newLines}
+          search={search}
+          onSearchChange={(value: string): void => { setSearch(value); }}
+          matchSummary={matchSummary}
+          copied={copied}
+          onCopy={copyLog}
+          onToggleFollowing={toggleFollowing}
+          onJumpToLatest={jumpToLatest}
+          onToggleWrap={onToggleWrap}
+          wrap={wrap}
+          safeLogUrl={safeLogUrl}
+          onPhaseChange={onPhaseChange}
+        />
       )}
       {truncated && (
         <p role="status" className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning-text">
@@ -197,7 +266,7 @@ export function RunLogOutput({
       )}
       <pre
         ref={element}
-        aria-label={phase === undefined ? "Log output" : `${phase === "plan" ? "Plan" : "Apply"} operational log output`}
+        aria-label={phase === undefined ? "Log output" : `${phaseLabel(phase)} operational log output`}
         className={className}
         onScroll={(event): void => {
           const pane = event.currentTarget;

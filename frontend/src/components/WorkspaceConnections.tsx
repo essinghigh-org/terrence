@@ -392,6 +392,53 @@ type HealthAssessment = {
   };
 };
 
+function failedCheckCount(attrs: HealthAssessment["attributes"]): number {
+  return (attrs["checks-failed"] ?? 0) + (attrs["checks-errored"] ?? 0);
+}
+
+function isFullyHealthy(attrs: HealthAssessment["attributes"], checksFailed: number): boolean {
+  return attrs.status === "completed"
+    && attrs.drifted === false
+    && attrs["all-checks-succeeded"] === true
+    && checksFailed === 0
+    && (attrs["checks-unknown"] ?? 0) === 0
+    && (attrs["error-msg"] ?? "") === "";
+}
+
+function driftLabel(attrs: HealthAssessment["attributes"]): string {
+  if (attrs.drifted === true) return `${attrs["resources-drifted"] ?? 0} resource(s) drifted`;
+  if (attrs.drifted === false) return "No drift detected";
+  return "Not available";
+}
+
+function completedLabel(completedAt: string | null | undefined): string {
+  return completedAt === null || completedAt === undefined ? "In progress" : formatDate(completedAt);
+}
+
+function LatestAssessmentCard({ assessment }: Readonly<{
+  assessment: HealthAssessment;
+}>): React.JSX.Element {
+  const attrs = assessment.attributes;
+  const checksFailed = failedCheckCount(attrs);
+  return (
+    <div className="space-y-5">
+    {isFullyHealthy(attrs, checksFailed) && (
+      <div className="flex items-center gap-4 rounded-lg border border-success/20 bg-success/5 px-4 py-2">
+        <Terrence pose="healthy" detail="small" className="w-28" />
+        <div><h3 className="font-heading text-lg font-semibold">Everything healthy</h3><p className="mt-1 text-sm text-muted-foreground">The latest assessment found no drift or failing checks.</p></div>
+      </div>
+    )}
+    <dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+      <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</dt><dd className="mt-1 font-medium capitalize">{attrs.status.replace(/_/g, " ")}</dd></div>
+      <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Drift</dt><dd className="mt-1 font-medium">{driftLabel(attrs)}</dd></div>
+      <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Validation</dt><dd className="mt-1 font-medium">{attrs["checks-passed"] ?? 0} passed{checksFailed > 0 ? ` · ${checksFailed} failed` : ""}</dd></div>
+      <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Completed</dt><dd className="mt-1 font-medium">{completedLabel(attrs["completed-at"])}</dd></div>
+      {attrs["error-msg"] !== null && attrs["error-msg"] !== undefined && <div className="sm:col-span-2 lg:col-span-4"><dt className="text-xs font-semibold uppercase tracking-wide text-destructive">Error</dt><dd className="mt-1 text-sm text-destructive">{attrs["error-msg"]}</dd></div>}
+    </dl>
+    </div>
+  );
+}
+
 export function WorkspaceHealth({
   workspace,
   onSaved,
@@ -473,28 +520,9 @@ export function WorkspaceHealth({
               <div><h3 className="font-heading font-semibold">No health assessment has run yet.</h3><p className="mt-1 max-w-md text-sm text-muted-foreground">Health assessments check for infrastructure drift and validation failures. Configure the schedule below to get started.</p></div>
             </div>
           )}
-          {!assessmentsLoading && assessments[0] !== undefined && ((): React.JSX.Element => {
-            const latest = assessments[0];
-            const attrs = latest.attributes;
-            const checksFailed = (attrs["checks-failed"] ?? 0) + (attrs["checks-errored"] ?? 0);
-            return (
-              <div className="space-y-5">
-              {attrs.status === "completed" && attrs.drifted === false && attrs["all-checks-succeeded"] === true && checksFailed === 0 && (attrs["checks-unknown"] ?? 0) === 0 && !attrs["error-msg"] && (
-                <div className="flex items-center gap-4 rounded-lg border border-success/20 bg-success/5 px-4 py-2">
-                  <Terrence pose="healthy" detail="small" className="w-28" />
-                  <div><h3 className="font-heading text-lg font-semibold">Everything healthy</h3><p className="mt-1 text-sm text-muted-foreground">The latest assessment found no drift or failing checks.</p></div>
-                </div>
-              )}
-              <dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
-                <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</dt><dd className="mt-1 font-medium capitalize">{attrs.status.replace(/_/g, " ")}</dd></div>
-                <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Drift</dt><dd className="mt-1 font-medium">{attrs.drifted === true ? `${attrs["resources-drifted"] ?? 0} resource(s) drifted` : attrs.drifted === false ? "No drift detected" : "Not available"}</dd></div>
-                <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Validation</dt><dd className="mt-1 font-medium">{attrs["checks-passed"] ?? 0} passed{checksFailed > 0 ? ` · ${checksFailed} failed` : ""}</dd></div>
-                <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Completed</dt><dd className="mt-1 font-medium">{attrs["completed-at"] === null || attrs["completed-at"] === undefined ? "In progress" : formatDate(attrs["completed-at"])}</dd></div>
-                {attrs["error-msg"] !== null && attrs["error-msg"] !== undefined && <div className="sm:col-span-2 lg:col-span-4"><dt className="text-xs font-semibold uppercase tracking-wide text-destructive">Error</dt><dd className="mt-1 text-sm text-destructive">{attrs["error-msg"]}</dd></div>}
-              </dl>
-              </div>
-            );
-          })()}
+          {!assessmentsLoading && assessments[0] !== undefined && (
+            <LatestAssessmentCard assessment={assessments[0]} />
+          )}
         </CardContent>
       </Card>
       <form onSubmit={save}>
