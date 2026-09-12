@@ -50,24 +50,210 @@ function explainAuditContext(user: Readonly<{ readonly id: string }> | null | un
   return { userId: user?.id ?? null, orgId: orgId ?? null };
 }
 
+function isRecordObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validPreflightProbes(raw: unknown): raw is string[] {
+  return Array.isArray(raw)
+    && raw.length <= 8
+    && raw.every((probe): probe is string => typeof probe === "string" && (probe === "connectivity" || probe === "identity"));
+}
+
 function preflightBodyProbes(body: unknown): Readonly<{ probes?: readonly string[]; invalid: boolean }> {
   if (body === undefined || body === null) return { invalid: false };
-  if (typeof body !== "object" || Array.isArray(body)) return { invalid: true };
-  const data = (body as Record<string, unknown>)["data"];
+  if (!isRecordObject(body)) return { invalid: true };
+  const data = body["data"];
   if (data === undefined) return { invalid: false };
-  if (typeof data !== "object" || data === null || Array.isArray(data)) return { invalid: true };
-  const attributes = (data as Record<string, unknown>)["attributes"];
+  if (!isRecordObject(data)) return { invalid: true };
+  const attributes = data["attributes"];
   if (attributes === undefined) return { invalid: false };
-  if (typeof attributes !== "object" || attributes === null || Array.isArray(attributes)) return { invalid: true };
-  const raw = (attributes as Record<string, unknown>)["probes"];
+  if (!isRecordObject(attributes)) return { invalid: true };
+  const raw = attributes["probes"];
   if (raw === undefined) return { invalid: false };
-  if (!Array.isArray(raw) || raw.length > 8 || raw.some((probe): boolean => typeof probe !== "string" || !["connectivity", "identity"].includes(probe))) return { invalid: true };
-  return { probes: raw as string[], invalid: false };
+  if (!validPreflightProbes(raw)) return { invalid: true };
+  return { probes: raw, invalid: false };
 }
 
 function preflightError(set: SetObj, status: number, detail: string): Readonly<{ errors: readonly [{ status: string; title: string; detail: string }] }> {
   (set as { status: number }).status = status;
   return { errors: [{ status: String(status), title: status === 422 ? "Unprocessable Entity" : "Not Found", detail }] };
+}
+
+async function explainPendingJob(
+  runId: string,
+  kind: ExplainKind,
+  reasoningEffort: ReasoningEffort | null,
+  set: SetObj,
+): Promise<{ response: unknown } | { none: true }> {
+  const dedupeKey = `${runId}:${kind}`;
+  const job = await db.query.durableJobs.findFirst({
+    where: and(eq(durableJobs.kind, "plan-explanation"), eq(durableJobs.dedupeKey, dedupeKey)),
+  });
+  if (job !== undefined && (job.status === "queued" || job.status === "running")) {
+    return { response: explainJobResource(runId, kind, job, reasoningEffort) };
+  }
+  if (job !== undefined && job.status === "failed") {
+    const err = explainError(502, "Bad Gateway", job.lastError ?? "Plan explainer failed");
+    (set as { status: number }).status = err.status;
+    return { response: err.body };
+  }
+  return { none: true };
+}
+
+type ExplainPostRequest = {
+  settings: Parameters<typeof resolvePlanExplainerSettings>[0];
+  kind: ExplainKind;
+  reasoningEffort: ReasoningEffort | null;
+  refresh: boolean;
+  streamRequested: boolean;
+};
+
+async function parseExplainPost(
+  runId: string,
+  body: unknown,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+  set: SetObj,
+): Promise<{ request: ExplainPostRequest } | { failure: unknown }> {
+  const authorized = await findAuthorizedRun(runId, userId, orgId ?? null, teamId ?? null, "run-read");
+  if (authorized === undefined) return { failure: notFound(set) };
+  const settings = await getSettings("plan-explainer");
+  if (settings["enabled"] !== true) return { failure: notFound(set) };
+  const reasoningEffort = configuredReasoningEffort(settings["reasoning-effort"]);
+  const attributes = readExplainAttributes(body);
+  const kindOrError = parseExplainKind(attributes["kind"], set);
+  if (typeof kindOrError !== "string") return { failure: kindOrError.body };
+  return {
+    request: {
+      settings,
+      kind: kindOrError,
+      reasoningEffort,
+      refresh: attributes["refresh"] === true,
+      streamRequested: attributes["stream"] === true,
+    },
+  };
+}
+
+async function explainCachedJson(
+  runId: string,
+  kind: ExplainKind,
+  reasoningEffort: ReasoningEffort | null,
+  streamRequested: boolean,
+): Promise<{ response: unknown } | { none: true }> {
+  const cached = await findExplanation(runId, kind);
+  if (cached === undefined) return { none: true };
+  if (streamRequested) {
+    return { response: cachedSseResponse(cached.content, kind, cached.model, reasoningEffort, cached.createdAt) };
+  }
+  return { response: explanationResource(runId, kind, cached.content, cached.model, reasoningEffort, new Date(cached.createdAt).toISOString(), true) };
+}
+
+async function resolveExplainerBackend(
+  settings: ExplainPostRequest["settings"],
+  set: SetObj,
+): Promise<{ backend: Exclude<Awaited<ReturnType<typeof resolvePlanExplainerSettings>>, null> } | { failure: unknown }> {
+  const resolvedSettings = await resolvePlanExplainerSettings(settings);
+  if (resolvedSettings === null) {
+    (set as { status: number }).status = 503;
+    return { failure: { errors: [{ status: "503", title: "Service Unavailable", detail: "Plan explainer is not fully configured" }] } };
+  }
+  return { backend: resolvedSettings };
+}
+
+async function loadExplainSource(
+  runId: string,
+  kind: ExplainKind,
+  set: SetObj,
+): Promise<{ source: ExplainSource } | { failure: unknown }> {
+  const source = await buildExplainSource(runId, kind);
+  if (source === undefined) {
+    const err = explainError(409, "Conflict", explainMissingArtifactDetail(kind));
+    (set as { status: number }).status = err.status;
+    return { failure: err.body };
+  }
+  return { source };
+}
+
+async function maybeStreamExplain(
+  streamRequested: boolean,
+  refresh: boolean,
+  runId: string,
+  kind: ExplainKind,
+  model: string,
+  reasoningEffort: ReasoningEffort | null,
+  request: Request,
+  backend: Exclude<Awaited<ReturnType<typeof resolvePlanExplainerSettings>>, null>,
+  source: ExplainSource,
+  audit: Readonly<{ userId: string | null; orgId: string | null }>,
+): Promise<{ response: unknown } | { none: true }> {
+  if (!streamRequested) return { none: true };
+  if (!refresh) {
+    const cachedStream = await findExplanation(runId, kind);
+    if (cachedStream !== undefined && cachedStream.content !== "") {
+      return { response: cachedSseResponse(cachedStream.content, kind, cachedStream.model, reasoningEffort, cachedStream.createdAt) };
+    }
+    const dedupeKey = `${runId}:${kind}`;
+    const pendingJob = await db.query.durableJobs.findFirst({
+      where: and(eq(durableJobs.kind, "plan-explanation"), eq(durableJobs.dedupeKey, dedupeKey)),
+    });
+    if (pendingJob !== undefined && (pendingJob.status === "queued" || pendingJob.status === "running")) {
+      return { response: sseJobProgressResponse(runId, kind, pendingJob, model, reasoningEffort, request) };
+    }
+  }
+  return { response: await streamExplainResponse(backend, source, runId, kind, model, reasoningEffort, request, refresh, audit) };
+}
+
+async function enqueueExplainJob(
+  runId: string,
+  kind: ExplainKind,
+  orgId: string | null,
+  reasoningEffort: ReasoningEffort | null,
+  set: SetObj,
+): Promise<{ response: unknown }> {
+  // Background the non-streaming generation: enqueue a durable job and
+  // return 202 so a tab close does not abort the LLM call. Concurrent
+  // requests for the same (run, kind) dedupe to the same job.
+  const dedupeKey = `${runId}:${kind}`;
+  let job;
+  try {
+    job = await enqueueDurableJob(
+      "plan-explanation",
+      { runId, kind, organizationId: orgId, jobClass: "explanation", estimatedBytes: 1 * 1024 * 1024 },
+      {
+        dedupeKey,
+        budget: { organizationId: orgId, jobClass: "explanation", estimatedBytes: 1 * 1024 * 1024 },
+      },
+    );
+  } catch (error: unknown) {
+    if (!(error instanceof DurableJobBudgetError)) throw error;
+    (set as { status: number }).status = error.status;
+    if (error.status === 429 && error.admission.retryAfterMs !== null) {
+      (set.headers as Record<string, string | number>)["Retry-After"] = Math.ceil(error.admission.retryAfterMs / 1_000);
+    }
+    return {
+      response: {
+        errors: [{
+          status: String(error.status),
+          title: error.status === 413 ? "Payload Too Large" : "Too Many Requests",
+          detail: error.status === 413
+            ? "The plan explanation estimate exceeds the configured artifact byte budget."
+            : "Plan explanation capacity is temporarily full; retry after the queue drains.",
+        }],
+      },
+    };
+  }
+  if (job.status === "succeeded") {
+    // Rare: a terminal job was recycled in the same call; fall through
+    // to serve the cached explanation if present.
+    const cachedAfter = await findExplanation(runId, kind);
+    if (cachedAfter !== undefined) {
+      return { response: explanationResource(runId, kind, cachedAfter.content, cachedAfter.model, reasoningEffort, new Date(cachedAfter.createdAt).toISOString(), true) };
+    }
+  }
+  (set as { status: number }).status = 202;
+  return { response: explainJobResource(runId, kind, job, reasoningEffort) };
 }
 
 export const operationsRoutes = new Elysia({ name: "operations" })
@@ -122,18 +308,8 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       if (cached !== undefined) {
         return explanationResource(runId, kind, cached.content, cached.model, reasoningEffort, new Date(cached.createdAt).toISOString(), true);
       }
-      const dedupeKey = `${runId}:${kind}`;
-      const job = await db.query.durableJobs.findFirst({
-        where: and(eq(durableJobs.kind, "plan-explanation"), eq(durableJobs.dedupeKey, dedupeKey)),
-      });
-      if (job !== undefined && (job.status === "queued" || job.status === "running")) {
-        return explainJobResource(runId, kind, job, reasoningEffort);
-      }
-      if (job !== undefined && job.status === "failed") {
-        const err = explainError(502, "Bad Gateway", job.lastError ?? "Plan explainer failed");
-        (set as { status: number }).status = err.status;
-        return err.body;
-      }
+      const pending = await explainPendingJob(runId, kind, reasoningEffort, set);
+      if ("response" in pending) return pending.response;
       const resolvedSettings = await resolvePlanExplainerSettings(settings);
       if (resolvedSettings === null) return notFound(set);
       const source = await buildExplainSource(runId, kind);
@@ -151,91 +327,21 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     })
     .post("/api/v2/runs/:run_id/explain", async ({ params, body, user, orgId, teamId, set, request }: ParamCtx): Promise<unknown> => {
       const runId = params["run_id"] ?? "";
-      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "run-read");
-      if (authorized === undefined) return notFound(set);
-      const settings = await getSettings("plan-explainer");
-      if (settings["enabled"] !== true) return notFound(set);
-      const reasoningEffort = configuredReasoningEffort(settings["reasoning-effort"]);
-      const attributes = readExplainAttributes(body);
-      const kindOrError = parseExplainKind(attributes["kind"], set);
-      if (typeof kindOrError !== "string") return kindOrError.body;
-      const kind = kindOrError;
-      const refresh = attributes["refresh"] === true;
-      const streamRequested = attributes["stream"] === true;
+      const parsed = await parseExplainPost(runId, body, user?.id, orgId, teamId, set);
+      if ("failure" in parsed) return parsed.failure;
+      const { settings, kind, reasoningEffort, refresh, streamRequested } = parsed.request;
       if (!refresh) {
-        const cached = await findExplanation(runId, kind);
-        if (cached !== undefined) {
-          if (streamRequested) return cachedSseResponse(cached.content, kind, cached.model, reasoningEffort, cached.createdAt);
-          return explanationResource(runId, kind, cached.content, cached.model, reasoningEffort, new Date(cached.createdAt).toISOString(), true);
-        }
+        const hit = await explainCachedJson(runId, kind, reasoningEffort, streamRequested);
+        if ("response" in hit) return hit.response;
       }
-      const resolvedSettings = await resolvePlanExplainerSettings(settings);
-      if (resolvedSettings === null) {
-        (set as { status: number }).status = 503;
-        return { errors: [{ status: "503", title: "Service Unavailable", detail: "Plan explainer is not fully configured" }] };
-      }
-      const model = resolvedSettings["model"] as string;
-      const source = await buildExplainSource(runId, kind);
-      if (source === undefined) {
-        const err = explainError(409, "Conflict", explainMissingArtifactDetail(kind));
-        (set as { status: number }).status = err.status;
-        return err.body;
-      }
-      const dedupeKey = `${runId}:${kind}`;
-      if (streamRequested) {
-        if (!refresh) {
-          const cachedStream = await findExplanation(runId, kind);
-          if (cachedStream !== undefined && cachedStream.content !== "") {
-            return cachedSseResponse(cachedStream.content, kind, cachedStream.model, reasoningEffort, cachedStream.createdAt);
-          }
-          const pendingJob = await db.query.durableJobs.findFirst({
-            where: and(eq(durableJobs.kind, "plan-explanation"), eq(durableJobs.dedupeKey, dedupeKey)),
-          });
-          if (pendingJob !== undefined && (pendingJob.status === "queued" || pendingJob.status === "running")) {
-            return sseJobProgressResponse(runId, kind, pendingJob, model, reasoningEffort, request);
-          }
-        }
-        return streamExplainResponse(resolvedSettings, source, runId, kind, model, reasoningEffort, request, refresh, explainAuditContext(user, orgId));
-      }
-      // Background the non-streaming generation: enqueue a durable job and
-      // return 202 so a tab close does not abort the LLM call. Concurrent
-      // requests for the same (run, kind) dedupe to the same job.
-      let job;
-      try {
-        job = await enqueueDurableJob(
-          "plan-explanation",
-          { runId, kind, organizationId: orgId, jobClass: "explanation", estimatedBytes: 1 * 1024 * 1024 },
-          {
-            dedupeKey,
-            budget: { organizationId: orgId, jobClass: "explanation", estimatedBytes: 1 * 1024 * 1024 },
-          },
-        );
-      } catch (error: unknown) {
-        if (!(error instanceof DurableJobBudgetError)) throw error;
-        (set as { status: number }).status = error.status;
-        if (error.status === 429 && error.admission.retryAfterMs !== null) {
-          (set.headers as Record<string, string | number>)["Retry-After"] = Math.ceil(error.admission.retryAfterMs / 1_000);
-        }
-        return {
-          errors: [{
-            status: String(error.status),
-            title: error.status === 413 ? "Payload Too Large" : "Too Many Requests",
-            detail: error.status === 413
-              ? "The plan explanation estimate exceeds the configured artifact byte budget."
-              : "Plan explanation capacity is temporarily full; retry after the queue drains.",
-          }],
-        };
-      }
-      if (job.status === "succeeded") {
-        // Rare: a terminal job was recycled in the same call; fall through
-        // to serve the cached explanation if present.
-        const cachedAfter = await findExplanation(runId, kind);
-        if (cachedAfter !== undefined) {
-          return explanationResource(runId, kind, cachedAfter.content, cachedAfter.model, reasoningEffort, new Date(cachedAfter.createdAt).toISOString(), true);
-        }
-      }
-      (set as { status: number }).status = 202;
-      return explainJobResource(runId, kind, job, reasoningEffort);
+      const backend = await resolveExplainerBackend(settings, set);
+      if ("failure" in backend) return backend.failure;
+      const loaded = await loadExplainSource(runId, kind, set);
+      if ("failure" in loaded) return loaded.failure;
+      const model = backend.backend["model"] as string;
+      const streamed = await maybeStreamExplain(streamRequested, refresh, runId, kind, model, reasoningEffort, request, backend.backend, loaded.source, explainAuditContext(user, orgId));
+      if ("response" in streamed) return streamed.response;
+      return (await enqueueExplainJob(runId, kind, orgId, reasoningEffort, set)).response;
     });
 
   function readExplainAttributes(body: unknown): Readonly<Record<string, unknown>> {
