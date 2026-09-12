@@ -419,6 +419,198 @@ function WorkspaceNav({
   );
 }
 
+function ProjectNav({
+  collapsed,
+  onNavigate,
+  orgPath,
+  pathname,
+  projectPath,
+  projectSettingsPath,
+  projectName,
+  projectId,
+  inProjectSettings,
+}: Readonly<{
+  collapsed: boolean;
+  onNavigate: () => void;
+  orgPath: string;
+  pathname: string;
+  projectPath: string;
+  projectSettingsPath: string;
+  projectName: string | null;
+  projectId: string;
+  inProjectSettings: boolean;
+}>): JSX.Element {
+  const projectLinks = inProjectSettings
+    ? ([
+        {
+          active: pathname === projectSettingsPath,
+          icon: Settings,
+          label: "General",
+          to: projectSettingsPath,
+        },
+        {
+          active: pathname === `${projectSettingsPath}/variable-sets`,
+          icon: Variable,
+          label: "Variable sets",
+          to: `${projectSettingsPath}/variable-sets`,
+        },
+        {
+          active: pathname === `${projectSettingsPath}/notifications`,
+          icon: Bell,
+          label: "Notifications",
+          to: `${projectSettingsPath}/notifications`,
+        },
+      ] as const)
+    : ([
+        {
+          active: pathname === projectPath,
+          icon: LayoutDashboard,
+          label: "Overview",
+          to: projectPath,
+        },
+        {
+          active: isActivePath(pathname, `${projectPath}/workspaces`),
+          icon: Box,
+          label: "Workspaces",
+          to: `${projectPath}/workspaces`,
+        },
+        {
+          active: isActivePath(pathname, projectSettingsPath),
+          icon: Settings,
+          label: "Settings",
+          to: projectSettingsPath,
+          trailing: true,
+        },
+      ] as const);
+
+  return (
+    <>
+      <SidebarNavLink
+        active={false}
+        collapsed={collapsed}
+        icon={ArrowLeft}
+        label="Projects"
+        onNavigate={onNavigate}
+        to={`${orgPath}/projects`}
+      />
+      <SidebarContextLabel collapsed={collapsed} title={projectName ?? projectId}>
+        {projectName ?? projectId}
+      </SidebarContextLabel>
+      {inProjectSettings && (
+        <SidebarContextLabel collapsed={collapsed} tone="secondary">
+          Project settings
+        </SidebarContextLabel>
+      )}
+      {projectLinks.map((link): JSX.Element => (
+        <SidebarNavLink
+          key={link.to}
+          active={link.active}
+          collapsed={collapsed}
+          icon={link.icon}
+          label={link.label}
+          onNavigate={onNavigate}
+          to={link.to}
+          trailing={"trailing" in link && link.trailing}
+        />
+      ))}
+    </>
+  );
+}
+
+function OrgNav({
+  collapsed,
+  onNavigate,
+  orgPath,
+  pathname,
+  orgName,
+  canReadProjects,
+  visitsRevision,
+}: Readonly<{
+  collapsed: boolean;
+  onNavigate: () => void;
+  orgPath: string;
+  pathname: string;
+  orgName: string;
+  canReadProjects: boolean;
+  visitsRevision: number;
+}>): JSX.Element {
+  const links = ([
+    { label: "Workspaces", to: `${orgPath}/workspaces`, icon: Box },
+    { label: "Projects", to: `${orgPath}/projects`, icon: FolderGit2 },
+    { label: "Registry", to: `${orgPath}/registry`, icon: Package },
+    { label: "Settings", to: `${orgPath}/settings`, icon: Settings, trailing: true },
+  ] as const).filter((link): boolean =>
+    link.label !== "Projects" || canReadProjects);
+
+  // Sidebar shortcuts are re-read on every navigation (visitsRevision
+  // bumps when a workspace is visited, so the list stays current).
+  void visitsRevision;
+  const pinned = getPinnedWorkspaces().filter((entry): boolean => entry.orgName === orgName);
+  const recent = getRecentWorkspaces()
+    .filter((entry): boolean => entry.orgName === orgName)
+    .filter((entry): boolean => !pinned.some((pinnedEntry): boolean => pinnedEntry.workspaceName === entry.workspaceName))
+    .slice(0, 4);
+
+  const shortcutLinks = [...pinned, ...recent].map((entry) => ({
+    label: entry.workspaceName,
+    to: `/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(entry.workspaceName)}`,
+    icon: Box,
+  }));
+
+  return (
+    <>
+      {shortcutLinks.length > 0 && (
+        <>
+          <div
+            className={cn(
+              "px-3 pb-2 pt-3 text-xs font-semibold text-muted-foreground",
+              collapsed && "lg:sr-only",
+            )}
+          >
+            {pinned.length > 0 ? "Pinned & recent" : "Recent"}
+          </div>
+          {shortcutLinks.map((link): JSX.Element => (
+            <SidebarNavLink
+              key={link.to}
+              active={false}
+              collapsed={collapsed}
+              icon={link.icon}
+              label={link.label}
+              onNavigate={onNavigate}
+              to={link.to}
+            />
+          ))}
+        </>
+      )}
+      <div
+        className={cn(
+          "px-3 pb-2 pt-3 text-xs font-semibold text-muted-foreground",
+          collapsed && "lg:sr-only",
+        )}
+      >
+        Manage
+      </div>
+      {links.map((link): JSX.Element => (
+        <SidebarNavLink
+          key={link.to}
+          active={
+            link.label === "Workspaces"
+              ? pathname === orgPath ||
+                pathname === link.to
+              : isActivePath(pathname, link.to)
+          }
+          collapsed={collapsed}
+          icon={link.icon}
+          label={link.label}
+          onNavigate={onNavigate}
+          to={link.to}
+          trailing={"trailing" in link && link.trailing}
+        />
+      ))}
+    </>
+  );
+}
+
 function AdminNav({
   collapsed,
   onNavigate,
@@ -1147,80 +1339,18 @@ export function Layout({
     }
 
     if (hasProject) {
-      const projectLinks = inProjectSettings
-        ? ([
-            {
-              active: location.pathname === projectSettingsPath,
-              icon: Settings,
-              label: "General",
-              to: projectSettingsPath,
-            },
-            {
-              active: location.pathname === `${projectSettingsPath}/variable-sets`,
-              icon: Variable,
-              label: "Variable sets",
-              to: `${projectSettingsPath}/variable-sets`,
-            },
-            {
-              active: location.pathname === `${projectSettingsPath}/notifications`,
-              icon: Bell,
-              label: "Notifications",
-              to: `${projectSettingsPath}/notifications`,
-            },
-          ] as const)
-        : ([
-            {
-              active: location.pathname === projectPath,
-              icon: LayoutDashboard,
-              label: "Overview",
-              to: projectPath,
-            },
-            {
-              active: isActivePath(location.pathname, `${projectPath}/workspaces`),
-              icon: Box,
-              label: "Workspaces",
-              to: `${projectPath}/workspaces`,
-            },
-            {
-              active: isActivePath(location.pathname, projectSettingsPath),
-              icon: Settings,
-              label: "Settings",
-              to: projectSettingsPath,
-              trailing: true,
-            },
-          ] as const);
-
       return (
-        <>
-          <SidebarNavLink
-            active={false}
-            collapsed={sidebarCollapsed}
-            icon={ArrowLeft}
-            label="Projects"
-            onNavigate={closeMobileNavigation}
-            to={`${orgPath}/projects`}
-          />
-          <SidebarContextLabel collapsed={sidebarCollapsed} title={projectName ?? projectId}>
-            {projectName ?? projectId}
-          </SidebarContextLabel>
-          {inProjectSettings && (
-            <SidebarContextLabel collapsed={sidebarCollapsed} tone="secondary">
-              Project settings
-            </SidebarContextLabel>
-          )}
-          {projectLinks.map((link): JSX.Element => (
-            <SidebarNavLink
-              key={link.to}
-              active={link.active}
-              collapsed={sidebarCollapsed}
-              icon={link.icon}
-              label={link.label}
-              onNavigate={closeMobileNavigation}
-              to={link.to}
-              trailing={"trailing" in link && link.trailing}
-            />
-          ))}
-        </>
+        <ProjectNav
+          collapsed={sidebarCollapsed}
+          onNavigate={closeMobileNavigation}
+          orgPath={orgPath}
+          pathname={location.pathname}
+          projectPath={projectPath}
+          projectSettingsPath={projectSettingsPath}
+          projectName={projectName}
+          projectId={projectId}
+          inProjectSettings={inProjectSettings}
+        />
       );
     }
 
@@ -1243,80 +1373,16 @@ export function Layout({
     }
 
     if (hasOrg) {
-      const links = ([
-        { label: "Workspaces", to: `${orgPath}/workspaces`, icon: Box },
-        { label: "Projects", to: `${orgPath}/projects`, icon: FolderGit2 },
-        { label: "Registry", to: `${orgPath}/registry`, icon: Package },
-        { label: "Settings", to: `${orgPath}/settings`, icon: Settings, trailing: true },
-      ] as const).filter((link): boolean =>
-        link.label !== "Projects" || canReadProjects);
-
-      // Sidebar shortcuts are re-read on every navigation (visitsRevision
-      // bumps when a workspace is visited, so the list stays current).
-      void visitsRevision;
-      const pinned = getPinnedWorkspaces().filter((entry): boolean => entry.orgName === orgName);
-      const recent = getRecentWorkspaces()
-        .filter((entry): boolean => entry.orgName === orgName)
-        .filter((entry): boolean => !pinned.some((pinnedEntry): boolean => pinnedEntry.workspaceName === entry.workspaceName))
-        .slice(0, 4);
-
-      const shortcutLinks = [...pinned, ...recent].map((entry) => ({
-        label: entry.workspaceName,
-        to: `/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(entry.workspaceName)}`,
-        icon: Box,
-      }));
-
       return (
-        <>
-          {shortcutLinks.length > 0 && (
-            <>
-              <div
-                className={cn(
-                  "px-3 pb-2 pt-3 text-xs font-semibold text-muted-foreground",
-                  sidebarCollapsed && "lg:sr-only",
-                )}
-              >
-                {pinned.length > 0 ? "Pinned & recent" : "Recent"}
-              </div>
-              {shortcutLinks.map((link): JSX.Element => (
-                <SidebarNavLink
-                  key={link.to}
-                  active={false}
-                  collapsed={sidebarCollapsed}
-                  icon={link.icon}
-                  label={link.label}
-                  onNavigate={closeMobileNavigation}
-                  to={link.to}
-                />
-              ))}
-            </>
-          )}
-          <div
-            className={cn(
-              "px-3 pb-2 pt-3 text-xs font-semibold text-muted-foreground",
-              sidebarCollapsed && "lg:sr-only",
-            )}
-          >
-            Manage
-          </div>
-          {links.map((link): JSX.Element => (
-            <SidebarNavLink
-              key={link.to}
-              active={
-                link.label === "Workspaces"
-                  ? location.pathname === orgPath ||
-                    location.pathname === link.to
-                  : isActivePath(location.pathname, link.to)
-              }
-              collapsed={sidebarCollapsed}
-              icon={link.icon}
-              label={link.label}
-              onNavigate={closeMobileNavigation}
-              to={link.to}
-              trailing={"trailing" in link && link.trailing}
-            />
-          ))}
-        </>
+        <OrgNav
+          collapsed={sidebarCollapsed}
+          onNavigate={closeMobileNavigation}
+          orgPath={orgPath}
+          pathname={location.pathname}
+          orgName={orgName}
+          canReadProjects={canReadProjects}
+          visitsRevision={visitsRevision}
+        />
       );
     }
 
