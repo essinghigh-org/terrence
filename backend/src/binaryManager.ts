@@ -377,6 +377,62 @@ for (const [tool, entry] of Object.entries(loadVersionCacheFile(VERSION_CACHE_FI
   if (tool === "tofu" || tool === "terraform") versionCache.set(tool, entry);
 }
 
+function githubAuthHeaders(): Record<string, string> {
+  // Same GitHub-token discipline as resolveLatestVersion: CI runners share an
+  // egress IP and the unauthenticated 60 req/hr ceiling is easily exhausted.
+  const githubToken = process.env["GITHUB_TOKEN"] ?? process.env["GH_TOKEN"] ?? "";
+  return githubToken !== "" ? { Authorization: `Bearer ${githubToken}` } : {};
+}
+
+function tofuReleaseVersions(data: readonly Record<string, unknown>[]): string[] {
+  return data
+    .map((r: Readonly<Record<string, unknown>>): string | undefined => {
+      const tagName = r["tag_name"];
+      return typeof tagName === "string" ? tagName.replace(/^v/, "") : undefined;
+    })
+    .filter((v: string | undefined): v is string => v !== undefined && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v));
+}
+
+async function fetchTofuVersions(authHeaders: Record<string, string>): Promise<string[]> {
+  // Paginate through all GitHub releases
+  const versions: string[] = [];
+  let page = 1;
+  while (page <= 100) {
+    const res = await fetch(
+      `https://api.github.com/repos/opentofu/opentofu/releases?per_page=100&page=${page}`,
+      {
+        headers: { "User-Agent": "terrence-iac-manager", ...authHeaders },
+        signal: AbortSignal.timeout(15000),
+      },
+    );
+    try {
+      guardUpstreamRateLimit(res, `releases enumeration page ${page}`);
+    } catch (rateError: unknown) {
+      // Stop paginating but keep whatever versions we already collected;
+      // the persistent cache still serves them until the window passes.
+      log.warn(`[terrence] Stopping version enumeration early: ${rateError instanceof Error ? rateError.message : String(rateError)}`);
+      break;
+    }
+    if (!res.ok) break;
+    const data = (await res.json()) as Record<string, unknown>[];
+    if (!Array.isArray(data) || data.length === 0) break;
+    versions.push(...tofuReleaseVersions(data));
+    page++;
+    if (data.length < 100) break;
+  }
+  return versions;
+}
+
+async function fetchTerraformVersions(): Promise<string[]> {
+  const res = await fetch("https://releases.hashicorp.com/terraform/index.json", {
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) return [];
+  const data = (await res.json()) as { versions?: Record<string, unknown> };
+  return Object.keys(data.versions ?? {})
+    .filter((v: string): boolean => /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v));
+}
+
 async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<string[]> {
   const cached = versionCache.get(tool);
   if (cached !== undefined && isVersionCacheFresh(cached, VERSION_CACHE_TTL_MS)) {
@@ -385,54 +441,7 @@ async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<strin
 
   try {
     assertNotRateLimited(tool === "tofu" ? "releases enumeration" : "hashicorp index");
-    // Same GitHub-token discipline as resolveLatestVersion: CI runners share an
-    // egress IP and the unauthenticated 60 req/hr ceiling is easily exhausted.
-    const githubToken = process.env["GITHUB_TOKEN"] ?? process.env["GH_TOKEN"] ?? "";
-    const authHeaders: Record<string, string> = githubToken !== ""
-      ? { Authorization: `Bearer ${githubToken}` }
-      : {};
-    let versions: string[] = [];
-    if (tool === "tofu") {
-      // Paginate through all GitHub releases
-      let page = 1;
-      while (page <= 100) {
-        const res = await fetch(
-          `https://api.github.com/repos/opentofu/opentofu/releases?per_page=100&page=${page}`,
-          {
-            headers: { "User-Agent": "terrence-iac-manager", ...authHeaders },
-            signal: AbortSignal.timeout(15000),
-          },
-        );
-        try {
-          guardUpstreamRateLimit(res, `releases enumeration page ${page}`);
-        } catch (rateError: unknown) {
-          // Stop paginating but keep whatever versions we already collected;
-          // the persistent cache still serves them until the window passes.
-          log.warn(`[terrence] Stopping version enumeration early: ${rateError instanceof Error ? rateError.message : String(rateError)}`);
-          break;
-        }
-        if (!res.ok) break;
-        const data = (await res.json()) as Record<string, unknown>[];
-        if (!Array.isArray(data) || data.length === 0) break;
-        versions.push(...data
-          .map((r: Readonly<Record<string, unknown>>): string | undefined => {
-            const tagName = r["tag_name"];
-            return typeof tagName === "string" ? tagName.replace(/^v/, "") : undefined;
-          })
-          .filter((v: string | undefined): v is string => v !== undefined && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v)));
-        page++;
-        if (data.length < 100) break;
-      }
-    } else {
-      const res = await fetch("https://releases.hashicorp.com/terraform/index.json", {
-        signal: AbortSignal.timeout(15000),
-      });
-      if (res.ok) {
-        const data = (await res.json()) as { versions?: Record<string, unknown> };
-        versions = Object.keys(data.versions ?? {})
-          .filter((v: string): boolean => /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v));
-      }
-    }
+    const versions = tool === "tofu" ? await fetchTofuVersions(githubAuthHeaders()) : await fetchTerraformVersions();
     versions.sort(compareSemver);
     versionCache.set(tool, { versions, fetchedAt: Date.now() });
     saveVersionCacheFile(VERSION_CACHE_FILE, tool, { versions, fetchedAt: Date.now() });
@@ -807,162 +816,198 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
   // runs; ALLOW_TOOL_FALLBACK remains reserved for alternate-tool fallback.
   const allowSystemFallback = true;
 
+async function checkCachedBinary(tool: "tofu" | "terraform", version: string, targetDir: string, binaryPath: string): Promise<BinaryResolution | "stale" | "absent"> {
+  if (!(await exists(binaryPath))) return "absent";
+  // Cached binary: re-validate against the persisted digest before use so a
+  // tampered or partially-written executable is never trusted "because it
+  // exists" (kanban 6.5). A missing sidecar is a pre-integrity install:
+  // used as-is with a warning (the startup sweep keeps those too); malformed
+  // metadata or a digest mismatch deletes the install and falls through to
+  // a fresh download.
+  const integrity = await readBinaryIntegrity(targetDir);
+  if (integrity.status === "missing") {
+    log.warn(`[terrence] Using unverified cached ${tool} v${version} at ${binaryPath} (no integrity metadata)`);
+    return { binaryPath, tool, version };
+  }
+  if (integrity.status === "invalid") {
+    log.warn(`[terrence] Cached ${tool} v${version} has malformed integrity metadata; re-downloading`);
+    await rm(targetDir, { recursive: true, force: true });
+    return "stale";
+  }
+  if (!(await verifyBinaryIntegrity(binaryPath, integrity.integrity))) {
+    log.warn(`[terrence] Cached ${tool} v${version} failed integrity check; re-downloading`);
+    await rm(targetDir, { recursive: true, force: true });
+    return "stale";
+  }
+  return { binaryPath, tool, version };
+}
+
+async function fetchBinaryWithRetries(tool: "tofu" | "terraform", version: string, downloadUrl: string): Promise<ArrayBuffer> {
+  // Issue #602: retry slow-link timeouts and transient upstream failures
+  // with backoff; unpublished versions and rejected archives fail fast.
+  const downloadTimeoutMs = resolveBinaryDownloadTimeoutMs();
+  const downloadRetries = resolveBinaryDownloadRetries();
+  for (let attempt = 0; ; attempt++) {
+    if (attempt > 0) {
+      const backoffMs = Math.min(1000 * 2 ** (attempt - 1), 10_000);
+      log.info(`Retrying ${tool} v${version} download (attempt ${attempt + 1} of ${downloadRetries + 1})`);
+      await new Promise<void>((resolve): void => {
+        setTimeout(resolve, backoffMs);
+      });
+    }
+    try {
+      return await fetchBinaryArchive(downloadUrl, downloadTimeoutMs);
+    } catch (downloadErr: unknown) {
+      if (attempt >= downloadRetries || !isRetryableBinaryDownloadError(downloadErr)) throw downloadErr;
+    }
+  }
+}
+
+async function downloadBinaryArchive(tool: "tofu" | "terraform", version: string, targetDir: string): Promise<{ zipPath: string; zipFilename: string }> {
+  await mkdir(targetDir, { recursive: true });
+  const zipPath = join(targetDir, "download.zip");
+
+  const arch = process.arch === "arm64" ? "arm64" : "amd64";
+  const os = process.platform === "darwin" ? "darwin" : "linux";
+
+  const zipFilename = tool === "tofu"
+    ? `tofu_${version}_${os}_${arch}.zip`
+    : `terraform_${version}_${os}_${arch}.zip`;
+
+  const downloadUrl = tool === "tofu"
+    ? `https://github.com/opentofu/opentofu/releases/download/v${version}/${zipFilename}`
+    : `https://releases.hashicorp.com/terraform/${version}/${zipFilename}`;
+
+  log.info(`Downloading ${tool} v${version} from ${downloadUrl}`);
+  const arrayBuffer = await fetchBinaryWithRetries(tool, version, downloadUrl);
+  // The loop only exits via return (arrayBuffer just assigned) or throw.
+
+  const isValidHash = await verifySha256(tool, version, zipFilename, arrayBuffer);
+  if (!isValidHash) {
+    throw new Error(`SHA256 verification failed for ${zipFilename}`);
+  }
+
+  await Bun.write(zipPath, arrayBuffer);
+  return { zipPath, zipFilename };
+}
+
+async function assertSafeZipMembers(tool: "tofu" | "terraform", targetDir: string, zipPath: string): Promise<string[]> {
+  // Zip Slip protection: verify the archive's member list BEFORE extraction
+  // so a malicious entry can never be written outside the target directory.
+  const zipEntries = await listZipEntries(zipPath);
+  if (zipEntries === null || zipEntries.some(zipEntryEscapes)) {
+    await rm(targetDir, { recursive: true, force: true });
+    throw new Error("Zip Slip detected: archive contains a path that escapes the target directory");
+  }
+
+  // Official packages contain the binary and standard release documentation;
+  // reject anything unexpected (kanban 6.7) so an archive smuggling extra files is never unpacked.
+  const ALLOWED_EXTRAS = new Set(["LICENSE", "LICENSE.txt", "README.md", "CHANGELOG.md"]);
+  const unexpected = unexpectedZipMembers(zipEntries, tool).filter(
+    (entry): boolean => !ALLOWED_EXTRAS.has(entry.replaceAll("\\", "/").replace(/^\.\//, "")),
+  );
+  if (unexpected.length > 0) {
+    await rm(targetDir, { recursive: true, force: true });
+    throw new Error(`Archive contains unexpected members (${unexpected.join(", ")}); refusing to extract`);
+  }
+  return zipEntries;
+}
+
+async function extractionEscaped(targetDir: string): Promise<boolean> {
+  // Defense in depth: confirm every extracted path still resolves under the
+  // target directory (path containment, not a string prefix check).
+  const resolvedTarget = resolve(targetDir);
+  const entries = await readdir(targetDir, { recursive: true, withFileTypes: false });
+  return entries.some((entry): boolean => {
+    const relativePath = relative(resolvedTarget, resolve(join(targetDir, entry)));
+    return relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath);
+  });
+}
+
+async function extractVerifiedArchive(targetDir: string, zipPath: string): Promise<number> {
+  let exitCode = -1;
+  try {
+    const unzipProc = spawn(["unzip", "-o", zipPath, "-d", targetDir]);
+    exitCode = await unzipProc.exited;
+    if (exitCode === 0 && await extractionEscaped(targetDir)) {
+      exitCode = -1;
+      try {
+        await rm(targetDir, { recursive: true, force: true });
+      } catch {
+        // Cleanup failure is secondary — Zip Slip error is primary
+      }
+    }
+  } catch (spawnErr: unknown) {
+    exitCode = -1;
+    const spawnMsg = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
+    console.error(`[terrence] Failed to spawn unzip process: ${spawnMsg}`);
+  }
+
+  try {
+    await unlink(zipPath);
+  } catch {}
+
+  return exitCode;
+}
+
+async function finalizeInstalledBinary(
+  tool: "tofu" | "terraform",
+  version: string,
+  targetDir: string,
+  binaryPath: string,
+  exitCode: number,
+): Promise<BinaryResolution | null> {
+  if (exitCode === 0 && (await exists(binaryPath))) {
+    try {
+      await chmod(binaryPath, 0o755);
+      // Record the on-disk digest so future runs can re-validate the cache
+      // without re-downloading (kanban 6.5).
+      await writeBinaryIntegrity(targetDir, {
+        tool,
+        version,
+        binarySha256: await sha256File(binaryPath),
+      });
+      log.info(`Successfully installed ${tool} v${version} to ${binaryPath}`);
+      return { binaryPath, tool, version };
+    } catch (integrityErr: unknown) {
+      // Extraction succeeded but the install cannot be trusted (integrity
+      // metadata unreadable/unwritable); remove the whole directory so the
+      // next attempt starts clean and nothing half-recorded is reused.
+      try {
+        await rm(targetDir, { recursive: true, force: true });
+      } catch {
+        // Cleanup failure is secondary — install error is primary.
+      }
+      throw integrityErr;
+    }
+  }
+  console.error(`[terrence] Unzip failed with exit code ${exitCode}`);
+  // A partial extraction is never trusted: remove whatever was unpacked
+  // so the cache cannot contain a half-written binary.
+  try {
+    await rm(targetDir, { recursive: true, force: true });
+  } catch {
+    // Cleanup failure is secondary — the unzip error is already reported.
+  }
+  return null;
+}
+
+async function installBinary(tool: "tofu" | "terraform", version: string, targetDir: string, binaryPath: string): Promise<BinaryResolution | null> {
+  const { zipPath } = await downloadBinaryArchive(tool, version, targetDir);
+  await assertSafeZipMembers(tool, targetDir, zipPath);
+  const exitCode = await extractVerifiedArchive(targetDir, zipPath);
+  return finalizeInstalledBinary(tool, version, targetDir, binaryPath, exitCode);
+}
+
   return withBinaryInstallLock(`${tool}:${version}`, async (): Promise<BinaryResolution | null> => {
     const targetDir = join(BINARY_BASE_DIR, tool, version);
   const binaryPath = join(targetDir, tool);
 
-  if (await exists(binaryPath)) {
-    // Cached binary: re-validate against the persisted digest before use so a
-    // tampered or partially-written executable is never trusted "because it
-    // exists" (kanban 6.5). A missing sidecar is a pre-integrity install:
-    // used as-is with a warning (the startup sweep keeps those too); malformed
-    // metadata or a digest mismatch deletes the install and falls through to
-    // a fresh download.
-    const integrity = await readBinaryIntegrity(targetDir);
-    if (integrity.status === "missing") {
-      log.warn(`[terrence] Using unverified cached ${tool} v${version} at ${binaryPath} (no integrity metadata)`);
-      return { binaryPath, tool, version };
-    }
-    if (integrity.status === "invalid") {
-      log.warn(`[terrence] Cached ${tool} v${version} has malformed integrity metadata; re-downloading`);
-      await rm(targetDir, { recursive: true, force: true });
-    } else if (!(await verifyBinaryIntegrity(binaryPath, integrity.integrity))) {
-      log.warn(`[terrence] Cached ${tool} v${version} failed integrity check; re-downloading`);
-      await rm(targetDir, { recursive: true, force: true });
-    } else {
-      return { binaryPath, tool, version };
-    }
-  }
+  const cached = await checkCachedBinary(tool, version, targetDir, binaryPath);
+  if (cached !== "stale" && cached !== "absent") return cached;
 
   try {
-    await mkdir(targetDir, { recursive: true });
-    const zipPath = join(targetDir, "download.zip");
-
-    const arch = process.arch === "arm64" ? "arm64" : "amd64";
-    const os = process.platform === "darwin" ? "darwin" : "linux";
-
-    const zipFilename = tool === "tofu"
-      ? `tofu_${version}_${os}_${arch}.zip`
-      : `terraform_${version}_${os}_${arch}.zip`;
-
-    const downloadUrl = tool === "tofu"
-      ? `https://github.com/opentofu/opentofu/releases/download/v${version}/${zipFilename}`
-      : `https://releases.hashicorp.com/terraform/${version}/${zipFilename}`;
-
-    log.info(`Downloading ${tool} v${version} from ${downloadUrl}`);
-    // Issue #602: retry slow-link timeouts and transient upstream failures
-    // with backoff; unpublished versions and rejected archives fail fast.
-    const downloadTimeoutMs = resolveBinaryDownloadTimeoutMs();
-    const downloadRetries = resolveBinaryDownloadRetries();
-    let arrayBuffer: ArrayBuffer | null = null;
-    for (let attempt = 0; ; attempt++) {
-      if (attempt > 0) {
-        const backoffMs = Math.min(1000 * 2 ** (attempt - 1), 10_000);
-        log.info(`Retrying ${tool} v${version} download (attempt ${attempt + 1} of ${downloadRetries + 1})`);
-        await new Promise<void>((resolve): void => {
-          setTimeout(resolve, backoffMs);
-        });
-      }
-      try {
-        arrayBuffer = await fetchBinaryArchive(downloadUrl, downloadTimeoutMs);
-        break;
-      } catch (downloadErr: unknown) {
-        if (attempt >= downloadRetries || !isRetryableBinaryDownloadError(downloadErr)) throw downloadErr;
-      }
-    }
-    // The loop only exits via break (arrayBuffer just assigned) or throw.
-
-    const isValidHash = await verifySha256(tool, version, zipFilename, arrayBuffer);
-    if (!isValidHash) {
-      throw new Error(`SHA256 verification failed for ${zipFilename}`);
-    }
-
-    await Bun.write(zipPath, arrayBuffer);
-
-    // Zip Slip protection: verify the archive's member list BEFORE extraction
-    // so a malicious entry can never be written outside the target directory.
-    const zipEntries = await listZipEntries(zipPath);
-    if (zipEntries === null || zipEntries.some(zipEntryEscapes)) {
-      await rm(targetDir, { recursive: true, force: true });
-      throw new Error("Zip Slip detected: archive contains a path that escapes the target directory");
-    }
-
-    // Official packages contain the binary and standard release documentation;
-    // reject anything unexpected (kanban 6.7) so an archive smuggling extra files is never unpacked.
-    const ALLOWED_EXTRAS = new Set(["LICENSE", "LICENSE.txt", "README.md", "CHANGELOG.md"]);
-    const unexpected = unexpectedZipMembers(zipEntries, tool).filter(
-      (entry): boolean => !ALLOWED_EXTRAS.has(entry.replaceAll("\\", "/").replace(/^\.\//, "")),
-    );
-    if (unexpected.length > 0) {
-      await rm(targetDir, { recursive: true, force: true });
-      throw new Error(`Archive contains unexpected members (${unexpected.join(", ")}); refusing to extract`);
-    }
-
-    let exitCode = -1;
-    try {
-      const unzipProc = spawn(["unzip", "-o", zipPath, "-d", targetDir]);
-      exitCode = await unzipProc.exited;
-      // Defense in depth: confirm every extracted path still resolves under the
-      // target directory (path containment, not a string prefix check).
-      if (exitCode === 0) {
-        const resolvedTarget = resolve(targetDir);
-        const entries = await readdir(targetDir, { recursive: true, withFileTypes: false });
-        const escaped = entries.some((entry): boolean => {
-          const relativePath = relative(resolvedTarget, resolve(join(targetDir, entry)));
-          return relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath);
-        });
-        if (escaped) {
-          exitCode = -1;
-          try {
-            await rm(targetDir, { recursive: true, force: true });
-          } catch {
-            // Cleanup failure is secondary — Zip Slip error is primary
-          }
-        }
-      }
-    } catch (spawnErr: unknown) {
-      exitCode = -1;
-      const spawnMsg = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
-      console.error(`[terrence] Failed to spawn unzip process: ${spawnMsg}`);
-    }
-
-    try {
-      await unlink(zipPath);
-    } catch {}
-
-    if (exitCode === 0 && (await exists(binaryPath))) {
-      try {
-        await chmod(binaryPath, 0o755);
-        // Record the on-disk digest so future runs can re-validate the cache
-        // without re-downloading (kanban 6.5).
-        await writeBinaryIntegrity(targetDir, {
-          tool,
-          version,
-          binarySha256: await sha256File(binaryPath),
-        });
-        log.info(`Successfully installed ${tool} v${version} to ${binaryPath}`);
-        return { binaryPath, tool, version };
-      } catch (integrityErr: unknown) {
-        // Extraction succeeded but the install cannot be trusted (integrity
-        // metadata unreadable/unwritable); remove the whole directory so the
-        // next attempt starts clean and nothing half-recorded is reused.
-        try {
-          await rm(targetDir, { recursive: true, force: true });
-        } catch {
-          // Cleanup failure is secondary — install error is primary.
-        }
-        throw integrityErr;
-      }
-    } else {
-      console.error(`[terrence] Unzip failed with exit code ${exitCode}`);
-      // A partial extraction is never trusted: remove whatever was unpacked
-      // so the cache cannot contain a half-written binary.
-      try {
-        await rm(targetDir, { recursive: true, force: true });
-      } catch {
-        // Cleanup failure is secondary — the unzip error is already reported.
-      }
-    }
+    return await installBinary(tool, version, targetDir, binaryPath);
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.warn(`[terrence] Dynamic download failed for ${tool} v${version}: ${errMsg}`);
