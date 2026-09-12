@@ -161,48 +161,82 @@ function attributes(resource: unknown): JsonObject {
   return asRecord(asRecord(resource)["attributes"]);
 }
 
+/** String-keyed record read field-by-field with the type guards. */
+type FieldMap = Readonly<Record<string, unknown>>;
+
+function requiredText(value: FieldMap, key: string, fallback: string): string {
+  const field = value[key];
+  return isString(field) ? field : fallback;
+}
+
+function optionalText(value: FieldMap, key: string): string | null {
+  const field = value[key];
+  return isString(field) ? field : null;
+}
+
+function registryWorkflow(value: FieldMap): "tag" | "branch" | null {
+  const workflow = value["publishing-workflow"];
+  if (workflow === "tag" || workflow === "branch") return workflow;
+  return null;
+}
+
+function registryVersionFrom(entry: unknown): RegistryModule["versions"][number] | null {
+  if (!isRecord(entry)) return null;
+  const version = asRecord(entry);
+  if (!isString(version["version"])) return null;
+  return {
+    version: version["version"],
+    status: isString(version["status"]) ? version["status"] : "pending",
+    deprecated: version["deprecated"] === true,
+    revoked: version["revoked"] === true,
+  };
+}
+
+function parseRegistryVersions(rawVersions: readonly unknown[]): RegistryModule["versions"] {
+  return rawVersions
+    .flatMap((entry): RegistryModule["versions"][number][] => {
+      const version = registryVersionFrom(entry);
+      return version === null ? [] : [version];
+    })
+    .sort((left, right): number => compareRegistryVersions(right.version, left.version));
+}
+
+function registryVcsRepoFrom(value: FieldMap): RegistryModule["vcsRepo"] {
+  const rawVcsRepo = value["vcs-repo"];
+  if (!isRecord(rawVcsRepo)) return null;
+  const vcsRepo = asRecord(rawVcsRepo);
+  return {
+    identifier: optionalText(vcsRepo, "identifier"),
+    displayIdentifier: optionalText(vcsRepo, "display-identifier"),
+    repositoryUrl: optionalText(vcsRepo, "repository-url"),
+    branch: isString(vcsRepo["branch"]) && vcsRepo["branch"] !== "" ? vcsRepo["branch"] : null,
+    sourceDirectory: optionalText(vcsRepo, "source-directory"),
+    tagPrefix: optionalText(vcsRepo, "tag-prefix"),
+  };
+}
+
 export function registryModuleFromResource(resource: unknown): RegistryModule {
   const raw = asRecord(resource);
   const value = attributes(resource);
   const rawVersions = Array.isArray(value["version-statuses"]) ? value["version-statuses"] : [];
-  const rawVcsRepo = value["vcs-repo"];
-  const vcsRepo = isRecord(rawVcsRepo) ? asRecord(rawVcsRepo) : null;
   const rawPermissions = isRecord(value["permissions"]) ? asRecord(value["permissions"]) : {};
   return {
-    id: isString(raw["id"]) ? raw["id"] : "",
-    name: isString(value["name"]) ? value["name"] : "",
-    namespace: isString(value["namespace"]) ? value["namespace"] : "",
-    provider: isString(value["provider"]) ? value["provider"] : "",
-    providerSource: isString(value["provider-source"]) ? value["provider-source"] : null,
-    description: isString(value["description"]) ? value["description"] : null,
-    status: isString(value["status"]) ? value["status"] : "pending",
+    id: requiredText(raw, "id", ""),
+    name: requiredText(value, "name", ""),
+    namespace: requiredText(value, "namespace", ""),
+    provider: requiredText(value, "provider", ""),
+    providerSource: optionalText(value, "provider-source"),
+    description: optionalText(value, "description"),
+    status: requiredText(value, "status", "pending"),
     publishingMechanism: value["publishing-mechanism"] === "vcs" ? "vcs" : "manual",
-    publishingWorkflow: value["publishing-workflow"] === "tag" || value["publishing-workflow"] === "branch"
-      ? value["publishing-workflow"]
-      : null,
-    versions: rawVersions.flatMap((entry): RegistryModule["versions"][number][] => {
-      if (!isRecord(entry)) return [];
-      const version = asRecord(entry);
-      return isString(version["version"]) ? [{
-        version: version["version"],
-        status: isString(version["status"]) ? version["status"] : "pending",
-        deprecated: version["deprecated"] === true,
-        revoked: version["revoked"] === true,
-      }] : [];
-    }).sort((left, right): number => compareRegistryVersions(right.version, left.version)),
-    vcsRepo: vcsRepo === null ? null : {
-      identifier: isString(vcsRepo["identifier"]) ? vcsRepo["identifier"] : null,
-      displayIdentifier: isString(vcsRepo["display-identifier"]) ? vcsRepo["display-identifier"] : null,
-      repositoryUrl: isString(vcsRepo["repository-url"]) ? vcsRepo["repository-url"] : null,
-      branch: isString(vcsRepo["branch"]) && vcsRepo["branch"] !== "" ? vcsRepo["branch"] : null,
-      sourceDirectory: isString(vcsRepo["source-directory"]) ? vcsRepo["source-directory"] : null,
-      tagPrefix: isString(vcsRepo["tag-prefix"]) ? vcsRepo["tag-prefix"] : null,
-    },
-    lastSuccessfulSyncAt: isString(value["last-successful-sync-at"]) ? value["last-successful-sync-at"] : null,
-    lastSyncAttemptAt: isString(value["last-sync-attempt-at"]) ? value["last-sync-attempt-at"] : null,
-    lastSyncError: isString(value["last-sync-error"]) ? value["last-sync-error"] : null,
-    createdAt: isString(value["created-at"]) ? value["created-at"] : "",
-    updatedAt: isString(value["updated-at"]) ? value["updated-at"] : "",
+    publishingWorkflow: registryWorkflow(value),
+    versions: parseRegistryVersions(rawVersions),
+    vcsRepo: registryVcsRepoFrom(value),
+    lastSuccessfulSyncAt: optionalText(value, "last-successful-sync-at"),
+    lastSyncAttemptAt: optionalText(value, "last-sync-attempt-at"),
+    lastSyncError: optionalText(value, "last-sync-error"),
+    createdAt: requiredText(value, "created-at", ""),
+    updatedAt: requiredText(value, "updated-at", ""),
     permissions: {
       canDelete: rawPermissions["can-delete"] === true,
       canResync: rawPermissions["can-resync"] === true,
