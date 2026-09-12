@@ -235,6 +235,81 @@ async function revokeAgentPoolToken(
   return true;
 }
 
+class HttpStatusError extends Error {
+  constructor(public readonly status: number, public readonly body: unknown) {
+    super(`request rejected with status ${status}`);
+  }
+}
+
+type CachedOrg = Exclude<Awaited<ReturnType<typeof cachedOrgByName>>, undefined>;
+
+async function requireOrgTokenOrg(
+  orgName: string,
+  userId: string | undefined,
+  orgId: string | null,
+): Promise<CachedOrg> {
+  const org = await cachedOrgByName(orgName);
+  if (org === undefined || (orgId !== org.id && !(await checkOrgPermission(userId, org.id, "owner")))) {
+    throw new HttpStatusError(404, { errors: [{ status: "404", title: "Not Found" }] });
+  }
+  return org;
+}
+
+function parseOrgTokenTypeOrThrow(url: string): "" | "audit-trails" {
+  // Unknown token values must not mint arbitrary token namespaces (todo 52/53).
+  const rawTokenType = new URL(url).searchParams.get("token") ?? "";
+  const validated = validateOrgTokenType(rawTokenType);
+  if (validated === null) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "token query parameter must be one of: (empty), organization, audit-trails" }] });
+  }
+  // The "organization" query alias resolves to the "" storage slot.
+  return validated === "organization" ? "" : validated;
+}
+
+function tokenAttributes(body: unknown): Record<string, unknown> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  return typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+}
+
+async function resolveOrgTokenExpiryOrThrow(
+  orgId: string,
+  tokenType: "" | "audit-trails",
+  attributes: Record<string, unknown>,
+): Promise<number | null> {
+  const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
+  if (Number.isNaN(requestedExpiry)) {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity" }] });
+  }
+  // TFE parity: org tokens default to a two-year expiry; the org TTL policy
+  // caps (or forbids) the result (todo 49-51, 72-74).
+  const requestedOrDefault = requestedExpiry ?? Date.now() + TWO_YEARS_MS;
+  const policyResolution = await resolveTokenExpiryUnderPolicy(orgId, tokenType, requestedOrDefault);
+  if (policyResolution.kind === "invalid") {
+    throw new HttpStatusError(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] });
+  }
+  if (policyResolution.kind === "forbidden") {
+    throw new HttpStatusError(403, { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] });
+  }
+  return policyResolution.expiresAt;
+}
+
+async function rotateOrgToken(
+  orgId: string,
+  tokenType: string,
+  createdToken: typeof apiTokens.$inferInsert,
+): Promise<Readonly<typeof apiTokens.$inferSelect> | undefined> {
+  return withDbLock(`organization-token:${orgId}:${tokenType}`, async (): Promise<Readonly<typeof apiTokens.$inferSelect> | undefined> => {
+    const prior = await db.query.apiTokens.findFirst({ where: organizationTokenWhere(orgId, tokenType) });
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      const t = tx as typeof db;
+      await t.delete(apiTokens).where(organizationTokenWhere(orgId, tokenType));
+      await t.insert(apiTokens).values(createdToken);
+    });
+    return prior;
+  });
+}
+
 export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
   .get("/api/v2/users", async ({ query, user, set }: ParamCtx): Promise<unknown> => {
@@ -1096,74 +1171,42 @@ export const userRoutes = new Elysia({ name: "users" })
       return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot mint unscoped organization tokens" }] };
     }
     const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || (orgId !== org.id && !(await checkOrgPermission(user?.id, org.id, "owner")))) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    // Unknown token values must not mint arbitrary token namespaces (todo 52/53).
-    const rawTokenType = new URL(request.url).searchParams.get("token") ?? "";
-    const validated = validateOrgTokenType(rawTokenType);
-    if (validated === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "token query parameter must be one of: (empty), organization, audit-trails" }] };
-    }
-    const tokenType = validated === "organization" ? "" : validated;
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
-    if (Number.isNaN(requestedExpiry)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
-    }
-    // TFE parity: org tokens default to a two-year expiry; the org TTL policy
-    // caps (or forbids) the result (todo 49-51, 72-74).
-    const requestedOrDefault = requestedExpiry ?? Date.now() + TWO_YEARS_MS;
-    // The "organization" query alias resolves to the "" storage slot.
-    const normalizedTokenType = validated === "organization" ? "" : validated;
-    const policyResolution = await resolveTokenExpiryUnderPolicy(org.id, normalizedTokenType, requestedOrDefault);
-    if (policyResolution.kind === "invalid") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
-    }
-    if (policyResolution.kind === "forbidden") {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
-    }
-    const expiresAt = policyResolution.expiresAt;
-    const rawToken = generateAuthenticationToken("org");
-    const createdToken = {
-      id: crypto.randomUUID(),
-      token: hashAuthenticationToken(rawToken),
-      userId: null,
-      orgId: org.id,
-      description: null,
-      scopes: null,
-      tokenType,
-      legacy: false,
-      createdAt: Date.now(),
-      lastUsedAt: null,
-      expiresAt,
-      teamId: null,
-    };
-    const priorOrgToken = await withDbLock(`organization-token:${org.id}:${tokenType}`, async (): Promise<Readonly<typeof apiTokens.$inferSelect> | undefined> => {
-      const prior = await db.query.apiTokens.findFirst({ where: organizationTokenWhere(org.id, tokenType) });
-      await db.transaction(async (tx: unknown): Promise<void> => {
-        const t = tx as typeof db;
-        await t.delete(apiTokens).where(organizationTokenWhere(org.id, tokenType));
-        await t.insert(apiTokens).values(createdToken);
+    try {
+      const org = await requireOrgTokenOrg(orgName, user?.id, orgId);
+      const tokenType = parseOrgTokenTypeOrThrow(request.url);
+      const attributes = tokenAttributes(body);
+      const expiresAt = await resolveOrgTokenExpiryOrThrow(org.id, tokenType, attributes);
+      const rawToken = generateAuthenticationToken("org");
+      const createdToken = {
+        id: crypto.randomUUID(),
+        token: hashAuthenticationToken(rawToken),
+        userId: null,
+        orgId: org.id,
+        description: null,
+        scopes: null,
+        tokenType,
+        legacy: false,
+        createdAt: Date.now(),
+        lastUsedAt: null,
+        expiresAt,
+        teamId: null,
+      };
+      const priorOrgToken = await rotateOrgToken(org.id, tokenType, createdToken);
+      await auditLog(priorOrgToken === undefined ? "create" : "replace", "organization-authentication-token", createdToken.id, user?.id ?? null, org.id, {
+        orgId: org.id,
+        tokenType: tokenType === "" ? null : tokenType,
+        source: "user",
+        ...(priorOrgToken === undefined ? {} : { replacedTokenId: priorOrgToken.id }),
       });
-      return prior;
-    });
-    await auditLog(priorOrgToken === undefined ? "create" : "replace", "organization-authentication-token", createdToken.id, user?.id ?? null, org.id, {
-      orgId: org.id,
-      tokenType: tokenType === "" ? null : tokenType,
-      source: "user",
-      ...(priorOrgToken === undefined ? {} : { replacedTokenId: priorOrgToken.id }),
-    });
-    (set as { status: number }).status = 201;
-    return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
+      (set as { status: number }).status = 201;
+      return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
+    } catch (error: unknown) {
+      if (error instanceof HttpStatusError) {
+        (set as { status: number }).status = error.status;
+        return error.body;
+      }
+      throw error;
+    }
   })
   .delete("/api/v2/organizations/:org_name/authentication-token", async ({ params, request, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
     const orgName = params["org_name"] ?? "";
