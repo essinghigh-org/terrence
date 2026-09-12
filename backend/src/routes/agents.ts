@@ -441,6 +441,38 @@ async function configurationArchiveResponse(
   return Bun.file(archivePath);
 }
 
+async function isConfigurationArchiveAvailable(
+  configuration: Readonly<{ archivePath: string | null; status: string }>,
+): Promise<boolean> {
+  if (configuration.archivePath === null) return false;
+  if (["backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(configuration.status)) return false;
+  return Bun.file(configuration.archivePath).exists();
+}
+
+async function refetchConfigurationArchive(
+  configuration: typeof configurationVersions.$inferSelect,
+): Promise<typeof configurationVersions.$inferSelect | undefined> {
+  if (await isConfigurationArchiveAvailable(configuration)) return configuration;
+  if (!(await refetchConfigurationVersion(configuration.id))) return undefined;
+  return db.query.configurationVersions.findFirst({
+    where: eq(configurationVersions.id, configuration.id),
+  });
+}
+
+async function serveValidatedTarArchive(
+  archivePath: string,
+  set: SetObj,
+): Promise<unknown> {
+  try {
+    await assertSafeTarArchive(archivePath);
+  } catch {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration archive failed safety validation" }] };
+  }
+  (set.headers as Record<string, string>)["Content-Type"] = "application/gzip";
+  return Bun.file(archivePath);
+}
+
 function completionResourceCounts(
   attrs: Record<string, unknown>,
   status: string,
@@ -1146,41 +1178,21 @@ export const agentRoutes = new Elysia({ name: "agents" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     let configuration = job.configuration;
-    if (
-      configuration.archivePath === null
-      || ["backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(configuration.status)
-      || !(await Bun.file(configuration.archivePath).exists())
-    ) {
-      if (!(await refetchConfigurationVersion(configuration.id))) {
-        (set as { status: number }).status = 404;
-        return { errors: [{ status: "404", title: "Not Found" }] };
-      }
-      const refreshed = await db.query.configurationVersions.findFirst({
-        where: eq(configurationVersions.id, configuration.id),
-      });
-      if (refreshed === undefined) {
-        (set as { status: number }).status = 404;
-        return { errors: [{ status: "404", title: "Not Found" }] };
-      }
-      configuration = refreshed;
+    const refreshed = await refetchConfigurationArchive(configuration);
+    if (refreshed === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    configuration = refreshed;
     const archivePath = configuration.archivePath;
     if (
       archivePath === null
-      || ["backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(configuration.status)
-      || !(await Bun.file(archivePath).exists())
+      || !(await isConfigurationArchiveAvailable(configuration))
     ) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    try {
-      await assertSafeTarArchive(archivePath);
-    } catch {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration archive failed safety validation" }] };
-    }
-    (set.headers as Record<string, string>)["Content-Type"] = "application/gzip";
-    return Bun.file(archivePath);
+    return serveValidatedTarArchive(archivePath, set);
   })
   .get("/api/v2/agents/:agent_id/jobs/:job_id/state", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const agentId = params["agent_id"] ?? "";
