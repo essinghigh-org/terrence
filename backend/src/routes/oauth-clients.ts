@@ -965,6 +965,30 @@ async function completeOAuth2Callback(
   return completeOAuthHandshake(oc, exchanged.accessToken, exchanged.serviceProviderUser, request);
 }
 
+function parseOAuthTokenSshKey(
+  attributes: Record<string, unknown>,
+  set: SetObj,
+): { sshKey: string | undefined } | { error: unknown } {
+  if (attributes["ssh-key"] !== undefined && typeof attributes["ssh-key"] !== "string") {
+    (set as { status: number }).status = 422;
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "ssh-key must be a string" }] } };
+  }
+  const sshKey = typeof attributes["ssh-key"] === "string" ? attributes["ssh-key"].trim() : undefined;
+  return { sshKey };
+}
+
+async function applyOAuthTokenSshKey(
+  ot: typeof oauthTokens.$inferSelect,
+  sshKey: string | undefined,
+  otId: string,
+): Promise<typeof oauthTokens.$inferSelect | undefined> {
+  if (sshKey === undefined) return ot;
+  return (await db.update(oauthTokens).set({
+    sshKey: sshKey === "" ? null : await encryptSecret(sshKey),
+    hasSshKey: sshKey !== "",
+  }).where(eq(oauthTokens.id, otId)).returning())[0];
+}
+
 export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/oauth-clients", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -1185,20 +1209,10 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     if (ot === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    if (attributes["ssh-key"] !== undefined && typeof attributes["ssh-key"] !== "string") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "ssh-key must be a string" }] };
-    }
-    const sshKey = typeof attributes["ssh-key"] === "string" ? attributes["ssh-key"].trim() : undefined;
-    const updated = sshKey === undefined
-      ? ot
-      : (await db.update(oauthTokens).set({
-          sshKey: sshKey === "" ? null : await encryptSecret(sshKey),
-          hasSshKey: sshKey !== "",
-        }).where(eq(oauthTokens.id, otId)).returning())[0];
+    const { attributes } = oauthClientPatchDocument(body);
+    const parsed = parseOAuthTokenSshKey(attributes, set);
+    if ("error" in parsed) return parsed.error;
+    const updated = await applyOAuthTokenSshKey(ot, parsed.sshKey, otId);
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: oauthTokenResource(updated) };
   })
