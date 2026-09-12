@@ -39,6 +39,54 @@ function componentResource(row: typeof registryComponents.$inferSelect): Record<
   };
 }
 
+function componentOrgData(data: Record<string, unknown>): Record<string, unknown> {
+  const rels = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
+  const orgRel = rels["organization"] !== null && typeof rels["organization"] === "object" ? rels["organization"] as Record<string, unknown> : {};
+  return orgRel["data"] !== null && typeof orgRel["data"] === "object" ? orgRel["data"] as Record<string, unknown> : {};
+}
+
+function parseComponentRequest(
+  body: unknown,
+  set: Ctx["set"],
+): { attrs: Record<string, unknown>; orgName: string; name: string } | { error: unknown } {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  const orgData = componentOrgData(data);
+  const orgName = typeof orgData["id"] === "string" ? orgData["id"] : typeof attrs["organization"] === "string" ? attrs["organization"] : "";
+  const name = typeof attrs["name"] === "string" ? attrs["name"].trim() : typeof data["id"] === "string" ? data["id"].trim() : "";
+  if (orgName === "" || name === "") { (set as { status: number }).status = 422; return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "organization and name are required" }] } }; }
+  return { attrs, orgName, name };
+}
+
+function buildComponentRow(
+  orgId: string,
+  name: string,
+  attrs: Record<string, unknown>,
+): typeof registryComponents.$inferInsert {
+  const namespace = typeof attrs["namespace"] === "string" && attrs["namespace"].trim() !== "" ? attrs["namespace"].trim() : "hashicorp";
+  const sourceIdentifier = typeof attrs["source-identifier"] === "string" && attrs["source-identifier"].trim() !== "" ? attrs["source-identifier"].trim() : name;
+  const version = typeof attrs["version"] === "string" && attrs["version"].trim() !== "" ? attrs["version"].trim() : "0.1.0";
+  const description = typeof attrs["description"] === "string" ? attrs["description"] : null;
+  const id = newResourceId("rcomp");
+  const now = Date.now();
+  return { id, orgId, name, namespace, description, source: "registry", sourceIdentifier, version, status: "pending", publishedAt: now, createdAt: now, updatedAt: now };
+}
+
+async function insertComponentRow(
+  row: typeof registryComponents.$inferInsert,
+  orgName: string,
+  set: Ctx["set"],
+): Promise<{ inserted: true } | { error: unknown }> {
+  try {
+    await db.insert(registryComponents).values(row);
+  } catch (error: unknown) {
+    if (isUniqueConstraintError(error)) { (set as { status: number }).status = 409; return { error: { errors: [{ status: "409", title: "Conflict", detail: `Component ${row.namespace}/${row.name} already exists in ${orgName}` }] } }; }
+    throw error;
+  }
+  return { inserted: true };
+}
+
 export const registryComponentsRoutes = new Elysia({ name: "registry-components" })
   .use(authPlugin)
   .get("/api/registry/v1/components", async ({ request, set }: Ctx): Promise<unknown> => {
@@ -64,31 +112,14 @@ export const registryComponentsRoutes = new Elysia({ name: "registry-components"
     return { data: componentResource(row) };
   })
   .post("/api/registry/v1/components", async ({ body, user, orgId: tokenOrgId, teamId, set }: Ctx): Promise<unknown> => {
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const rels = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
-    const orgRel = rels["organization"] !== null && typeof rels["organization"] === "object" ? rels["organization"] as Record<string, unknown> : {};
-    const orgData = orgRel["data"] !== null && typeof orgRel["data"] === "object" ? orgRel["data"] as Record<string, unknown> : {};
-    const orgName = typeof orgData["id"] === "string" ? orgData["id"] : typeof attrs["organization"] === "string" ? String(attrs["organization"]) : "";
-    const name = typeof attrs["name"] === "string" ? attrs["name"].trim() : typeof data["id"] === "string" ? String(data["id"]).trim() : "";
-    if (orgName === "" || name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "organization and name are required" }] }; }
-    const org = await cachedOrgByName(orgName);
+    const parsed = parseComponentRequest(body, set);
+    if ("error" in parsed) return parsed.error;
+    const org = await cachedOrgByName(parsed.orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const namespace = typeof attrs["namespace"] === "string" && attrs["namespace"].trim() !== "" ? attrs["namespace"].trim() : "hashicorp";
-    const sourceIdentifier = typeof attrs["source-identifier"] === "string" && String(attrs["source-identifier"]).trim() !== "" ? String(attrs["source-identifier"]).trim() : name;
-    const version = typeof attrs["version"] === "string" && attrs["version"].trim() !== "" ? attrs["version"].trim() : "0.1.0";
-    const description = typeof attrs["description"] === "string" ? attrs["description"] : null;
-    const id = newResourceId("rcomp");
-    const now = Date.now();
-    const row: typeof registryComponents.$inferInsert = { id, orgId: org.id, name, namespace, description, source: "registry", sourceIdentifier, version, status: "pending", publishedAt: now, createdAt: now, updatedAt: now };
-    try {
-      await db.insert(registryComponents).values(row);
-    } catch (error: unknown) {
-      if (isUniqueConstraintError(error)) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: `Component ${namespace}/${name} already exists in ${orgName}` }] }; }
-      throw error;
-    }
-    const created = await db.query.registryComponents.findFirst({ where: eq(registryComponents.id, id) });
+    const row = buildComponentRow(org.id, parsed.name, parsed.attrs);
+    const inserted = await insertComponentRow(row, parsed.orgName, set);
+    if ("error" in inserted) return inserted.error;
+    const created = await db.query.registryComponents.findFirst({ where: eq(registryComponents.id, row.id) });
     if (created === undefined) throw new Error("Created registry component could not be loaded");
     (set as { status: number }).status = 201;
     return { data: componentResource(created) };
