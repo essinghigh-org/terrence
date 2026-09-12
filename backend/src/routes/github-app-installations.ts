@@ -162,6 +162,20 @@ function parseManifestConfiguration(record: RepositoryRecord, apiUrl: string): G
   };
 }
 
+function mergeValidatedAppConfiguration(
+  configuration: GitHubAppConfiguration,
+  validation: Readonly<{ appId?: number; slug?: string; name?: string | null; owner?: string | null }>,
+): GitHubAppConfiguration {
+  return {
+    ...configuration,
+    appId: validation.appId ?? configuration.appId,
+    appIdText: String(validation.appId ?? configuration.appId),
+    slug: validation.slug ?? configuration.slug,
+    name: validation.name ?? configuration.name,
+    owner: validation.owner ?? configuration.owner,
+  };
+}
+
 async function manifestConversion(code: string): Promise<Readonly<{ configuration: GitHubAppConfiguration; htmlUrl: string | null }> | null> {
   const apiUrl = manifestGitHubApiUrl();
   const controller = new AbortController();
@@ -186,14 +200,7 @@ async function manifestConversion(code: string): Promise<Readonly<{ configuratio
     const validation = await validateGitHubAppConfiguration(configuration);
     if (!validation.ok) return null;
     return {
-      configuration: {
-        ...configuration,
-        appId: validation.appId ?? configuration.appId,
-        appIdText: String(validation.appId ?? configuration.appId),
-        slug: validation.slug ?? configuration.slug,
-        name: validation.name ?? configuration.name,
-        owner: validation.owner ?? configuration.owner,
-      },
+      configuration: mergeValidatedAppConfiguration(configuration, validation),
       htmlUrl: httpUrl(record["html_url"]),
     };
   } catch {
@@ -1366,12 +1373,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       return flowError(set, 422, "GitHub App Validation Failed", validation.detail);
     }
     await persistGitHubAppConfiguration({
-      ...configuration,
-      appId: validation.appId ?? configuration.appId,
-      appIdText: String(validation.appId ?? configuration.appId),
-      slug: validation.slug ?? configuration.slug,
-      name: validation.name ?? configuration.name,
-      owner: validation.owner ?? configuration.owner,
+      ...mergeValidatedAppConfiguration(configuration, validation),
       source: "manual",
     });
     const record = await getGitHubAppRecord();
