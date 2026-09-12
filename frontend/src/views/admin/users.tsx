@@ -14,6 +14,66 @@ import { type DataItem } from "./types";
 
 type UserAction = { id: string; label: string; path: string; title: string; description: string };
 
+function UserEditDialog({
+  editingUser,
+  resetUser,
+  username,
+  email,
+  password,
+  confirmation,
+  saving,
+  error,
+  onUsernameChange,
+  onEmailChange,
+  onPasswordChange,
+  onConfirmationChange,
+  onClose,
+  onSubmit,
+  onOpenChange,
+}: Readonly<{
+  editingUser: DataItem | null;
+  resetUser: DataItem | null;
+  username: string;
+  email: string;
+  password: string;
+  confirmation: string;
+  saving: boolean;
+  error: string;
+  onUsernameChange: (value: string) => void;
+  onEmailChange: (value: string) => void;
+  onPasswordChange: (value: string) => void;
+  onConfirmationChange: (value: string) => void;
+  onClose: () => void;
+  onSubmit: (event: React.SyntheticEvent) => Promise<void>;
+  onOpenChange: (open: boolean) => void;
+}>): React.JSX.Element {
+  return (
+    <Dialog open={editingUser !== null || resetUser !== null} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{resetUser !== null ? `Reset password for ${resetUser.attributes.username ?? resetUser.id}` : "Edit user"}</DialogTitle>
+          <DialogDescription>{resetUser !== null ? "Set a temporary password and share it securely. This signs the user out, revokes their API tokens, and requires a new password at next sign-in. Their MFA remains enabled." : "Update the account name and email address. Changing the email requires it to be verified again."}</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={onSubmit} className="space-y-4">
+          {resetUser !== null ? (
+            <>
+              <div className="space-y-2"><label htmlFor="admin-reset-password" className="text-sm font-medium">Temporary password</label><Input id="admin-reset-password" name="new-password" type="password" autoComplete="new-password" required value={password} onInput={(event): void => { onPasswordChange(event.currentTarget.value); }} /></div>
+              <div className="space-y-2"><label htmlFor="admin-reset-confirmation" className="text-sm font-medium">Confirm temporary password</label><Input id="admin-reset-confirmation" name="password-confirmation" type="password" autoComplete="new-password" required value={confirmation} onInput={(event): void => { onConfirmationChange(event.currentTarget.value); }} /></div>
+            </>
+          ) : (
+            <>
+              <div className="space-y-2"><label htmlFor="admin-edit-username" className="text-sm font-medium">Username</label><Input id="admin-edit-username" name="username" autoComplete="off" spellCheck={false} required value={username} onInput={(event): void => { onUsernameChange(event.currentTarget.value); }} /></div>
+              <div className="space-y-2"><label htmlFor="admin-edit-email" className="text-sm font-medium">Email (optional)</label><Input id="admin-edit-email" name="email" type="email" autoComplete="off" spellCheck={false} value={email} onInput={(event): void => { onEmailChange(event.currentTarget.value); }} /></div>
+            </>
+          )}
+          {error !== "" && <p role="alert" className="text-sm text-destructive">{error}</p>}
+          <DialogFooter><Button type="button" variant="outline" disabled={saving} onClick={onClose}>Cancel</Button><Button type="submit" disabled={saving}>{saving && <Spinner data-icon="inline-start" />}{resetUser !== null ? "Reset password" : "Save changes"}</Button></DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function UsersAdmin(props: Readonly<{
   users: DataItem[];
   setCreateDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -147,29 +207,23 @@ export function UsersAdmin(props: Readonly<{
           <p className="text-xs text-muted-foreground">Users need organization membership to work with infrastructure. Site admins can manage the whole instance.</p>
         </CardContent>
       </Card>
-      <Dialog open={editingUser !== null || resetUser !== null} onOpenChange={(open): void => { if (!open && !saving) closeForm(); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{resetUser !== null ? `Reset password for ${resetUser.attributes.username ?? resetUser.id}` : "Edit user"}</DialogTitle>
-            <DialogDescription>{resetUser !== null ? "Set a temporary password and share it securely. This signs the user out, revokes their API tokens, and requires a new password at next sign-in. Their MFA remains enabled." : "Update the account name and email address. Changing the email requires it to be verified again."}</DialogDescription>
-          </DialogHeader>
-          <form onSubmit={saveUser} className="space-y-4">
-            {resetUser !== null ? (
-              <>
-                <div className="space-y-2"><label htmlFor="admin-reset-password" className="text-sm font-medium">Temporary password</label><Input id="admin-reset-password" name="new-password" type="password" autoComplete="new-password" required value={password} onInput={(event): void => { setPassword(event.currentTarget.value); }} /></div>
-                <div className="space-y-2"><label htmlFor="admin-reset-confirmation" className="text-sm font-medium">Confirm temporary password</label><Input id="admin-reset-confirmation" name="password-confirmation" type="password" autoComplete="new-password" required value={confirmation} onInput={(event): void => { setConfirmation(event.currentTarget.value); }} /></div>
-              </>
-            ) : (
-              <>
-                <div className="space-y-2"><label htmlFor="admin-edit-username" className="text-sm font-medium">Username</label><Input id="admin-edit-username" name="username" autoComplete="off" spellCheck={false} required value={username} onInput={(event): void => { setUsername(event.currentTarget.value); }} /></div>
-                <div className="space-y-2"><label htmlFor="admin-edit-email" className="text-sm font-medium">Email (optional)</label><Input id="admin-edit-email" name="email" type="email" autoComplete="off" spellCheck={false} value={email} onInput={(event): void => { setEmail(event.currentTarget.value); }} /></div>
-              </>
-            )}
-            {error !== "" && <p role="alert" className="text-sm text-destructive">{error}</p>}
-            <DialogFooter><Button type="button" variant="outline" disabled={saving} onClick={closeForm}>Cancel</Button><Button type="submit" disabled={saving}>{saving && <Spinner data-icon="inline-start" />}{resetUser !== null ? "Reset password" : "Save changes"}</Button></DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <UserEditDialog
+        editingUser={editingUser}
+        resetUser={resetUser}
+        username={username}
+        email={email}
+        password={password}
+        confirmation={confirmation}
+        saving={saving}
+        error={error}
+        onUsernameChange={(value: string): void => { setUsername(value); }}
+        onEmailChange={(value: string): void => { setEmail(value); }}
+        onPasswordChange={(value: string): void => { setPassword(value); }}
+        onConfirmationChange={(value: string): void => { setConfirmation(value); }}
+        onClose={closeForm}
+        onSubmit={saveUser}
+        onOpenChange={(open): void => { if (!open && !saving) closeForm(); }}
+      />
       <ConfirmDialog
         open={pendingAction !== null}
         onOpenChange={(open): void => { if (!open && !saving) { setPendingAction(null); setError(""); } }}
