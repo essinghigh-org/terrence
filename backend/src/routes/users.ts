@@ -204,6 +204,37 @@ function agentTokenResource(
   };
 }
 
+async function revokeTeamApiToken(
+  tokenId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null | undefined,
+): Promise<boolean> {
+  const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) });
+  // Team tokens: generic delete requires manage-teams on the token's org;
+  // the legacy credential can only be removed via the singular endpoint
+  // (todo 46).
+  if (token === undefined || token.teamId === null || token.legacy !== false) return false;
+  const team = await db.query.teams.findFirst({ where: eq(teams.id, token.teamId) });
+  if (team === undefined || !(await checkOrganizationPermission(team.orgId, userId, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) return false;
+  await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
+  return true;
+}
+
+async function revokeAgentPoolToken(
+  tokenId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null | undefined,
+): Promise<boolean> {
+  const agent = await findAuthorizedAgentToken(tokenId, userId, tokenOrgId, tokenTeamId);
+  if (agent === undefined) return false;
+  const revokedAt = Date.now();
+  await db.update(agentPoolTokens).set({ revokedAt }).where(and(eq(agentPoolTokens.id, tokenId), isNull(agentPoolTokens.revokedAt)));
+  await auditLog("revoke", "agent-pool-token", tokenId, userId ?? null, agent.pool.orgId, { agentPoolId: agent.pool.id });
+  return true;
+}
+
 export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
   .get("/api/v2/users", async ({ query, user, set }: ParamCtx): Promise<unknown> => {
@@ -929,34 +960,16 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 204;
       return {};
     }
-    // Team tokens: generic delete requires manage-teams on the token's org;
-    // the legacy credential can only be removed via the singular endpoint
-    // (todo 46).
-    if (token !== undefined && token.teamId !== null && token.legacy === false) {
-      const team = await db.query.teams.findFirst({ where: eq(teams.id, token.teamId) });
-      if (team !== undefined && (await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) {
-        await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
-        (set as { status: number }).status = 204;
-        return {};
-      }
+    if (await revokeTeamApiToken(tokenId, user?.id, tokenOrgId, tokenTeamId)) {
+      (set as { status: number }).status = 204;
+      return {};
     }
-    const agentToken = await db.query.agentPoolTokens.findFirst({ where: eq(agentPoolTokens.id, tokenId) });
-    const pool = agentToken === undefined
-      ? undefined
-      : await db.query.agentPools.findFirst({ where: eq(agentPools.id, agentToken.agentPoolId) });
-    if (
-      agentToken === undefined
-      || pool === undefined
-      || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-agent-pools"))
-    ) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
+    if (await revokeAgentPoolToken(tokenId, user?.id, tokenOrgId, tokenTeamId)) {
+      (set as { status: number }).status = 204;
+      return {};
     }
-    const revokedAt = Date.now();
-    await db.update(agentPoolTokens).set({ revokedAt }).where(and(eq(agentPoolTokens.id, tokenId), isNull(agentPoolTokens.revokedAt)));
-    if (agentToken !== undefined && pool !== undefined) await auditLog("revoke", "agent-pool-token", tokenId, user?.id ?? null, pool.orgId, { agentPoolId: pool.id });
-    (set as { status: number }).status = 204;
-    return {};
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
   })
   .post("/api/v2/tokens", async ({ body, user, set }: ParamCtx): Promise<unknown> => {
     if (user === null || user === undefined) {
