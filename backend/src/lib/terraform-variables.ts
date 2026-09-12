@@ -226,6 +226,32 @@ export type TerraformVariableSkip = Readonly<{
   reason: "invalid-name" | "unbalanced-braces";
 }>;
 
+function recordSkippedVariable(skipped: TerraformVariableSkip[], name: string | undefined): void {
+  if (skipped.length >= TERRAFORM_VARIABLE_PARSER_LIMITS.maxDiagnostics) {
+    throw new TerraformVariableParseError(
+      "output-too-large",
+      `Terraform variable metadata diagnostics exceed ${TERRAFORM_VARIABLE_PARSER_LIMITS.maxDiagnostics} entries`,
+    );
+  }
+  skipped.push({ name: name ?? null, reason: name === undefined ? "invalid-name" : "unbalanced-braces" });
+}
+
+function buildVariableMetadata(name: string, body: string): TerraformVariableMetadata {
+  const typeExpression = attributeExpression(body, "type")?.replace(/\s+/g, " ").trim();
+  const type = typeExpression === undefined || typeExpression === "" ? "any" : typeExpression;
+  const rawDefault = attributeExpression(body, "default");
+  const descriptionExpression = attributeExpression(body, "description");
+  return {
+    name,
+    type,
+    description: descriptionExpression === undefined ? null : quotedValue(descriptionExpression) ?? descriptionExpression,
+    hasDefault: rawDefault !== undefined,
+    ...(rawDefault === undefined ? {} : { defaultValue: literalValue(rawDefault) }),
+    sensitive: attributeExpression(body, "sensitive")?.trim() === "true",
+    nullable: attributeExpression(body, "nullable")?.trim() !== "false",
+  };
+}
+
 export function parseTerraformVariablesWithDiagnostics(source: string): Readonly<{
   variables: TerraformVariableMetadata[];
   skipped: TerraformVariableSkip[];
@@ -241,13 +267,7 @@ export function parseTerraformVariablesWithDiagnostics(source: string): Readonly
     const openingBrace = source.indexOf("{", match.index + match[0].length - 1);
     const closingBrace = matchingBrace(source, openingBrace);
     if (name === undefined || closingBrace === undefined) {
-      if (skipped.length >= TERRAFORM_VARIABLE_PARSER_LIMITS.maxDiagnostics) {
-        throw new TerraformVariableParseError(
-          "output-too-large",
-          `Terraform variable metadata diagnostics exceed ${TERRAFORM_VARIABLE_PARSER_LIMITS.maxDiagnostics} entries`,
-        );
-      }
-      skipped.push({ name: name ?? null, reason: name === undefined ? "invalid-name" : "unbalanced-braces" });
+      recordSkippedVariable(skipped, name);
       continue;
     }
     if (!variables.has(name) && variables.size >= TERRAFORM_VARIABLE_PARSER_LIMITS.maxVariables) {
@@ -257,19 +277,7 @@ export function parseTerraformVariablesWithDiagnostics(source: string): Readonly
       );
     }
     const body = source.slice(openingBrace + 1, closingBrace);
-    const typeExpression = attributeExpression(body, "type")?.replace(/\s+/g, " ").trim();
-    const type = typeExpression === undefined || typeExpression === "" ? "any" : typeExpression;
-    const rawDefault = attributeExpression(body, "default");
-    const descriptionExpression = attributeExpression(body, "description");
-    variables.set(name, {
-      name,
-      type,
-      description: descriptionExpression === undefined ? null : quotedValue(descriptionExpression) ?? descriptionExpression,
-      hasDefault: rawDefault !== undefined,
-      ...(rawDefault === undefined ? {} : { defaultValue: literalValue(rawDefault) }),
-      sensitive: attributeExpression(body, "sensitive")?.trim() === "true",
-      nullable: attributeExpression(body, "nullable")?.trim() !== "false",
-    });
+    variables.set(name, buildVariableMetadata(name, body));
   }
   const sorted = [...variables.values()].sort((left, right): number => left.name.localeCompare(right.name));
   return { variables: sorted, skipped };

@@ -11,6 +11,16 @@ export function executorPolicyAllowsLocal(allowed: ExecutorBackend[]): boolean {
   return allowed.includes("landlock");
 }
 
+function projectExecutionDenial(backend: ExecutorBackend, allowedModes: string): string | undefined {
+  const allowed = allowedModes.split(",").map((s) => s.trim()).filter(Boolean);
+  const backendMode = backend === "agent" ? "agent" : backend === "landlock" ? "remote" : backend;
+  const allowsAgentAlias = backend === "agent" && allowed.includes("remote:agent");
+  if (!allowed.includes(backendMode) && !allowed.includes(backend) && !allowsAgentAlias && !allowed.includes("*")) {
+    return `Project restricts execution to [${allowed.join(", ")}]; ${backend} is not allowed.`;
+  }
+  return undefined;
+}
+
 /** Full executor policy check against workspace/project/org constraints (todos 36-39). */
 export function executorPolicyAllows(
   backend: ExecutorBackend,
@@ -21,13 +31,10 @@ export function executorPolicyAllows(
   if (workspace?.trustedExecution === false && backend === "landlock") {
     return { allowed: false, reason: "Workspace is marked untrusted: local execution is refused. Use an isolated executor (agent/container)." };
   }
-  if (project?.allowedExecutionModes !== null && project?.allowedExecutionModes !== undefined && project.allowedExecutionModes !== "") {
-    const allowed = project.allowedExecutionModes.split(",").map((s) => s.trim()).filter(Boolean);
-    const backendMode = backend === "agent" ? "agent" : backend === "landlock" ? "remote" : backend;
-    const allowsAgentAlias = backend === "agent" && allowed.includes("remote:agent");
-    if (!allowed.includes(backendMode) && !allowed.includes(backend) && !allowsAgentAlias && !allowed.includes("*")) {
-      return { allowed: false, reason: `Project restricts execution to [${allowed.join(", ")}]; ${backend} is not allowed.` };
-    }
+  const allowedModes = project?.allowedExecutionModes;
+  if (allowedModes !== null && allowedModes !== undefined && allowedModes !== "") {
+    const denial = projectExecutionDenial(backend, allowedModes);
+    if (denial !== undefined) return { allowed: false, reason: denial };
   }
   if (organization?.requireHardIsolation === true && backend === "landlock") {
     return { allowed: false, reason: "Organization requires hard isolation: local execution is disabled." };
