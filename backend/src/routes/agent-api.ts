@@ -900,6 +900,30 @@ async function buildClaimedJobPayload(
   }
 }
 
+type ClaimedStackJob = NonNullable<Awaited<ReturnType<typeof findClaimedStackAgentJob>>>;
+
+function stackJobConfigArchivePath(claimed: ClaimedStackJob | undefined): string | null {
+  if (claimed === undefined) return null;
+  const runArchivePath = typeof (claimed.deploymentRun.payload ?? {})["archivePath"] === "string" ? (claimed.deploymentRun.payload ?? {})["archivePath"] as string : null;
+  const configurationArchivePath = typeof (claimed.configuration.payload ?? {})["archivePath"] === "string" ? (claimed.configuration.payload ?? {})["archivePath"] as string : null;
+  return runArchivePath ?? configurationArchivePath;
+}
+
+async function serveStackConfigArchive(
+  claimed: ClaimedStackJob | undefined,
+  archivePath: string | null,
+  agentMissing: boolean,
+  set: { status?: number; headers?: Record<string, string | number> },
+): Promise<unknown> {
+  if (claimed === undefined || archivePath === null || !isStackStoragePath(archivePath) || !(await Bun.file(archivePath).exists())) {
+    const status = agentMissing ? 401 : 404;
+    set.status = status;
+    return { errors: [{ status: String(status), title: status === 401 ? "Unauthorized" : "Not Found" }] };
+  }
+  set.headers = { "content-type": "application/gzip" };
+  return Bun.file(archivePath);
+}
+
 export const agentApiRoutes = new Elysia({ name: "agent-api" })
   .use(authPlugin)
 
@@ -1143,15 +1167,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     const agent = await agentFromRequest(ctx);
     const fencingToken = requestedFencingToken(ctx);
     const claimed = agent === undefined ? undefined : await findClaimedStackAgentJob(agent.id, ctx.params["job_id"] ?? "", fencingToken);
-    const runArchivePath = typeof (claimed?.deploymentRun.payload ?? {})["archivePath"] === "string" ? (claimed?.deploymentRun.payload ?? {})["archivePath"] as string : null;
-    const configurationArchivePath = typeof (claimed?.configuration.payload ?? {})["archivePath"] === "string" ? (claimed?.configuration.payload ?? {})["archivePath"] as string : null;
-    const archivePath = runArchivePath ?? configurationArchivePath;
-    if (claimed === undefined || archivePath === null || !isStackStoragePath(archivePath) || !(await Bun.file(archivePath).exists())) {
-      set.status = agent === undefined ? 401 : 404;
-      return { errors: [{ status: String(set.status), title: set.status === 401 ? "Unauthorized" : "Not Found" }] };
-    }
-    set.headers = { "content-type": "application/gzip" };
-    return Bun.file(archivePath);
+    return serveStackConfigArchive(claimed, stackJobConfigArchivePath(claimed), agent === undefined, set);
   })
 
   // --- Artifact endpoints (agent-token + claimed-job scoped) ----------------
