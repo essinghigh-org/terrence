@@ -1082,6 +1082,26 @@ async function checkCommitStatusesPermission(
   return { id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: writeRes.status, detail: `Commit statuses write returned HTTP ${writeRes.status}. Check the GitHub App's permission settings.` };
 }
 
+async function checkSetupAuthorization(
+  state: SetupState,
+  initiatingToken: Readonly<typeof apiTokens.$inferSelect> | undefined,
+): Promise<boolean> {
+  if (initiatingToken === undefined) return false;
+  const identityMatches = state.userId !== null
+    ? initiatingToken.userId === state.userId
+    : state.tokenTeamId !== null
+      ? initiatingToken.teamId === state.tokenTeamId
+      : initiatingToken.orgId === state.orgId && state.tokenOrgId === state.orgId;
+  if (!identityMatches) return false;
+  return checkOrganizationPermission(
+    state.orgId,
+    state.userId ?? undefined,
+    state.tokenOrgId,
+    state.tokenTeamId,
+    "manage-vcs-settings",
+  );
+}
+
 export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstallations" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/vcs-connections/:connection_id/repositories", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -1500,21 +1520,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, state.orgId) });
     const initiatingToken = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, state.tokenId) });
-    const stillAuthorized = initiatingToken !== undefined
-      && (
-        state.userId !== null
-          ? initiatingToken.userId === state.userId
-          : state.tokenTeamId !== null
-            ? initiatingToken.teamId === state.tokenTeamId
-            : initiatingToken.orgId === state.orgId && state.tokenOrgId === state.orgId
-      )
-      && await checkOrganizationPermission(
-        state.orgId,
-        state.userId ?? undefined,
-        state.tokenOrgId,
-        state.tokenTeamId,
-        "manage-vcs-settings",
-      );
+    const stillAuthorized = await checkSetupAuthorization(state, initiatingToken);
     if (org?.name !== state.orgName || !stillAuthorized) {
       return flowError(set, 403, "Forbidden", "Organization authorization is no longer valid");
     }
