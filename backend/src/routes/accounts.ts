@@ -776,6 +776,211 @@ async function validateMfaChallenge(
   return { userId: challenge.userId };
 }
 
+async function issueGraceAccessToken(
+  successorUser: typeof users.$inferSelect,
+  successorFamilyId: string,
+  now: number,
+): Promise<unknown> {
+  const graceAccess = opaqueToken("user");
+  const graceAccessId = crypto.randomUUID();
+  const graceExpiresAt = now + ACCESS_TOKEN_TTL_MS;
+  await db.insert(apiTokens).values({
+    id: graceAccessId,
+    token: tokenHash(graceAccess),
+    userId: successorUser.id,
+    refreshFamilyId: successorFamilyId,
+    description: "Browser session access token",
+    expiresAt: graceExpiresAt,
+    createdAt: now,
+  });
+  // The browser already holds the successor refresh cookie from the
+  // winning response; only the access-token document is re-issued.
+  return accessTokenDocument(graceAccessId, graceAccess, successorUser, graceExpiresAt);
+}
+
+async function resolveGraceSuccessor(
+  rotatedAtMs: number | null,
+  successorHash: string | null,
+  now: number,
+): Promise<{ successor: typeof refreshSessions.$inferSelect; successorUser: typeof users.$inferSelect } | null> {
+  if (rotatedAtMs === null || successorHash === null || now - rotatedAtMs > REFRESH_GRACE_MS) return null;
+  const successor = await db.query.refreshSessions.findFirst({
+    where: eq(refreshSessions.tokenHash, successorHash),
+  });
+  const successorUser = successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
+    ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
+    : undefined;
+  if (successor !== undefined && successorUser !== undefined && !isUserLoginBlocked(successorUser)) {
+    return { successor, successorUser };
+  }
+  return null;
+}
+
+async function loadRefreshCandidate(
+  seen: Map<string, typeof refreshSessions.$inferSelect>,
+  presentedToken: string,
+): Promise<{ current: typeof refreshSessions.$inferSelect } | { stale: true }> {
+  const key = tokenHash(presentedToken);
+  const cached = seen.get(key) ?? null;
+  if (cached !== null) return { current: cached };
+  const row = await refreshSessionForToken(presentedToken);
+  if (row === undefined) return { stale: true };
+  seen.set(key, row);
+  return { current: row };
+}
+
+async function processRefreshCandidate(
+  current: typeof refreshSessions.$inferSelect,
+  currentUser: typeof users.$inferSelect,
+  liveFamilyId: string | null,
+  now: number,
+  set: SetObj,
+  request: RequestInfo | undefined,
+  server: unknown,
+): Promise<{ response: unknown } | { familyId: string | null }> {
+  // Two-tab concurrency grace (todo 125-127): this request serialized
+  // behind the winning tab (in-process rotation lock) and is presenting
+  // a token the winner just rotated. Within the grace window that is
+  // the legitimate second tab, not replay: re-issue an access token
+  // against the successor session WITHOUT rotating again. Outside the
+  // window the normal reuse handling below applies.
+  if (current.rotatedAt !== null) {
+    const grace = await resolveGraceSuccessor(current.rotatedAtMs, current.successorHash, now);
+    if (grace !== null) {
+      return { response: await issueGraceAccessToken(grace.successorUser, grace.successor.familyId, now) };
+    }
+  }
+  // Rotated tokens are normally reuse, but the pre-2026-08-19
+  // Path=/api/v2/users ghost cookie is a rotated token that shares
+  // the same family as the live token the browser also sends.
+  // Only relax reuse when the rotated token is from the same family
+  // as the live candidate we will successfully rotate.
+  // TODO(remove after 2027-02-19): legacy ghost-cookie relaxation.
+  if (current.rotatedAt !== null) {
+    if (liveFamilyId !== null && current.familyId !== liveFamilyId) {
+      await revokeRefreshFamily(current.familyId, current.userId, now);
+      return { response: refreshUnauthorized(set, request, "Refresh token reuse detected", server) };
+    }
+    // We don't know the live family yet or this ghost shares it —
+    // stash and re-evaluate after we find a live candidate.
+    return { familyId: liveFamilyId };
+  }
+  // This is a live candidate — its family is the live family, so earlier
+  // rotated ghosts from the same family stay forgiven (already skipped).
+  // (Live processing always returns a response below, so there is no
+  // later iteration to propagate to; the caller retains liveFamilyId.)
+
+  const accessToken = opaqueToken("user");
+  const accessTokenId = crypto.randomUUID();
+  const refreshToken = opaqueToken("refresh");
+  const accessExpiresAt = now + ACCESS_TOKEN_TTL_MS;
+  // Two-tab concurrency grace (todo 125-127): the rotation records the
+  // successor hash so an immediately-duplicated refresh presenting the
+  // same old token resolves to the successor instead of revoking the
+  // family. Only rotations within REFRESH_GRACE_MS are forgiven.
+  const rotated = await db.transaction(async (tx: unknown): Promise<boolean> => {
+    const t = tx as typeof db;
+    const claimed = await t.update(refreshSessions)
+      .set({ rotatedAt: now, rotatedAtMs: now, successorHash: tokenHash(refreshToken) })
+      .where(and(
+        eq(refreshSessions.id, current.id),
+        isNull(refreshSessions.rotatedAt),
+        isNull(refreshSessions.revokedAt),
+        gt(refreshSessions.expiresAt, now),
+      ))
+      .returning({ id: refreshSessions.id });
+    if (claimed.length === 0) return false;
+    await t.delete(apiTokens).where(eq(apiTokens.id, current.accessTokenId));
+    await t.insert(apiTokens).values({
+      id: accessTokenId,
+      token: tokenHash(accessToken),
+      userId: currentUser.id,
+      refreshFamilyId: current.familyId,
+      description: "Browser session access token",
+      expiresAt: accessExpiresAt,
+      createdAt: now,
+    });
+    await t.insert(refreshSessions).values({
+      id: crypto.randomUUID(),
+      familyId: current.familyId,
+      tokenHash: tokenHash(refreshToken),
+      userId: currentUser.id,
+      accessTokenId,
+      expiresAt: current.expiresAt,
+      createdAt: now,
+      mfaVerified: current.mfaVerified ?? false,
+    });
+    return true;
+  });
+  if (!rotated) {
+    // Re-read the row: the concurrent winner may have populated
+    // successorHash/rotatedAtMs that our stale snapshot lacks.
+    const fresh = await db.query.refreshSessions.findFirst({
+      where: eq(refreshSessions.id, current.id),
+    });
+    const effective = fresh ?? current;
+    // The claim failed: the token was already rotated (two-tab race or
+    // replay) or revoked/expired. The in-process rotation lock means a
+    // concurrent same-process tab serialized behind us and re-read the
+    // row; a genuine cross-process replay arrives later than the grace
+    // window. Inside the window, treat the duplicate as the legitimate
+    // second tab: hand back the successor session's access token
+    // WITHOUT rotating again (todo 125-126). Outside the window this
+    // stays a family-revocation reuse event (todo 127).
+    const grace = await resolveGraceSuccessor(effective.rotatedAtMs, effective.successorHash, now);
+    if (grace !== null) {
+      // Keep the successor's refresh cookie value as-is: the browser
+      // already holds it from the first response. Only the access
+      // token document is re-issued here.
+      return { response: await issueGraceAccessToken(grace.successorUser, grace.successor.familyId, now) };
+    }
+    await revokeRefreshFamily(current.familyId, current.userId, now);
+    return { response: refreshUnauthorized(set, request, "Refresh token reuse detected", server) };
+  }
+
+  setRefreshCookie(set, request, refreshToken, current.expiresAt, server);
+  return { response: accessTokenDocument(accessTokenId, accessToken, currentUser, accessExpiresAt) };
+}
+
+async function classifyRefreshFailure(
+  seen: Map<string, typeof refreshSessions.$inferSelect>,
+  candidates: readonly string[],
+  now: number,
+  set: SetObj,
+  request: RequestInfo | undefined,
+  server: unknown,
+): Promise<unknown> {
+  // No candidate matched a live session. If any candidate was a
+  // rotated token, treat it as reuse (revoke the family). Otherwise
+  // the session is simply invalid/expired.
+  const reuse = [...seen.values()].find((row): boolean => row.rotatedAt !== null) ?? null;
+  if (reuse !== null) {
+    await revokeRefreshFamily(reuse.familyId, reuse.userId, now);
+    return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
+  }
+  if ([...seen.values()].some((row): boolean => row.revokedAt !== null || row.expiresAt <= now)) {
+    return refreshUnauthorized(set, request, "Refresh session expired", server);
+  }
+  // Tokens not found in DB (seen miss) — fill the map for them too
+  // so the error classification above could consider them; otherwise
+  // treat as invalid.
+  for (const token of candidates) {
+    const key = tokenHash(token);
+    if (seen.has(key)) continue;
+    const row = await refreshSessionForToken(token);
+    if (row === undefined) continue;
+    seen.set(key, row);
+    if (row.rotatedAt !== null) {
+      await revokeRefreshFamily(row.familyId, row.userId, now);
+      return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
+    }
+    if (row.revokedAt !== null || row.expiresAt <= now) {
+      return refreshUnauthorized(set, request, "Refresh session expired", server);
+    }
+  }
+  return refreshUnauthorized(set, request, "Refresh session is invalid", server);
+}
+
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
   .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
@@ -917,14 +1122,9 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       const now = Date.now();
       let liveFamilyId: string | null = null;
       for (const presentedToken of candidates) {
-        const key = tokenHash(presentedToken);
-        let current = seen.get(key) ?? null;
-        if (current === null) {
-          const row = await refreshSessionForToken(presentedToken);
-          if (row === undefined) continue;
-          seen.set(key, row);
-          current = row;
-        }
+        const loaded = await loadRefreshCandidate(seen, presentedToken);
+        if ("stale" in loaded) continue;
+        const current = loaded.current;
         if (current.revokedAt !== null || current.expiresAt <= now) {
           continue;
         }
@@ -933,189 +1133,12 @@ export const accountRoutes = new Elysia({ name: "accounts" })
           await revokeAllRefreshSessions(current.userId, now);
           return refreshUnauthorized(set, request, "Refresh session is invalid", server);
         }
-        // Two-tab concurrency grace (todo 125-127): this request serialized
-        // behind the winning tab (in-process rotation lock) and is presenting
-        // a token the winner just rotated. Within the grace window that is
-        // the legitimate second tab, not replay: re-issue an access token
-        // against the successor session WITHOUT rotating again. Outside the
-        // window the normal reuse handling below applies.
-        if (
-          current.rotatedAt !== null
-          && current.rotatedAtMs !== null
-          && current.successorHash !== null
-          && now - current.rotatedAtMs <= REFRESH_GRACE_MS
-        ) {
-          const successor = await db.query.refreshSessions.findFirst({
-            where: eq(refreshSessions.tokenHash, current.successorHash),
-          });
-          const successorUser = successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
-            ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
-            : undefined;
-          if (successor !== undefined && successorUser !== undefined && !isUserLoginBlocked(successorUser)) {
-            const graceAccess = opaqueToken("user");
-            const graceAccessId = crypto.randomUUID();
-            const graceExpiresAt = now + ACCESS_TOKEN_TTL_MS;
-            await db.insert(apiTokens).values({
-              id: graceAccessId,
-              token: tokenHash(graceAccess),
-              userId: successorUser.id,
-              refreshFamilyId: successor.familyId,
-              description: "Browser session access token",
-              expiresAt: graceExpiresAt,
-              createdAt: now,
-            });
-            // The browser already holds the successor refresh cookie from the
-            // winning response; only the access-token document is re-issued.
-            return accessTokenDocument(graceAccessId, graceAccess, successorUser, graceExpiresAt);
-          }
-        }
-        // Rotated tokens are normally reuse, but the pre-2026-08-19
-        // Path=/api/v2/users ghost cookie is a rotated token that shares
-        // the same family as the live token the browser also sends.
-        // Only relax reuse when the rotated token is from the same family
-        // as the live candidate we will successfully rotate.
-        // TODO(remove after 2027-02-19): legacy ghost-cookie relaxation.
-        if (current.rotatedAt !== null) {
-          if (liveFamilyId === null) {
-            // We don't know the live family yet — stash and re-evaluate
-            // after we find a live candidate. For now just remember it.
-            continue;
-          }
-          if (current.familyId !== liveFamilyId) {
-            await revokeRefreshFamily(current.familyId, current.userId, now);
-            return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
-          }
-          continue;
-        }
-        // This is a live candidate — record its family so earlier rotated
-        // ghosts from the same family can be forgiven (already skipped).
-        liveFamilyId ??= current.familyId;
-        const user = currentUser;
-
-        const accessToken = opaqueToken("user");
-        const accessTokenId = crypto.randomUUID();
-        const refreshToken = opaqueToken("refresh");
-        const accessExpiresAt = now + ACCESS_TOKEN_TTL_MS;
-        // Two-tab concurrency grace (todo 125-127): the rotation records the
-        // successor hash so an immediately-duplicated refresh presenting the
-        // same old token resolves to the successor instead of revoking the
-        // family. Only rotations within REFRESH_GRACE_MS are forgiven.
-        const rotated = await db.transaction(async (tx: unknown): Promise<boolean> => {
-          const t = tx as typeof db;
-          const claimed = await t.update(refreshSessions)
-            .set({ rotatedAt: now, rotatedAtMs: now, successorHash: tokenHash(refreshToken) })
-            .where(and(
-              eq(refreshSessions.id, current.id),
-              isNull(refreshSessions.rotatedAt),
-              isNull(refreshSessions.revokedAt),
-              gt(refreshSessions.expiresAt, now),
-            ))
-            .returning({ id: refreshSessions.id });
-          if (claimed.length === 0) return false;
-          await t.delete(apiTokens).where(eq(apiTokens.id, current.accessTokenId));
-          await t.insert(apiTokens).values({
-            id: accessTokenId,
-            token: tokenHash(accessToken),
-            userId: user.id,
-            refreshFamilyId: current.familyId,
-            description: "Browser session access token",
-            expiresAt: accessExpiresAt,
-            createdAt: now,
-          });
-          await t.insert(refreshSessions).values({
-            id: crypto.randomUUID(),
-            familyId: current.familyId,
-            tokenHash: tokenHash(refreshToken),
-            userId: user.id,
-            accessTokenId,
-            expiresAt: current.expiresAt,
-            createdAt: now,
-            mfaVerified: current.mfaVerified ?? false,
-          });
-          return true;
-        });
-        if (!rotated) {
-          // Re-read the row: the concurrent winner may have populated
-          // successorHash/rotatedAtMs that our stale snapshot lacks.
-          const fresh = await db.query.refreshSessions.findFirst({
-            where: eq(refreshSessions.id, current.id),
-          });
-          const effective = fresh ?? current;
-          // The claim failed: the token was already rotated (two-tab race or
-          // replay) or revoked/expired. The in-process rotation lock means a
-          // concurrent same-process tab serialized behind us and re-read the
-          // row; a genuine cross-process replay arrives later than the grace
-          // window. Inside the window, treat the duplicate as the legitimate
-          // second tab: hand back the successor session's access token
-          // WITHOUT rotating again (todo 125-126). Outside the window this
-          // stays a family-revocation reuse event (todo 127).
-          if (
-            effective.rotatedAtMs !== null
-            && effective.successorHash !== null
-            && now - effective.rotatedAtMs <= REFRESH_GRACE_MS
-          ) {
-            const successor = await db.query.refreshSessions.findFirst({
-              where: eq(refreshSessions.tokenHash, effective.successorHash),
-            });
-            const successorUser = successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
-              ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
-              : undefined;
-            if (successor !== undefined && successorUser !== undefined && !isUserLoginBlocked(successorUser)) {
-              const graceAccess = opaqueToken("user");
-              const graceAccessId = crypto.randomUUID();
-              const graceExpiresAt = now + ACCESS_TOKEN_TTL_MS;
-              await db.insert(apiTokens).values({
-                id: graceAccessId,
-                token: tokenHash(graceAccess),
-                userId: successorUser.id,
-                refreshFamilyId: successor.familyId,
-                description: "Browser session access token",
-                expiresAt: graceExpiresAt,
-                createdAt: now,
-              });
-              // Keep the successor's refresh cookie value as-is: the browser
-              // already holds it from the first response. Only the access
-              // token document is re-issued here.
-              return accessTokenDocument(graceAccessId, graceAccess, successorUser, graceExpiresAt);
-            }
-          }
-          await revokeRefreshFamily(current.familyId, current.userId, now);
-          return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
-        }
-
-        setRefreshCookie(set, request, refreshToken, current.expiresAt, server);
-        return accessTokenDocument(accessTokenId, accessToken, user, accessExpiresAt);
+        const outcome = await processRefreshCandidate(current, currentUser, liveFamilyId, now, set, request, server);
+        if ("response" in outcome) return outcome.response;
+        liveFamilyId = outcome.familyId;
       }
 
-      // No candidate matched a live session. If any candidate was a
-      // rotated token, treat it as reuse (revoke the family). Otherwise
-      // the session is simply invalid/expired.
-      const reuse = [...seen.values()].find((row): boolean => row.rotatedAt !== null) ?? null;
-      if (reuse !== null) {
-        await revokeRefreshFamily(reuse.familyId, reuse.userId, now);
-        return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
-      }
-      if ([...seen.values()].some((row): boolean => row.revokedAt !== null || row.expiresAt <= now)) {
-        return refreshUnauthorized(set, request, "Refresh session expired", server);
-      }
-      // Tokens not found in DB (seen miss) — fill the map for them too
-      // so the error classification above could consider them; otherwise
-      // treat as invalid.
-      for (const token of candidates) {
-        const key = tokenHash(token);
-        if (seen.has(key)) continue;
-        const row = await refreshSessionForToken(token);
-        if (row === undefined) continue;
-        seen.set(key, row);
-        if (row.rotatedAt !== null) {
-          await revokeRefreshFamily(row.familyId, row.userId, now);
-          return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
-        }
-        if (row.revokedAt !== null || row.expiresAt <= now) {
-          return refreshUnauthorized(set, request, "Refresh session expired", server);
-        }
-      }
-      return refreshUnauthorized(set, request, "Refresh session is invalid", server);
+      return classifyRefreshFailure(seen, candidates, now, set, request, server);
     });
   })
   .post("/api/v2/users/logout", async ({ request, server, set }: ReqCtx): Promise<unknown> => {
