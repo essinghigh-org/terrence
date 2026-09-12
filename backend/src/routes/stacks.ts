@@ -576,6 +576,44 @@ function stackExecutionModeError(executionMode: unknown, agentPoolId: string | u
   return null;
 }
 
+function stackConfigurationSourceError(source: string, vcsIdentifier: string | null): string | null {
+  if (!(source === "manual" || source === "fetch" || source === "reuse")) {
+    return "source must be manual, fetch, or reuse";
+  }
+  if (source === "fetch" && vcsIdentifier === null) {
+    return "fetch requires a VCS-backed stack";
+  }
+  return null;
+}
+
+function stackConfigurationAttributes(body: unknown): Record<string, unknown> {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"];
+  return data !== null && typeof data === "object" && (data as Record<string, unknown>)["attributes"] !== null && typeof (data as Record<string, unknown>)["attributes"] === "object"
+    ? (data as Record<string, unknown>)["attributes"] as Record<string, unknown>
+    : {};
+}
+
+function stackConfigurationFlagError(attrs: Record<string, unknown>): string | null {
+  for (const key of ["speculative", "destroy-all"] as const) {
+    if (attrs[key] !== undefined && typeof attrs[key] !== "boolean") {
+      return `${key} must be a boolean`;
+    }
+  }
+  return null;
+}
+
+function validateStackConfigurationRequest(source: string, vcsIdentifier: string | null, attrs: Record<string, unknown>): string | null {
+  const sourceError = stackConfigurationSourceError(source, vcsIdentifier);
+  if (sourceError !== null) return sourceError;
+  const flagError = stackConfigurationFlagError(attrs);
+  if (flagError !== null) return flagError;
+  if (source === "manual" && vcsIdentifier !== null && attrs["speculative"] !== true) {
+    return "manual configurations for VCS-backed stacks must be speculative";
+  }
+  return null;
+}
+
 export const stackRoutes = new Elysia({ name: "stacks" })
   .use(authPlugin)
   .post("/api/v2/stacks", async ({ body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -639,26 +677,10 @@ export const stackRoutes = new Elysia({ name: "stacks" })
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const source = new URL(request.url).searchParams.get("source") ?? "manual";
-    if (!(source === "manual" || source === "fetch" || source === "reuse")) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "source must be manual, fetch, or reuse" }] };
-    }
-    if (source === "fetch" && details.stack.vcsIdentifier === null) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "fetch requires a VCS-backed stack" }] };
-    }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"];
-    const attrs = data !== null && typeof data === "object" && (data as Record<string, unknown>)["attributes"] !== null && typeof (data as Record<string, unknown>)["attributes"] === "object"
-      ? (data as Record<string, unknown>)["attributes"] as Record<string, unknown>
-      : {};
-    for (const key of ["speculative", "destroy-all"] as const) {
-      if (attrs[key] !== undefined && typeof attrs[key] !== "boolean") {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a boolean` }] };
-      }
-    }
-    if (source === "manual" && details.stack.vcsIdentifier !== null && attrs["speculative"] !== true) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "manual configurations for VCS-backed stacks must be speculative" }] };
+    const attrs = stackConfigurationAttributes(body);
+    const requestError = validateStackConfigurationRequest(source, details.stack.vcsIdentifier, attrs);
+    if (requestError !== null) {
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: requestError }] };
     }
     const configuration = await createStackConfigurationRecord(details.stack, source, attrs);
     if (configuration === undefined) {
