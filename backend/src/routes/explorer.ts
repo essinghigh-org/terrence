@@ -291,6 +291,148 @@ function sqlColumn(name: string): SQL {
 
 type ExplorerColumnType = "boolean" | "numeric" | "date" | "text";
 
+function bulkActionAttributes(body: unknown): { dataObject: Record<string, unknown>; attributes: Record<string, unknown>; inputs: Record<string, unknown> } {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload["data"];
+  const dataObject = data !== null && typeof data === "object" ? data as Record<string, unknown> : {};
+  const attributes = dataObject["attributes"] !== null && typeof dataObject["attributes"] === "object"
+    ? dataObject["attributes"] as Record<string, unknown>
+    : {};
+  const inputs = attributes["action_inputs"] !== null && typeof attributes["action_inputs"] === "object"
+    ? attributes["action_inputs"] as Record<string, unknown>
+    : {};
+  return { dataObject, attributes, inputs };
+}
+
+function parseBulkActionInputs(
+  body: unknown,
+  set: SetObj,
+): { subject: string; message: string; targetIds: unknown; query: unknown } | { error: unknown } {
+  const { dataObject, attributes, inputs } = bulkActionAttributes(body);
+  const subject = typeof inputs["subject"] === "string" ? inputs["subject"].trim() : "";
+  const message = typeof inputs["message"] === "string" ? inputs["message"].trim() : "";
+  const actionType = attributes["action_type"];
+  const targetIds = attributes["target_ids"];
+  const query = attributes["query"];
+  if (
+    dataObject["type"] !== "bulk_actions"
+    || (actionType !== "change_request" && actionType !== "change_requests")
+    || subject === ""
+    || message === ""
+    || (targetIds === undefined) === (query === undefined)
+  ) return { error: explorerBulkActionError(set, 422, "Unprocessable Entity", "Valid bulk-action inputs and exactly one target selector are required") };
+  return { subject, message, targetIds, query };
+}
+
+async function validateBulkTargetMembership(organizationId: string, requestedIds: string[], set: SetObj): Promise<unknown | null> {
+  const candidates = await db.query.workspaces.findMany({
+    columns: { id: true },
+    where: and(eq(workspaces.orgId, organizationId), inArray(workspaces.id, requestedIds)),
+  });
+  const candidateIds = new Set(candidates.map((workspace): string => workspace.id));
+  if (requestedIds.some((id): boolean => !candidateIds.has(id))) {
+    return explorerBulkActionError(set, 422, "Unprocessable Entity", "The target selector did not resolve to workspaces");
+  }
+  return null;
+}
+
+async function resolveBulkActionQuerySelection(
+  organization: Readonly<{ id: string; name: string }>,
+  query: unknown,
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<{ selectedIds: string[] } | { error: unknown }> {
+  let selection: ExplorerWorkspaceSelection | undefined;
+  try {
+    selection = await queryWorkspaceIds(organization.id, organization.name, query, request.signal);
+  } catch (cause: unknown) {
+    const response = queryBudgetError(set, cause);
+    if (response !== undefined) return { error: response };
+    throw cause;
+  }
+  const selectedIds = selection?.ids;
+  const selectedTotal = selection?.total;
+  if (selectedIds === undefined || selectedIds.length === 0) {
+    return { error: explorerBulkActionError(set, 422, "Unprocessable Entity", "The target selector did not resolve to workspaces") };
+  }
+  if (
+    selectedIds.length > MAX_EXPLORER_BULK_ACTION_TARGETS
+    || (selectedTotal !== undefined && selectedTotal > MAX_EXPLORER_BULK_ACTION_TARGETS)
+  ) {
+    return { error: explorerBulkActionError(set, 422, "Unprocessable Entity", `The target selector matches more than ${MAX_EXPLORER_BULK_ACTION_TARGETS} workspaces`) };
+  }
+  return { selectedIds };
+}
+
+async function resolveBulkActionTargetIds(
+  organization: Readonly<{ id: string; name: string }>,
+  targetIds: unknown,
+  query: unknown,
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<{ selectedIds: string[] } | { error: unknown }> {
+  if (targetIds !== undefined) {
+    if (
+      !Array.isArray(targetIds)
+      || targetIds.length === 0
+      || targetIds.length > MAX_EXPLORER_BULK_ACTION_TARGETS
+      || targetIds.some((id): boolean => typeof id !== "string")
+    ) {
+      return { error: explorerBulkActionError(set, 422, "Unprocessable Entity", `target_ids must contain between 1 and ${MAX_EXPLORER_BULK_ACTION_TARGETS} workspace IDs`) };
+    }
+    const requestedIds = [...new Set(targetIds as string[])];
+    const membershipError = await validateBulkTargetMembership(organization.id, requestedIds, set);
+    if (membershipError !== null) return { error: membershipError };
+    return { selectedIds: requestedIds };
+  }
+  return resolveBulkActionQuerySelection(organization, query, request, set);
+}
+
+async function createBulkActionRecords(
+  organization: Readonly<{ id: string }>,
+  selectedIds: string[],
+  subject: string,
+  message: string,
+  userId: string | null,
+  set: SetObj,
+): Promise<unknown> {
+  const now = Date.now();
+  const records = selectedIds.map((workspaceId): ExplorerBulkActionRecord =>
+    explorerBulkActionRecordValues(workspaceId, subject, message, userId, now));
+  await db.transaction(async (tx): Promise<void> => {
+    await tx.insert(explorerBulkActionRecords).values(records);
+    await tx.insert(auditLogs).values(records.map((record) => auditLogValues({
+      orgId: organization.id,
+      userId,
+      action: "create",
+      resourceType: "explorer-bulk-action-records",
+      resourceId: record.id,
+      details: {
+        workspaceId: record.workspaceId,
+        toStatus: "pending",
+      },
+      createdAt: now,
+    }) as typeof auditLogs.$inferInsert));
+  });
+  // Notifications reread the committed Explorer bulk-action rows. Dispatching only
+  // after commit prevents a failed transaction from producing a notification
+  // for a row that never became durable.
+  for (let i = 0; i < records.length; i += EXPLORER_NOTIFICATION_CONCURRENCY) {
+    await Promise.all(records
+      .slice(i, i + EXPLORER_NOTIFICATION_CONCURRENCY)
+      .map((record): Promise<void> => queueExplorerBulkActionNotification(record.id)));
+  }
+  (set as { status: number }).status = 201;
+  return {
+    data: explorerBulkActionResource(records[0]!, organization.id),
+    meta: {
+      "action-type": "change-requests",
+      "action-inputs": { subject, message },
+      "created-count": records.length,
+    },
+  };
+}
+
 function sqlBoundValue(value: string, operator: string, columnType: ExplorerColumnType): string | number | boolean | undefined {
   const comparison = comparisonOperators.has(operator);
   if (columnType === "boolean" && comparison) {
@@ -817,104 +959,13 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
       || !(await checkOrganizationPermission(organization.id, user?.id, tokenOrgId, tokenTeamId, "manage-workspaces"))
     ) return explorerBulkActionError(set, 404, "Not Found");
 
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"];
-    const dataObject = data !== null && typeof data === "object" ? data as Record<string, unknown> : {};
-    const attributes = dataObject["attributes"] !== null && typeof dataObject["attributes"] === "object"
-      ? dataObject["attributes"] as Record<string, unknown>
-      : {};
-    const inputs = attributes["action_inputs"] !== null && typeof attributes["action_inputs"] === "object"
-      ? attributes["action_inputs"] as Record<string, unknown>
-      : {};
-    const subject = typeof inputs["subject"] === "string" ? inputs["subject"].trim() : "";
-    const message = typeof inputs["message"] === "string" ? inputs["message"].trim() : "";
-    const actionType = attributes["action_type"];
-    const targetIds = attributes["target_ids"];
-    const query = attributes["query"];
-    if (
-      dataObject["type"] !== "bulk_actions"
-      || (actionType !== "change_request" && actionType !== "change_requests")
-      || subject === ""
-      || message === ""
-      || (targetIds === undefined) === (query === undefined)
-    ) return explorerBulkActionError(set, 422, "Unprocessable Entity", "Valid bulk-action inputs and exactly one target selector are required");
+    const parsed = parseBulkActionInputs(body, set);
+    if ("error" in parsed) return parsed.error;
 
-    let selectedIds: string[] | undefined;
-    let selectedTotal: number | undefined;
-    if (targetIds !== undefined) {
-      if (
-        !Array.isArray(targetIds)
-        || targetIds.length === 0
-        || targetIds.length > MAX_EXPLORER_BULK_ACTION_TARGETS
-        || targetIds.some((id): boolean => typeof id !== "string")
-      ) {
-        return explorerBulkActionError(set, 422, "Unprocessable Entity", `target_ids must contain between 1 and ${MAX_EXPLORER_BULK_ACTION_TARGETS} workspace IDs`);
-      }
-      const requestedIds = [...new Set(targetIds as string[])];
-      const candidates = await db.query.workspaces.findMany({
-        columns: { id: true },
-        where: and(eq(workspaces.orgId, organization.id), inArray(workspaces.id, requestedIds)),
-      });
-      const candidateIds = new Set(candidates.map((workspace): string => workspace.id));
-      selectedIds = requestedIds;
-      if (selectedIds.some((id): boolean => !candidateIds.has(id))) selectedIds = undefined;
-    } else {
-      let selection: ExplorerWorkspaceSelection | undefined;
-      try {
-        selection = await queryWorkspaceIds(organization.id, organization.name, query, request.signal);
-      } catch (cause: unknown) {
-        const response = queryBudgetError(set, cause);
-        if (response !== undefined) return response;
-        throw cause;
-      }
-      selectedIds = selection?.ids;
-      selectedTotal = selection?.total;
-    }
-    if (selectedIds === undefined || selectedIds.length === 0) {
-      return explorerBulkActionError(set, 422, "Unprocessable Entity", "The target selector did not resolve to workspaces");
-    }
-    if (
-      selectedIds.length > MAX_EXPLORER_BULK_ACTION_TARGETS
-      || (selectedTotal !== undefined && selectedTotal > MAX_EXPLORER_BULK_ACTION_TARGETS)
-    ) {
-      return explorerBulkActionError(set, 422, "Unprocessable Entity", `The target selector matches more than ${MAX_EXPLORER_BULK_ACTION_TARGETS} workspaces`);
-    }
+    const resolved = await resolveBulkActionTargetIds(organization, parsed.targetIds, parsed.query, request, set);
+    if ("error" in resolved) return resolved.error;
 
-    const now = Date.now();
-    const records = selectedIds.map((workspaceId): ExplorerBulkActionRecord =>
-      explorerBulkActionRecordValues(workspaceId, subject, message, user?.id ?? null, now));
-    await db.transaction(async (tx): Promise<void> => {
-      await tx.insert(explorerBulkActionRecords).values(records);
-      await tx.insert(auditLogs).values(records.map((record) => auditLogValues({
-        orgId: organization.id,
-        userId: user?.id ?? null,
-        action: "create",
-        resourceType: "explorer-bulk-action-records",
-        resourceId: record.id,
-        details: {
-          workspaceId: record.workspaceId,
-          toStatus: "pending",
-        },
-        createdAt: now,
-      }) as typeof auditLogs.$inferInsert));
-    });
-    // Notifications reread the committed Explorer bulk-action rows. Dispatching only
-    // after commit prevents a failed transaction from producing a notification
-    // for a row that never became durable.
-    for (let i = 0; i < records.length; i += EXPLORER_NOTIFICATION_CONCURRENCY) {
-      await Promise.all(records
-        .slice(i, i + EXPLORER_NOTIFICATION_CONCURRENCY)
-        .map((record): Promise<void> => queueExplorerBulkActionNotification(record.id)));
-    }
-    (set as { status: number }).status = 201;
-    return {
-      data: explorerBulkActionResource(records[0]!, organization.id),
-      meta: {
-        "action-type": "change-requests",
-        "action-inputs": { subject, message },
-        "created-count": records.length,
-      },
-    };
+    return createBulkActionRecords(organization, resolved.selectedIds, parsed.subject, parsed.message, user?.id ?? null, set);
   })
   .get("/api/v2/organizations/:org_name/explorer", async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
