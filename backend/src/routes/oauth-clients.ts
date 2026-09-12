@@ -739,6 +739,85 @@ function resolveOAuthClientSecretFields(attributes: Record<string, unknown>): {
   };
 }
 
+function oauthClientCredentialsError(
+  oc: Readonly<{ key: string | null; secret: string | null }>,
+  set: SetObj,
+): unknown | null {
+  if (oc.key === null || oc.key === "" || oc.secret === null || oc.secret === "") {
+    return unprocessable(set, "OAuth client key and secret are required");
+  }
+  return null;
+}
+
+async function connectOAuth1Flow(
+  oc: typeof oauthClients.$inferSelect,
+  oauth1: OAuth1Endpoints,
+  redirectUri: string,
+  state: string,
+  projectId: string | null,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+  userId: string | null,
+  request: ParamCtx["request"],
+  set: SetObj,
+): Promise<unknown> {
+  const callback = new URL(redirectUri);
+  callback.searchParams.set("state", state);
+  let requestToken: { token: string; tokenSecret: string; callbackConfirmed: boolean } | null;
+  try {
+    requestToken = await oauth1TokenRequest(oc, oauth1.requestToken.toString(), {
+      oauth_callback: callback.toString(),
+    });
+  } catch {
+    requestToken = null;
+  }
+  if (requestToken?.callbackConfirmed !== true) {
+    return oauthFlowError(set, 502, "VCS Provider Error", "Bitbucket Data Center did not return a usable request token");
+  }
+  await putOAuthHandshakeState(state, Date.now() + OAUTH_STATE_TTL_MS, {
+    clientId: oc.id,
+    flow: "oauth1",
+    projectId,
+    redirectUri: callback.toString(),
+    requestToken: requestToken.token,
+    requestTokenSecret: requestToken.tokenSecret,
+    tokenOrgId,
+    tokenTeamId,
+    userId,
+  });
+  oauth1.authorization.searchParams.set("oauth_token", requestToken.token);
+  return authorizationResponse(request, state, oauth1.authorization.toString());
+}
+
+async function connectOAuth2Flow(
+  clientId: string,
+  clientKey: string,
+  oauth2: OAuth2Endpoints,
+  redirectUri: string,
+  state: string,
+  projectId: string | null,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+  userId: string | null,
+  request: ParamCtx["request"],
+): Promise<unknown> {
+  await putOAuthHandshakeState(state, Date.now() + OAUTH_STATE_TTL_MS, {
+    clientId,
+    flow: "oauth2",
+    projectId,
+    redirectUri,
+    tokenOrgId,
+    tokenTeamId,
+    userId,
+  });
+  oauth2.authorization.searchParams.set("client_id", clientKey);
+  oauth2.authorization.searchParams.set("redirect_uri", redirectUri);
+  oauth2.authorization.searchParams.set("response_type", "code");
+  oauth2.authorization.searchParams.set("state", state);
+  if (oauth2.scope !== undefined) oauth2.authorization.searchParams.set("scope", oauth2.scope);
+  return authorizationResponse(request, state, oauth2.authorization.toString());
+}
+
 export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/oauth-clients", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -905,58 +984,18 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     const oauth2 = oauth2Endpoints(oc);
     const oauth1 = oauth1Endpoints(oc);
     if (oauth2 === null && oauth1 === null) return unprocessable(set, "This VCS provider does not support an OAuth handshake");
-    if (oc.key === null || oc.key === "" || oc.secret === null || oc.secret === "") {
-      return unprocessable(set, "OAuth client key and secret are required");
-    }
+    const credentialsError = oauthClientCredentialsError(oc, set);
+    if (credentialsError !== null) return credentialsError;
 
     await pruneOAuthStates();
     const state = crypto.randomUUID();
     const redirectUri = apiURL(request, `/api/v2/oauth-clients/${oc.id}/callback`);
     if (oauth1 !== null) {
-      const callback = new URL(redirectUri);
-      callback.searchParams.set("state", state);
-      let requestToken: { token: string; tokenSecret: string; callbackConfirmed: boolean } | null;
-      try {
-        requestToken = await oauth1TokenRequest(oc, oauth1.requestToken.toString(), {
-          oauth_callback: callback.toString(),
-        });
-      } catch {
-        requestToken = null;
-      }
-      if (requestToken?.callbackConfirmed !== true) {
-        return oauthFlowError(set, 502, "VCS Provider Error", "Bitbucket Data Center did not return a usable request token");
-      }
-      await putOAuthHandshakeState(state, Date.now() + OAUTH_STATE_TTL_MS, {
-        clientId: oc.id,
-        flow: "oauth1",
-        projectId,
-        redirectUri: callback.toString(),
-        requestToken: requestToken.token,
-        requestTokenSecret: requestToken.tokenSecret,
-        tokenOrgId: tokenOrgId ?? null,
-        tokenTeamId: tokenTeamId ?? null,
-        userId: user?.id ?? null,
-      });
-      oauth1.authorization.searchParams.set("oauth_token", requestToken.token);
-      return authorizationResponse(request, state, oauth1.authorization.toString());
+      return connectOAuth1Flow(oc, oauth1, redirectUri, state, projectId, tokenOrgId ?? null, tokenTeamId ?? null, user?.id ?? null, request, set);
     }
     if (oauth2 === null) return unprocessable(set, "This VCS provider does not support the OAuth2 authorization-code flow");
 
-    await putOAuthHandshakeState(state, Date.now() + OAUTH_STATE_TTL_MS, {
-      clientId: oc.id,
-      flow: "oauth2",
-      projectId,
-      redirectUri,
-      tokenOrgId: tokenOrgId ?? null,
-      tokenTeamId: tokenTeamId ?? null,
-      userId: user?.id ?? null,
-    });
-    oauth2.authorization.searchParams.set("client_id", oc.key);
-    oauth2.authorization.searchParams.set("redirect_uri", redirectUri);
-    oauth2.authorization.searchParams.set("response_type", "code");
-    oauth2.authorization.searchParams.set("state", state);
-    if (oauth2.scope !== undefined) oauth2.authorization.searchParams.set("scope", oauth2.scope);
-    return authorizationResponse(request, state, oauth2.authorization.toString());
+    return connectOAuth2Flow(oc.id, oc.key ?? "", oauth2, redirectUri, state, projectId, tokenOrgId ?? null, tokenTeamId ?? null, user?.id ?? null, request);
   })
   .get("/api/v2/oauth-clients/:oc_id/callback", async ({ params, query, request, set }: ParamCtx): Promise<unknown> => {
     await pruneOAuthStates();
