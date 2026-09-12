@@ -137,6 +137,252 @@ function PaginationFooter({
   );
 }
 
+function tabTotal(tab: Tab, resourcesTotal: number, outputsTotal: number): number {
+  if (tab === "resources") return resourcesTotal;
+  if (tab === "outputs") return outputsTotal;
+  return 0;
+}
+
+function tabError(tab: Tab, resourceError: string, outputError: string, dependencyGraphError: string): string {
+  if (tab === "resources") return resourceError;
+  if (tab === "outputs") return outputError;
+  return dependencyGraphError;
+}
+
+function applyResourceResult(
+  result: PromiseSettledResult<Resource[]>,
+  setResources: (value: Resource[]) => void,
+  setResourceError: (message: string) => void,
+): void {
+  if (result.status === "fulfilled") {
+    setResources(result.value);
+  } else {
+    setResourceError(result.reason instanceof Error ? result.reason.message : "Could not load resources");
+  }
+}
+
+function applyOutputResult(
+  result: PromiseSettledResult<unknown>,
+  setOutputs: (value: Output[]) => void,
+  setOutputError: (message: string) => void,
+): void {
+  if (result.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+    const data = (result.value as { data?: Output[] }).data;
+    setOutputs(Array.isArray(data) ? data : []);
+  } else if (result.reason instanceof ApiError && result.reason.status === 404) {
+    setOutputs([]);
+  } else {
+    setOutputError(result.reason instanceof Error ? result.reason.message : "Could not load outputs");
+  }
+}
+
+function applyGraphResult(
+  result: PromiseSettledResult<unknown>,
+  setDependencyGraph: (value: DependencyGraphState | null) => void,
+  setDependencyGraphError: (message: string) => void,
+): void {
+  if (result.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+    const attributes = (result.value as { data?: { attributes?: { nodes?: unknown } } }).data?.attributes;
+    const nodes = Array.isArray(attributes?.nodes)
+      ? attributes.nodes.flatMap((value): DependencyGraphResource[] => {
+          if (!isRecord(value)) return [];
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+          const node = value as { address?: unknown; dependencies?: unknown };
+          if (!isString(node.address) || !Array.isArray(node.dependencies)) return [];
+          return [{ address: node.address, dependencies: node.dependencies.filter((dependency): dependency is string => isString(dependency)) }];
+        })
+      : [];
+    setDependencyGraph({ nodes });
+  } else if (result.reason instanceof ApiError && result.reason.status === 404) {
+    setDependencyGraph(null);
+  } else {
+    setDependencyGraphError(result.reason instanceof Error ? result.reason.message : "Could not load dependency graph");
+  }
+}
+
+function applyReadmeResult(
+  result: PromiseSettledResult<JsonValue>,
+  setReadme: (value: Readme | null) => void,
+  setReadmeError: (message: string) => void,
+): void {
+  if (result.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+    const data = (result.value as { data?: { attributes?: Readme } }).data?.attributes;
+    setReadme(data?.content !== undefined ? data : null);
+  } else if (result.reason instanceof ApiError && result.reason.status === 404) {
+    setReadme(null);
+  } else {
+    setReadmeError(result.reason instanceof Error ? result.reason.message : "Could not load README.md");
+  }
+}
+
+function ResourcesTable({
+  resourcePage,
+  resourcesEmpty,
+  page,
+  pageCount,
+  total,
+  onPageChange,
+}: Readonly<{
+  resourcePage: Resource[];
+  resourcesEmpty: boolean;
+  page: number;
+  pageCount: number;
+  total: number;
+  onPageChange: (page: number) => void;
+}>): React.JSX.Element {
+  return (
+    <>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="min-w-64">Address</TableHead>
+            <TableHead>Provider</TableHead>
+            <TableHead>Type</TableHead>
+            <TableHead>Module</TableHead>
+            <TableHead>Updated</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {resourcePage.map((resource): React.JSX.Element => (
+            <TableRow key={resource.id}>
+              <TableCell className="font-mono text-xs">{resource.attributes.address}</TableCell>
+              <TableCell>{resource.attributes.provider ?? "—"}</TableCell>
+              <TableCell>{resource.attributes["provider-type"] ?? "—"}</TableCell>
+              <TableCell>{resource.attributes.module ?? "root"}</TableCell>
+              <TableCell><time dateTime={resource.attributes["updated-at"]}>{formatDate(resource.attributes["updated-at"])}</time></TableCell>
+            </TableRow>
+          ))}
+          {resourcePage.length === 0 && <TableRow><TableCell colSpan={5} className="h-28 text-center text-muted-foreground">{resourcesEmpty ? "No resources are recorded in the current state." : "No resources match this search."}</TableCell></TableRow>}
+        </TableBody>
+      </Table>
+      <PaginationFooter label="resources" page={page} pageCount={pageCount} total={total} onPageChange={onPageChange} />
+    </>
+  );
+}
+
+function OutputsTable({
+  outputPage,
+  outputsEmpty,
+  page,
+  pageCount,
+  total,
+  onPageChange,
+}: Readonly<{
+  outputPage: Output[];
+  outputsEmpty: boolean;
+  page: number;
+  pageCount: number;
+  total: number;
+  onPageChange: (page: number) => void;
+}>): React.JSX.Element {
+  return (
+    <>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Name</TableHead>
+            <TableHead>Value</TableHead>
+            <TableHead>Type</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {outputPage.map((output): React.JSX.Element => (
+            <TableRow key={output.id}>
+              <TableCell className="font-mono text-xs">{output.attributes.name}</TableCell>
+              <TableCell className={cn("max-w-xl whitespace-normal break-words", output.attributes.sensitive === true ? "italic text-muted-foreground" : "font-mono text-xs")}>{outputValue(output)}</TableCell>
+              <TableCell>{output.attributes.type ?? "—"}</TableCell>
+            </TableRow>
+          ))}
+          {outputPage.length === 0 && <TableRow><TableCell colSpan={3} className="h-28 text-center text-muted-foreground">{outputsEmpty ? "No outputs are recorded in the current state." : "No outputs match this search."}</TableCell></TableRow>}
+        </TableBody>
+      </Table>
+      <PaginationFooter label="outputs" page={page} pageCount={pageCount} total={total} onPageChange={onPageChange} />
+    </>
+  );
+}
+
+function StateBody({
+  loading,
+  activeError,
+  tab,
+  onRetry,
+  resourcePage,
+  resourcesEmpty,
+  outputPage,
+  outputsEmpty,
+  page,
+  pageCount,
+  visibleResourcesTotal,
+  visibleOutputsTotal,
+  dependencyGraph,
+  resourceDetails,
+  onPageChange,
+}: Readonly<{
+  loading: boolean;
+  activeError: string;
+  tab: Tab;
+  onRetry: () => void;
+  resourcePage: Resource[];
+  resourcesEmpty: boolean;
+  outputPage: Output[];
+  outputsEmpty: boolean;
+  page: number;
+  pageCount: number;
+  visibleResourcesTotal: number;
+  visibleOutputsTotal: number;
+  dependencyGraph: DependencyGraphState | null;
+  resourceDetails: Record<string, ResourceDetails>;
+  onPageChange: (page: number) => void;
+}>): React.JSX.Element {
+  if (loading) {
+    return <div role="status" className="flex min-h-36 items-center justify-center"><Spinner aria-label="Loading current state" /></div>;
+  }
+  if (activeError !== "") {
+    return (
+      <div role="alert" className="min-h-36 p-6 text-center">
+        <p className="font-medium text-destructive">Could not load {tab}</p>
+        <p className="mt-1 text-sm text-muted-foreground">{activeError}</p>
+        <Button className="mt-3" size="sm" variant="outline" onClick={onRetry}>Try again</Button>
+      </div>
+    );
+  }
+  if (tab === "resources") {
+    return (
+      <ResourcesTable
+        resourcePage={resourcePage}
+        resourcesEmpty={resourcesEmpty}
+        page={page}
+        pageCount={pageCount}
+        total={visibleResourcesTotal}
+        onPageChange={onPageChange}
+      />
+    );
+  }
+  if (tab === "outputs") {
+    return (
+      <OutputsTable
+        outputPage={outputPage}
+        outputsEmpty={outputsEmpty}
+        page={page}
+        pageCount={pageCount}
+        total={visibleOutputsTotal}
+        onPageChange={onPageChange}
+      />
+    );
+  }
+  if (dependencyGraph === null) {
+    return (
+      <div className="flex min-h-36 items-center justify-center px-6 text-center text-sm text-muted-foreground">
+        No dependency relationships are recorded in the current state.
+      </div>
+    );
+  }
+  return <DependencyGraph resources={dependencyGraph.nodes} details={resourceDetails} />;
+}
+
 export function WorkspaceResources({
   workspaceId,
 }: Readonly<{ workspaceId: string }>): React.JSX.Element {
@@ -184,51 +430,14 @@ export function WorkspaceResources({
     );
     const [resourceResult, outputResult, dependencyGraphResult] = await stateResults;
     if (isAborted(signal)) return;
-    if (resourceResult.status === "fulfilled") {
-      setResources(resourceResult.value);
-    } else {
-      setResourceError(resourceResult.reason instanceof Error ? resourceResult.reason.message : "Could not load resources");
-    }
-    if (outputResult.status === "fulfilled") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const data = (outputResult.value as { data?: Output[] }).data;
-      setOutputs(Array.isArray(data) ? data : []);
-    } else if (outputResult.reason instanceof ApiError && outputResult.reason.status === 404) {
-      setOutputs([]);
-    } else {
-      setOutputError(outputResult.reason instanceof Error ? outputResult.reason.message : "Could not load outputs");
-    }
-    if (dependencyGraphResult.status === "fulfilled") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const attributes = (dependencyGraphResult.value as { data?: { attributes?: { nodes?: unknown } } }).data?.attributes;
-      const nodes = Array.isArray(attributes?.nodes)
-        ? attributes.nodes.flatMap((value): DependencyGraphResource[] => {
-            if (!isRecord(value)) return [];
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-            const node = value as { address?: unknown; dependencies?: unknown };
-            if (!isString(node.address) || !Array.isArray(node.dependencies)) return [];
-            return [{ address: node.address, dependencies: node.dependencies.filter((dependency): dependency is string => isString(dependency)) }];
-          })
-        : [];
-      setDependencyGraph({ nodes });
-    } else if (dependencyGraphResult.reason instanceof ApiError && dependencyGraphResult.reason.status === 404) {
-      setDependencyGraph(null);
-    } else {
-      setDependencyGraphError(dependencyGraphResult.reason instanceof Error ? dependencyGraphResult.reason.message : "Could not load dependency graph");
-    }
+    applyResourceResult(resourceResult, setResources, setResourceError);
+    applyOutputResult(outputResult, setOutputs, setOutputError);
+    applyGraphResult(dependencyGraphResult, setDependencyGraph, setDependencyGraphError);
     setLoading(false);
 
     const resolvedReadme = await readmeResult;
     if (isAborted(signal)) return;
-    if (resolvedReadme.status === "fulfilled") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const data = (resolvedReadme.value as { data?: { attributes?: Readme } }).data?.attributes;
-      setReadme(data?.content !== undefined ? data : null);
-    } else if (resolvedReadme.reason instanceof ApiError && resolvedReadme.reason.status === 404) {
-      setReadme(null);
-    } else {
-      setReadmeError(resolvedReadme.reason instanceof Error ? resolvedReadme.reason.message : "Could not load README.md");
-    }
+    applyReadmeResult(resolvedReadme, setReadme, setReadmeError);
     setReadmeLoading(false);
   }, [workspaceId]);
 
@@ -265,12 +474,12 @@ export function WorkspaceResources({
     });
     return details;
   }, [resources]);
-  const activeTotal = tab === "resources" ? visibleResources.length : tab === "outputs" ? visibleOutputs.length : 0;
+  const activeTotal = tabTotal(tab, visibleResources.length, visibleOutputs.length);
   const pageCount = Math.max(1, Math.ceil(activeTotal / PAGE_SIZE));
   const page = Math.min(pages[tab], pageCount);
   const resourcePage = visibleResources.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const outputPage = visibleOutputs.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const activeError = tab === "resources" ? resourceError : tab === "outputs" ? outputError : dependencyGraphError;
+  const activeError = tabError(tab, resourceError, outputError, dependencyGraphError);
 
   useEffect((): void => {
     if (pages[tab] > pageCount) setPages((current): Readonly<Record<Tab, number>> => ({ ...current, [tab]: pageCount }));
@@ -322,71 +531,23 @@ export function WorkspaceResources({
         </div>
       </div>}
 
-      {loading ? (
-        <div role="status" className="flex min-h-36 items-center justify-center"><Spinner aria-label="Loading current state" /></div>
-      ) : activeError !== "" ? (
-        <div role="alert" className="min-h-36 p-6 text-center">
-          <p className="font-medium text-destructive">Could not load {tab}</p>
-          <p className="mt-1 text-sm text-muted-foreground">{activeError}</p>
-          <Button className="mt-3" size="sm" variant="outline" onClick={(): void => { void load(); }}>Try again</Button>
-        </div>
-      ) : tab === "resources" ? (
-        <>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="min-w-64">Address</TableHead>
-                <TableHead>Provider</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Module</TableHead>
-                <TableHead>Updated</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {resourcePage.map((resource): React.JSX.Element => (
-                <TableRow key={resource.id}>
-                  <TableCell className="font-mono text-xs">{resource.attributes.address}</TableCell>
-                  <TableCell>{resource.attributes.provider ?? "—"}</TableCell>
-                  <TableCell>{resource.attributes["provider-type"] ?? "—"}</TableCell>
-                  <TableCell>{resource.attributes.module ?? "root"}</TableCell>
-                  <TableCell><time dateTime={resource.attributes["updated-at"]}>{formatDate(resource.attributes["updated-at"])}</time></TableCell>
-                </TableRow>
-              ))}
-              {resourcePage.length === 0 && <TableRow><TableCell colSpan={5} className="h-28 text-center text-muted-foreground">{resources.length === 0 ? "No resources are recorded in the current state." : "No resources match this search."}</TableCell></TableRow>}
-            </TableBody>
-          </Table>
-          <PaginationFooter label="resources" page={page} pageCount={pageCount} total={visibleResources.length} onPageChange={setPage} />
-        </>
-      ) : tab === "outputs" ? (
-        <>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Value</TableHead>
-                <TableHead>Type</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {outputPage.map((output): React.JSX.Element => (
-                <TableRow key={output.id}>
-                  <TableCell className="font-mono text-xs">{output.attributes.name}</TableCell>
-                  <TableCell className={cn("max-w-xl whitespace-normal break-words", output.attributes.sensitive === true ? "italic text-muted-foreground" : "font-mono text-xs")}>{outputValue(output)}</TableCell>
-                  <TableCell>{output.attributes.type ?? "—"}</TableCell>
-                </TableRow>
-              ))}
-              {outputPage.length === 0 && <TableRow><TableCell colSpan={3} className="h-28 text-center text-muted-foreground">{outputs.length === 0 ? "No outputs are recorded in the current state." : "No outputs match this search."}</TableCell></TableRow>}
-            </TableBody>
-          </Table>
-          <PaginationFooter label="outputs" page={page} pageCount={pageCount} total={visibleOutputs.length} onPageChange={setPage} />
-        </>
-      ) : dependencyGraph === null ? (
-        <div className="flex min-h-36 items-center justify-center px-6 text-center text-sm text-muted-foreground">
-          No dependency relationships are recorded in the current state.
-        </div>
-      ) : (
-        <DependencyGraph resources={dependencyGraph.nodes} details={resourceDetails} />
-      )}
+      <StateBody
+        loading={loading}
+        activeError={activeError}
+        tab={tab}
+        onRetry={(): void => { void load(); }}
+        resourcePage={resourcePage}
+        resourcesEmpty={resources.length === 0}
+        outputPage={outputPage}
+        outputsEmpty={outputs.length === 0}
+        page={page}
+        pageCount={pageCount}
+        visibleResourcesTotal={visibleResources.length}
+        visibleOutputsTotal={visibleOutputs.length}
+        dependencyGraph={dependencyGraph}
+        resourceDetails={resourceDetails}
+        onPageChange={setPage}
+      />
 
       {readmeLoading && <div className="border-t px-5 py-4 text-xs text-muted-foreground">Checking for README.md…</div>}
         {!readmeLoading && readmeError !== "" && <p role="alert" className="border-t px-5 py-4 text-xs text-muted-foreground">README.md could not be loaded: {readmeError}</p>}
