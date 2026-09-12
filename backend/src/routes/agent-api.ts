@@ -285,6 +285,36 @@ async function stackAgentPayload(details: ClaimedStackAgentJob, baseUrl: string)
  * directly. An absent or malformed credential is never treated as anonymous
  * access.
  */
+async function claimedPoolJob(
+  pool: Readonly<{ poolId: string }>,
+  jobId: string,
+  fencingToken: number,
+): Promise<ClaimedAgentJob | undefined> {
+  const job = await db.query.agentJobs.findFirst({
+    where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
+  });
+  if (job?.agentId === null || job?.agentId === undefined) return undefined;
+  const agent = await db.query.agents.findFirst({ where: eq(agents.id, job.agentId) });
+  if (agent === undefined || agent.agentPoolId !== pool.poolId) return undefined;
+  return findClaimedAgentJob(agent.id, jobId, fencingToken);
+}
+
+async function claimedSignedJob(
+  ctx: AgentCtx,
+  jobId: string,
+  fencingToken: number,
+): Promise<ClaimedAgentJob | undefined> {
+  const path = new URL(ctx.request.url).pathname;
+  const signed = validSignedApiURL(ctx.request, path, ctx.request.method)
+    || validSignedApiURL(ctx.request, path, "*");
+  if (!signed) return undefined;
+  const job = await db.query.agentJobs.findFirst({
+    where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
+  });
+  if (job?.agentId === null || job?.agentId === undefined) return undefined;
+  return findClaimedAgentJob(job.agentId, jobId, fencingToken);
+}
+
 async function claimedJobForArtifact(
   ctx: AgentCtx,
   jobId: string,
@@ -297,25 +327,11 @@ async function claimedJobForArtifact(
   if (token !== undefined) {
     const pool = await poolForToken(token);
     if (pool !== undefined) {
-      const job = await db.query.agentJobs.findFirst({
-        where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
-      });
-      if (job?.agentId === null || job?.agentId === undefined) return undefined;
-      const agent = await db.query.agents.findFirst({ where: eq(agents.id, job.agentId) });
-      if (agent === undefined || agent.agentPoolId !== pool.poolId) return undefined;
-      return findClaimedAgentJob(agent.id, jobId, fencingToken);
+      return claimedPoolJob(pool, jobId, fencingToken);
     }
   }
 
-  const path = new URL(ctx.request.url).pathname;
-  const signed = validSignedApiURL(ctx.request, path, ctx.request.method)
-    || validSignedApiURL(ctx.request, path, "*");
-  if (!signed) return undefined;
-  const job = await db.query.agentJobs.findFirst({
-    where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
-  });
-  if (job?.agentId === null || job?.agentId === undefined) return undefined;
-  return findClaimedAgentJob(job.agentId, jobId, fencingToken);
+  return claimedSignedJob(ctx, jobId, fencingToken);
 }
 
 async function acknowledgeArtifact(ctx: AgentCtx): Promise<unknown> {
