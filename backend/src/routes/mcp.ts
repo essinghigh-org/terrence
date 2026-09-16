@@ -4,6 +4,7 @@ import { authPlugin } from "../auth";
 import { db } from "../db";
 import { teams } from "../db/schema";
 import { allMcpTools } from "../lib/mcp";
+import { log } from "../lib/log";
 import {
   MCP_PROTOCOL_VERSION,
   MCP_SERVER_CAPABILITIES,
@@ -37,6 +38,7 @@ type McpToken = Readonly<{
 
 type DispatchResult = Readonly<{ status: number; body: unknown }>;
 
+/** Parse token scopes, rejecting malformed scope data rather than granting access. */
 function safeParseScopes(raw: string | null): TokenScopes | null {
   try {
     return parseTokenScopes(raw);
@@ -45,6 +47,7 @@ function safeParseScopes(raw: string | null): TokenScopes | null {
   }
 }
 
+/** Build per-request authorization context, rejecting missing or deleted token principals. */
 async function authenticatedSession(token: McpToken | null, tokenError: string | null): Promise<McpSession | null> {
   if (token === null || tokenError !== null) return null;
   const team = token.teamId === null
@@ -60,21 +63,25 @@ async function authenticatedSession(token: McpToken | null, tokenError: string |
   };
 }
 
+/** Check every tool-level grant against the token ceiling before discovery or execution. */
 function toolPermittedTo(session: McpSession, tool: McpTool): boolean {
   const scopes = session.scopes;
   if (scopes === null || tool.requires.length === 0) return true;
   return tool.requires.every((grant: WorkspacePermissionGrant): boolean => scopeGrants(scopes, grant));
 }
 
+/** Set the Elysia response status without coupling protocol helpers to route context types. */
 function setHttpStatus(set: unknown, status: number): void {
   (set as { status: number }).status = status;
 }
 
+/** Apply a transport validation status and return its JSON-RPC error envelope. */
 function protocolFailure(set: unknown, failure: McpRequestFailure): JsonRpcError {
   setHttpStatus(set, failure.status);
   return failure.response;
 }
 
+/** Allow non-browser requests and explicitly trusted browser origins only. */
 function validOrigin(request: Request): boolean {
   const rawOrigin = request.headers.get("origin");
   if (rawOrigin === null) return true;
@@ -97,12 +104,14 @@ function validOrigin(request: Request): boolean {
     && (origin === "http://localhost:5173" || origin === "http://127.0.0.1:5173");
 }
 
+/** Reject the removed standalone SSE transport and advertise POST in Allow. */
 function methodNotAllowed(set: unknown): JsonRpcError {
   setHttpStatus(set, 405);
   (set as { headers: Record<string, string | number> }).headers["Allow"] = "POST";
   return mcpError(null, -32600, "The MCP 2026-07-28 Streamable HTTP endpoint accepts POST only");
 }
 
+/** Validate media negotiation and routing headers before dispatching an MCP request. */
 function transportValidation(request: Request, parsed: ParsedMcpRequest): McpRequestFailure | null {
   if (!isJsonContent(request.headers)) {
     return { status: 415, response: mcpError(parsed.id, -32600, "Content-Type must be application/json") };
@@ -116,7 +125,6 @@ function transportValidation(request: Request, parsed: ParsedMcpRequest): McpReq
 export const mcpRoutes = new Elysia()
   .use(authPlugin)
   .get("/mcp", ({ set }): JsonRpcError => methodNotAllowed(set))
-  .delete("/mcp", ({ set }): JsonRpcError => methodNotAllowed(set))
   .post("/mcp", async ({ request, token, tokenError, body, set }): Promise<unknown> => {
     if (!validOrigin(request)) {
       setHttpStatus(set, 403);
@@ -147,6 +155,7 @@ export const mcpRoutes = new Elysia()
     return dispatched.body;
   });
 
+/** Describe the supported protocol and server capabilities with private cache hints. */
 function discover(id: JsonRpcId): DispatchResult {
   return {
     status: 200,
@@ -160,6 +169,7 @@ function discover(id: JsonRpcId): DispatchResult {
   };
 }
 
+/** Return the permission-filtered, unpaginated tool catalog without cache reuse. */
 function listTools(id: JsonRpcId, session: McpSession, params: Readonly<Record<string, unknown>>): DispatchResult {
   if (params["cursor"] !== undefined) {
     return { status: 200, body: mcpError(id, -32602, "Terrence MCP does not paginate its tool catalog; cursor must be omitted") };
@@ -178,6 +188,7 @@ function listTools(id: JsonRpcId, session: McpSession, params: Readonly<Record<s
   };
 }
 
+/** Authorize and execute a tool, exposing expected failures but logging unexpected exceptions privately. */
 async function callTool(id: JsonRpcId, session: McpSession, params: Readonly<Record<string, unknown>>): Promise<DispatchResult> {
   const toolName = typeof params["name"] === "string" ? params["name"] : "";
   const tool = allMcpTools.find((candidate) => candidate.name === toolName);
@@ -211,11 +222,12 @@ async function callTool(id: JsonRpcId, session: McpSession, params: Readonly<Rec
       }),
     };
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { status: 200, body: mcpError(id, -32603, `Tool error: ${message}`) };
+    log.error("MCP tool execution failed", { toolName, requestId: id, error });
+    return { status: 200, body: mcpError(id, -32603, "Tool execution failed") };
   }
 }
 
+/** Dispatch supported stateless MCP methods and reject unknown methods. */
 async function dispatchMcpRequest(session: McpSession, request: ParsedMcpRequest): Promise<DispatchResult> {
   switch (request.method) {
     case "server/discover":
