@@ -343,6 +343,17 @@ for (const route of routes) {
     summary: `${m.toUpperCase()} ${openApiPath}`,
     responses,
   };
+  if (m === "get" && openApiPath === "/api/v2/admin/github-app/manifest/redirect") {
+    operation.parameters = [
+      { name: "state", in: "query", required: true, schema: { type: "string" } },
+    ];
+    const redirectResponse = responses["200"] as Record<string, unknown> | undefined;
+    if (redirectResponse !== undefined) {
+      redirectResponse.content = {
+        "text/html": { schema: { type: "string" } },
+      };
+    }
+  }
   if (m === "get" && openApiPath === "/api/v2/provider-icons/{hostname}/{namespace}/{name}") {
     const providerIconResponse = responses["200"] as Record<string, unknown> | undefined;
     if (providerIconResponse !== undefined) {

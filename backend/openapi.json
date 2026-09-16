@@ -42324,14 +42324,24 @@
         "tags": [
           "admin"
         ],
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "summary": "GET /api/v2/admin/github-app/manifest/redirect",
         "responses": {
           "200": {
             "description": "Success",
             "content": {
-              "application/vnd.api+json": {
+              "text/html": {
                 "schema": {
-                  "type": "object"
+                  "type": "string"
                 }
               }
             }
