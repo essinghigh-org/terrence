@@ -86,13 +86,20 @@ function ExistingAppForm({ busy, onSave }: Readonly<{
   );
 }
 
+function connectionStatusLabel(status: string, verified: boolean): string {
+  if (status === "active") return verified ? "Connected" : "Configured";
+  if (status === "invalid") return "Needs attention";
+  if (status === "disconnected") return "Disconnected";
+  return "Not connected";
+}
+
 function ConnectionCard({ attributes, busy, onValidate }: Readonly<{
   attributes: GitHubAppAttributes;
   busy: boolean;
   onValidate: () => void;
 }>): React.JSX.Element {
   const status = attributes.status ?? "unconfigured";
-  const label = status === "active" ? attributes["connection-verified"] === true ? "Connected" : "Configured" : status === "invalid" ? "Needs attention" : status === "disconnected" ? "Disconnected" : "Not connected";
+  const label = connectionStatusLabel(status, attributes["connection-verified"] === true);
   const registrationUrl = attributes["registration-url"];
   return (
     <Card>
@@ -118,6 +125,104 @@ function ConnectionCard({ attributes, busy, onValidate }: Readonly<{
         <CredentialStorage attributes={attributes} />
       </CardContent>
     </Card>
+  );
+}
+
+type StartFlow = (flow: "manifest" | "installation", organization?: string, publicApp?: boolean) => Promise<void>;
+
+function PendingSetupCard({ attributes, hasApp, busy, onContinue }: Readonly<{
+  attributes: GitHubAppAttributes;
+  hasApp: boolean;
+  busy: boolean;
+  onContinue: () => void;
+}>): React.JSX.Element {
+  const missingOwners = attributes["missing-owners"] ?? [];
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Finish {hasApp ? "the replacement" : "connecting the app"}</CardTitle>
+        <CardDescription>{hasApp
+          ? "Your current app is still in use. The new app has been created but setup is not complete."
+          : "The app has been created. Grant repository access on GitHub to finish connecting it."}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {missingOwners.length > 0 && <p className="text-sm">Still needs installation for: <strong>{missingOwners.join(", ")}</strong>.</p>}
+        <Button onClick={onContinue} disabled={busy}>Continue installation on GitHub</Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function AdvancedGitHubAppSettings({ attributes, hasApp, pending, busy, onCreate, onSave, onImport, onDisconnect }: Readonly<{
+  attributes: GitHubAppAttributes;
+  hasApp: boolean;
+  pending: boolean;
+  busy: boolean;
+  onCreate: (organization: string, publicApp: boolean) => Promise<void>;
+  onSave: (attributes: Readonly<Record<string, unknown>>) => Promise<boolean>;
+  onImport: () => void;
+  onDisconnect: () => void;
+}>): React.JSX.Element {
+  const hasRegistration = hasApp || pending;
+  return (
+    <details className="rounded-xl border p-5">
+      <summary className="cursor-pointer font-medium">Advanced: replacement, manual setup, and recovery</summary>
+      <div className="mt-5 space-y-6">
+        {hasRegistration && <section className="space-y-3">
+          <h2 className="text-sm font-semibold">{pending ? "Start a different registration" : "Replace the app"}</h2>
+          {pending && <p className="text-sm text-muted-foreground">Creating another app supersedes the unfinished setup. It does not delete that registration on GitHub.</p>}
+          <CreateAppForm busy={busy} replacing={hasApp} onCreate={onCreate} />
+        </section>}
+        <details className="border-t pt-4"><summary className="cursor-pointer text-sm font-medium">Use an existing GitHub App</summary><ExistingAppForm busy={busy} onSave={onSave} /></details>
+        <section className="space-y-3 border-t pt-4">
+          <h2 className="text-sm font-semibold">Import deployment credentials</h2>
+          <p className="text-sm text-muted-foreground">Import is a recovery action, not a connection check. It validates the environment credentials and replaces any stored app credentials.</p>
+          {attributes["environment-import-available"] === true
+            ? <Button variant="outline" disabled={busy} onClick={onImport}>Import from environment…</Button>
+            : <p className="text-sm text-muted-foreground">No complete GitHub App credential set is available in this process environment.</p>}
+        </section>
+        {hasRegistration && <section className="space-y-3 border-t pt-4">
+          <h2 className="text-sm font-semibold">Disconnect</h2>
+          <p className="text-sm text-muted-foreground">Removes stored credentials, not the app on GitHub or workspace configuration. To delete the registration itself, use GitHub. Deleting it there uninstalls it everywhere.</p>
+          <Button variant="destructive" disabled={busy} onClick={onDisconnect}><Unplug data-icon="inline-start" />Disconnect from Terrence…</Button>
+        </section>}
+      </div>
+    </details>
+  );
+}
+
+function GitHubAppContent({ attributes, loading, busy, onRetry, onValidate, onStartFlow, onSave, onImport, onDisconnect }: Readonly<{
+  attributes: GitHubAppAttributes | null;
+  loading: boolean;
+  busy: string;
+  onRetry: () => void;
+  onValidate: () => void;
+  onStartFlow: StartFlow;
+  onSave: (attributes: Readonly<Record<string, unknown>>) => Promise<boolean>;
+  onImport: () => void;
+  onDisconnect: () => void;
+}>): React.JSX.Element {
+  if (attributes === null) {
+    return loading
+      ? <Spinner className="size-6 text-primary" />
+      : <Button variant="outline" onClick={onRetry}>Retry loading settings</Button>;
+  }
+  const disabled = busy !== "" || loading;
+  const hasApp = attributes.configured === true;
+  const pending = attributes["pending-replacement"] === true;
+  const create = async (organization: string, publicApp: boolean): Promise<void> => {
+    await onStartFlow("manifest", organization, publicApp);
+  };
+  return (
+    <div className="space-y-6">
+      <ConnectionCard attributes={attributes} busy={disabled} onValidate={onValidate} />
+      {pending && <PendingSetupCard attributes={attributes} hasApp={hasApp} busy={disabled} onContinue={(): void => { void onStartFlow("installation"); }} />}
+      {!hasApp && !pending && <Card>
+        <CardHeader><CardTitle>Connect GitHub</CardTitle><CardDescription>Create a preconfigured app without copying private keys.</CardDescription></CardHeader>
+        <CardContent><CreateAppForm busy={disabled} replacing={false} onCreate={create} /></CardContent>
+      </Card>}
+      <AdvancedGitHubAppSettings attributes={attributes} hasApp={hasApp} pending={pending} busy={disabled} onCreate={create} onSave={onSave} onImport={onImport} onDisconnect={onDisconnect} />
+    </div>
   );
 }
 
@@ -188,54 +293,22 @@ export function AdminGitHubApp(): React.JSX.Element {
     } finally { setBusy(""); }
   };
 
-  const disabled = busy !== "" || loading;
-  const hasApp = attributes?.configured === true;
-  const pending = attributes?.["pending-replacement"] === true;
-
   return (
     <PageShell>
       <PageHeader eyebrow="Site administration" title="GitHub App" description="Connect GitHub, manage the app, and check where its credentials are stored." />
       {error !== "" && <div role="alert" className="mb-4 rounded-md bg-destructive/15 p-4 text-sm text-destructive">{error}</div>}
       {notice !== "" && <div role="status" className="mb-4 rounded-md bg-primary/10 p-4 text-sm text-primary">{notice}</div>}
-      {loading && attributes === null && <Spinner className="size-6 text-primary" />}
-      {!loading && attributes === null && <Button variant="outline" onClick={(): void => { setError(""); void load().catch((caught: unknown): void => { setError(caught instanceof Error ? caught.message : "Failed to load settings."); }); }}>Retry loading settings</Button>}
-      {attributes !== null && <div className="space-y-6">
-        <ConnectionCard attributes={attributes} busy={disabled} onValidate={(): void => { void action("validate"); }} />
-        {pending && <Card>
-          <CardHeader><CardTitle>Finish {hasApp ? "the replacement" : "connecting the app"}</CardTitle><CardDescription>{hasApp ? "Your current app is still in use. The new app has been created but setup is not complete." : "The app has been created. Grant repository access on GitHub to finish connecting it."}</CardDescription></CardHeader>
-          <CardContent className="space-y-4">
-            {(attributes["missing-owners"] ?? []).length > 0 && <p className="text-sm">Still needs installation for: <strong>{attributes["missing-owners"]?.join(", ")}</strong>.</p>}
-            <Button onClick={(): void => { void startFlow("installation"); }} disabled={disabled}>Continue installation on GitHub</Button>
-          </CardContent>
-        </Card>}
-        {!hasApp && !pending && <Card>
-          <CardHeader><CardTitle>Connect GitHub</CardTitle><CardDescription>Create a preconfigured app without copying private keys.</CardDescription></CardHeader>
-          <CardContent><CreateAppForm busy={disabled} replacing={false} onCreate={async (organization, publicApp): Promise<void> => { await startFlow("manifest", organization, publicApp); }} /></CardContent>
-        </Card>}
-        <details className="rounded-xl border p-5">
-          <summary className="cursor-pointer font-medium">Advanced: replacement, manual setup, and recovery</summary>
-          <div className="mt-5 space-y-6">
-            {(hasApp || pending) && <section className="space-y-3">
-              <h2 className="text-sm font-semibold">{pending ? "Start a different registration" : "Replace the app"}</h2>
-              {pending && <p className="text-sm text-muted-foreground">Creating another app supersedes the unfinished setup. It does not delete that registration on GitHub.</p>}
-              <CreateAppForm busy={disabled} replacing={hasApp} onCreate={async (organization, publicApp): Promise<void> => { await startFlow("manifest", organization, publicApp); }} />
-            </section>}
-            <details className="border-t pt-4"><summary className="cursor-pointer text-sm font-medium">Use an existing GitHub App</summary><ExistingAppForm busy={disabled} onSave={saveManual} /></details>
-            <section className="space-y-3 border-t pt-4">
-              <h2 className="text-sm font-semibold">Import deployment credentials</h2>
-              <p className="text-sm text-muted-foreground">Import is a recovery action, not a connection check. It validates the environment credentials and replaces any stored app credentials.</p>
-              {attributes["environment-import-available"] === true
-                ? <Button variant="outline" disabled={disabled} onClick={(): void => { setImportOpen(true); }}>Import from environment…</Button>
-                : <p className="text-sm text-muted-foreground">No complete GitHub App credential set is available in this process environment.</p>}
-            </section>
-            {(hasApp || pending) && <section className="space-y-3 border-t pt-4">
-              <h2 className="text-sm font-semibold">Disconnect</h2>
-              <p className="text-sm text-muted-foreground">Removes stored credentials, not the app on GitHub or workspace configuration. To delete the registration itself, use GitHub. Deleting it there uninstalls it everywhere.</p>
-              <Button variant="destructive" disabled={disabled} onClick={(): void => { setDisconnectOpen(true); }}><Unplug data-icon="inline-start" />Disconnect from Terrence…</Button>
-            </section>}
-          </div>
-        </details>
-      </div>}
+      <GitHubAppContent
+        attributes={attributes}
+        loading={loading}
+        busy={busy}
+        onRetry={(): void => { setError(""); void load().catch((caught: unknown): void => { setError(caught instanceof Error ? caught.message : "Failed to load settings."); }); }}
+        onValidate={(): void => { void action("validate"); }}
+        onStartFlow={startFlow}
+        onSave={saveManual}
+        onImport={(): void => { setImportOpen(true); }}
+        onDisconnect={(): void => { setDisconnectOpen(true); }}
+      />
       <ConfirmDialog open={disconnectOpen} onOpenChange={(open): void => { if (busy === "") setDisconnectOpen(open); }} title="Disconnect GitHub App from Terrence" description="This removes stored credentials and pending setup. Workspace configuration and GitHub registrations are kept. A restart will not automatically re-import the old environment credentials." confirmText="Disconnect from Terrence" confirmVariant="destructive" requireCheckbox="I understand that GitHub-backed operations will stop until an app is connected again." loading={busy === "disconnect"} onConfirm={async (): Promise<void> => { if (await action("disconnect")) setDisconnectOpen(false); }} />
       <ConfirmDialog open={importOpen} onOpenChange={(open): void => { if (busy === "") setImportOpen(open); }} title="Import GitHub App credentials from environment" description="This replaces stored credentials and any unfinished setup with the app configured in the deployment environment. It does not migrate installations to a different app." confirmText="Validate and import" requireCheckbox="I have checked that these are the credentials I want Terrence to use." loading={busy === "import-environment"} onConfirm={async (): Promise<void> => { if (await action("import-environment")) setImportOpen(false); }} />
     </PageShell>

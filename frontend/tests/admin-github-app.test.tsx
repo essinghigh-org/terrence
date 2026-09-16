@@ -6,6 +6,7 @@ import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 const originalLocation = window.location;
+const testOrigin = "https://terrence.test";
 
 const json = (data: JsonValue): Response =>
   new Response(JSON.stringify(data), {
@@ -21,6 +22,7 @@ const getAccept = (init?: RequestInit): string | null =>
 function stubLocationAssign(assignedUrls: string[]): void {
   // @ts-expect-error Mocking window.location in test
   window.location = {
+    origin: testOrigin,
     assign: (url: string | URL): void => {
       assignedUrls.push(String(url));
     },
@@ -40,30 +42,33 @@ test("manifest setup requests the JSON:API media type the Accept gate requires",
   stubLocationAssign(assignedUrls);
 
   const setupAccepts: (string | null)[] = [];
+  const handoffUrl = new URL("/api/v2/admin/github-app/manifest/redirect?state=state-1", window.location.origin).toString();
   const fetchMock = mock(async (
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
-    const url = getUrl(input);
-    if (url === "/api/v2/admin/github-app") {
+    const url = new URL(getUrl(input), window.location.origin);
+    if (url.pathname === "/api/v2/admin/github-app") {
       return json({ data: { attributes: { status: "unconfigured" } } });
     }
-    if (url === "/api/v2/admin/github-app/manifest/setup") {
+    if (url.pathname === "/api/v2/admin/github-app/manifest/setup") {
       setupAccepts.push(getAccept(init));
+      expect(url.searchParams.get("organization")).toBe("");
+      expect(url.searchParams.get("public")).toBe("false");
       return json({
         data: {
           id: "state-1",
           type: "vcs-authorization-requests",
-          attributes: { "authorization-url": "https://github.com/settings/apps/new?state=state-1" },
+          attributes: { "authorization-url": handoffUrl },
         },
       });
     }
-    throw new Error(`Unexpected request: ${url}`);
+    throw new Error(`Unexpected request: ${url.toString()}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<AdminGitHubApp />);
-  const startButton = await view.findByRole("button", { name: /Create or replace with GitHub/ });
+  const startButton = await view.findByRole("button", { name: "Create GitHub App" });
   fireEvent.click(startButton);
 
   await waitFor((): void => {
@@ -72,7 +77,7 @@ test("manifest setup requests the JSON:API media type the Accept gate requires",
   // The JSON:API Accept gate 406s plain application/json here.
   expect(setupAccepts[setupAccepts.length - 1]).toBe("application/vnd.api+json");
   await waitFor((): void => {
-    expect(assignedUrls).toEqual(["https://github.com/settings/apps/new?state=state-1"]);
+    expect(assignedUrls).toEqual([handoffUrl]);
   });
   view.unmount();
 });

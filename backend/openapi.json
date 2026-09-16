@@ -42318,6 +42318,69 @@
         }
       }
     },
+    "/api/v2/admin/github-app/manifest/redirect": {
+      "get": {
+        "operationId": "get-api-v2-admin-github-app-manifest-redirect",
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /api/v2/admin/github-app/manifest/redirect",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/github-app/manifest/resume": {
+      "get": {
+        "operationId": "get-api-v2-admin-github-app-manifest-resume",
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /api/v2/admin/github-app/manifest/resume",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
+    },
     "/api/v2/admin/github-app/manifest/callback": {
       "get": {
         "operationId": "get-api-v2-admin-github-app-manifest-callback",
