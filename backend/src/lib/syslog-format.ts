@@ -63,7 +63,7 @@ function paramSafeKey(key: string): string {
 const MAX_FLATTEN_DEPTH = 5;
 const MAX_FLATTEN_PARAMS = 128;
 
-function pushScalarMetaParam(key: string, value: unknown, out: (readonly [string, string])[]): boolean {
+function pushScalarMetaParam(key: string, value: unknown, out: Readonly<Pick<(readonly [string, string])[], "push" | "length">>): boolean {
   if (typeof value === "string") {
     out.push([key, value]);
     return true;
@@ -75,7 +75,7 @@ function pushScalarMetaParam(key: string, value: unknown, out: (readonly [string
   return false;
 }
 
-function pushJsonMetaParam(key: string, value: unknown, out: (readonly [string, string])[]): void {
+function pushJsonMetaParam(key: string, value: unknown, out: Readonly<Pick<(readonly [string, string])[], "push" | "length">>): void {
   try {
     const json = JSON.stringify(value) ?? NIL;
     out.push([key, json]);
@@ -94,8 +94,9 @@ function flattenMetaParam(
   key: string,
   value: unknown,
   depth: number,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Set has no rule-verifiable readonly form; ancestors is only read (a working copy is mutated instead)
   ancestors: ReadonlySet<object>,
-  out: (readonly [string, string])[],
+  out: Readonly<Pick<(readonly [string, string])[], "push" | "length">>,
 ): void {
   if (out.length >= MAX_FLATTEN_PARAMS || value === null || value === undefined) return;
   if (pushScalarMetaParam(key, value, out)) return;
@@ -157,7 +158,11 @@ function hasToJson(value: object): boolean {
  * would blow the UDP budget on their own, and full detail stays in the local
  * console JSON logs. Values with toJSON (Date et al) pass through untouched
  * so JSON.stringify applies their serializer. */
-function makeJsonSafe(value: unknown, ancestors: Set<object>): unknown {
+function makeJsonSafe(
+  value: unknown,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ancestors tracks the active recursion path via add/delete by design
+  ancestors: Set<object>,
+): unknown {
   if (typeof value === "bigint") return value.toString();
   if (value !== null && typeof value === "object") {
     if (value instanceof Error) return { name: value.name, message: value.message };
@@ -179,7 +184,7 @@ function makeJsonSafe(value: unknown, ancestors: Set<object>): unknown {
 }
 
 /** Never-throwing JSON for the message body. */
-function stringifySyslogBody(value: Record<string, unknown>): string {
+function stringifySyslogBody(value: Readonly<Record<string, unknown>>): string {
   try {
     return JSON.stringify(makeJsonSafe(value, new Set())) ?? "{}";
   } catch {
@@ -206,11 +211,11 @@ function fallbackJsonBody(maxBytes: number): string {
  * non-envelope meta fields are dropped first, then the remaining budget is
  * filled with the longest message prefix (plus marker) that fits. Envelope keys always
  * survive when the requested budget permits them. */
-function fitJsonBody(body: Record<string, unknown>, maxBytes: number): string {
+function fitJsonBody(body: Readonly<Record<string, unknown>>, maxBytes: number): string {
   const full = stringifySyslogBody(body);
   if (Buffer.byteLength(full, "utf8") <= maxBytes) return full;
   const shortened: Record<string, unknown> = { ...body, truncated: true };
-  const sizeOf = (candidate: Record<string, unknown>): number =>
+  const sizeOf = (candidate: Readonly<Record<string, unknown>>): number =>
     Buffer.byteLength(stringifySyslogBody(candidate), "utf8");
   // 1. Drop the largest non-envelope meta fields until the fixed overhead
   // (everything except the resizable message) fits the budget.
@@ -219,6 +224,7 @@ function fitJsonBody(body: Record<string, unknown>, maxBytes: number): string {
     .map((key): readonly [string, number] => [key, Buffer.byteLength(stringifySyslogBody({ [key]: shortened[key] }), "utf8")])
     .sort((a, b): number => b[1] - a[1]);
   const dropped = new Set<string>();
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Set has no rule-verifiable readonly form; drop is only read here
   const baseFor = (drop: ReadonlySet<string>): Record<string, unknown> =>
     Object.fromEntries(
       Object.entries({ ...shortened, message: "" }).filter(([key]): boolean => !drop.has(key)),

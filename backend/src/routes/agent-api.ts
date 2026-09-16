@@ -621,7 +621,7 @@ async function completeStatusAgentJob(
   jobStatus: unknown,
   fencingToken: number,
   set: { status?: number },
-): Promise<unknown | undefined> {
+): Promise<unknown> {
   const errorMessage = typeof jobPayload["error"] === "string" ? jobPayload["error"] : null;
   const result = statusResultFields(jobData, ["has_changes", "generated_configuration", "resource_additions",
     "resource_changes", "resource_destructions", "resource_imports", "action_failures",
@@ -698,7 +698,7 @@ async function completeStatusStackJob(
   runId: string,
   fencingToken: number | undefined,
   set: { status?: number },
-): Promise<unknown | undefined> {
+): Promise<unknown> {
   const explicitStackJobId = jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
   const stackJob = await findStatusStackJob(agent.id, phase, runId, explicitStackJobId, fencingToken);
   if (stackJob === undefined) return fencingConflict(set);
@@ -747,7 +747,7 @@ async function handleStatusCompletion(
   runId: string,
   fencingToken: number | undefined,
   set: { status?: number },
-): Promise<unknown | undefined> {
+): Promise<unknown> {
   const job = await findStatusAgentJob(agent.id, runId, phase, fencingToken);
   if (job !== undefined && fencingToken !== undefined) {
     return completeStatusAgentJob(agent, job, jobPayload, jobData, jobStatus, fencingToken, set);
@@ -757,7 +757,7 @@ async function handleStatusCompletion(
 
 function statusResponseHeaders(ctx: AgentCtx, set: { headers?: Record<string, string | number> }): Record<string, never> {
   const messageIndex = ctx.request.headers.get("tfc-agent-message-index");
-  if (set.headers === undefined) set.headers = {};
+  set.headers ??= {};
   if (messageIndex !== null) set.headers["tfc-agent-message-index"] = messageIndex;
   set.headers["content-type"] = "application/json";
   return {};

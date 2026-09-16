@@ -463,9 +463,9 @@ export function selectResourceBudgetJob(
 }
 
 type RunningTally = Readonly<{
-  byClass: Record<ResourceJobClass, number>;
-  byOrganization: Map<string | null, number>;
-  bytesByOrganization: Map<string | null, number>;
+  byClass: Readonly<Record<ResourceJobClass, number>>;
+  byOrganization: Readonly<Pick<ReadonlyMap<string | null, number>, "get">>;
+  bytesByOrganization: Readonly<Pick<ReadonlyMap<string | null, number>, "get">>;
   bytes: number;
   ordinaryRunning: number;
 }>;

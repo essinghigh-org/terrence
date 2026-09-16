@@ -7,7 +7,7 @@ const users = [
   { id: "user-alex", attributes: { username: "alex", email: "alex@example.test", "can-reset-password": true } },
   { id: "user-sam", attributes: { username: "sam", email: "sam@example.test", "can-reset-password": false } },
 ];
-const renderUsers = () => render(<UsersAdmin users={users} setCreateDialogOpen={() => {}} setDeleteUserId={() => {}} loadAdminData={async () => {}} />);
+const renderUsers = () => render(<UsersAdmin users={users} setCreateDialogOpen={() => undefined} setDeleteUserId={() => undefined} loadAdminData={async () => undefined} />);
 afterEach(() => { cleanup(); globalThis.fetch = originalFetch; });
 
 test("filters by email and edits identity through the existing user endpoint", async () => {
@@ -20,7 +20,7 @@ test("filters by email and edits identity through the existing user endpoint", a
   const dialog = within(view.getByRole("dialog"));
   fireEvent.input(dialog.getByLabelText("Username"), { target: { value: "alex-lab" } });
   fireEvent.click(dialog.getByRole("button", { name: "Save changes" }));
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  await waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(1); });
   const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
   expect(url).toBe("/api/v2/admin/users/user-alex");
   expect(init.method).toBe("PATCH");
@@ -43,7 +43,7 @@ test("password recovery explains session revocation, validates confirmation, and
   expect(fetchMock).not.toHaveBeenCalled();
   fireEvent.input(dialog.getByLabelText("Confirm temporary password"), { target: { value: "short" } });
   fireEvent.submit(dialog.getByRole("button", { name: "Reset password" }).closest("form")!);
-  await waitFor(() => expect(dialog.getByRole("alert").textContent).toContain("Password must be at least 12"));
+  await waitFor(() => { expect(dialog.getByRole("alert").textContent).toContain("Password must be at least 12"); });
   const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
   expect(url).toBe("/api/v2/admin/users/user-alex/actions/reset_password");
   expect(JSON.parse(init.body as string).data.attributes).toEqual({ password: "short", "password-confirmation": "short" });
@@ -62,5 +62,5 @@ test("role changes require confirmation before sending a request", async () => {
   const dialog = within(view.getByRole("dialog"));
   expect(dialog.getByText(/manage every organization/)).toBeTruthy();
   fireEvent.click(dialog.getByRole("button", { name: "Confirm change" }));
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  await waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(1); });
 });

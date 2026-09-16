@@ -1,6 +1,7 @@
 import { getSettings, resolvePlanExplainerSettings } from "./settings";
 import { buildExplainSource, fetchUpstream, parseCompletionBody, persistExplainerOutput, scrubExplanationContent, type ExplainKind } from "./run-explanations";
 import type { DurableJob, DurableJobContext } from "./durable-jobs";
+import type { DeepReadonly } from "./types";
 import { db } from "../db";
 import { eq } from "drizzle-orm";
 import { runs, workspaces } from "../db/schema";
@@ -16,7 +17,7 @@ async function explanationRunOrgId(runId: string): Promise<string | null> {
   return workspace?.orgId ?? null;
 }
 
-export async function runPlanExplanationJob(job: DurableJob, context: DurableJobContext): Promise<void> {
+export async function runPlanExplanationJob(job: DeepReadonly<DurableJob>, context: DurableJobContext): Promise<void> {
   const payload = job.payload as { runId?: string; kind?: string };
   const runId = typeof payload.runId === "string" ? payload.runId : "";
   const kind = payload.kind as ExplainKind;
@@ -46,7 +47,6 @@ export async function runPlanExplanationJob(job: DurableJob, context: DurableJob
 
   const model = resolved["model"] as string;
 
-  let content: string;
   const parts = await fetchUpstream(resolved, source.prompt, false, context.signal, async (upstream, tick) => {
     tick();
     await context.heartbeat();
@@ -65,7 +65,7 @@ export async function runPlanExplanationJob(job: DurableJob, context: DurableJob
     await context.heartbeat();
     return completion;
   });
-  content = parts.content;
+  const content = parts.content;
 
   if (await context.canceled()) return;
   const scrubbed = scrubExplanationContent(content, source.secrets);

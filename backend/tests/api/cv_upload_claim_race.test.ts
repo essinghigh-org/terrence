@@ -33,7 +33,7 @@ describe("configuration-version upload claim race", () => {
         ...(body === undefined ? {} : { "Content-Type": "application/octet-stream" }),
         ...headers,
       },
-      body: body === undefined ? null : body,
+      body: body ?? null,
     }));
 
   const requestJson = (path: string, method: string, body?: unknown): Promise<Response> =>

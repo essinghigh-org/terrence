@@ -81,6 +81,7 @@ function normalizedLdapLoginInput(settings: LdapSettings, username: string, pass
 }
 
 async function initializeLdapClient(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ldapjs Client is a live stateful connection (bind/search mutate it) by design
   client: Client,
   settings: LdapSettings,
   bindDn: string | null,
@@ -92,6 +93,7 @@ async function initializeLdapClient(
 }
 
 async function findUniqueLdapEntry(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ldapjs Client is a live stateful connection (search mutates it) by design
   client: Client,
   baseDn: string,
   settings: LdapSettings,

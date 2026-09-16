@@ -28,9 +28,7 @@ test("unrefs and deduplicates escalation timers, then clears them on shutdown", 
     kill: (): void => {
       killCalls += 1;
     },
-    exited: new Promise<number>((resolve): void => {
-      void resolve;
-    }),
+    exited: new Promise<number>(() => undefined),
   });
 
   cancelRunExecution(runId);
@@ -55,9 +53,7 @@ test("force cancellation clears the escalation timer", (): void => {
     kill: (): void => {
       killCalls += 1;
     },
-    exited: new Promise<number>((resolve): void => {
-      void resolve;
-    }),
+    exited: new Promise<number>(() => undefined),
   });
 
   cancelRunExecution(runId);

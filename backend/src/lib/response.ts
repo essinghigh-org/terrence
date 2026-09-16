@@ -1082,7 +1082,7 @@ type OutputResourceRef = { id: string; type: string };
 // where the included resources are type "workspace-outputs" with a
 // name/sensitive/output-type/value shape (see tfe.WorkspaceOutputs).
 export function workspaceOutputResources(state: StateParam): Record<string, unknown>[] {
-  return stateOutputResources(state).map((resource: Record<string, unknown>): Record<string, unknown> => {
+  return stateOutputResources(state).map((resource: Readonly<Record<string, unknown>>): Record<string, unknown> => {
     const attributes = (resource["attributes"] ?? {}) as Record<string, unknown>;
     return {
       id: resource["id"],
@@ -1208,7 +1208,7 @@ function stateCapabilityAllows(
 
 function buildStateUrlAttributes(
   state: Readonly<{ id: string; workspaceId: string }>,
-  flags: { rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean },
+  flags: Readonly<{ rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }>,
   request: Readonly<{ url: string }>,
   authorization?: AuthorizedStateAccess,
 ): Record<string, unknown> {
@@ -1283,14 +1283,14 @@ export function stateVersionResource(
 }
 
 /** History must never load, decrypt or parse state blobs. Details remain lazy. */
-function summaryIdentityAttributes(summary: StateSummary | null, rawStateAvailable: boolean): Record<string, unknown> {
+function summaryIdentityAttributes(summary: Readonly<StateSummary> | null, rawStateAvailable: boolean): Record<string, unknown> {
   return {
     md5: rawStateAvailable ? summary?.md5 ?? null : null,
     size: rawStateAvailable ? summary?.size ?? null : null,
   };
 }
 
-function summaryVersionAttributes(summary: StateSummary | null): Record<string, unknown> {
+function summaryVersionAttributes(summary: Readonly<StateSummary> | null): Record<string, unknown> {
   return {
     lineage: summary?.lineage ?? null,
     "terraform-version": summary?.terraformVersion ?? null,
@@ -1298,14 +1298,14 @@ function summaryVersionAttributes(summary: StateSummary | null): Record<string, 
   };
 }
 
-function opaqueRepresentationAttributes(summary: StateSummary | null): Record<string, unknown> {
+function opaqueRepresentationAttributes(summary: Readonly<StateSummary> | null): Record<string, unknown> {
   return summary?.status === "opaque" ? {
     "state-representation": "opentofu-encrypted",
     "structured-state-unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR,
   } : {};
 }
 
-function summaryStatusAttributes(summary: StateSummary | null, ready: boolean, stateSummaryMissing: boolean): Record<string, unknown> {
+function summaryStatusAttributes(summary: Readonly<StateSummary> | null, ready: boolean, stateSummaryMissing: boolean): Record<string, unknown> {
   return {
     "resources-processed": ready,
     "summary-status": summary?.status ?? (stateSummaryMissing ? "unindexed" : "outdated"),
@@ -1314,7 +1314,7 @@ function summaryStatusAttributes(summary: StateSummary | null, ready: boolean, s
 }
 
 function summaryCoreAttributes(
-  summary: StateSummary | null,
+  summary: Readonly<StateSummary> | null,
   rawStateAvailable: boolean,
   ready: boolean,
   stateSummaryMissing: boolean,
@@ -1327,7 +1327,7 @@ function summaryCoreAttributes(
   };
 }
 
-function summaryResourceCounts(counted: StateSummary | null): Record<string, unknown> {
+function summaryResourceCounts(counted: Readonly<StateSummary> | null): Record<string, unknown> {
   return {
     "resource-count": counted?.resourceCount ?? null,
     "managed-resource-count": counted?.managedCount ?? null,
@@ -1335,7 +1335,7 @@ function summaryResourceCounts(counted: StateSummary | null): Record<string, unk
   };
 }
 
-function summaryScopeCounts(counted: StateSummary | null): Record<string, unknown> {
+function summaryScopeCounts(counted: Readonly<StateSummary> | null): Record<string, unknown> {
   return {
     "module-count": counted?.moduleCount ?? null,
     "provider-count": counted?.providerCount ?? null,
@@ -1343,7 +1343,7 @@ function summaryScopeCounts(counted: StateSummary | null): Record<string, unknow
   };
 }
 
-function summaryCountAttributes(summary: StateSummary | null, ready: boolean): Record<string, unknown> {
+function summaryCountAttributes(summary: Readonly<StateSummary> | null, ready: boolean): Record<string, unknown> {
   const counted = ready && summary?.status === "ready" ? summary : null;
   return { ...summaryResourceCounts(counted), ...summaryScopeCounts(counted) };
 }

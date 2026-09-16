@@ -122,7 +122,7 @@ export function CommandPalette({
       if (!controller.signal.aborted) {
         setOrgs(namedResources(result));
       }
-    }).catch(() => {});
+    }).catch(() => undefined);
 
     if (isNonEmptyString(currentOrgName)) {
       void fetchApi(
@@ -132,7 +132,7 @@ export function CommandPalette({
         if (!controller.signal.aborted) {
           setWorkspaces(namedResources(result));
         }
-      }).catch(() => {});
+      }).catch(() => undefined);
     }
 
     // Bundled documentation index: every doc page is reachable from the
@@ -140,7 +140,7 @@ export function CommandPalette({
     void fetchApi("/docs", { signal: controller.signal })
       .then((result) => {
         if (!controller.signal.aborted) setDocs(docsFromResponse(result));
-      }).catch(() => {});
+      }).catch(() => undefined);
 
     return () => {
       controller.abort();

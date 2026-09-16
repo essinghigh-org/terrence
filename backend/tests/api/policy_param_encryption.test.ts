@@ -44,12 +44,12 @@ describe("policy-set parameter encryption (#577)", () => {
   });
 
   afterAll(async () => {
-    await db.delete(policySetParameters).where(eq(policySetParameters.policySetId, setId)).catch((): void => {});
-    await db.delete(policySets).where(eq(policySets.id, setId)).catch((): void => {});
-    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => {});
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`)).catch((): void => {});
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => {});
-    await db.delete(users).where(eq(users.id, userId)).catch((): void => {});
+    await db.delete(policySetParameters).where(eq(policySetParameters.policySetId, setId)).catch((): void => undefined);
+    await db.delete(policySets).where(eq(policySets.id, setId)).catch((): void => undefined);
+    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => undefined);
+    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`)).catch((): void => undefined);
+    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
+    await db.delete(users).where(eq(users.id, userId)).catch((): void => undefined);
   });
 
   it("encrypts sensitive parameters at rest and redacts reads", async () => {

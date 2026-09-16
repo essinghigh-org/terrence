@@ -108,7 +108,7 @@ function normalizedVcsFetchInit(init: VcsFetchInit): {
 
 type VcsResolvedFetcher = (target: ResolvedExternalUrl, init: ExternalRequestInit) => Promise<Response>;
 
-async function cancelResponseBody(response: Response): Promise<void> {
+async function cancelResponseBody(response: DeepReadonly<Response>): Promise<void> {
   if (response.body !== null) await response.body.cancel().catch((): undefined => undefined);
 }
 
@@ -251,7 +251,8 @@ function validateGithubPushFields(ref: string | undefined, commitSha: string | u
 
 type WebhookBase = DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined; sourceIdentity: VcsSourceIdentity }>;
 
-function buildGithubPushDetails(branchTag: { branch?: string; tag?: string }, base: WebhookBase, commitMessage: string, commitSha: string, commitUrl: string, filesChanged: ReadonlySet<string>): WebhookDetails {
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- filesChanged is already ReadonlySet; preserve the complete set contract returned in WebhookDetails
+function buildGithubPushDetails(branchTag: Readonly<{ branch?: string; tag?: string }>, base: WebhookBase, commitMessage: string, commitSha: string, commitUrl: string, filesChanged: ReadonlySet<string>): WebhookDetails {
   return {
     ...(branchTag.branch === undefined ? {} : { branch: branchTag.branch }),
     cloneUrl: base.cloneUrl,
@@ -887,7 +888,7 @@ function extractGithubPrFilenames(body: unknown): ReadonlySet<string> | undefine
   return files;
 }
 
-function githubNextPageUrl(headers: Headers, baseUrl: string): string | null | undefined {
+function githubNextPageUrl(headers: DeepReadonly<Headers>, baseUrl: string): string | null | undefined {
   const link = headers.get("link");
   if (link === null) return null;
   for (const part of link.split(",")) {

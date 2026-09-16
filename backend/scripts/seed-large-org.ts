@@ -103,13 +103,17 @@ async function main(): Promise<void> {
 
   // --- workspaces ---------------------------------------------------------------
   t0 = performance.now();
-  const workspaceRows = Array.from({ length: workspaceCount }, (_, i) => ({
-    id: `ws-perf-${suffix}-${i}`,
-    orgId,
-    projectId: projectRows[i % projectCount]!.id,
-    name: `workspace-${i + 1}`,
-    executionMode: "remote",
-  }));
+  const workspaceRows = Array.from({ length: workspaceCount }, (_, i) => {
+    const project = projectRows[i % projectCount];
+    if (project === undefined) throw new Error("seed requires at least one project row");
+    return {
+      id: `ws-perf-${suffix}-${i}`,
+      orgId,
+      projectId: project.id,
+      name: `workspace-${i + 1}`,
+      executionMode: "remote",
+    };
+  });
   for (const chunk of chunked(workspaceRows, batchSize)) {
     await db.insert(workspaces).values(chunk);
   }
@@ -120,9 +124,11 @@ async function main(): Promise<void> {
   const variableRows = [];
   for (let w = 0; w < workspaceCount; w++) {
     for (let v = 0; v < varsPerWorkspace; v++) {
+      const workspace = workspaceRows[w];
+      if (workspace === undefined) throw new Error("seed requires workspace rows");
       variableRows.push({
         id: `var-perf-${suffix}-${w}-${v}`,
-        workspaceId: workspaceRows[w]!.id,
+        workspaceId: workspace.id,
         key: `perf_var_${v}`,
         value: `value-${w}-${v}`,
         category: "terraform",

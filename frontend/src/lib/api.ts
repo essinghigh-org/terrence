@@ -1,5 +1,6 @@
 import { isNumber, isRecord, isString } from "../lib/type-guards";
 import type { JsonObject, JsonValue } from "@/lib/json";
+import type { DeepReadonly } from "@/lib/utils";
 import { clearActiveUserIdentity } from "./storage-identity";
 const API_BASE_URL = "/api/v2";
 export const AUTH_CHANGED_EVENT = "terrence:auth-changed";
@@ -120,7 +121,7 @@ export function retryAfterDelayMilliseconds(value: string | null, now = Date.now
  * surfaced so UIs can render per-field feedback instead of a single blob
  * (26.9). Unparsable pointers are dropped.
  */
-export function extractFieldErrors(rawErrors: readonly Readonly<JsonObject>[]): Record<string, string> {
+export function extractFieldErrors(rawErrors: readonly DeepReadonly<JsonObject>[]): Record<string, string> {
   const fieldErrors: Record<string, string> = {};
   for (const entry of rawErrors) {
     const source = entry["source"];

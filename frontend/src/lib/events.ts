@@ -1,6 +1,7 @@
 import { ApiError, prepareAuthToken } from "./api";
 import { isRecord } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
+import type { DeepReadonly } from "@/lib/utils";
 
 // Wire-format shape of the SSE run-status event; knip cannot see the
 // type-only documentation use.
@@ -15,11 +16,11 @@ export type RunStatusEvent = Readonly<{
 
 export type SseEvent = Readonly<{
   name: string;
-  data: Readonly<JsonObject>;
+  data: DeepReadonly<JsonObject>;
 }>;
 
 export type EventStreamHandle = Readonly<{ close: () => void }>;
-type EventHandler = (event: Readonly<{ name: string; data: Readonly<JsonObject> }>) => void;
+type EventHandler = (event: SseEvent) => void;
 
 /**
  * Authenticated Server-Sent Events subscription (10.20). Connects to

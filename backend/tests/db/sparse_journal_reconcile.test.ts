@@ -53,14 +53,6 @@ async function buildSparseDatabase(dir: string, maxIdx: number): Promise<string>
   return dbPath;
 }
 
-function tableExists(db: Database, name: string): boolean {
-  return !!db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
-}
-
-function columnExists(db: Database, table: string, column: string): boolean {
-  return !!db.query(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?`).get(column);
-}
-
 test("boots cleanly on the 2026-08-23 prod shape: journal at 0025 plus seven out-of-journal columns", async () => {
   const dir = await mkdtemp(join(tmpdir(), "terrence-sparse-prod-"));
   try {
@@ -420,7 +412,3 @@ test("boots past a partially applied migration stranded past fully-absent ones (
     await rm(dir, { recursive: true, force: true });
   }
 }, 120_000);
-
-// Guard the helper imports used above so tree-shaking never drops them silently.
-void tableExists;
-void columnExists;

@@ -203,9 +203,8 @@ export async function seedBenchmark(): Promise<BenchContext> {
 
   // Configuration versions: one per workspace, uploaded; the newest run of
   // each workspace is linked to it so originsForRuns() has real data.
-  const configurationVersionIds = workspaceIds.map((workspaceId): string => {
+  const configurationVersionIds = workspaceIds.map((): string => {
     const id = `cv-${randomUUID()}`;
-    void workspaceId;
     return id;
   });
   await db.insert(configurationVersions).values(configurationVersionIds.map((id, index): typeof configurationVersions.$inferInsert => ({

@@ -13,14 +13,21 @@
 //     everything else from the declared SQLite type).
 import { createHash } from "node:crypto";
 import type { SQLQueryBindings } from "bun:sqlite";
+import { toComparableString } from "../utils";
+import type { DeepReadonly } from "../types";
 
 export type SqliteQueryable = Readonly<{
-  query: (sql: string) => { all: (...params: SQLQueryBindings[]) => unknown[]; get: (...params: SQLQueryBindings[]) => unknown };
+  query: (sql: string) => {
+    // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- mirrors bun:sqlite Statement.all bindings (must stay mutable to accept Database); values are only forwarded
+    all: (...params: SQLQueryBindings[]) => unknown[];
+    // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- mirrors bun:sqlite Statement.get bindings (must stay mutable to accept Database); values are only forwarded
+    get: (...params: SQLQueryBindings[]) => unknown;
+  };
 }>;
 
-export type PostgresQueryable = {
-  unsafe: <T = Record<string, unknown>>(sql: string, values?: unknown[]) => Promise<T[]>;
-};
+export type PostgresQueryable = Readonly<{
+  unsafe: <T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) => Promise<T[]>;
+}>;
 
 export type ColumnMode = "boolean" | "json" | "integer" | "numeric" | "real" | "text" | "blob" | "datetime";
 
@@ -58,7 +65,7 @@ function coerceBoolean(value: unknown): boolean {
   if (value === false) return false;
   if (value === 1 || value === "1" || value === "t" || value === "true") return true;
   if (value === 0 || value === "0" || value === "f" || value === "false") return false;
-  throw new Error(`Boolean column holds ${String(value)} (${typeof value}); refusing to guess`);
+  throw new Error(`Boolean column holds ${toComparableString(value)} (${typeof value}); refusing to guess`);
 }
 
 function coerceCell(value: unknown, mode: ColumnMode): unknown {
@@ -71,7 +78,13 @@ function coerceCell(value: unknown, mode: ColumnMode): unknown {
       return typeof value === "object" ? JSON.stringify(value) : value;
     case "blob":
       // bun:sqlite returns BLOB as Uint8Array; Bun.sql binds bytea from it.
-      return value instanceof Uint8Array ? value : Buffer.from(String(value), "binary");
+      return value instanceof Uint8Array ? value : Buffer.from(toComparableString(value), "binary");
+    case "integer":
+    case "numeric":
+    case "real":
+    case "text":
+    case "datetime":
+      return value;
     default:
       return value;
   }
@@ -146,7 +159,8 @@ export async function copyTable(
     });
     total += rows.length;
     if (rowid !== null) {
-      const lastRow = rows[rows.length - 1]!;
+      const lastRow = rows[rows.length - 1];
+      if (lastRow === undefined) break;
       const last = lastRow["_terrence_rowid"];
       if (typeof last !== "number") break; // no usable keyset cursor; stop rather than loop forever
       cursor = last;
@@ -178,7 +192,7 @@ function canonicalJsonCell(value: unknown): string {
     }
   }
   if (typeof value === "object") return `j${canonicalJson(value)}`;
-  return `s${String(value)}`;
+  return `s${toComparableString(value)}`;
 }
 
 function canonicalIntegerCell(value: unknown): string {
@@ -217,8 +231,10 @@ export function canonicalCell(value: unknown, mode: ColumnMode): string {
     case "numeric": return canonicalNumericCell(value);
     case "real": return canonicalRealCell(value);
     case "blob": return canonicalBlobCell(value);
+    case "text":
+    case "datetime":
     default:
-      return `s${String(value)}`;
+      return `s${toComparableString(value)}`;
   }
 }
 
@@ -314,7 +330,7 @@ export type ForeignKeyViolation = Readonly<{
 export async function validateForeignKeys(
   target: PostgresQueryable,
   tables: readonly CopyTable[],
-  fkNames: ReadonlyMap<string, readonly string[]>,
+  fkNames: DeepReadonly<Map<string, readonly string[]>>,
 ): Promise<readonly ForeignKeyViolation[]> {
   const violations: ForeignKeyViolation[] = [];
   for (const table of tables) {

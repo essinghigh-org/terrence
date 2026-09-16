@@ -29,6 +29,7 @@ import {
 import { and, count, eq, inArray, min, type SQL } from "drizzle-orm";
 import { databaseMetrics, databasePoolMetrics } from "../db";
 import { slowQueriesSnapshot, slowQueryFingerprints } from "./db-pool-metrics";
+import type { DbPoolMetrics, SlowQuery } from "./db-pool-metrics";
 import { configuredHeartbeatTimeoutMs } from "./agent-jobs";
 import {
   checkOrganizationPermission,
@@ -78,8 +79,8 @@ export type MetricsCollection = Readonly<{
       pageCount: number;
       cacheSizeBytes: number | null;
       freelistBytes: number | null;
-      pool: import("./db-pool-metrics").DbPoolMetrics;
-      slowQueries: readonly import("./db-pool-metrics").SlowQuery[];
+      pool: DbPoolMetrics;
+      slowQueries: readonly SlowQuery[];
       slowFingerprints: Readonly<Record<string, number>>;
     }>;
     /** VCS webhook delivery queue state (todo 192-194). */

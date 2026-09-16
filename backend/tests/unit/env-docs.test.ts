@@ -58,7 +58,7 @@ function referencedEnvVars(): Set<string> {
     // static configuration names; they are covered by the INFRACOST_* family
     // documentation instead.
     for (const line of source.split("\n")) {
-      if (/Object\.(keys|entries)\(process\.env\)/.test(line) || /Reflect\.get\(process\.env/.test(line)) continue;
+      if (/Object\.(keys|entries)\(process\.env\)/.test(line) || line.includes('Reflect.get(process.env')) continue;
       pattern.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = pattern.exec(line)) !== null) {

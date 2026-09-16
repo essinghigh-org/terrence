@@ -401,7 +401,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
           setAvailableVersions(versions.filter((version): version is string => isString(version)));
         }
       })
-      .catch((): void => {})
+      .catch((): void => undefined)
       .finally((): void => { if (!controller.signal.aborted) setVersionsLoading(false); });
     return (): void => { controller.abort(); };
   }, [iacBinary, open]);
@@ -452,7 +452,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
           setVcsRepositories(list.map((item) => item.attributes));
         }
       })
-      .catch((): void => {})
+      .catch((): void => undefined)
       .finally((): void => {
         if (!controller.signal.aborted) setVcsReposLoading(false);
       });

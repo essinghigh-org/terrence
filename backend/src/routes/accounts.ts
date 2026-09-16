@@ -683,7 +683,7 @@ async function checkPostLoginState(
   user: typeof users.$inferSelect,
   localPasswordAuthenticated: boolean,
   set: SetObj,
-): Promise<unknown | null> {
+): Promise<unknown> {
   if (localPasswordAuthenticated && isLoginLocked(user)) {
     (set as { status: number }).status = 401;
     return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
@@ -707,7 +707,7 @@ async function checkPostLoginState(
 
 async function mfaChallengeResponse(
   user: Readonly<typeof users.$inferSelect>,
-): Promise<unknown | null> {
+): Promise<unknown> {
   // If MFA is enabled for this account, issue a short-lived challenge token
   // instead of an access token. The client completes login via
   // POST /users/login/mfa with a valid TOTP code.
@@ -1057,7 +1057,7 @@ function parseUsernameChange(
   attrs: Attrs,
   changes: AccountChanges,
   set: SetObj,
-): unknown | null {
+): unknown {
   if (!Object.hasOwn(attrs, "username")) return null;
   if (typeof attrs["username"] !== "string" || attrs["username"].trim() === "") {
     (set as { status: number }).status = 422;
@@ -1077,7 +1077,7 @@ function parseEmailChange(
   currentEmail: string | null,
   changes: AccountChanges,
   set: SetObj,
-): unknown | null {
+): unknown {
   if (!Object.hasOwn(attrs, "email")) return null;
   const emailVal = attrs["email"];
   if (emailVal !== null && (typeof emailVal !== "string" || emailVal.trim() === "")) {
@@ -1098,7 +1098,7 @@ function parseThemeChange(
   attrs: Attrs,
   changes: AccountChanges,
   set: SetObj,
-): unknown | null {
+): unknown {
   if (!Object.hasOwn(attrs, "theme")) return null;
   if (typeof attrs["theme"] !== "string" || attrs["theme"].length > 64 || !THEME_ID_PATTERN.test(attrs["theme"])) {
     (set as { status: number }).status = 422;

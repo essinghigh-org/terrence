@@ -52,10 +52,14 @@ function accessFailure(status: number, detail: string): AccessFailure {
   return { status, body: { errors: [{ status: String(status), title: status === 422 ? "Unprocessable Entity" : "Not Found", detail }] } };
 }
 
+function optionalAccessLevel(value: unknown, allowed: readonly string[]): boolean {
+  return value === undefined || (typeof value === "string" && allowed.includes(value));
+}
+
 function validProjectAccessMap(project: Record<string, unknown>): boolean {
   return Object.keys(project).every((key): boolean => PROJECT_ACCESS_KEYS.has(key))
-    && (project["settings"] === undefined || ["read", "update", "delete"].includes(String(project["settings"])))
-    && (project["teams"] === undefined || ["none", "read", "manage"].includes(String(project["teams"])));
+    && optionalAccessLevel(project["settings"], ["read", "update", "delete"])
+    && optionalAccessLevel(project["teams"], ["none", "read", "manage"]);
 }
 
 const WORKSPACE_BOOLEAN_KEYS = ["create", "move", "locking", "delete", "run-tasks", "policy-overrides"];
@@ -63,10 +67,10 @@ const WORKSPACE_BOOLEAN_KEYS = ["create", "move", "locking", "delete", "run-task
 function validWorkspaceAccessMap(workspace: Record<string, unknown>): boolean {
   return Object.keys(workspace).every((key): boolean => WORKSPACE_ACCESS_KEYS.has(key))
     && !WORKSPACE_BOOLEAN_KEYS.some((key): boolean => workspace[key] !== undefined && typeof workspace[key] !== "boolean")
-    && (workspace["runs"] === undefined || ["read", "plan", "apply"].includes(String(workspace["runs"])))
-    && (workspace["variables"] === undefined || ["none", "read", "write"].includes(String(workspace["variables"])))
-    && (workspace["state-versions"] === undefined || ["none", "read-outputs", "read", "write"].includes(String(workspace["state-versions"])))
-    && (workspace["sentinel-mocks"] === undefined || ["none", "read"].includes(String(workspace["sentinel-mocks"])));
+    && optionalAccessLevel(workspace["runs"], ["read", "plan", "apply"])
+    && optionalAccessLevel(workspace["variables"], ["none", "read", "write"])
+    && optionalAccessLevel(workspace["state-versions"], ["none", "read-outputs", "read", "write"])
+    && optionalAccessLevel(workspace["sentinel-mocks"], ["none", "read"]);
 }
 
 function normalizedCustomAccess(projectAccess: unknown, workspaceAccess: unknown): AccessLevel | undefined {

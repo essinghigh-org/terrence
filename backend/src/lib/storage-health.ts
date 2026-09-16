@@ -1,5 +1,6 @@
 import { log } from "./log";
 import { statfs } from "node:fs/promises";
+import { toComparableString } from "./comparable";
 
 /**
  * storage-health.ts — disk-full detection (kanban 3.23).
@@ -53,7 +54,7 @@ export function isDiskFullError(error: unknown): boolean {
   if (error === null || typeof error !== "object") return false;
   const code = "code" in error ? (error as { code?: unknown }).code : undefined;
   if (code === "ENOSPC" || code === "EDQUOT") return true;
-  const message = error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : toComparableString(error);
   return message.includes("database or disk is full") || message.includes("SQLITE_FULL");
 }
 

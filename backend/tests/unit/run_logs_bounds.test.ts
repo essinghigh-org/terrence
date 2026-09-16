@@ -8,7 +8,7 @@ describe("run log bounds #343", (): void => {
     expect(source).toContain("MAX_RUN_LOGS_PER_RUN");
     expect(source).toContain("limit: MAX_RUN_LOGS_PER_RUN");
     // archive path should also be bounded
-    expect(source.match(/archiveRunLogs[\s\S]*?limit: MAX_RUN_LOGS_PER_RUN/)).toBeTruthy();
-    expect(source.match(/readRunLogs[\s\S]*?limit: MAX_RUN_LOGS_PER_RUN/)).toBeTruthy();
+    expect(/archiveRunLogs[\s\S]*?limit: MAX_RUN_LOGS_PER_RUN/.exec(source)).toBeTruthy();
+    expect(/readRunLogs[\s\S]*?limit: MAX_RUN_LOGS_PER_RUN/.exec(source)).toBeTruthy();
   });
 });

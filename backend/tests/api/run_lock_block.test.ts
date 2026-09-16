@@ -65,14 +65,14 @@ describe("locked workspaces surface blocked runs (#575)", () => {
   });
 
   afterAll(async () => {
-    await db.delete(logs).where(eq(logs.runId, pendingRunId)).catch((): void => {});
-    await db.delete(logs).where(eq(logs.runId, confirmedRunId)).catch((): void => {});
-    await db.delete(runs).where(eq(runs.workspaceId, wsId)).catch((): void => {});
-    await db.delete(workspaces).where(eq(workspaces.orgId, orgId)).catch((): void => {});
-    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => {});
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`)).catch((): void => {});
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => {});
-    await db.delete(users).where(eq(users.id, userId)).catch((): void => {});
+    await db.delete(logs).where(eq(logs.runId, pendingRunId)).catch((): void => undefined);
+    await db.delete(logs).where(eq(logs.runId, confirmedRunId)).catch((): void => undefined);
+    await db.delete(runs).where(eq(runs.workspaceId, wsId)).catch((): void => undefined);
+    await db.delete(workspaces).where(eq(workspaces.orgId, orgId)).catch((): void => undefined);
+    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => undefined);
+    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`)).catch((): void => undefined);
+    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
+    await db.delete(users).where(eq(users.id, userId)).catch((): void => undefined);
   });
 
   it("logs the lock block for pending runs without starting them", async () => {

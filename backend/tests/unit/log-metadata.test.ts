@@ -5,7 +5,7 @@ import { describe, expect, it, spyOn } from "bun:test";
 describe("structured logger metadata nesting (12.5)", () => {
   it("nests caller metadata under a reserved `meta` key", async () => {
     const mod = await import("../../src/lib/log");
-    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const logSpy = spyOn(console, "log").mockImplementation(() => undefined);
     try {
       mod.log.info("hello", { timestamp: "attacker", level: "debug", message: "boom" });
       const line = logSpy.mock.calls[0]?.[0] as string;
@@ -23,7 +23,7 @@ describe("structured logger metadata nesting (12.5)", () => {
 
   it("omits meta when not provided", async () => {
     const mod = await import("../../src/lib/log");
-    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const logSpy = spyOn(console, "log").mockImplementation(() => undefined);
     try {
       mod.log.info("solo");
       const line = logSpy.mock.calls[0]?.[0] as string;
@@ -84,7 +84,7 @@ describe("structured logger metadata nesting (12.5)", () => {
 
   it("omits meta when it is an empty object", async () => {
     const mod = await import("../../src/lib/log");
-    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const logSpy = spyOn(console, "log").mockImplementation(() => undefined);
     try {
       mod.log.info("no-op", {});
       const line = logSpy.mock.calls[0]?.[0] as string;

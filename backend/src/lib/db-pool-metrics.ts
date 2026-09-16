@@ -280,7 +280,7 @@ export function poolMetrics(driver: "sqlite" | "postgres", maxConnections: numbe
 }
 
 /** Test seam: clear all samples and counters. */
-export function _resetPoolMetrics(): void {
+export function resetPoolMetrics(): void {
   pendingQueries = 0;
   pendingTransactions = 0;
   totalQueries = 0;
@@ -363,4 +363,4 @@ export function slowQueriesSnapshot(): readonly SlowQuery[] {
 export { fingerprintQuery };
 
 /** @public keep fingerprint import honest for knip when not otherwise referenced */
-export const _slowThresholdMs = SLOW_THRESHOLD_MS;
+export const slowThresholdMs = SLOW_THRESHOLD_MS;

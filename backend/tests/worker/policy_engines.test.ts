@@ -65,11 +65,11 @@ main = rule { secret_word == "s3cret" }
   const withEnv = async <T>(name: string, value: string | undefined, fn: () => Promise<T>): Promise<T> => {
     const saved = process.env[name];
     try {
-      if (value === undefined) delete process.env[name];
+      if (value === undefined) Reflect.deleteProperty(process.env, name);
       else process.env[name] = value;
       return await fn();
     } finally {
-      if (saved === undefined) delete process.env[name];
+      if (saved === undefined) Reflect.deleteProperty(process.env, name);
       else process.env[name] = saved;
     }
   };
@@ -118,14 +118,14 @@ main = rule { secret_word == "s3cret" }
   });
 
   afterAll(async () => {
-    await db.delete(policyChecks).where(inArray(policyChecks.runId, [opaRunId, senRunId])).catch((): void => {});
-    await db.delete(policySetParameters).where(inArray(policySetParameters.policySetId, [senParamSetId])).catch((): void => {});
-    await db.delete(policies).where(inArray(policies.id, [opaPassId, opaFailId, senPassId, senParamId])).catch((): void => {});
-    await db.delete(policySetWorkspaces).where(inArray(policySetWorkspaces.workspaceId, [opaWsId, senWsId])).catch((): void => {});
-    await db.delete(policySets).where(inArray(policySets.id, [opaSetId, sentinelSetId, senParamSetId])).catch((): void => {});
-    await db.delete(runs).where(inArray(runs.id, [opaRunId, senRunId])).catch((): void => {});
-    await db.delete(workspaces).where(inArray(workspaces.id, [opaWsId, senWsId])).catch((): void => {});
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => {});
+    await db.delete(policyChecks).where(inArray(policyChecks.runId, [opaRunId, senRunId])).catch((): void => undefined);
+    await db.delete(policySetParameters).where(inArray(policySetParameters.policySetId, [senParamSetId])).catch((): void => undefined);
+    await db.delete(policies).where(inArray(policies.id, [opaPassId, opaFailId, senPassId, senParamId])).catch((): void => undefined);
+    await db.delete(policySetWorkspaces).where(inArray(policySetWorkspaces.workspaceId, [opaWsId, senWsId])).catch((): void => undefined);
+    await db.delete(policySets).where(inArray(policySets.id, [opaSetId, sentinelSetId, senParamSetId])).catch((): void => undefined);
+    await db.delete(runs).where(inArray(runs.id, [opaRunId, senRunId])).catch((): void => undefined);
+    await db.delete(workspaces).where(inArray(workspaces.id, [opaWsId, senWsId])).catch((): void => undefined);
+    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
   });
 
   it("probe reports a missing engine with install guidance", async () => {

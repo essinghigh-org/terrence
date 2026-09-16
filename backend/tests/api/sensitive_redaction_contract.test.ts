@@ -50,16 +50,16 @@ describe("sensitive value redaction contract (#577)", () => {
   });
 
   afterAll(async () => {
-    await db.delete(workspaceVariables).where(eq(workspaceVariables.workspaceId, wsId)).catch((): void => {});
-    await db.delete(variableSetVariables).where(eq(variableSetVariables.key, `VS_KEY_${suffix}`)).catch((): void => {});
-    await db.delete(variableSets).where(eq(variableSets.orgId, orgId)).catch((): void => {});
-    await db.delete(policySetParameters).where(eq(policySetParameters.key, `PS_KEY_${suffix}`)).catch((): void => {});
-    await db.delete(policySets).where(eq(policySets.orgId, orgId)).catch((): void => {});
-    await db.delete(workspaces).where(eq(workspaces.orgId, orgId)).catch((): void => {});
-    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => {});
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`)).catch((): void => {});
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => {});
-    await db.delete(users).where(eq(users.id, userId)).catch((): void => {});
+    await db.delete(workspaceVariables).where(eq(workspaceVariables.workspaceId, wsId)).catch((): void => undefined);
+    await db.delete(variableSetVariables).where(eq(variableSetVariables.key, `VS_KEY_${suffix}`)).catch((): void => undefined);
+    await db.delete(variableSets).where(eq(variableSets.orgId, orgId)).catch((): void => undefined);
+    await db.delete(policySetParameters).where(eq(policySetParameters.key, `PS_KEY_${suffix}`)).catch((): void => undefined);
+    await db.delete(policySets).where(eq(policySets.orgId, orgId)).catch((): void => undefined);
+    await db.delete(workspaces).where(eq(workspaces.orgId, orgId)).catch((): void => undefined);
+    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => undefined);
+    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`)).catch((): void => undefined);
+    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
+    await db.delete(users).where(eq(users.id, userId)).catch((): void => undefined);
   });
 
   it("serializers null sensitive values", () => {

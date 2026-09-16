@@ -85,10 +85,13 @@ export function staticCacheControl(pathname: string): string | undefined {
   return undefined;
 }
 
-export function applySecurityHeaders(target: Record<string, string | number>): void {
+export function applySecurityHeaders(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- the header record is populated in place by design
+  target: Record<string, string | number>,
+): void {
   target["Content-Security-Policy"] ??= buildContentSecurityPolicy();
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
-    if (target[name] === undefined) target[name] = value;
+    target[name] ??= value;
   }
 }
 
@@ -97,8 +100,10 @@ export const HSTS_VALUE = "max-age=31536000; includeSubDomains";
 
 /** Whether a response should carry HSTS. Caller passes the request so we can check the scheme / X-Forwarded-Proto. */
 export function shouldSendHsts(request: Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>): boolean {
-  // Import lazily to avoid circular deps at module load.
+  // Lazy require: a static import cycles back through settings/run-logs and
+  // crashes module init with a TDZ error (verified 2026-09-11).
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy to avoid the settings/run-logs import cycle at module load
     const { requestIsHttps } = require("./client-ip") as { requestIsHttps: (r: unknown) => boolean };
     return requestIsHttps(request);
   } catch {

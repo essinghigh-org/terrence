@@ -18,6 +18,7 @@
  */
 import { accessSync, constants, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { envText } from "./constants";
 
 /** Ceiling for a single run's process count. Generous: tofu + providers +
  * local-exec shells stay well below this; fork bombs do not. */
@@ -47,7 +48,7 @@ export function resolveCgroupLimits(env: NodeJS.ProcessEnv = process.env): RunCg
   return {
     memoryMax: rawMemory !== undefined && rawMemory !== "" ? rawMemory : DEFAULT_MEMORY_MAX,
     pidMax: parsePositiveInt(env["TERRENCE_RUN_CGROUP_PIDS_MAX"]) ?? DEFAULT_PID_LIMIT,
-    cpuWeight: env["TERRENCE_RUN_CGROUP_CPU_WEIGHT"]?.trim() || CPU_WEIGHT,
+    cpuWeight: envText(env["TERRENCE_RUN_CGROUP_CPU_WEIGHT"]) ?? CPU_WEIGHT,
   };
 }
 

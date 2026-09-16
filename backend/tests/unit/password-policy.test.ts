@@ -108,7 +108,7 @@ describe("Configurable password policy (kanban 5.5)", () => {
 
     afterAll(() => {
       for (const [key, value] of Object.entries(originalEnv)) {
-        if (value === undefined) delete process.env[key];
+        if (value === undefined) Reflect.deleteProperty(process.env, key);
         else process.env[key] = value;
       }
     });

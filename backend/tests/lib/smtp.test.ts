@@ -242,7 +242,7 @@ describe("sendEmail", () => {
   test("fails when a recipient is rejected", async () => {
     const strict = createFakeSmtpServer({ rejectRcpt: "ghost@example.com" });
     try {
-      await expect(sendEmail(
+      expect(sendEmail(
         { ...settings, port: strict.port, encryption: "plain" },
         { to: ["ghost@example.com"], subject: "s", text: "b" },
       )).rejects.toThrow(/RCPT TO rejected/);
@@ -252,7 +252,7 @@ describe("sendEmail", () => {
   });
 
   test("rejects header-injection addresses before connecting", async () => {
-    await expect(sendEmail(testSettings, {
+    expect(sendEmail(testSettings, {
       to: ["victim@example.com\r\nBcc: attacker@example.com"],
       subject: "s",
       text: "b",
@@ -260,7 +260,7 @@ describe("sendEmail", () => {
   });
 
   test("rejects an empty SMTP host before connecting", async () => {
-    await expect(sendEmail({ ...testSettings, host: "" }, {
+    expect(sendEmail({ ...testSettings, host: "" }, {
       to: ["one@example.com"],
       subject: "s",
       text: "b",

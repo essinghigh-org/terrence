@@ -12,6 +12,7 @@
 // /json-outputs-upload, plus the agent filesystem path): configuration
 // versions, policy sets, state versions, registry module versions, and
 // policy content uploads all follow that shape.
+import type { DeepReadonly } from "./types";
 
 export const API_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
 
@@ -62,8 +63,8 @@ export async function readTextWithLimit(request: Readonly<Pick<Request, "body">>
   return new TextDecoder().decode(concatChunks(chunks));
 }
 
-function concatChunks(chunks: readonly Uint8Array[]): Uint8Array {
-  const total = chunks.reduce((sum: number, chunk: Uint8Array): number => sum + chunk.byteLength, 0);
+function concatChunks(chunks: readonly DeepReadonly<Uint8Array>[]): Uint8Array {
+  const total = chunks.reduce((sum: number, chunk: DeepReadonly<Uint8Array>): number => sum + chunk.byteLength, 0);
   const merged = new Uint8Array(total);
   let offset = 0;
   for (const chunk of chunks) {

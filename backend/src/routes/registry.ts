@@ -1271,6 +1271,7 @@ async function findTestVariable(params: TestVarsParams): Promise<DeepReadonly<ty
   return db.query.testVariables.findFirst({ where: and(eq(testVariables.moduleId, mod.id), eq(testVariables.id, params.variable_id)) });
 }
 
+// eslint-disable-next-line @typescript-eslint/naming-convention -- TFP test-run API wire names
 type TestRunParams = TestVarsParams & { test_run_id?: string; configuration_version_id?: string };
 
 function testConfigurationResource(

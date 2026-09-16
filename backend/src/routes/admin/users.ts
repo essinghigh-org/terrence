@@ -245,7 +245,8 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     if (filterSuspended === "false") conditions.push(eq(users.isSuspended, false));
     if (q !== "") {
       const pattern = `%${q}%`;
-      conditions.push(or(caseInsensitiveLike(users.username, pattern), caseInsensitiveLike(users.email, pattern))!);
+      const usernameOrEmail = or(caseInsensitiveLike(users.username, pattern), caseInsensitiveLike(users.email, pattern));
+      if (usernameOrEmail !== undefined) conditions.push(usernameOrEmail);
     }
     const where = conditions.length === 0 ? undefined : conditions.length === 1 ? conditions[0] : and(...conditions);
     const [allUsers, countRows] = await Promise.all([

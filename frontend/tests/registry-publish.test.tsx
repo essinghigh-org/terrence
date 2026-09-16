@@ -198,7 +198,7 @@ test("manual publication uploads the selected archive bytes and retries without 
     }
     if (url === "/api/v2/registry-module-versions/version-manual/upload" && init?.method === "PUT") {
 // SAFETY: the captured request body is a string per the request construction.
-      uploadBodies.push(init.body as BodyInit);
+      uploadBodies.push(init.body!);
       if (uploadBodies.length === 1) return json({ errors: [{ detail: "Archive traversal detected" }] }, 422);
       return json({ data: { id: "version-manual", attributes: { status: "ok" } } });
     }

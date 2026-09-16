@@ -198,7 +198,9 @@ const IPV6_TAIL_RE = /^(?:[0-9a-f:]*)?::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}
 export function isLiteralIpv4(host: string): boolean {
   const m = IPV4_RE.exec(host);
   if (m === null) return false;
-  return [m[1]!, m[2]!, m[3]!, m[4]!].every((o: string): boolean => Number(o) <= 255);
+  const [, a, b, c, d] = m;
+  if (a === undefined || b === undefined || c === undefined || d === undefined) return false;
+  return [a, b, c, d].every((o: string): boolean => Number(o) <= 255);
 }
 
 export function isLiteralIpv6(host: string): boolean {
@@ -459,13 +461,16 @@ async function assertSafeAvatarDestination(url: string, providerId: string): Pro
     // blind fetch (the old code returned OK on null, opening a TOCTOU hole).
     return { error: "Could not safely resolve the avatar host" };
   }
-  for (const address of resolved) {
-    if (!originTrusted && isNonPublicAddress(address)) {
-      // Reject if ANY answer is non-public: split-horizon/rebinding defense.
-      return { error: "Avatar host resolves to a non-public address (loopback/private/multicast)" };
-    }
+  if (!originTrusted && resolved.some(isNonPublicAddress)) {
+    // Reject if ANY answer is non-public: split-horizon/rebinding defense.
+    return { error: "Avatar host resolves to a non-public address (loopback/private/multicast)" };
   }
-  return { pinned: resolved[0]! };
+  const first = resolved[0];
+  if (first === undefined) {
+    // FAIL CLOSED: empty answer set pins nothing.
+    return { error: "Could not safely resolve the avatar host" };
+  }
+  return { pinned: first };
 }
 
 // ---------------------------------------------------------------------------
@@ -509,11 +514,17 @@ async function requestPinned(target: DeepReadonly<{
       headers: { ...headers, Host: hostHeader },
       signal: AbortSignal.any([target.signal, AbortSignal.timeout(timeoutMs)]),
     };
-    const request = mod.request(options, (res: http.IncomingMessage): void => {
+    const request = mod.request(options, (
+      // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Node http callback contract; the stream is consumed (destroy on cap) not structurally mutated
+      res: Readonly<http.IncomingMessage>,
+    ): void => {
       const chunks: Uint8Array[] = [];
       let total = 0;
       let settled = false;
-      res.on("data", (chunk: Uint8Array): void => {
+      res.on("data", (
+        // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Node http callback contract; the chunk reference is stored unmutated for Buffer.concat
+        chunk: Readonly<Uint8Array>,
+      ): void => {
         total += chunk.length;
         if (total > maxBytes) {
           // Exceeded the cap: settle immediately with the 413 signal instead of
@@ -532,13 +543,13 @@ async function requestPinned(target: DeepReadonly<{
         settled = true;
         resolvePromise({ status: res.statusCode ?? 0, headers: res.headers, bytes: Buffer.concat(chunks), truncated: false });
       });
-      res.on("error", (error: Error): void => {
+      res.on("error", (error: Readonly<Error>): void => {
         if (settled) return;
         settled = true;
         rejectPromise(error);
       });
     });
-    request.on("error", (error: Error): void => { rejectPromise(error); });
+    request.on("error", (error: Readonly<Error>): void => { rejectPromise(error); });
     request.end();
   });
 }
@@ -547,28 +558,28 @@ function isSvgHead(head: string): boolean {
   return head.startsWith("<svg") || head.startsWith("<?xml");
 }
 
-function isPngMagic(bytes: Readonly<Uint8Array>): boolean {
+function isPngMagic(bytes: DeepReadonly<Uint8Array>): boolean {
   return bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
 }
 
-function isJpegMagic(bytes: Readonly<Uint8Array>): boolean {
+function isJpegMagic(bytes: DeepReadonly<Uint8Array>): boolean {
   return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
 }
 
-function isGifMagic(bytes: Readonly<Uint8Array>): boolean {
+function isGifMagic(bytes: DeepReadonly<Uint8Array>): boolean {
   if (bytes.length < 6) return false;
   const head = Buffer.from(bytes.subarray(0, 6)).toString("latin1");
   return head === "GIF87a" || head === "GIF89a";
 }
 
-function isWebpMagic(bytes: Readonly<Uint8Array>): boolean {
+function isWebpMagic(bytes: DeepReadonly<Uint8Array>): boolean {
   return bytes.length >= 12 && Buffer.from(bytes.subarray(0, 4)).toString("latin1") === "RIFF"
     && Buffer.from(bytes.subarray(8, 12)).toString("latin1") === "WEBP";
 }
 
-function sniffImageKind(bytes: Readonly<Uint8Array>): string | null {
+function sniffImageKind(bytes: DeepReadonly<Uint8Array>): string | null {
   const b = Buffer.from(bytes);
-  const head = b.slice(0, 512).toString("utf8").trimStart();
+  const head = b.subarray(0, 512).toString("utf8").trimStart();
   if (isSvgHead(head)) return "svg";
   if (isPngMagic(b)) return "png";
   if (isJpegMagic(b)) return "jpeg";
@@ -622,7 +633,11 @@ function resolveAvatarMime(raw: DeepReadonly<RawResponse>): { mime: string; kind
   return { mime, kind };
 }
 
-async function storeAvatarImage(key: string, bytes: Readonly<Uint8Array>): Promise<void> {
+async function storeAvatarImage(
+  key: string,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- writeFile requires ArrayBufferView; Uint8Array has no rule-verifiable readonly form and the bytes are only read
+  bytes: Readonly<Uint8Array>,
+): Promise<void> {
   await mkdir(join(avatarDir(), key.slice(0, 2)), { recursive: true, mode: 0o700 });
   const tmpImg = `${imgPath(key)}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(tmpImg, bytes, { mode: 0o600 });
@@ -758,8 +773,11 @@ async function collectAvatarShardNames(dir: string): Promise<string[] | null> {
   }
 }
 
-async function collectAvatarEntries(dir: string, shardNames: readonly string[]): Promise<Map<string, { img?: string; json?: string; size: number; last: number }>> {
-  const entries = new Map<string, { img?: string; json?: string; size: number; last: number }>();
+/** Mutable avatar cache entry; readers take DeepReadonly views, hydration mutates in place. */
+type AvatarCacheEntry = { img?: string; json?: string; size: number; last: number };
+
+async function collectAvatarEntries(dir: string, shardNames: readonly string[]): Promise<Map<string, AvatarCacheEntry>> {
+  const entries = new Map<string, AvatarCacheEntry>();
   for (const shard of shardNames) {
     const shardPath = join(dir, shard);
     let names: string[] = [];
@@ -781,7 +799,11 @@ async function collectAvatarEntries(dir: string, shardNames: readonly string[]):
   return entries;
 }
 
-async function hydrateAvatarEntry(record: { img?: string; json?: string; size: number; last: number }, key: string): Promise<void> {
+async function hydrateAvatarEntry(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- hydrates the shared cache entry in place (size/last updates, missing-file eviction)
+  record: AvatarCacheEntry,
+  key: string,
+): Promise<void> {
   let size = 0;
   let last = 0;
   if (record.img !== undefined) {
@@ -808,13 +830,16 @@ async function hydrateAvatarEntry(record: { img?: string; json?: string; size: n
   record.last = last;
 }
 
-async function hydrateAvatarEntries(entries: ReadonlyMap<string, { img?: string; json?: string; size: number; last: number }>): Promise<void> {
+async function hydrateAvatarEntries(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- values are mutated in place by hydrateAvatarEntry during cache hydration
+  entries: ReadonlyMap<string, AvatarCacheEntry>,
+): Promise<void> {
   for (const [key, record] of entries) {
     await hydrateAvatarEntry(record, key);
   }
 }
 
-function selectAgeBasedRemovals(entries: ReadonlyMap<string, { img?: string; json?: string; size: number; last: number }>, now: number, maxAgeMs: number): Set<string> {
+function selectAgeBasedRemovals(entries: DeepReadonly<Map<string, AvatarCacheEntry>>, now: number, maxAgeMs: number): Set<string> {
   const removals = new Set<string>();
   for (const [key, record] of entries) {
     const orphan = record.img === undefined;
@@ -824,7 +849,13 @@ function selectAgeBasedRemovals(entries: ReadonlyMap<string, { img?: string; jso
   return removals;
 }
 
-function selectBudgetRemovals(entries: ReadonlyMap<string, { img?: string; json?: string; size: number; last: number }>, removals: Set<string>, maxBytes: number, maxEntries: number): void {
+function selectBudgetRemovals(
+  entries: DeepReadonly<Map<string, AvatarCacheEntry>>,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Set has no rule-verifiable readonly form and removals are accumulated here by design
+  removals: Set<string>,
+  maxBytes: number,
+  maxEntries: number,
+): void {
   let totalBytes = 0;
   const live: { key: string; last: number; size: number }[] = [];
   for (const [key, record] of entries) {
@@ -842,7 +873,11 @@ function selectBudgetRemovals(entries: ReadonlyMap<string, { img?: string; json?
   }
 }
 
-async function removeAvatarEntries(entries: ReadonlyMap<string, { img?: string; json?: string; size: number; last: number }>, removals: ReadonlySet<string>): Promise<number> {
+async function removeAvatarEntries(
+  entries: DeepReadonly<Map<string, AvatarCacheEntry>>,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Set has no rule-verifiable readonly form; the set is only iterated here
+  removals: ReadonlySet<string>,
+): Promise<number> {
   let removed = 0;
   for (const key of removals) {
     const record = entries.get(key);

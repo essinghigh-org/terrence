@@ -1,4 +1,5 @@
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import type { DeepReadonly } from "./types";
 
 // Persistent version-discovery cache (kanban 6.10). Kept in its own tiny
 // module so the file-format helpers can be unit-tested without network or
@@ -15,7 +16,7 @@ export type VersionCacheFile = Partial<Record<VersionCacheTool, VersionCacheEntr
 
 /** True when the entry exists and its fetchedAt is within ttlMs of now. */
 export function isVersionCacheFresh(
-  entry: VersionCacheEntry | undefined,
+  entry: DeepReadonly<VersionCacheEntry> | undefined,
   ttlMs: number,
   now: number = Date.now(),
 ): boolean {
@@ -45,7 +46,7 @@ export function loadVersionCacheFile(filePath: string): VersionCacheFile {
       || !entry.versions.every((v: unknown): boolean => typeof v === "string")
       || typeof entry.fetchedAt !== "number"
       || !Number.isFinite(entry.fetchedAt)) {
-      delete parsed[tool];
+      Reflect.deleteProperty(parsed, tool);
     }
   }
   return parsed;
@@ -56,6 +57,7 @@ export function loadVersionCacheFile(filePath: string): VersionCacheFile {
 export function saveVersionCacheFile(
   filePath: string,
   tool: VersionCacheTool,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- entry is stored into the mutable cache-file structure by design
   entry: VersionCacheEntry,
 ): void {
   const tmpPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;

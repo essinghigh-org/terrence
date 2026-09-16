@@ -7,12 +7,12 @@ export function executorBackendFromEnv(): ExecutorBackend {
   return executionSetting("TERRENCE_EXECUTOR_BACKEND");
 }
 
-export function executorPolicyAllowsLocal(allowed: ExecutorBackend[]): boolean {
+export function executorPolicyAllowsLocal(allowed: readonly ExecutorBackend[]): boolean {
   return allowed.includes("landlock");
 }
 
 function projectExecutionDenial(backend: ExecutorBackend, allowedModes: string): string | undefined {
-  const allowed = allowedModes.split(",").map((s) => s.trim()).filter(Boolean);
+  const allowed = allowedModes.split(",").map((s): string => s.trim()).filter(Boolean);
   const backendMode = backend === "agent" ? "agent" : backend === "landlock" ? "remote" : backend;
   const allowsAgentAlias = backend === "agent" && allowed.includes("remote:agent");
   if (!allowed.includes(backendMode) && !allowed.includes(backend) && !allowsAgentAlias && !allowed.includes("*")) {
@@ -43,6 +43,6 @@ export function executorPolicyAllows(
 }
 
 /** Whether any allowed backend includes a hard-isolated executor. */
-export function hasHardIsolation(allowed: ExecutorBackend[]): boolean {
-  return allowed.some((b) => b !== "landlock");
+export function hasHardIsolation(allowed: readonly ExecutorBackend[]): boolean {
+  return allowed.some((b): boolean => b !== "landlock");
 }

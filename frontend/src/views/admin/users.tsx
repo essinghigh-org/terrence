@@ -118,8 +118,8 @@ export function UsersAdmin(props: Readonly<{
       await fetchApi(`/api/v2/admin/users/${encodeURIComponent(target.id)}${resetUser !== null ? "/actions/reset_password" : ""}`, {
         method: resetUser !== null ? "POST" : "PATCH",
         body: JSON.stringify({ data: { type: "users", attributes: resetUser !== null
-          ? { password, "password-confirmation": confirmation }
-          : { username: username.trim(), email: email.trim() || null } } }),
+        ? { password, "password-confirmation": confirmation }
+        : { username: username.trim(), email: email.trim() === "" ? null : email.trim() } } }),
       });
       toast.add({ title: resetUser !== null ? "Password reset. Share the temporary password securely." : "User updated", type: "success" });
       closeForm();

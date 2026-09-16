@@ -1,4 +1,5 @@
 import { newResourceId } from "./resource-id";
+import type { DeepReadonly } from "./types";
 // Shared plumbing for SAML, OIDC, and LDAP authentication: settings reads,
 // external-identity provisioning with a well-defined conflict policy, group
 // mapping, and SSO session issuance.
@@ -198,7 +199,7 @@ async function ssoUserById(userId: string): Promise<typeof users.$inferSelect> {
 async function provisionExistingSsoIdentity(
   identity: SsoIdentity,
   normalized: NormalizedSsoIdentity,
-  existing: typeof users.$inferSelect,
+  existing: DeepReadonly<typeof users.$inferSelect>,
 ): Promise<SsoProvisionResult> {
   const verifiedEmailAt = identity.emailVerified === true && normalized.email !== null ? Date.now() : undefined;
   if (existing.email === null && normalized.email !== null

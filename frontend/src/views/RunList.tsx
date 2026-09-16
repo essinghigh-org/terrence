@@ -401,7 +401,7 @@ export function RunList({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   // Latest effect's SSE dispatcher (see the refresh effect below).
-  const runStatusDispatchRef = useRef<() => void>(() => {});
+  const runStatusDispatchRef = useRef<() => void>(() => undefined);
   const [filter, setFilter] = useState("");
   // Debounced server-side search: the filter box queries the whole history
   // (search[basic] matches ID, message, status, creator, and source) instead
@@ -542,7 +542,7 @@ export function RunList({
     return (): void => {
       stopped = true;
       controller.abort();
-      runStatusDispatchRef.current = (): void => {};
+      runStatusDispatchRef.current = (): void => undefined;
       if (timer !== undefined) window.clearTimeout(timer);
       if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
     };

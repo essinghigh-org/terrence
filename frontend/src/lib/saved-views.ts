@@ -19,7 +19,8 @@ export type SavedView = Readonly<{
 const SAVED_VIEWS_PREFIX = "terrence-saved-views:";
 
 function storeKey(orgIdentifier: string): string {
-  const orgId = resolveOrgId(orgIdentifier) || orgIdentifier;
+  const resolved = resolveOrgId(orgIdentifier);
+  const orgId = resolved !== "" ? resolved : orgIdentifier;
   const userId = getActiveUserId();
   return userId !== null ? `${SAVED_VIEWS_PREFIX}${userId}:${orgId}` : `${SAVED_VIEWS_PREFIX}${orgId}`;
 }
@@ -55,7 +56,8 @@ export function getSavedViews(orgIdentifier: string): SavedView[] {
       // Legacy migration checks:
       // 1. Un-namespaced key with resolved orgId
       // 2. Un-namespaced key with orgIdentifier (legacy orgName key)
-      const orgId = resolveOrgId(orgIdentifier) || orgIdentifier;
+      const resolved = resolveOrgId(orgIdentifier);
+      const orgId = resolved !== "" ? resolved : orgIdentifier;
       const candidates = [
         `${SAVED_VIEWS_PREFIX}${orgId}`,
         `${SAVED_VIEWS_PREFIX}${orgIdentifier}`,

@@ -9,6 +9,7 @@
 // election on PostgreSQL and is a no-op elsewhere.
 import { sql, type SQL } from "drizzle-orm";
 import { isPostgres } from "./driver";
+import type { DeepReadonly } from "../lib/types";
 
 // Arbitrary stable key (ASCII "terr"); only meaningful within this database.
 const FIRST_USER_LOCK_KEY = 0x74657272;
@@ -22,6 +23,6 @@ export async function lockFirstUserElection(tx: unknown): Promise<void> {
   if (!isPostgres) return;
   // SAFETY: only the PostgreSQL drizzle client (which always exposes
   // execute()) reaches this call; the sqlite AppDb type is a runtime no-op.
-  const client = tx as { readonly execute: (query: SQL) => Promise<unknown> };
+  const client = tx as { readonly execute: (query: DeepReadonly<SQL>) => Promise<unknown> };
   await client.execute(sql`SELECT pg_advisory_xact_lock(${FIRST_USER_LOCK_KEY})`);
 }

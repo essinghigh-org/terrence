@@ -53,8 +53,8 @@ describe("route param fuzzing (470-475)", () => {
   it("invalid UTF-8 / malformed percent (473 / 475) maps to 400/404/422", async () => {
     for (const path of ["/api/v2/organizations/%FF", "/api/v2/organizations/%ZZ", "/api/v2/organizations/%2", "/api/v2/organizations/helloworld"]) {
       const s = await fuzzPath(path);
-      expect(s === null ? 400 : s).toBeGreaterThanOrEqual(400);
-      expect([400, 404, 422].includes(s!) || s === null).toBe(true);
+      expect(s ?? 400).toBeGreaterThanOrEqual(400);
+      expect(s === null || [400, 404, 422].includes(s)).toBe(true);
     }
   });
 

@@ -13,7 +13,9 @@ const scopeRank = { global: 0, organizationProject: 1, organizationWorkspace: 2,
 export function compareVariableSets(
   left: VariableSet,
   right: VariableSet,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Set has no rule-verifiable readonly form; the allow-lists are only read here
   workspaceSetIds: ReadonlySet<string>,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Set has no rule-verifiable readonly form; the allow-lists are only read here
   projectSetIds: ReadonlySet<string>,
 ): number {
   const rank = (set: VariableSet): number => {

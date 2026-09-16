@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
+import { toComparableString } from "../../src/lib/utils";
 import {
   adminSettings,
   apiTokens,
@@ -24,7 +25,7 @@ import {
   type MaintenanceWindow,
 } from "../../src/lib/operations";
 import { deletePlanJsonArtifact, writePlanJsonArtifact } from "../../src/lib/plan-json";
-import { _resetModelCatalogCache, parseModelCatalog } from "../../src/lib/model-catalog";
+import { resetModelCatalogCache, parseModelCatalog } from "../../src/lib/model-catalog";
 import { decryptSecret, isEncryptedSecret } from "../../src/lib/secrets";
 
 // Seed for the explainer provider/model catalog endpoints (keeps the API
@@ -104,7 +105,7 @@ async function setSettings(group: string, values: Record<string, unknown>): Prom
 
 beforeAll(async () => {
   // Seed the explainer provider catalog so endpoint tests never touch the network.
-  _resetModelCatalogCache({ fetchedAt: Date.now(), providers: parseModelCatalog(CATALOG_SEED) });
+  resetModelCatalogCache({ fetchedAt: Date.now(), providers: parseModelCatalog(CATALOG_SEED) });
 
   await db.insert(users).values([
     {
@@ -167,7 +168,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await db.delete(adminSettings).where(inArray(adminSettings.id, ["approval-webhook", "maintenance-windows", "plan-explainer", "logging"]));
   invalidateSettingsCache();
-  await deletePlanJsonArtifact(explainerRunId).catch((): void => {});
+  await deletePlanJsonArtifact(explainerRunId).catch((): void => undefined);
   if (orgId !== "") await db.delete(organizations).where(eq(organizations.id, orgId));
   await db.delete(apiTokens).where(eq(apiTokens.token, createHash("sha256").update(token).digest("hex")));
   await db.delete(apiTokens).where(eq(apiTokens.token, createHash("sha256").update(adminToken).digest("hex")));
@@ -360,7 +361,7 @@ describe("AI plan explainer (21.2)", () => {
       expect(body.errors[0]?.detail ?? "").toContain("unreachable");
     } else {
       const body = (await response.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(String(body.data.attributes["status"] ?? body.data.attributes["job-id"] ?? "queued")).toMatch(/queued|running|failed/);
+      expect(toComparableString(body.data.attributes["status"] ?? body.data.attributes["job-id"] ?? "queued")).toMatch(/queued|running|failed/);
     }
   });
 
@@ -479,8 +480,8 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
   });
 
   afterAll(async () => {
-    upstream?.stop(true);
-    await deletePlanJsonArtifact(cacheRunId).catch((): void => {});
+    await upstream?.stop(true);
+    await deletePlanJsonArtifact(cacheRunId).catch((): void => undefined);
     await setSettings("plan-explainer", { enabled: false, "endpoint-url": null, "api-key": null, model: null });
   });
 
@@ -495,7 +496,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     if (first.status === 202) { await new Promise(r => setTimeout(r, 200)); }
     if (first.status === 202) {
       const env = (await first.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(String(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
+      expect(toComparableString(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
       // Job is async with worker off; ensure at least the enqueue happened
       expect(upstreamCalls).toBe(0);
     } else {
@@ -553,7 +554,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     if (generated.status === 202) { await new Promise(r => setTimeout(r, 200)); }
     if (generated.status === 202) {
       const env = (await generated.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(String(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
+      expect(toComparableString(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
     } else {
       const generatedBody = (await generated.json()) as { data: { attributes: { explanation: string; cached: boolean } } };
       expect(generatedBody.data.attributes.explanation).toContain("adds one instance");
@@ -701,7 +702,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     if (response.status === 202) { await new Promise(r => setTimeout(r, 200)); }
     if (response.status === 202) {
       const env = (await response.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(String(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
+      expect(toComparableString(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
     } else {
       const body = (await response.json()) as { data: { attributes: { explanation: string } } };
       expect(body.data.attributes.explanation).toContain("adds one instance");
@@ -762,7 +763,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
       expect(cachedBody.data.attributes.model).toBe("test-model");
     } else {
       const env = (await cached.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(String(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
+      expect(toComparableString(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
     }
     expect(upstreamCalls >= 0).toBe(true);
     await setSettings("plan-explainer", { enabled: true, provider: "openrouter", "endpoint-url": endpointUrl, "api-key": null, model: "test-model", "reasoning-effort": "xhigh" });

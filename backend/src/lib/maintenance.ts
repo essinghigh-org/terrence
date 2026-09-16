@@ -59,7 +59,7 @@ function readStateFromDisk(): MaintenanceState {
 let cached: MaintenanceState | undefined;
 
 function currentState(): MaintenanceState {
-  if (cached === undefined) cached = readStateFromDisk();
+  cached ??= readStateFromDisk();
   return cached;
 }
 

@@ -4,6 +4,7 @@ import { and, eq, inArray, lt } from "drizzle-orm";
 import { db } from "../db";
 import { agentForwardedRequests } from "../db/schema";
 import { resolveExternalUrl } from "./url-safety";
+import type { DeepReadonly } from "./types";
 
 const MAX_FORWARD_BODY_BYTES = 10 * 1024 * 1024;
 const FORWARDED_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -33,7 +34,11 @@ function responseHeaders(headers: Readonly<Record<string, readonly string[]>> | 
  *  arbitrarily large streamed body must not exhaust backend memory before
  *  the size limit runs. Throws once the accumulated byte count exceeds
  *  the cap, cancelling the remaining stream. */
-async function readBodyCapped(init: BodyInit, capBytes: number): Promise<Buffer> {
+async function readBodyCapped(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- BodyInit is a Web API union consumed via instanceof narrowing and forwarded to Buffer/Response/stream readers that require mutable shapes
+  init: BodyInit,
+  capBytes: number,
+): Promise<Buffer> {
   if (typeof init === "string") {
     const bytes = Buffer.from(init);
     if (bytes.length > capBytes) throw new Error(`Forwarded request body exceeds ${capBytes} bytes`);
@@ -75,25 +80,34 @@ async function readBodyCapped(init: BodyInit, capBytes: number): Promise<Buffer>
   return Buffer.concat(chunks);
 }
 
-function validateForwardUrl(input: string | Readonly<URL>): URL {
+function validateForwardUrl(input: string | DeepReadonly<URL>): URL {
   const url = new URL(input);
   if (!/^https?:$/.test(url.protocol) || url.username !== "" || url.password !== "") throw new Error("Forwarded requests require an HTTP(S) URL without embedded credentials");
   return url;
 }
 
-function validateForwardMethod(init: Readonly<RequestInit>): string {
+function validateForwardMethod(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- RequestInit is a Web fetch contract type; only method is read here
+  init: Readonly<RequestInit>,
+): string {
   const method = (init.method ?? "GET").toUpperCase();
   if (!/^[A-Z]+$/.test(method) || method === "CONNECT" || method === "TRACE") throw new Error("Forwarded request method is not supported");
   return method;
 }
 
-function buildForwardHeaders(init: Readonly<RequestInit>): Record<string, string[]> {
+function buildForwardHeaders(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- RequestInit headers feed new Headers() which requires mutable HeadersInit; only read here
+  init: Readonly<RequestInit>,
+): Record<string, string[]> {
   const headers: Record<string, string[]> = {};
   new Headers(init.headers).forEach((value, name): void => { headers[name] = [value]; });
   return headers;
 }
 
-async function readForwardBody(init: Readonly<RequestInit>): Promise<Buffer | null> {
+async function readForwardBody(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- RequestInit is a Web fetch contract type; the body is only read here
+  init: Readonly<RequestInit>,
+): Promise<Buffer | null> {
   if (init.body === undefined || init.body === null) return null;
   const bodyBytes = await readBodyCapped(init.body, MAX_FORWARD_BODY_BYTES);
   if ((bodyBytes?.byteLength ?? 0) > MAX_FORWARD_BODY_BYTES) throw new Error("Forwarded request body exceeds 10 MiB");
@@ -121,7 +135,7 @@ async function pollForwardResponse(id: string, deadline: number): Promise<Respon
 
 export async function forwardFetch(
   agentPoolId: string,
-  input: string | Readonly<URL>,
+  input: string | DeepReadonly<URL>,
   init: Readonly<RequestInit> = {},
   options: Readonly<{ sensitive?: boolean }> = {},
 ): Promise<Response> {

@@ -227,7 +227,7 @@ function accessStageFailure(
   return { check: check("provider_access", "failed", failure.code, failure.details), identity: null };
 }
 
-function bearerAccessToken(exchangeJson: Record<string, unknown> | null, status: number): string | ProviderAccessResult {
+function bearerAccessToken(exchangeJson: Readonly<Record<string, unknown>> | null, status: number): string | ProviderAccessResult {
   const accessToken = typeof exchangeJson?.["access_token"] === "string" ? exchangeJson["access_token"] : undefined;
   if (accessToken === undefined || accessToken === "") return providerErrorResult(status);
   return accessToken;
@@ -451,7 +451,7 @@ async function azureAccess(
   };
 }
 
-function firstProjectRecord(identityJson: Record<string, unknown> | null): Record<string, unknown> | undefined {
+function firstProjectRecord(identityJson: Readonly<Record<string, unknown>> | null): Record<string, unknown> | undefined {
   const projects = identityJson?.["projects"];
   return Array.isArray(projects) && typeof projects[0] === "object" && projects[0] !== null
     ? projects[0] as Record<string, unknown>
@@ -521,21 +521,21 @@ function vaultLoginConfig(
   };
 }
 
-function vaultClientToken(loginJson: Record<string, unknown> | null, status: number): string | ProviderAccessResult {
+function vaultClientToken(loginJson: Readonly<Record<string, unknown>> | null, status: number): string | ProviderAccessResult {
   const auth = typeof loginJson?.["auth"] === "object" && loginJson["auth"] !== null ? loginJson["auth"] as Record<string, unknown> : null;
   const clientToken = typeof auth?.["client_token"] === "string" ? auth["client_token"] : undefined;
   if (clientToken === undefined || clientToken === "") return providerErrorResult(status);
   return clientToken;
 }
 
-function vaultIdentityPolicies(lookupJson: Record<string, unknown> | null): { data: Record<string, unknown> | null; policies: string[] } {
+function vaultIdentityPolicies(lookupJson: Readonly<Record<string, unknown>> | null): { data: Record<string, unknown> | null; policies: string[] } {
   const data = typeof lookupJson?.["data"] === "object" && lookupJson["data"] !== null ? lookupJson["data"] as Record<string, unknown> : null;
   return { data, policies: Array.isArray(data?.["policies"])
     ? data["policies"].map((value): string | null => safeVisibleString(value, 160)).filter((value): value is string => value !== null).slice(0, 32)
     : [] };
 }
 
-function namespacedHeaders(base: Record<string, string>, namespace: string | undefined): Record<string, string> {
+function namespacedHeaders(base: Readonly<Record<string, string>>, namespace: string | undefined): Record<string, string> {
   return namespace === undefined ? base : { ...base, "x-vault-namespace": namespace };
 }
 

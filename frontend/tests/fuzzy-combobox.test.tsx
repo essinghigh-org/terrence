@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { FuzzyCombobox, fuzzyScore } from "../src/components/ui/fuzzy-combobox";
 
 afterEach((): void => {
@@ -122,5 +122,4 @@ test("combobox closes on Escape and clears the query", () => {
   fireEvent.keyDown(input, { key: "Escape" });
   // listbox unmounts (portal-free inline list)
   expect(view.queryByRole("listbox")).toBeNull();
-  void waitFor;
 });

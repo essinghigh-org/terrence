@@ -290,8 +290,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     const peekPending = await peekPendingAuth(oauthState);
     if (peekPending === undefined || peekPending.expiresAt <= Date.now()) {
       // Consume if present but expired, so the stale row does not linger.
-      const stale = await takePendingAuth(oauthState);
-      void stale;
+      await takePendingAuth(oauthState);
       return plainError("OAuth authorization expired. Please run 'terraform login' again.");
     }
 

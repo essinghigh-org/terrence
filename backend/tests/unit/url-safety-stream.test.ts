@@ -25,7 +25,7 @@ describe("streamed external URL responses", () => {
     });
     await new Promise<void>((resolve, reject): void => {
       server.once("error", reject);
-      server.listen(0, "127.0.0.1", (): void => resolve());
+      server.listen(0, "127.0.0.1", (): void => { resolve(); });
     });
   });
 
@@ -49,7 +49,7 @@ describe("streamed external URL responses", () => {
     const first = await reader.read();
     expect(new TextDecoder().decode(first.value)).toBe("partial response");
     expect(receivedUserAgent).toBe("Terrence");
-    await expect(reader.read()).rejects.toThrow(/External response closed before completing|aborted/);
+    expect(reader.read()).rejects.toThrow(/External response closed before completing|aborted/);
 
     const customResponse = await fetchResolvedExternalUrlStream(
       { address: "127.0.0.1", url: `http://127.0.0.1:${serverPort(server)}/custom` },
@@ -66,6 +66,6 @@ describe("streamed external URL responses", () => {
     const customFirst = await customReader.read();
     expect(new TextDecoder().decode(customFirst.value)).toBe("partial response");
     expect(receivedUserAgent).toBe("CustomAgent/1.0");
-    await expect(customReader.read()).rejects.toThrow(/External response closed before completing|aborted/);
+    expect(customReader.read()).rejects.toThrow(/External response closed before completing|aborted/);
   });
 });

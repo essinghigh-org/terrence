@@ -25,7 +25,9 @@ export async function agentPoolAllowsWorkspace(
   pool: AgentPool,
   workspaceId: string,
   projectId: string | null,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Set has no rule-verifiable readonly form; the allow-lists are only read here
   allowedWorkspaceIds?: ReadonlySet<string>,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Set has no rule-verifiable readonly form; the allow-lists are only read here
   allowedProjectIds?: ReadonlySet<string>,
 ): Promise<boolean> {
   if (pool.organizationScoped !== false) return true;

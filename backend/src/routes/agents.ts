@@ -347,7 +347,7 @@ function agentPoolScopeContainmentError(
   assignedWorkspaces: readonly Readonly<{ id: string; projectId: string | null }>[],
   defaultProjects: readonly Readonly<{ id: string }>[],
   set: SetObj,
-): unknown | null {
+): unknown {
   if (organizationScoped) return null;
   const workspaceIds = new Set(allowedWorkspaceIds);
   const projectIds = new Set(allowedProjectIds);

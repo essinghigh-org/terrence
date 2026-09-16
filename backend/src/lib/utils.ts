@@ -42,26 +42,19 @@ import {
 import { auditLogValues, type AuditResult } from "./audit-trail";
 
 export { validateVersion, decodeStatePayload, parseStatePayload };
+export { toComparableString } from "./comparable";
 
 export function caseInsensitiveLike(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- drizzle Column must stay mutable for ilike/like builders
   column: Parameters<typeof like>[0],
   pattern: string,
 ): ReturnType<typeof like> {
   return isPostgres ? ilike(column, pattern) : like(column, pattern);
 }
 
-export type DeepReadonly<T> =
-  T extends (...args: infer _Args) => infer _Return
-    ? T
-    : T extends boolean | number | string | symbol | bigint | null | undefined
-      ? T
-      : T extends ReadonlySet<infer Item>
-        ? ReadonlySet<DeepReadonly<Item>>
-        : T extends readonly (infer Item)[]
-          ? readonly DeepReadonly<Item>[]
-          : T extends object
-            ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
-            : T;
+import type { DeepReadonly } from "./types";
+
+export type { DeepReadonly };
 
 const PUBLIC_URL = executionSetting("PUBLIC_URL");
 
@@ -94,17 +87,29 @@ export function errorBody(status: number, title: string, detail?: string): JsonA
 }
 
 /** JSON:API error response that also sets the HTTP status. */
-export function apiError(set: ErrorSet, status: number, title: string, detail?: string): JsonApiErrorBody {
+export function apiError(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Elysia set object is mutated by design to set the HTTP status
+  set: ErrorSet,
+  status: number,
+  title: string,
+  detail?: string,
+): JsonApiErrorBody {
   set.status = status;
   return errorBody(status, title, detail);
 }
 
-export function notFound(set?: ErrorSet): JsonApiErrorBody {
+export function notFound(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Elysia set object is mutated by design to set the HTTP status
+  set?: ErrorSet,
+): JsonApiErrorBody {
   if (set !== undefined) set.status = 404;
   return errorBody(404, "Not Found");
 }
 
-export function forbidden(set?: ErrorSet): JsonApiErrorBody {
+export function forbidden(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Elysia set object is mutated by design to set the HTTP status
+  set?: ErrorSet,
+): JsonApiErrorBody {
   if (set !== undefined) set.status = 403;
   return errorBody(403, "Forbidden");
 }
@@ -951,7 +956,7 @@ function deriveWorkspaceIdsForRequired(
  * the pre-existing semantics before time-bounded delegations existed.
  */
 function teamOverrideDelegationActive(
-  team: Readonly<{ organizationAccess?: Record<string, boolean> | null; policyOverrideDelegationExpiresAt?: number | null }>,
+  team: DeepReadonly<{ organizationAccess?: Record<string, boolean> | null; policyOverrideDelegationExpiresAt?: number | null }>,
 ): boolean {
   if (team.organizationAccess?.["delegate-policy-overrides"] !== true) return false;
   const expiresAt = team.policyOverrideDelegationExpiresAt;
@@ -1733,14 +1738,14 @@ function addWorkspaceNameFilter(conditions: readonly RunWhereCondition[], name: 
   return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
 }
 
-function addWorkspaceNamesFilter(conditions: readonly RunWhereCondition[], names: string[] | undefined): RunWhereConditions {
+function addWorkspaceNamesFilter(conditions: readonly RunWhereCondition[], names: readonly string[] | undefined): RunWhereConditions {
   if (names === undefined || names.length === 0) return conditions;
   const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces)
     .where(or(...names.map((name: string) => caseInsensitiveLike(workspaces.name, `%${name}%`))));
   return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
 }
 
-function runHistoryCsv(params: URLSearchParams, name: string): string[] | undefined {
+function runHistoryCsv(params: DeepReadonly<URLSearchParams>, name: string): string[] | undefined {
   return params.get(name)?.split(",").map((value: string): string => value.trim()).filter((s: string): boolean => s !== "");
 }
 
@@ -1815,7 +1820,7 @@ const DELETION_ARTIFACT_BATCH_SIZE = 25;
 
 async function deleteIdChunks(
   ids: readonly string[],
-  operation: (chunk: string[]) => Promise<void>,
+  operation: (chunk: readonly string[]) => Promise<void>,
 ): Promise<void> {
   for (let offset = 0; offset < ids.length; offset += DELETE_ID_CHUNK_SIZE) {
     await operation(ids.slice(offset, offset + DELETE_ID_CHUNK_SIZE));
@@ -1844,7 +1849,7 @@ async function appendWorkspaceDeletionArtifacts(
 }
 
 async function deleteWorkspaceDataInTransaction(
-  transaction: typeof db,
+  transaction: DeepReadonly<typeof db>,
   workspaceIds: readonly string[],
   manifestPath: string,
 ): Promise<void> {

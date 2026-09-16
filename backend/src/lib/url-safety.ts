@@ -1,4 +1,5 @@
 import { networkSetting } from "./runtime-config";
+import type { DeepReadonly } from "./types";
 /**
  * URL host safety classification (SSRF hardening).
  *
@@ -267,7 +268,7 @@ function parseExternalUrl(url: string): URL | string {
   }
 }
 
-function validateExternalProtocol(parsed: Readonly<URL>): string | null {
+function validateExternalProtocol(parsed: DeepReadonly<URL>): string | null {
   if (!["http:", "https:"].includes(parsed.protocol)) return "Only http and https URLs are allowed";
   if (parsed.username !== "" || parsed.password !== "") return "URLs with embedded credentials (user:password@host) are not allowed";
   return null;

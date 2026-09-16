@@ -82,7 +82,7 @@ async function request(base: string, path: string, token: string | undefined, in
       accept: "application/json",
       authorization: `Bearer ${token}`,
       ...(init.body === undefined ? {} : { "content-type": "application/vnd.api+json" }),
-      ...init.headers,
+      ...Object.fromEntries(new Headers(init.headers)),
     },
   });
   if (response.status === 204) return undefined;

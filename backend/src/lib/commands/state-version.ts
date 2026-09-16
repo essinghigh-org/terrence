@@ -142,7 +142,7 @@ async function commitPendingReservation(
       "State upload reservation expired or its workspace lock changed",
     );
   }
-  if (!(await fenceStateWorkspace(tx as typeof db, workspaceRow))) {
+  if (!(await fenceStateWorkspace(tx, workspaceRow))) {
     return conflict("workspace-changed", "State content was already uploaded");
   }
 

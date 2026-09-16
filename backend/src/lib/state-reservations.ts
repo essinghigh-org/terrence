@@ -1,11 +1,12 @@
 import { and, eq, isNull } from "drizzle-orm";
-import { db } from "../db";
+import type { db } from "../db";
 import { auditLogs, stateVersions, workspaces } from "../db/schema";
 import { auditLogValues } from "./audit-trail";
+import type { DeepReadonly } from "./types";
 
 export const STATE_UPLOAD_TTL_MS = 60 * 60 * 1000;
-type Workspace = Readonly<typeof workspaces.$inferSelect>;
-type Reservation = Readonly<typeof stateVersions.$inferSelect>;
+type Workspace = DeepReadonly<typeof workspaces.$inferSelect>;
+type Reservation = DeepReadonly<typeof stateVersions.$inferSelect>;
 
 export function stateUploadLock(workspace: Workspace): string {
   return JSON.stringify([workspace.locked, workspace.lockOwnerType, workspace.lockOwnerId, workspace.lockedAt]);
@@ -18,7 +19,7 @@ export function stateReservationObsolete(reservation: Reservation, workspace: Wo
 
 /** Lock the workspace row until transaction commit without altering its lock.
  * The predicate rejects a handoff since the caller authorized the operation. */
-export async function fenceStateWorkspace(tx: typeof db, workspace: Workspace): Promise<boolean> {
+export async function fenceStateWorkspace(tx: DeepReadonly<typeof db>, workspace: Workspace): Promise<boolean> {
   const rows = await tx.update(workspaces).set({ locked: workspace.locked }).where(and(
     eq(workspaces.id, workspace.id),
     workspace.locked === null ? isNull(workspaces.locked) : eq(workspaces.locked, workspace.locked),
@@ -31,7 +32,7 @@ export async function fenceStateWorkspace(tx: typeof db, workspace: Workspace): 
 
 /** Remove only uncommitted obsolete reservations, retaining an atomic audit
  * tombstone. Deleting frees the unique serial for the next legitimate writer. */
-export async function pruneStateReservations(tx: typeof db, workspace: Workspace): Promise<void> {
+export async function pruneStateReservations(tx: DeepReadonly<typeof db>, workspace: Workspace): Promise<void> {
   const pending = await tx.query.stateVersions.findMany({ where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "pending"), isNull(stateVersions.statePayload)) });
   for (const reservation of pending) {
     if (!stateReservationObsolete(reservation, workspace)) continue;
@@ -40,7 +41,7 @@ export async function pruneStateReservations(tx: typeof db, workspace: Workspace
 }
 
 
-export async function discardStateReservation(tx: typeof db, reservation: Reservation, workspace: Workspace, reason: "upload-expired" | "lock-changed" | "discarded"): Promise<boolean> {
+export async function discardStateReservation(tx: DeepReadonly<typeof db>, reservation: Reservation, workspace: Workspace, reason: "upload-expired" | "lock-changed" | "discarded"): Promise<boolean> {
   const removed = await tx.delete(stateVersions).where(and(eq(stateVersions.id, reservation.id), eq(stateVersions.status, "pending"), isNull(stateVersions.statePayload))).returning({ id: stateVersions.id });
   if (removed.length === 0) return false;
   await tx.insert(auditLogs).values(auditLogValues({

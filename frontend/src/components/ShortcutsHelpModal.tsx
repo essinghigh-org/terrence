@@ -19,7 +19,7 @@ type ShortcutGroup = Readonly<{
   shortcuts: readonly Shortcut[];
 }>;
 
-const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform ?? navigator.userAgent);
+const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 const MOD_KEY = isMac ? "⌘ K" : "Ctrl + K";
 
 const GROUPS: readonly ShortcutGroup[] = [
@@ -83,13 +83,13 @@ export function ShortcutsHelpModal({
         </DialogHeader>
 
         <div className="max-h-[60vh] space-y-4 overflow-y-auto py-2 pr-1">
-          {GROUPS.map((group) => (
+          {GROUPS.map((group): JSX.Element => (
             <section key={group.label} aria-label={`${group.label} shortcuts`}>
               <p className="mb-1.5 text-2xs uppercase font-semibold tracking-wide text-muted-foreground/70">
                 {group.label}
               </p>
               <div className="space-y-1">
-                {group.shortcuts.map((shortcut) => (
+                {group.shortcuts.map((shortcut): JSX.Element => (
                   <div
                     key={shortcut.keys}
                     className="flex items-center justify-between gap-4 rounded-md border px-2.5 py-1.5 text-sm"

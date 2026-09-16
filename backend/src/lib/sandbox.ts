@@ -5,6 +5,7 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "os";
 import { envFlag } from "./env";
 import type { Subprocess } from "bun";
+import { log } from "./log";
 
 /**
  * Landlock-based run sandbox for Terraform/OpenTofu execution.
@@ -309,7 +310,6 @@ export class RunSandbox {
       // loopback and is unaffected by socket path length.
       if (tmpDir.length + 32 > 107) {
         try {
-          const { log } = require("./log") as { log: { warn: (msg: string, data?: unknown) => void } };
           log.warn("sandbox TMPDIR too deep for terraform provider sockets", { tmpDir, length: tmpDir.length });
         } catch { /* logging is best-effort */ }
       }
@@ -394,6 +394,10 @@ let cachedResolvDir: string | null | undefined;
 function storageProtectionPrefix(allowStorage: boolean): string | null {
   if (allowStorage) return null;
   try {
+    // Lazy require: ../db/driver runs its resolver at import time, which
+    // throws on a broken DATABASE_URL (doctor/db-check must report that as
+    // a clean finding, not crash at import).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy to avoid running the driver resolver at module load
     const { storageDir } = require("../db/driver") as { storageDir: string };
     const resolvedStorageDir = resolve(storageDir);
     return resolvedStorageDir.endsWith("/") ? resolvedStorageDir : resolvedStorageDir + "/";
@@ -430,7 +434,6 @@ function extraRwArgs(): string[] {
     // Todo 67: observable record so operators (and the UI banner from 66)
     // can correlate which widened paths are actually in effect.
     try {
-      const { log } = require("./log") as { log: { warn: (msg: string, data?: unknown) => void } };
       log.warn("sandbox extra RW paths active", { paths: out.map((a) => a.slice("--rw=".length)) });
     } catch { /* logging is best-effort during early boot */ }
   }

@@ -124,9 +124,9 @@ export const eventsRoutes = new Elysia({ name: "events" })
     // request abort signal, a client-side reader cancel, an enqueue failure,
     // or the one-hour lifetime cap (permissions are re-resolved on
     // reconnect).
-    let disposeSubscriptions: () => void = (): void => {};
+    let disposeSubscriptions: () => void = (): void => undefined;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
-    let cleanup: () => void = (): void => {};
+    let cleanup: () => void = (): void => undefined;
 
     const stream = new ReadableStream<Uint8Array>({
       start(controller: ReadableStreamDefaultController<Uint8Array>) {
@@ -147,10 +147,9 @@ export const eventsRoutes = new Elysia({ name: "events" })
         // installed BEFORE abort registration so an already-aborted request
         // always runs the full cleanup path.
         cleanup = (): void => {
-          if (lifetime !== undefined) clearTimeout(lifetime);
+          clearTimeout(lifetime);
           baseCleanup();
         };
-        let lifetime: ReturnType<typeof setTimeout> | undefined;
         const enqueue = (event: string, data: unknown): void => {
           if (controller.desiredSize !== null && controller.desiredSize <= 0) {
             // Backpressure: the client stopped reading; end the stream and
@@ -206,7 +205,7 @@ export const eventsRoutes = new Elysia({ name: "events" })
 
         // One-hour lifetime: the permission snapshot ages; closing forces
         // clients to reconnect and re-resolve permissions.
-        lifetime = setTimeout(cleanup, 60 * 60 * 1000);
+        const lifetime = setTimeout(cleanup, 60 * 60 * 1000);
         const abort = (): void => {
           cleanup();
         };

@@ -166,7 +166,7 @@ describe("run log slices", () => {
   it("reports corrupt archives as errors instead of empty logs", async () => {
     const { writeFile } = await import("node:fs/promises");
     await writeFile(runLogArchivePath(bigRunId), "not gzip");
-    await expect(readRunLogsPage(bigRunId, { number: 1, size: 20 })).rejects.toThrow();
+    expect(readRunLogsPage(bigRunId, { number: 1, size: 20 })).rejects.toThrow();
     const { gzipSync } = await import("node:zlib");
     for (const invalid of [
       { version: 1, logs: [] },
@@ -174,7 +174,7 @@ describe("run log slices", () => {
       ...[-1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((totalCount) => ({ version: 1, logs: [], truncated: false, totalCount })),
     ]) {
       await writeFile(runLogArchivePath(bigRunId), gzipSync(JSON.stringify(invalid)));
-      await expect(readRunLogsPage(bigRunId, { number: 1, size: 20 })).rejects.toThrow("Invalid run log archive format");
+      expect(readRunLogsPage(bigRunId, { number: 1, size: 20 })).rejects.toThrow("Invalid run log archive format");
     }
     await deleteRunLogArchive(bigRunId);
     expect((await readRunLogsPage(bigRunId, { number: 1, size: 20 })).logs).toEqual([]);

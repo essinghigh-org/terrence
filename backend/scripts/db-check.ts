@@ -20,6 +20,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { toComparableString } from "../src/lib/comparable";
 
 const args = new Set(process.argv.slice(2));
 const full = args.has("--full");
@@ -96,7 +97,7 @@ function run(): void {
     const pragma = full ? "integrity_check" : "quick_check";
     const rows = engine.query(`PRAGMA ${pragma}`).all() as ({ quick_check?: string; integrity_check?: string } | Record<string, unknown>)[];
     const detail = rows.map((row): string => {
-        const value = "quick_check" in row ? String(row.quick_check) : "integrity_check" in row ? String(row.integrity_check) : String(Object.values(row)[0] ?? "");
+        const value = "quick_check" in row ? String(row.quick_check) : "integrity_check" in row ? String(row.integrity_check) : toComparableString(Object.values(row)[0] ?? "");
         return value;
     });
     const baseOk = detail.length > 0 && detail.every((value): boolean => value === "ok");

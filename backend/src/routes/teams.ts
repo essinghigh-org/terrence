@@ -2,7 +2,7 @@ import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { teams, teamMemberships, teamWorkspaces, organizationMemberships, apiTokens, workspaces, users, scimGroups, scimSettings, teamScimGroupMappings, notificationConfigurations } from "../db/schema";
-import { eq, and, count, inArray, asc, desc, or } from "drizzle-orm";
+import { eq, and, count, inArray, asc, desc, or, sql } from "drizzle-orm";
 import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
 import { TOKEN_DESCRIPTION_MAX_LENGTH } from "../lib/constants";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
@@ -384,9 +384,9 @@ async function resolveCallerTeamVisibility(
 function buildVisibleTeamWhere(orgId: string, callerCanSeeSecret: boolean, callerTeamIds: Set<string> | null) {
   if (callerCanSeeSecret) return eq(teams.orgId, orgId);
   if (callerTeamIds !== null && callerTeamIds.size > 0) {
-    return and(eq(teams.orgId, orgId), or(eq(teams.visibility, "organization"), inArray(teams.id, [...callerTeamIds])))!;
+    return sql`${eq(teams.orgId, orgId)} AND (${eq(teams.visibility, "organization")} OR ${inArray(teams.id, [...callerTeamIds])})`;
   }
-  return and(eq(teams.orgId, orgId), eq(teams.visibility, "organization"))!;
+  return sql`${eq(teams.orgId, orgId)} AND ${eq(teams.visibility, "organization")}`;
 }
 
 async function loadTeamListAssociations(teamIds: string[], scimEnabled: boolean): Promise<{

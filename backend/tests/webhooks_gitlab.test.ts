@@ -12,7 +12,7 @@ describe("GitLab merge-request file trigger filtering (kanban 1.6)", () => {
   const oauthTokenId = "oautht-gitlab-filter-test";
   const originalFetch = globalThis.fetch;
   let mergeRequestDiffs: unknown = [{ old_path: "docs/readme.md", new_path: "docs/readme.md" }];
-  let mergeRequestDiffPageTwo: unknown | undefined;
+  let mergeRequestDiffPageTwo: unknown;
   let mergeRequestNextPage: string | null = null;
   let tarballFetches = 0;
   const mergeRequestUrls: string[] = [];

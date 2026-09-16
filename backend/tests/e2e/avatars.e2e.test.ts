@@ -128,7 +128,7 @@ describe("avatar rendering over real HTTP", (): void => {
   it("serves a bound VCS avatar end-to-end with a content-hashed ETag and 304", async (): Promise<void> => {
     // The bound github-app origin (GITHUB_APP_HTTP_URL) authorizes the local
     // upstream; this is the deterministic path (no external network).
-    const key = await AvatarService.record("github-app", `${upstream.url.toString()}avatar.png`);
+    const key = AvatarService.record("github-app", `${upstream.url.toString()}avatar.png`);
     const target = `/api/v2/avatars/${key}`;
     const primed = await fetch(`http://127.0.0.1:${port}${target}`);
     expect(primed.status).toBe(200);
@@ -152,7 +152,7 @@ describe("avatar rendering over real HTTP", (): void => {
   it("rejects an unbound private destination (SSRF)", async (): Promise<void> => {
     process.env["GITHUB_APP_HTTP_URL"] = "http://example.com";
     try {
-      const key = await AvatarService.record("probe", "http://127.0.0.1:1/avatar.png");
+      const key = AvatarService.record("probe", "http://127.0.0.1:1/avatar.png");
       const res = await fetch(`http://127.0.0.1:${port}/api/v2/avatars/${key}`);
       expect([422, 502]).toContain(res.status);
     } finally {

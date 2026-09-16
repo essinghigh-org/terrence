@@ -130,7 +130,7 @@ function evidenceForPayload(payload: string, capturedAt: string): RecoveryCaptur
   };
 }
 
-function validEvidenceShape(record: Record<string, unknown>): boolean {
+function validEvidenceShape(record: Readonly<Record<string, unknown>>): boolean {
   return record["version"] === RECOVERY_EVIDENCE_VERSION
     && typeof record["capturedAt"] === "string"
     && /^\d{4}-\d{2}-\d{2}T/.test(record["capturedAt"])
@@ -144,7 +144,7 @@ function validEvidenceShape(record: Record<string, unknown>): boolean {
     && (record["lineage"] === null || boundedStateString(record["lineage"]) !== null);
 }
 
-function validPromotedFields(record: Record<string, unknown>): boolean {
+function validPromotedFields(record: Readonly<Record<string, unknown>>): boolean {
   const promotedStateVersionId = record["promotedStateVersionId"];
   const promotedAt = record["promotedAt"];
   const promotedSerial = record["promotedSerial"];

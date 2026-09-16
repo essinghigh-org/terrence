@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import type { Socket as BunSocket } from "bun";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
@@ -46,10 +47,10 @@ describe("Email notification configurations (API + SMTP delivery)", () => {
       hostname: "127.0.0.1",
       port: 0,
       socket: {
-        open(socket: import("bun").Socket): void {
+        open(socket: BunSocket): void {
           socket.write("220 test-smtp ready\r\n");
         },
-        data(socket: import("bun").Socket, chunk: Uint8Array): void {
+        data(socket: BunSocket, chunk: Uint8Array): void {
           const text = chunk.toString();
           for (const rawLine of text.split("\r\n")) {
             if (rawLine === "") continue;

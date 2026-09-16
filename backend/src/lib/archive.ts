@@ -85,7 +85,7 @@ function assertVerboseMemberType(line: string): void {
   }
 }
 
-function assertVerboseMemberPath(line: string, seen: Set<string>): void {
+function assertVerboseMemberPath(line: string, seen: Readonly<Pick<Set<string>, "has" | "add">>): void {
   const member = tarVerboseMemberName(line);
   if (member === undefined || tarMemberPathUnsafe(member) || member.includes("\\") || /^[A-Za-z]:/.test(member)) {
     throw new Error("Archive contains an unsafe path");

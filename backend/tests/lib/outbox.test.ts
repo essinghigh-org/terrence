@@ -58,8 +58,8 @@ describe("transactional outbox", () => {
   test("idempotency compares payload contents regardless of JSON object key order", async () => {
     const input = event(`outbox-key-order-${crypto.randomUUID()}`, "test.outbox", { runId: "run-1", details: { status: "planned", count: 1 } });
     await enqueueOutboxEvent(input);
-    await expect(enqueueOutboxEvent({ ...input, payload: { details: { count: 1, status: "planned" }, runId: "run-1" } })).resolves.toMatchObject({ id: input.id });
-    await expect(enqueueOutboxEvent({ ...input, payload: { runId: "run-2", details: { status: "planned", count: 1 } } })).rejects.toThrow("different payload");
+    expect(enqueueOutboxEvent({ ...input, payload: { details: { count: 1, status: "planned" }, runId: "run-1" } })).resolves.toMatchObject({ id: input.id });
+    expect(enqueueOutboxEvent({ ...input, payload: { runId: "run-2", details: { status: "planned", count: 1 } } })).rejects.toThrow("different payload");
   });
   test("commits the event and durable job with the domain transaction", async () => {
     const id = `outbox-atomic-${crypto.randomUUID()}`;

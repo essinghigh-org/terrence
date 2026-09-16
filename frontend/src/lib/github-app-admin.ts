@@ -9,7 +9,7 @@ export type GitHubAppAttributes = Readonly<{
   "registration-url"?: string | null;
   "invalid-reason"?: string | null;
   "pending-replacement"?: boolean;
-  "missing-owners"?: string[];
+  "missing-owners"?: readonly string[];
   "credential-storage"?: "database" | "environment" | "none";
   "environment-removable"?: boolean;
   "environment-import-available"?: boolean;
@@ -22,6 +22,8 @@ export function githubAppSourceLabel(source: string | null | undefined): string 
     case "manifest": return "Created with GitHub";
     case "manual": return "Added manually";
     case "environment": return "Using environment variables";
+    case null:
+    case undefined:
     default: return "Source unavailable";
   }
 }
@@ -74,7 +76,7 @@ export function githubAppAuthorizationUrl(
   const url = new URL(value, origin);
   if ((url.protocol !== "https:" && url.protocol !== "http:")
     || url.username !== "" || url.password !== "" || url.hash !== ""
-    || url.searchParams.has("manifest") || !url.searchParams.get("state")) {
+    || url.searchParams.has("manifest") || (url.searchParams.get("state") ?? "") === "") {
     throw new Error("The server returned an unsafe GitHub App setup URL.");
   }
   const valid = flow === "manifest"

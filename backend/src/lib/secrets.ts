@@ -289,6 +289,7 @@ export async function decryptSecret(value: string): Promise<string> {
   const tag = Buffer.from(tagEncoded, "base64");
   const ciphertext = Buffer.from(ciphertextEncoded, "base64");
 
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- node:crypto CipherKey requires a mutable Buffer
   const decrypt = (key: Buffer): string => {
     const decipher = createDecipheriv("aes-256-gcm", key, iv);
     decipher.setAuthTag(tag);
@@ -335,6 +336,7 @@ export function decryptSecretSync(value: string, storageDir: string): string {
   const tag = Buffer.from(tagEncoded, "base64");
   const ciphertext = Buffer.from(ciphertextEncoded, "base64");
 
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- node:crypto CipherKey requires a mutable Buffer
   const decrypt = (key: Buffer): string => {
     const decipher = createDecipheriv("aes-256-gcm", key, iv);
     decipher.setAuthTag(tag);

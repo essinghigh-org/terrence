@@ -830,7 +830,7 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
     const byId = new Map(nodes.map((node): [string, typeof node] => [node.id, node]));
     byId.set(readinessNodeId(), {
       id: readinessNodeId(), hostname: readinessNodeId(), address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
-      version: appVersion(), status: String(current.status).toLowerCase(), readinessChecks: current.checks,
+      version: appVersion(), status: current.status.toLowerCase(), readinessChecks: current.checks,
       registeredAt: Date.now(), lastHeartbeatAt: Date.now(),
     });
     return {

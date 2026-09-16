@@ -38,14 +38,14 @@ function parseSyslogScheme(value: string): { scheme: SyslogTransport; rest: stri
   return { scheme: schemeMatch[1] as SyslogTransport, rest: value.slice(schemeMatch[0].length) };
 }
 
-function parseSyslogHost(url: URL): { host: string; isIpv6: boolean } | null {
+function parseSyslogHost(url: Readonly<Pick<URL, "hostname" | "port">>): { host: string; isIpv6: boolean } | null {
   const isIpv6 = url.hostname.startsWith("[") && url.hostname.endsWith("]");
   const host = isIpv6 ? url.hostname.slice(1, -1) : url.hostname;
   if (!isIpv6 && !/^[A-Za-z0-9._-]+$/.test(host)) return null;
   return { host, isIpv6 };
 }
 
-function parseSyslogPort(url: URL): number | null {
+function parseSyslogPort(url: Readonly<Pick<URL, "hostname" | "port">>): number | null {
   const port = Number.parseInt(url.port, 10);
   return Number.isFinite(port) && port >= 1 && port <= 65_535 ? port : null;
 }
@@ -135,7 +135,7 @@ function jsonDepth1Boundaries(message: string): number[] {
   return boundaries;
 }
 
-function selectTruncationBoundary(message: string, boundaries: number[], maxBytes: number): number {
+function selectTruncationBoundary(message: string, boundaries: readonly number[], maxBytes: number): number {
   let lo = 0;
   let hi = boundaries.length;
   while (lo < hi) {

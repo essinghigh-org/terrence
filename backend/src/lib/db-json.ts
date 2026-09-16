@@ -5,6 +5,7 @@
 // JSON-path queries in the codebase portable across backends.
 import { sql, type SQL, type AnyColumn } from "drizzle-orm";
 import { isPostgres } from "../db/driver";
+import type { DeepReadonly } from "./types";
 
 /**
  * Persisted JSON is data at a trust boundary.  Drizzle's `$type` annotation
@@ -67,7 +68,7 @@ export function versionedJson<T>(data: T, extensions?: Readonly<Record<string, u
 }
 
 function assertEnvelopeVersion(
-  record: Record<string, unknown>,
+  record: Readonly<Record<string, unknown>>,
   field: string,
   context: Readonly<{ rowId?: string; schemaVersion?: number }>,
 ): number {
@@ -82,7 +83,7 @@ function assertEnvelopeVersion(
 }
 
 function readEnvelopeExtensions(
-  record: Record<string, unknown>,
+  record: Readonly<Record<string, unknown>>,
   field: string,
   context: Readonly<{ rowId?: string; schemaVersion?: number }>,
   schemaVersion: number,
@@ -141,7 +142,7 @@ export function readVersionedJson<T>(
  * becomes PostgreSQL `col #>> '{a,b}'` (both return text/scalars).
  * The path uses SQLite's `$.a.b` shape (leading `$.` optional).
  */
-export function jsonExtract(column: SQL | AnyColumn, path: string): SQL {
+export function jsonExtract(column: DeepReadonly<SQL> | DeepReadonly<AnyColumn>, path: string): SQL {
   const parts = path
     .replace(/^\$\.?/, "")
     .split(".")
@@ -158,7 +159,7 @@ export function jsonExtract(column: SQL | AnyColumn, path: string): SQL {
  * json_object('k', v))` becomes PostgreSQL `jsonb_set(coalesce(col,'{}'),
  * '{k}', to_jsonb(v))`. The key is a single JSON path segment.
  */
-export function jsonSet(column: SQL | AnyColumn, key: string, value: SQL | AnyColumn): SQL {
+export function jsonSet(column: DeepReadonly<SQL> | DeepReadonly<AnyColumn>, key: string, value: DeepReadonly<SQL> | DeepReadonly<AnyColumn>): SQL {
   const safeKey = key.replace(/"/g, "");
   if (isPostgres) {
     const arrayLiteral = `{${safeKey}}`;

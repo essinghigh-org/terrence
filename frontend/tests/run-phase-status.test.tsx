@@ -136,7 +136,7 @@ test("returning to the page refreshes the phase for the newly fetched status", a
     return log ?? Response.json({ data: null });
   }) as typeof fetch;
   const view = renderHook(() => useRunView("run-refresh"));
-  await waitFor(() => expect(view.result.current.state.plan?.attributes.status).toBe("pending"));
+  await waitFor(() => { expect(view.result.current.state.plan?.attributes.status).toBe("pending"); });
   const initialReads = planReads;
   status = "planning";
   act(() => { document.dispatchEvent(new Event("visibilitychange")); });

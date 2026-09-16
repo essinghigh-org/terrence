@@ -24,6 +24,7 @@ import { handleBitbucketWebhook, handleGithubWebhook, handleGitlabWebhook } from
 import { log } from "./log";
 import { recordFailure } from "./process-metrics";
 import { parsePersistedJobPayload } from "./validation";
+import type { DeepReadonly } from "./types";
 
 export type VcsWebhookProvider = "github" | "gitlab" | "bitbucket";
 
@@ -132,7 +133,7 @@ export function vcsWebhookDeliveryId(
 }
 
 /** Enqueue one delivery onto the durable queue; resolves after the DB insert. */
-export async function enqueueVcsWebhookJob(input: Readonly<{
+export async function enqueueVcsWebhookJob(input: DeepReadonly<{
   provider: VcsWebhookProvider;
   eventName: string;
   payload: Record<string, unknown>;
@@ -161,7 +162,7 @@ async function setDeliveryStatus(deliveryId: string, status: string, extra: Read
     .where(eq(githubWebhookDeliveries.id, deliveryId));
 }
 
-async function dispatch(provider: VcsWebhookProvider, eventName: string, payload: Record<string, unknown>): Promise<void> {
+async function dispatch(provider: VcsWebhookProvider, eventName: string, payload: Readonly<Record<string, unknown>>): Promise<void> {
   if (provider === "github") {
     await handleGithubWebhook(eventName, payload);
     return;
@@ -178,7 +179,7 @@ async function dispatch(provider: VcsWebhookProvider, eventName: string, payload
  * worker-disabled nodes (tests, benchmarks, API-only processes) so deliveries
  * never strand in `queued`.
  */
-export async function processVcsWebhookPayload(body: VcsWebhookJobPayload, attempts = 1): Promise<void> {
+export async function processVcsWebhookPayload(body: DeepReadonly<VcsWebhookJobPayload>, attempts = 1): Promise<void> {
   const provider = body.provider;
   const eventName = body.eventName;
   const deliveryId = body.deliveryId;
@@ -201,7 +202,7 @@ export async function processVcsWebhookPayload(body: VcsWebhookJobPayload, attem
 }
 
 /** Durable-job handler registered in worker.ts. */
-export async function handleVcsWebhookJob(job: DurableJob): Promise<void> {
+export async function handleVcsWebhookJob(job: DeepReadonly<DurableJob>): Promise<void> {
   const body = parsePersistedJobPayload("vcs-webhook", job.payload, job.payloadSchemaVersion, job.id) as unknown as VcsWebhookJobPayload;
   await processVcsWebhookPayload(body, job.attempts);
 }

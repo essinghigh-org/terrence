@@ -73,7 +73,7 @@ export function OrganizationCidrRanges({ orgName }: Readonly<{ orgName: string }
         <label className="block text-sm font-medium" htmlFor="cidr-list">Range list</label>
         <Select id="cidr-list" name="cidr-list"  value={selectedListId} onChange={(event) => { setSelectedListId(event.currentTarget.value); }}>{lists.map((list) => <option key={list.id} value={list.id}>{list.attributes.name}</option>)}</Select>
         <form onSubmit={addRange} className="flex gap-2"><Input id="cidr-range" name="cidr-range" autoComplete="off" spellCheck={false} aria-label="CIDR range" value={rangeValue} onInput={(event) => { setRangeValue(event.currentTarget.value); }} placeholder="10.0.0.0/8" /><Button type="submit" disabled={saving || rangeValue.trim() === ""}>Add range</Button></form>
-        <ul className="divide-y rounded-md border">{ranges.map((range) => <li className="flex items-center justify-between px-3 py-2 text-sm" key={range.id}><code>{range.attributes.value}</code><Button type="button" variant="ghost" size="sm" onClick={() => setPendingRemove(range)}>Remove</Button></li>)}{ranges.length === 0 && <li className="px-3 py-3 text-sm text-muted-foreground">No ranges in this list.</li>}</ul>
+        <ul className="divide-y rounded-md border">{ranges.map((range) => <li className="flex items-center justify-between px-3 py-2 text-sm" key={range.id}><code>{range.attributes.value}</code><Button type="button" variant="ghost" size="sm" onClick={() => { setPendingRemove(range); }}>Remove</Button></li>)}{ranges.length === 0 && <li className="px-3 py-3 text-sm text-muted-foreground">No ranges in this list.</li>}</ul>
       </>}
       {error !== "" && <p role="alert" className="text-sm text-destructive">{error}</p>}
     </CardContent>

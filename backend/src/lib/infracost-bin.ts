@@ -35,11 +35,11 @@ const BINARY_BASE_DIR = resolve(
  * sync with releases; bump deliberately. */
 const DEFAULT_INFRACOST_VERSION = "0.10.45";
 
-export type InfracostIntegrity = {
+export type InfracostIntegrity = Readonly<{
   tool: "infracost";
   version: string;
   binarySha256: string;
-}
+}>
 
 const INTEGRITY_FILE = ".integrity.json";
 

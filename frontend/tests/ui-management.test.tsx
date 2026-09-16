@@ -427,7 +427,7 @@ test("renders and saves the organization agent execution mode", async () => {
   const form = view.getByRole("button", { name: "Save settings" }).closest("form");
   expect(form).not.toBeNull();
   // SAFETY: the form is present because the preceding role query found its submit button.
-  fireEvent.submit(form as HTMLFormElement);
+  fireEvent.submit(form!);
 
   await waitFor((): void => { expect(postedBody).toBeDefined(); });
   if (postedBody === undefined) throw new Error("Expected a serialized organization PATCH body");
@@ -686,13 +686,13 @@ test("toggles dense table density and persists the preference", async () => {
   fireEvent.click(view.getByRole("button", { name: "Switch to dense table density" }));
   expect(view.getByRole("table").getAttribute("data-density")).toBe("dense");
 // SAFETY: the captured call argument is a stringified JSON body.
-  const stored = JSON.parse(window.localStorage.getItem("terrence-table-prefs:workspaces") as string);
+  const stored = JSON.parse(window.localStorage.getItem("terrence-table-prefs:workspaces")!);
   expect(stored.density).toBe("dense");
 
   fireEvent.click(view.getByRole("button", { name: "Switch to comfortable table density" }));
   expect(view.getByRole("table").getAttribute("data-density")).toBe("comfortable");
 // SAFETY: the captured call argument is a stringified JSON body.
-  expect(JSON.parse(window.localStorage.getItem("terrence-table-prefs:workspaces") as string).density)
+  expect(JSON.parse(window.localStorage.getItem("terrence-table-prefs:workspaces")!).density)
     .toBe("comfortable");
 
   window.localStorage.removeItem("terrence-table-prefs:workspaces");
@@ -766,7 +766,7 @@ test("pins a workspace (star) and sorts it to the top", async () => {
   await waitFor((): void => { expect(rows()[0]).toContain("beta"); });
   expect(view.getByRole("button", { name: "Unpin beta" })).toBeTruthy();
 // SAFETY: the captured call argument is a stringified JSON body.
-  const stored = JSON.parse(window.localStorage.getItem("terrence-pinned-workspaces") as string);
+  const stored = JSON.parse(window.localStorage.getItem("terrence-pinned-workspaces")!);
   expect(stored).toEqual([{ orgName: "acme", workspaceName: "beta", visitedAt: 0 }]);
 
   fireEvent.click(view.getByRole("button", { name: "Unpin beta" }));
@@ -849,7 +849,7 @@ test("saves, applies, and deletes a named workspace view", async () => {
   });
   expect(window.localStorage.getItem("terrence-saved-views:acme")).not.toBeNull();
 // SAFETY: the captured call argument is a stringified JSON body.
-  const stored = JSON.parse(window.localStorage.getItem("terrence-saved-views:acme") as string);
+  const stored = JSON.parse(window.localStorage.getItem("terrence-saved-views:acme")!);
   expect(stored).toEqual([{ name: "Errored only", search: "", statusFilter: "errored", projectFilter: "" }]);
 
   // Apply the view from the chip (resets filters to the saved state).
@@ -937,7 +937,7 @@ test("column chooser hides and restores table columns with persistence", async (
     expect(view.queryByText("acme/terraform-aws")).toBeNull();
   });
 // SAFETY: the captured call argument is a stringified JSON body.
-  const stored = JSON.parse(window.localStorage.getItem("terrence-table-prefs:workspaces") as string);
+  const stored = JSON.parse(window.localStorage.getItem("terrence-table-prefs:workspaces")!);
   expect(stored.visibleColumns).not.toContain("repository");
   expect(stored.visibleColumns).not.toContain("status");
   expect(stored.visibleColumns).toContain("project");

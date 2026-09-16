@@ -26,7 +26,7 @@ test("an interrupted upload leaves the previously published artifact intact", as
   const path = join(directory, "artifact.tar.gz");
   await writeFile(path, "published-before-upload");
 
-  await expect(persistUploadBody(undefined, interruptedRequest(), path, 1024)).rejects.toThrow("connection interrupted");
+  expect(persistUploadBody(undefined, interruptedRequest(), path, 1024)).rejects.toThrow("connection interrupted");
   expect(await readFile(path, "utf8")).toBe("published-before-upload");
   expect((await readdir(directory)).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
 });
@@ -37,7 +37,7 @@ test("an upload whose lease expires leaves the previously published artifact int
   const path = join(directory, "artifact.tar.gz");
   await writeFile(path, "published-before-upload");
 
-  await expect(persistUploadBody(
+  expect(persistUploadBody(
     new TextEncoder().encode("stale-upload"),
     new Request("http://localhost/upload"),
     path,
@@ -54,7 +54,7 @@ test("an empty upload does not replace the previously published artifact", async
   const path = join(directory, "artifact.tar.gz");
   await writeFile(path, "published-before-upload");
 
-  await expect(persistUploadBody(new Uint8Array(), new Request("http://localhost/upload"), path, 1024)).rejects.toThrow("empty");
+  expect(persistUploadBody(new Uint8Array(), new Request("http://localhost/upload"), path, 1024)).rejects.toThrow("empty");
   expect(await readFile(path, "utf8")).toBe("published-before-upload");
   expect((await readdir(directory)).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
 });

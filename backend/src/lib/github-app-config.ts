@@ -419,7 +419,7 @@ function signAppToken(configuration: GitHubAppConfiguration): string | null {
   }
 }
 
-async function fetchAppIdentity(configuration: GitHubAppConfiguration, token: string, signal: AbortSignal): Promise<{ response: Response; body: unknown }> {
+async function fetchAppIdentity(configuration: GitHubAppConfiguration, token: string, signal: Readonly<AbortSignal>): Promise<{ response: Response; body: unknown }> {
   const response = await fetch(`${configuration.apiUrl.replace(/\/$/u, "")}/app`, {
     headers: {
       Accept: "application/vnd.github+json",
@@ -443,7 +443,7 @@ function appIdentityMatches(
 }
 
 function checkedAppIdentity(
-  response: Response,
+  response: Readonly<Pick<Response, "ok" | "status">>,
   body: unknown,
   configuration: GitHubAppConfiguration,
 ): Readonly<{ ok: boolean; status: number | null; detail: string; credentialError: boolean; appId?: number; slug?: string; name?: string | null; owner?: string | null; ownerType?: string }> {

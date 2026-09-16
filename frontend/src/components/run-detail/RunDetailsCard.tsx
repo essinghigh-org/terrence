@@ -34,7 +34,7 @@ function RunTimeline({ timestamps, inputStateSerial }: Readonly<{
   // Insertion order is a serialization detail; the timeline reads oldest
   // first regardless of the order the API record lists the keys in.
   const timestampEntries = Object.entries(timestamps)
-    .flatMap(([key, value]): ReadonlyArray<readonly [string, string, number]> => {
+    .flatMap(([key, value]): readonly (readonly [string, string, number])[] => {
       const at = timestampMilliseconds(key, value);
       return at === undefined ? [] : [[key, value, at]];
     })

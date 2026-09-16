@@ -642,7 +642,7 @@ function applyOAuthClientFieldUpdates(
   attributes: Record<string, unknown>,
   updates: Partial<typeof oauthClients.$inferInsert>,
   set: SetObj,
-): unknown | null {
+): unknown {
   if (attributes["organization-scoped"] !== undefined) {
     if (typeof attributes["organization-scoped"] !== "boolean") return unprocessable(set, "organization-scoped must be a boolean");
     updates.organizationScoped = attributes["organization-scoped"];
@@ -751,7 +751,7 @@ function resolveOAuthClientSecretFields(attributes: Record<string, unknown>): {
 function oauthClientCredentialsError(
   oc: Readonly<{ key: string | null; secret: string | null }>,
   set: SetObj,
-): unknown | null {
+): unknown {
   if (oc.key === null || oc.key === "" || oc.secret === null || oc.secret === "") {
     return unprocessable(set, "OAuth client key and secret are required");
   }

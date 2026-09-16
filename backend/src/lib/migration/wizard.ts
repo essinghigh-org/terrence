@@ -992,7 +992,7 @@ async function verifyJournal(target: MigrationSql): Promise<boolean> {
   );
   if (expectedRows.length !== targetRows.length) return false;
   return expectedRows.every((row, index): boolean =>
-    row.hash === targetRows[index]?.hash && row.createdAt === Number(targetRows[index]?.createdAt ?? 0));
+    row.hash === targetRows[index]?.hash && row.createdAt === (targetRows[index]?.createdAt ?? 0));
 }
 
 function emptyReport(): MigrationReport {

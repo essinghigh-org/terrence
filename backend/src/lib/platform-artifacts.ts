@@ -4,6 +4,7 @@ import { durableJobs } from "../db/schema";
 import { jsonExtract } from "./db-json";
 import { newResourceId } from "./resource-id";
 import { canonicalJson, sha256Hex } from "./run-provenance";
+import type { DeepReadonly } from "./types";
 
 /**
  * Platform workflows deliberately share the durable-jobs table. These rows
@@ -166,11 +167,11 @@ export async function updatePlatformArtifact(
   return row === undefined || !isArtifactKind(row.kind) ? undefined : row as PlatformArtifact;
 }
 
-export function artifactPayload(row: PlatformArtifact): Record<string, unknown> {
+export function artifactPayload(row: DeepReadonly<PlatformArtifact>): Record<string, unknown> {
   return { ...row.payload };
 }
 
-export function artifactResource(row: PlatformArtifact, type: string = row.kind): Record<string, unknown> {
+export function artifactResource(row: DeepReadonly<PlatformArtifact>, type: string = row.kind): Record<string, unknown> {
   const payload = artifactPayload(row);
   delete payload["organizationId"];
   delete payload["actorId"];

@@ -51,7 +51,7 @@ async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, marker
       if (result.value !== undefined) all += decoder.decode(result.value, { stream: true });
     }
   } finally {
-    await reader.cancel().catch((): void => {});
+    await reader.cancel().catch((): void => undefined);
     reader.releaseLock();
   }
   return all;
@@ -159,7 +159,7 @@ describe("authenticated SSE event stream", () => {
       }),
     ]);
     expect(result.done).toBe(true);
-    await reader.cancel().catch((): void => {});
+    await reader.cancel().catch((): void => undefined);
     reader.releaseLock();
   });
 
@@ -205,12 +205,12 @@ describe("authenticated SSE event stream", () => {
         }),
       ]);
       expect(result.done).toBe(true);
-      await reader.cancel().catch((): void => {});
+      await reader.cancel().catch((): void => undefined);
       reader.releaseLock();
     } finally {
-      await db.delete(organizationMemberships).where(eq(organizationMemberships.id, seed.membershipId)).catch((): void => {});
-      await db.delete(organizationMemberships).where(eq(organizationMemberships.id, recoveryMembershipId)).catch((): void => {});
-      await db.delete(users).where(eq(users.id, recoveryOwnerId)).catch((): void => {});
+      await db.delete(organizationMemberships).where(eq(organizationMemberships.id, seed.membershipId)).catch((): void => undefined);
+      await db.delete(organizationMemberships).where(eq(organizationMemberships.id, recoveryMembershipId)).catch((): void => undefined);
+      await db.delete(users).where(eq(users.id, recoveryOwnerId)).catch((): void => undefined);
     }
   });
 
@@ -250,9 +250,9 @@ describe("authenticated SSE event stream", () => {
       expect(streamed).not.toContain("run-sse-noaccess");
       expect(streamed).not.toContain("run-sse-orgonly");
     } finally {
-      await db.delete(apiTokens).where(eq(apiTokens.userId, memberId)).catch((): void => {});
-      await db.delete(organizationMemberships).where(eq(organizationMemberships.userId, memberId)).catch((): void => {});
-      await db.delete(users).where(eq(users.id, memberId)).catch((): void => {});
+      await db.delete(apiTokens).where(eq(apiTokens.userId, memberId)).catch((): void => undefined);
+      await db.delete(organizationMemberships).where(eq(organizationMemberships.userId, memberId)).catch((): void => undefined);
+      await db.delete(users).where(eq(users.id, memberId)).catch((): void => undefined);
     }
   });
 
@@ -315,14 +315,14 @@ describe("authenticated SSE event stream", () => {
       expect(streamed).not.toContain("run-sse-denied");
       expect(streamed).toContain('"run-id":"run-sse-allowed"');
     } finally {
-      await db.delete(teamWorkspaces).where(eq(teamWorkspaces.teamId, teamId)).catch((): void => {});
-      await db.delete(teamMemberships).where(eq(teamMemberships.teamId, teamId)).catch((): void => {});
-      await db.delete(teams).where(eq(teams.id, teamId)).catch((): void => {});
-      await db.delete(workspaces).where(eq(workspaces.projectId, projectId)).catch((): void => {});
-      await db.delete(projects).where(eq(projects.id, projectId)).catch((): void => {});
-      await db.delete(apiTokens).where(eq(apiTokens.userId, memberId)).catch((): void => {});
-      await db.delete(organizationMemberships).where(eq(organizationMemberships.userId, memberId)).catch((): void => {});
-      await db.delete(users).where(eq(users.id, memberId)).catch((): void => {});
+      await db.delete(teamWorkspaces).where(eq(teamWorkspaces.teamId, teamId)).catch((): void => undefined);
+      await db.delete(teamMemberships).where(eq(teamMemberships.teamId, teamId)).catch((): void => undefined);
+      await db.delete(teams).where(eq(teams.id, teamId)).catch((): void => undefined);
+      await db.delete(workspaces).where(eq(workspaces.projectId, projectId)).catch((): void => undefined);
+      await db.delete(projects).where(eq(projects.id, projectId)).catch((): void => undefined);
+      await db.delete(apiTokens).where(eq(apiTokens.userId, memberId)).catch((): void => undefined);
+      await db.delete(organizationMemberships).where(eq(organizationMemberships.userId, memberId)).catch((): void => undefined);
+      await db.delete(users).where(eq(users.id, memberId)).catch((): void => undefined);
       await cleanupSeed(owned);
     }
   });

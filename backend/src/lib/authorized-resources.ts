@@ -22,7 +22,7 @@ export type AuthorizedRunCapability<Capability extends WorkspacePermission = Wor
 export type StateCapability = "state-read" | "state-write" | "state-outputs" | "admin";
 export type StateCapabilitySet = StateCapability | readonly StateCapability[];
 export type AuthorizedStateWorkspaceAccess = Readonly<{
-  workspace: typeof workspaces.$inferSelect;
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>;
   capability: StateCapabilitySet;
 }>;
 export type AuthorizedStateAccess = Readonly<{ workspaceId: string; capability: StateCapabilitySet }> | AuthorizedStateWorkspaceAccess;

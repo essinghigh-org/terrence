@@ -18,7 +18,7 @@
  *     read; closed breakers are deleted on read. A periodic sweep bounds
  *     table growth from destinations that are removed entirely.
  */
-import { and, eq, lt, sql } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 import { db } from "../db";
 import { notificationDeliveryState } from "../db/schema";
 
@@ -239,7 +239,3 @@ export async function sharedDeliveryStateRowsForTests(): Promise<readonly {
 export async function resetSharedDeliveryStateForTests(): Promise<void> {
   await db.delete(notificationDeliveryState);
 }
-
-// sql is imported for potential raw upserts in dialect-specific paths; keep
-// the import honest by referencing it once.
-void sql;

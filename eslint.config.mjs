@@ -110,7 +110,7 @@ export default tseslint.config(
         'error',
         { selector: 'default', format: ['camelCase'], leadingUnderscore: 'allow' },
         { selector: 'import', format: ['camelCase', 'PascalCase'] },
-        { selector: 'variable', format: ['camelCase', 'UPPER_CASE'] },
+        { selector: 'variable', format: ['camelCase', 'UPPER_CASE', 'PascalCase'] },
         { selector: 'function', format: ['camelCase', 'PascalCase'] },
         { selector: 'parameter', format: ['camelCase'], leadingUnderscore: 'allow' },
         { selector: 'method', format: ['camelCase'] },

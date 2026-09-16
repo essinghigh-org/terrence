@@ -93,6 +93,10 @@ function connectionStatusLabel(status: string, verified: boolean): string {
   return "Not connected";
 }
 
+function connectionName(attributes: GitHubAppAttributes): string {
+  return attributes.name ?? attributes.slug ?? "GitHub connection";
+}
+
 function ConnectionCard({ attributes, busy, onValidate }: Readonly<{
   attributes: GitHubAppAttributes;
   busy: boolean;
@@ -100,16 +104,17 @@ function ConnectionCard({ attributes, busy, onValidate }: Readonly<{
 }>): React.JSX.Element {
   const status = attributes.status ?? "unconfigured";
   const label = connectionStatusLabel(status, attributes["connection-verified"] === true);
-  const registrationUrl = attributes["registration-url"];
+  const registrationUrl = attributes["registration-url"] ?? "";
+  const invalidReason = attributes["invalid-reason"] ?? "";
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><GitBranch className="size-5" />{attributes.name ?? attributes.slug ?? "GitHub connection"}</CardTitle>
+        <CardTitle className="flex items-center gap-2"><GitBranch className="size-5" />{connectionName(attributes)}</CardTitle>
         <CardDescription>The site-wide app used by Terrence organizations and their repositories.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-center gap-2"><Badge variant={status === "active" ? "secondary" : "outline"}>{label}</Badge>{attributes.configured === true && <span className="text-sm text-muted-foreground">{githubAppSourceLabel(attributes.source)}</span>}</div>
-        {attributes["invalid-reason"] && <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{attributes["invalid-reason"]}</p>}
+        {invalidReason !== "" && <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{invalidReason}</p>}
         {attributes.configured === true && <>
           <dl className="grid gap-2 text-sm sm:grid-cols-3">
             <div><dt className="text-muted-foreground">Owner</dt><dd>{attributes.owner ?? "Unknown"}</dd></div>
@@ -118,7 +123,7 @@ function ConnectionCard({ attributes, busy, onValidate }: Readonly<{
           </dl>
           <div className="flex flex-wrap gap-2">
             {status === "active" && <Button variant="outline" onClick={onValidate} disabled={busy}>Check connection</Button>}
-            {registrationUrl && <a className={buttonVariants({ variant: "outline" })} href={registrationUrl} target="_blank" rel="noreferrer"><ExternalLink data-icon="inline-start" />Open on GitHub</a>}
+            {registrationUrl !== "" && <a className={buttonVariants({ variant: "outline" })} href={registrationUrl} target="_blank" rel="noreferrer"><ExternalLink data-icon="inline-start" />Open on GitHub</a>}
           </div>
         </>}
         {status === "invalid" && <p className="text-sm text-muted-foreground">Reconnect with corrected credentials or create a replacement under Advanced below.</p>}

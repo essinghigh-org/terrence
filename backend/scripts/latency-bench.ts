@@ -79,9 +79,9 @@ type Result = {
 }
 
 async function main(): Promise<void> {
+  if (token === undefined || token === "") throw new Error("--token is required");
   const headers: Record<string, string> = { Authorization: "Bearer " + token, Accept: "application/vnd.api+json" };
   const results: Result[] = [];
-  let failures = 0;
   for (const endpoint of endpoints) {
     // Warmup is best-effort: a warmup failure must not abort the whole run.
     for (let i = 0; i < warmup; i += 1) {
@@ -102,7 +102,6 @@ async function main(): Promise<void> {
     const finite = times.filter((t) => Number.isFinite(t));
     const stats = percentiles(finite);
     const failed = finite.length === 0 || !Number.isFinite(stats.p95);
-    if (failed) failures += 1;
     results.push({
       name: endpoint.name,
       p50: Math.round(stats.p50),

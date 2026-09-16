@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import type { DeepReadonly } from "./types";
 import { extractValidatedModuleArchive, moduleRootPath } from "./registry-module-archive";
 
 const MODULE_TEST_DIR = resolve(
@@ -214,7 +215,7 @@ export async function runModuleTest(
   versionId: string,
   archivePath: string,
   configuration: ModuleTestConfiguration,
-  signal?: AbortSignal,
+  signal?: DeepReadonly<AbortSignal>,
   environmentFactory?: ModuleTestEnvironmentFactory,
 ): Promise<ModuleTestResult> {
   const createdAt = new Date().toISOString();

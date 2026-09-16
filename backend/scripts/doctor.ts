@@ -26,6 +26,7 @@ import { probeLandlockAbi, runSandboxRequired } from "../src/lib/sandbox";
 // in main() so a broken DATABASE_URL becomes a clean config finding instead
 // of an import-time crash — importing the driver module runs its resolver.)
 import { envEnabled } from "../src/lib/env";
+import { toComparableString } from "../src/lib/comparable";
 
 const args = new Set(process.argv.slice(2));
 const asJson = args.has("--json");
@@ -121,7 +122,7 @@ async function checkDatabase(db: DatabaseTarget): Promise<void> {
     try {
         const engine = new Database(dbPath, { readonly: true });
         const rows = engine.query("PRAGMA quick_check").all() as Record<string, unknown>[];
-        const value = rows.length > 0 ? String(Object.values(rows[0])[0] ?? "") : "no rows";
+        const value = rows.length > 0 ? toComparableString(Object.values(rows[0])[0] ?? "") : "no rows";
         engine.close();
         if (value === "ok") {
             let detail = `quick_check ok (${dbPath})`;

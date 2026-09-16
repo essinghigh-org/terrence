@@ -14,7 +14,7 @@ import {
 import { and, asc, count, countDistinct, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { auditLogValues } from "../lib/audit-trail";
-import { checkOrganizationPermission, pageRequest, pagination } from "../lib/utils";
+import { checkOrganizationPermission, pageRequest, pagination, toComparableString } from "../lib/utils";
 import { queueExplorerBulkActionNotification } from "../lib/notifications";
 import { ensureExplorerInventory } from "../lib/explorer-inventory";
 import { isPostgres } from "../db/driver";
@@ -164,7 +164,7 @@ function numericFilterMatch(operator: string, values: string[], value: unknown):
 
 function filterMatch(value: unknown, operator: string, expected: string[]): boolean {
   const values = expected.map((item) => item.toLocaleLowerCase());
-  const actual = value === null || value === undefined ? "" : String(value).toLocaleLowerCase();
+  const actual = value === null || value === undefined ? "" : toComparableString(value).toLocaleLowerCase();
   return textFilterMatch(operator, values, actual)
     ?? nullFilterMatch(operator, actual, value)
     ?? numericFilterMatch(operator, values, value)
@@ -175,7 +175,7 @@ function compare(value: unknown, expected: string): number {
   const actualNumber = typeof value === "number" || (typeof value === "string" && value.trim() !== "") ? Number(value) : Number.NaN;
   const expectedNumber = expected.trim() === "" ? Number.NaN : Number(expected);
   if (!Number.isNaN(actualNumber) && !Number.isNaN(expectedNumber)) return actualNumber - expectedNumber;
-  return String(value ?? "").localeCompare(expected);
+  return toComparableString(value ?? "").localeCompare(expected);
 }
 
 function applyQuery(rows: ExplorerRow[], query: ExplorerQuery): ExplorerRow[] {
@@ -188,7 +188,7 @@ function applyQuery(rows: ExplorerRow[], query: ExplorerQuery): ExplorerRow[] {
         const a = fieldValue(left, field);
         const b = fieldValue(right, field);
         if (a === b) continue;
-        const comparison = String(a ?? "").localeCompare(String(b ?? ""), undefined, { numeric: true, sensitivity: "base" });
+        const comparison = toComparableString(a ?? "").localeCompare(toComparableString(b ?? ""), undefined, { numeric: true, sensitivity: "base" });
         return descending ? -comparison : comparison;
       }
       return 0;
@@ -324,7 +324,7 @@ function parseBulkActionInputs(
   return { subject, message, targetIds, query };
 }
 
-async function validateBulkTargetMembership(organizationId: string, requestedIds: string[], set: SetObj): Promise<unknown | null> {
+async function validateBulkTargetMembership(organizationId: string, requestedIds: string[], set: SetObj): Promise<unknown> {
   const candidates = await db.query.workspaces.findMany({
     columns: { id: true },
     where: and(eq(workspaces.orgId, organizationId), inArray(workspaces.id, requestedIds)),
@@ -399,6 +399,8 @@ async function createBulkActionRecords(
   const now = Date.now();
   const records = selectedIds.map((workspaceId): ExplorerBulkActionRecord =>
     explorerBulkActionRecordValues(workspaceId, subject, message, userId, now));
+  const firstRecord = records[0];
+  if (firstRecord === undefined) throw new Error("Bulk change requests require at least one workspace");
   await db.transaction(async (tx): Promise<void> => {
     await tx.insert(explorerBulkActionRecords).values(records);
     await tx.insert(auditLogs).values(records.map((record) => auditLogValues({
@@ -424,7 +426,7 @@ async function createBulkActionRecords(
   }
   (set as { status: number }).status = 201;
   return {
-    data: explorerBulkActionResource(records[0]!, organization.id),
+    data: explorerBulkActionResource(firstRecord, organization.id),
     meta: {
       "action-type": "change-requests",
       "action-inputs": { subject, message },
@@ -720,7 +722,7 @@ async function indexedExplorerRowsUnbudgeted(
   if (query.type === "workspaces") {
     const where = indexedWhere(query, orgId, orgName, workspaceInventoryColumns);
     const [rows, total] = await Promise.all([
-      db.query.explorerWorkspaceInventory.findMany({ where, orderBy: [...indexedOrders(query, workspaceInventoryColumns, "workspace_updated_at"), asc(sqlColumn("workspace_id"))], ...(page === undefined ? {} : page) }),
+      db.query.explorerWorkspaceInventory.findMany({ where, orderBy: [...indexedOrders(query, workspaceInventoryColumns, "workspace_updated_at"), asc(sqlColumn("workspace_id"))], ...(page ?? {}) }),
       db.select({ total: count() }).from(explorerWorkspaceInventory).where(where),
     ]);
     return { rows: rows.map((row) => inventoryResource(row, orgName)), total: total[0]?.total ?? 0 };
@@ -813,7 +815,7 @@ function csvFields(query: ExplorerQuery): string[] {
 
 function csvChunk(fields: readonly string[], rows: readonly ExplorerRow[], includeHeader: boolean): string {
   const quote = (value: unknown): string => {
-    const text = String(value ?? "");
+    const text = toComparableString(value ?? "");
     const safe = /^[=+\-@\t\r]/.test(text) ? `\t${text}` : text;
     return `"${safe.replaceAll('"', '""')}"`;
   };
