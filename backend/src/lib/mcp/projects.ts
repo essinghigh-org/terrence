@@ -3,7 +3,7 @@ import { asc, eq, sql, and } from "drizzle-orm";
 import { db } from "../../db";
 import { projects, teamProjects, workspaces } from "../../db/schema";
 import { checkOrgPermission, checkOrganizationPermission } from "../utils";
-import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
+import { READ_ONLY_TOOL, ADDITIVE_TOOL, toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
 import { cachedOrgByName } from "../cached-lookups";
 
 /**
@@ -14,6 +14,7 @@ export const projectTools: readonly McpTool[] = [
   {
     name: "get_projects",
     description: "List projects within an organization, with optional name search and pagination.",
+    annotations: READ_ONLY_TOOL,
     inputSchema: {
       type: "object",
       properties: {
@@ -52,6 +53,7 @@ export const projectTools: readonly McpTool[] = [
   {
     name: "get_project",
     description: "Get a single project by ID, with workspace and team counts.",
+    annotations: READ_ONLY_TOOL,
     inputSchema: {
       type: "object",
       properties: { project_id: { type: "string", description: "Project ID" } },
@@ -82,6 +84,7 @@ export const projectTools: readonly McpTool[] = [
   {
     name: "create_project",
     description: "Create a project within an organization.",
+    annotations: ADDITIVE_TOOL,
     inputSchema: {
       type: "object",
       properties: {

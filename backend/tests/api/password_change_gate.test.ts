@@ -5,6 +5,7 @@ import { apiTokens, users } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { hashPassword } from "../../src/lib/password-hashing";
 import { eq } from "drizzle-orm";
+import { modernMcpInit } from "./mcp_test_helpers";
 
 // Issue #570: a forced password change gates every authenticated surface
 // (allow-list: account-read, password-change, logout, and session refresh
@@ -15,15 +16,17 @@ describe("forced password change gates all surfaces (#570)", () => {
   const token = `token-pwflag-${suffix}`;
   const currentPassword = `Old-password-99-${suffix}!`;
 
-  const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
+  const request = (path: string, method = "GET", body?: unknown) => {
+    const init: RequestInit = {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
         ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    };
+    return app.handle(new Request(`http://terrence.test${path}`, path === "/mcp" && method === "POST" ? modernMcpInit(init) : init));
+  };
 
   const passwordTitle = async (res: Response): Promise<string | undefined> => {
     const body = await res.json() as { errors?: { title?: string }[] };

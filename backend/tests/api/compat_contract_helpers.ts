@@ -5,6 +5,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, organizationMemberships, organizations, runs, stateVersions, systemApiTokens, users, workspaces } from "../../src/db/schema";
 import { hashSystemApiToken } from "../../src/lib/system-api";
+import { modernMcpInit } from "./mcp_test_helpers";
 
 export type OrgSeed = {
   suffix: string;
@@ -78,8 +79,10 @@ export async function persistExecutionSeed(input: Readonly<{
   await db.insert(stateVersions).values({ id: input.stateId, workspaceId: input.workspaceId, runId: input.runId, serial: input.serial, statePayload: input.statePayload });
 }
 
-export const request = (path: string, init?: RequestInit): Promise<Response> =>
-  app.handle(new Request(new URL(path, "http://terrence.test"), init));
+export const request = (path: string, init?: RequestInit): Promise<Response> => {
+  const requestInit = path === "/mcp" && init?.method === "POST" ? modernMcpInit(init) : init;
+  return app.handle(new Request(new URL(path, "http://terrence.test"), requestInit));
+};
 
 export const jsonHeaders = (token: string): Record<string, string> => ({
   Authorization: `Bearer ${token}`,

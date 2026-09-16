@@ -9,6 +9,7 @@ import { db } from "../../src/db";
 import { agents, agentPools, apiTokens, organizationMemberships, organizations, policies, policySetParameters, policySets, projects, runs, teams, teamMemberships, users, workspaceVariables, workspaces, workspaceTags, configurationVersions } from "../../src/db/schema";
 import { MAX_TAG_RULE_DEPTH } from "../../src/lib/token-scopes";
 import { variableValueForRead } from "../../src/lib/variable-crypto";
+import { modernMcpInit } from "./mcp_test_helpers";
 
 const AUTH_PREFIX = "Bea" + "rer ";
 
@@ -105,8 +106,10 @@ afterAll(() => {
   fgServer.proc.kill();
 });
 
-const request = (path: string, init?: RequestInit): Promise<Response> =>
-  fetch(new URL(path, `http://127.0.0.1:${fgServer.port}`), init);
+const request = (path: string, init?: RequestInit): Promise<Response> => {
+  const requestInit = path === "/mcp" && init?.method === "POST" ? modernMcpInit(init) : init;
+  return fetch(new URL(path, `http://127.0.0.1:${fgServer.port}`), requestInit);
+};
 
 async function seedOrgFixtures(s: ScopedSeed, opts: { tags?: boolean; includeUsers?: boolean } = {}): Promise<void> {
   await db.insert(users).values({ id: s.userId, username: s.username, passwordHash: "unused" });
@@ -236,12 +239,10 @@ describe("fine-grained user tokens", () => {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
       });
       expect(mcp.status).toBe(401);
-      // The SSE setup endpoint (GET /mcp) must fail closed too, not 500.
-      const mcpSse = await request("/mcp", {
-        method: "GET",
-        headers: { ...headers(raw), Accept: "text/event-stream" },
-      });
-      expect(mcpSse.status).toBe(401);
+      // Authentication still fails closed before method handling on the removed
+      // GET transport when the stored scopes are malformed.
+      const mcpGet = await request("/mcp", { method: "GET", headers: headers(raw) });
+      expect(mcpGet.status).toBe(401);
     } finally {
       await db.delete(apiTokens).where(eq(apiTokens.id, id));
     }
@@ -819,18 +820,14 @@ describe("fine-grained user tokens", () => {
           params: { name: "get_workspace", arguments: { org: s.orgName, name: "ws-b1" } },
         }),
       });
-      const outsideBody = await outside.json() as { result?: { content: { text: string }[] }; error?: { code: number; message: string } };
-      // A tool-level denial is a JSON-RPC error, not a result wrapper.
-      const outsideText = outsideBody.result?.content[0]?.text ?? "";
-      let toolError: { code?: number } | undefined;
-      if (outsideText !== "") {
-        try {
-          toolError = (JSON.parse(outsideText) as { error?: { code: number } }).error;
-        } catch { /* not a result payload */ }
-      }
-      const denied = outsideBody.error ?? toolError;
-      expect(denied).toBeDefined();
-      expect(denied?.code).toBe(-32001);
+      const outsideBody = await outside.json() as {
+        result?: { isError?: boolean; content?: { text?: string }[]; structuredContent?: { error?: { category?: string } } };
+      };
+      // Resource-level authorization failures are successful tools/call RPCs
+      // carrying a CallToolResult with isError=true.
+      expect(outsideBody.result?.isError).toBe(true);
+      expect(outsideBody.result?.structuredContent?.error?.category).toBe("forbidden");
+      expect(outsideBody.result?.content?.[0]?.text).toContain("Not authorized");
     } finally {
       await db.delete(apiTokens).where(eq(apiTokens.id, created.id));
     }
