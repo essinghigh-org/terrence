@@ -433,11 +433,20 @@ async function fetchAppIdentity(configuration: GitHubAppConfiguration, token: st
   return { response, body };
 }
 
+function appIdentityMatches(
+  returnedId: number | null,
+  returnedSlug: string | null,
+  configuration: GitHubAppConfiguration,
+): boolean {
+  return returnedId === configuration.appId
+    && (returnedSlug === null || returnedSlug === configuration.slug);
+}
+
 function checkedAppIdentity(
   response: Response,
   body: unknown,
   configuration: GitHubAppConfiguration,
-): Readonly<{ ok: boolean; status: number | null; detail: string; credentialError: boolean; appId?: number; slug?: string; name?: string | null; owner?: string | null }> {
+): Readonly<{ ok: boolean; status: number | null; detail: string; credentialError: boolean; appId?: number; slug?: string; name?: string | null; owner?: string | null; ownerType?: string }> {
   if (!response.ok) return {
     ok: false,
     status: response.status,
@@ -448,15 +457,16 @@ function checkedAppIdentity(
   const returnedId = positiveInteger(record?.["id"]);
   const returnedSlug = nonEmptyString(record?.["slug"]);
   const returnedName = nonEmptyString(record?.["name"]);
-  if (returnedId !== configuration.appId || (returnedSlug !== null && returnedSlug !== configuration.slug)) {
+  if (!appIdentityMatches(returnedId, returnedSlug, configuration)) {
     return { ok: false, status: 502, detail: "GitHub returned an App that does not match the configured credentials", credentialError: true };
   }
   const ownerValue = asRecord(record?.["owner"]);
   const owner = nonEmptyString(ownerValue?.["login"] ?? ownerValue?.["name"]);
-  return { ok: true, status: response.status, detail: "GitHub App credentials are valid", appId: returnedId, slug: returnedSlug ?? configuration.slug, name: returnedName, owner, credentialError: false };
+  const ownerType = nonEmptyString(ownerValue?.["type"]) ?? "unknown";
+  return { ok: true, status: response.status, detail: "GitHub App credentials are valid", appId: returnedId ?? configuration.appId, slug: returnedSlug ?? configuration.slug, name: returnedName, owner, ownerType, credentialError: false };
 }
 
-export async function validateGitHubAppConfiguration(configuration: GitHubAppConfiguration): Promise<Readonly<{ ok: boolean; status: number | null; detail: string; credentialError: boolean; appId?: number; slug?: string; name?: string | null; owner?: string | null }>> {
+export async function validateGitHubAppConfiguration(configuration: GitHubAppConfiguration): Promise<Readonly<{ ok: boolean; status: number | null; detail: string; credentialError: boolean; appId?: number; slug?: string; name?: string | null; owner?: string | null; ownerType?: string }>> {
   const token = signAppToken(configuration);
   if (token === null) {
     return { ok: false, status: null, detail: "The GitHub App private key is invalid", credentialError: true };

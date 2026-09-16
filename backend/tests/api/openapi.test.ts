@@ -147,6 +147,23 @@ describe("openapi contract", () => {
     expect(operation?.responses?.["200"]?.content?.["application/vnd.api+json"]).toBeUndefined();
   });
 
+  it("documents the GitHub App manifest handoff as an HTML response with required state", () => {
+    const operation = paths["/api/v2/admin/github-app/manifest/redirect"]?.["get"] as {
+      parameters?: { name?: string; in?: string; required?: boolean; schema?: Record<string, unknown> }[];
+      responses?: Record<string, { content?: Record<string, unknown> }>;
+    } | undefined;
+    expect(operation?.parameters).toContainEqual({
+      name: "state",
+      in: "query",
+      required: true,
+      schema: { type: "string" },
+    });
+    expect(operation?.responses?.["200"]?.content?.["text/html"]).toEqual({
+      schema: { type: "string" },
+    });
+    expect(operation?.responses?.["200"]?.content?.["application/vnd.api+json"]).toBeUndefined();
+  });
+
   it("has no frontend catch-alls in the contract", () => {
     expect(paths["/*"]).toBeUndefined();
     expect(paths["*"]).toBeUndefined();
