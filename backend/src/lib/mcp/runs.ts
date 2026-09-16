@@ -12,7 +12,7 @@ import { queueRunNotification } from "../notifications";
 import { createRun } from "../../routes/runs";
 import { planStatusForRun } from "../response";
 import { readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../plan-json";
-import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
+import { READ_ONLY_TOOL, OPEN_WORLD_ADDITIVE_TOOL, OPEN_WORLD_DESTRUCTIVE_TOOL, DESTRUCTIVE_TOOL, toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
 
 function runCreationAttributes(args: Readonly<Record<string, unknown>>): Record<string, unknown> {
   const attributes: Record<string, unknown> = {};
@@ -130,6 +130,7 @@ export const runTools: readonly McpTool[] = [
   {
     name: "get_run",
     description: "Get details for a specific run, or list recent runs for a workspace.",
+    annotations: READ_ONLY_TOOL,
     inputSchema: {
       type: "object",
       properties: {
@@ -180,6 +181,7 @@ export const runTools: readonly McpTool[] = [
   {
     name: "create_run",
     description: "Create (plan) a new run on a workspace. Requires the runs:plan grant.",
+    annotations: OPEN_WORLD_ADDITIVE_TOOL,
     inputSchema: {
       type: "object",
       properties: {
@@ -226,6 +228,7 @@ export const runTools: readonly McpTool[] = [
   {
     name: "apply_run",
     description: "Apply a completed plan on a run. Requires the runs:apply grant.",
+    annotations: OPEN_WORLD_DESTRUCTIVE_TOOL,
     inputSchema: {
       type: "object",
       properties: {
@@ -253,6 +256,7 @@ export const runTools: readonly McpTool[] = [
   {
     name: "discard_run",
     description: "Discard a run (mark it discarded). Requires the runs:discard grant.",
+    annotations: DESTRUCTIVE_TOOL,
     inputSchema: {
       type: "object",
       properties: {
@@ -291,6 +295,7 @@ export const runTools: readonly McpTool[] = [
   {
     name: "cancel_run",
     description: "Cancel a run (mark it canceled). Requires the runs:cancel grant.",
+    annotations: OPEN_WORLD_DESTRUCTIVE_TOOL,
     inputSchema: {
       type: "object",
       properties: { run_id: { type: "string", description: "Run ID" } },
@@ -335,6 +340,7 @@ export const runTools: readonly McpTool[] = [
   {
     name: "get_plan_json",
     description: "Return the sanitized JSON plan for a run (sensitive values redacted). Requires the runs:read grant.",
+    annotations: READ_ONLY_TOOL,
     inputSchema: {
       type: "object",
       properties: { run_id: { type: "string", description: "Run ID" } },

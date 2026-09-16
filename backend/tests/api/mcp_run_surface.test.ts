@@ -154,8 +154,9 @@ describe("mcp run plan surface", () => {
     try {
       const denied = await mcpCall(scopedSecret, "get_plan_json", { run_id: foreignRunId });
       expect(denied.status).toBe(200);
-      const deniedBody = await denied.json() as { error?: { code: number } };
-      expect(deniedBody.error?.code).toBe(-32001);
+      const deniedBody = await denied.json() as { result?: { isError?: boolean; structuredContent?: { error?: { category?: string } } } };
+      expect(deniedBody.result?.isError).toBe(true);
+      expect(deniedBody.result?.structuredContent?.error?.category).toBe("forbidden");
     } finally {
       await db.delete(runs).where(eq(runs.id, foreignRunId));
     }
@@ -173,9 +174,10 @@ describe("mcp run plan surface", () => {
     try {
       const res = await mcpCall(seed.token, "get_plan_json", { run_id: emptyRunId });
       expect(res.status).toBe(200);
-      const body = await res.json() as { error?: { code: number; message: string } };
-      expect(body.error?.code).toBe(-32602);
-      expect(body.error?.message).toBe("Plan JSON output is unavailable for this run");
+      const body = await res.json() as { result?: { isError?: boolean; content?: { text?: string }[]; structuredContent?: { error?: { category?: string } } } };
+      expect(body.result?.isError).toBe(true);
+      expect(body.result?.structuredContent?.error?.category).toBe("invalid_request");
+      expect(body.result?.content?.[0]?.text).toBe("Plan JSON output is unavailable for this run");
     } finally {
       await db.delete(runs).where(eq(runs.id, emptyRunId));
     }

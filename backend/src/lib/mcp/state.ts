@@ -3,7 +3,7 @@ import { db } from "../../db";
 import { assessmentResults, stateVersions } from "../../db/schema";
 import { findAuthorizedWorkspace } from "../authorized-resources";
 import { CLIENT_ENCRYPTED_STATE_ERROR, decodeStatePayload, isClientEncryptedState } from "../validation";
-import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
+import { READ_ONLY_TOOL, toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
 
 /**
  * State tools. All reads require the `state:read` grant (the `state-read`
@@ -14,6 +14,7 @@ export const stateTools: readonly McpTool[] = [
   {
     name: "get_workspace_state",
     description: "Return the latest Terraform state for a workspace as parsed JSON.",
+    annotations: READ_ONLY_TOOL,
     inputSchema: {
       type: "object",
       properties: {
@@ -61,6 +62,7 @@ export const stateTools: readonly McpTool[] = [
   {
     name: "get_workspace_drift_status",
     description: "Return the latest drift assessment results for a workspace.",
+    annotations: READ_ONLY_TOOL,
     inputSchema: {
       type: "object",
       properties: {

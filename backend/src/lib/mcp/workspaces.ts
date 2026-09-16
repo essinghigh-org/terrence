@@ -23,7 +23,7 @@ import { isExecutionMode } from "../constants";
 import { ensureDefaultProject } from "../../routes/projects";
 import { validVariableAttributes } from "../validation";
 import { variableValueForRead, variableValueForWrite } from "../variable-crypto";
-import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
+import { ADDITIVE_TOOL, READ_ONLY_TOOL, DESTRUCTIVE_TOOL, IDEMPOTENT_DESTRUCTIVE_TOOL, IDEMPOTENT_MUTATION_TOOL, toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
 import { cachedOrgByName } from "../cached-lookups";
 
 async function exactWorkspaceResult(
@@ -172,6 +172,7 @@ export const workspaceTools: readonly McpTool[] = [
   {
     name: "create_workspace",
     description: "Create a new workspace in an organization. Requires the workspaces:write grant.",
+    annotations: ADDITIVE_TOOL,
     inputSchema: {
       type: "object",
       properties: {
@@ -227,6 +228,7 @@ export const workspaceTools: readonly McpTool[] = [
   {
     name: "get_workspace",
     description: "Look up workspace(s) within an organization, by exact name or search.",
+    annotations: READ_ONLY_TOOL,
     inputSchema: {
       type: "object",
       properties: {
@@ -270,6 +272,7 @@ export const workspaceTools: readonly McpTool[] = [
   {
     name: "get_workspace_vars",
     description: "List variables for a workspace.",
+    annotations: READ_ONLY_TOOL,
     inputSchema: {
       type: "object",
       properties: {
@@ -299,6 +302,7 @@ export const workspaceTools: readonly McpTool[] = [
   {
     name: "create_workspace_variable",
     description: "Create a variable on a workspace.",
+    annotations: ADDITIVE_TOOL,
     inputSchema: {
       type: "object",
       properties: {
@@ -341,6 +345,7 @@ export const workspaceTools: readonly McpTool[] = [
   {
     name: "update_workspace_variable",
     description: "Update an existing workspace variable.",
+    annotations: DESTRUCTIVE_TOOL,
     inputSchema: {
       type: "object",
       properties: {
@@ -375,6 +380,7 @@ export const workspaceTools: readonly McpTool[] = [
   {
     name: "delete_workspace_variable",
     description: "Delete a workspace variable.",
+    annotations: IDEMPOTENT_DESTRUCTIVE_TOOL,
     inputSchema: {
       type: "object",
       properties: {
@@ -400,6 +406,7 @@ export const workspaceTools: readonly McpTool[] = [
   {
     name: "lock_workspace",
     description: "Lock a workspace.",
+    annotations: IDEMPOTENT_MUTATION_TOOL,
     inputSchema: {
       type: "object",
       properties: {
@@ -433,6 +440,7 @@ export const workspaceTools: readonly McpTool[] = [
   {
     name: "unlock_workspace",
     description: "Unlock a workspace.",
+    annotations: IDEMPOTENT_MUTATION_TOOL,
     inputSchema: {
       type: "object",
       properties: { workspace_id: { type: "string", description: "Workspace ID" } },

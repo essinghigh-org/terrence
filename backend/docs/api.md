@@ -116,12 +116,11 @@ Revocation closes streams immediately. See [Security](security).
 
 ## MCP server
 
-Terrence exposes a Model Context Protocol server:
+Terrence exposes a stateless Model Context Protocol `2026-07-28` server at `POST /mcp`. The older `initialize` handshake, protocol sessions, `Mcp-Session-Id`, and standalone `GET /mcp` SSE transport are not supported.
 
-- `GET /mcp` opens an SSE transport session.
-- `POST /mcp` sends JSON-RPC messages.
+Clients authenticate each request with a bearer token and send the modern per-request `_meta` envelope plus the `MCP-Protocol-Version` and `Mcp-Method` routing headers (`Mcp-Name` is also required for `tools/call`). `server/discover` advertises the supported protocol revision and server capabilities. Tool discovery is filtered by the token's grants, and each tool reports MCP read-only, destructive, idempotent, and open-world annotations.
 
-The MCP server exposes organization, workspace, and run tools. Clients authenticate with a user token. See the MCP tool list for the exact names.
+`tools/list` responses are private and non-cacheable because the visible tool set depends on the authenticating token. Tool calls return both text content and structured JSON content; expected tool/application failures use `isError: true` rather than a JSON-RPC protocol error.
 
 ## Rate limits
 

@@ -1,20 +1,54 @@
 import { Elysia } from "elysia";
-import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { db } from "../db";
 import { teams } from "../db/schema";
-import { eq } from "drizzle-orm";
-import { parseTokenScopes, scopeGrants, type TokenScopes, type WorkspacePermissionGrant } from "../lib/token-scopes";
-import { setRequestTokenScopes } from "../lib/request-scope";
 import { allMcpTools } from "../lib/mcp";
-import type { McpSession, McpTool } from "../lib/mcp/types";
+import { log } from "../lib/log";
+import {
+  MCP_PROTOCOL_VERSION,
+  MCP_SERVER_CAPABILITIES,
+  MCP_SUPPORTED_PROTOCOL_VERSIONS,
+  acceptsModernMcp,
+  isJsonContent,
+  mcpError,
+  mcpSuccess,
+  parseModernMcpRequest,
+  validateModernMcpHeaders,
+  type JsonRpcError,
+  type JsonRpcId,
+  type McpRequestFailure,
+  type ParsedMcpRequest,
+} from "../lib/mcp/protocol";
+import { isMcpToolFailure, type McpSession, type McpTool } from "../lib/mcp/types";
+import { executionSetting } from "../lib/runtime-config";
+import { setRequestTokenScopes } from "../lib/request-scope";
+import { parseTokenScopes, scopeGrants, type TokenScopes, type WorkspacePermissionGrant } from "../lib/token-scopes";
+import { requestBaseUrl } from "../lib/utils";
 
-// ---------------------------------------------------------------------------
-// Auth — Bearer token only (no ?token= query param)
-// ---------------------------------------------------------------------------
 class McpAuthError extends Error {}
 
-async function authenticatedSession(token: Readonly<{ id: string; userId: string | null; orgId: string | null; teamId: string | null; scopes?: string | null }> | null, tokenError: string | null): Promise<McpSession | null> {
+type McpToken = Readonly<{
+  id: string;
+  userId: string | null;
+  orgId: string | null;
+  teamId: string | null;
+  scopes?: string | null;
+}>;
+
+type DispatchResult = Readonly<{ status: number; body: unknown }>;
+
+/** Parse token scopes, rejecting malformed scope data rather than granting access. */
+function safeParseScopes(raw: string | null): TokenScopes | null {
+  try {
+    return parseTokenScopes(raw);
+  } catch {
+    throw new McpAuthError("Token scopes are malformed");
+  }
+}
+
+/** Build per-request authorization context, rejecting missing or deleted token principals. */
+async function authenticatedSession(token: McpToken | null, tokenError: string | null): Promise<McpSession | null> {
   if (token === null || tokenError !== null) return null;
   const team = token.teamId === null
     ? undefined
@@ -29,193 +63,182 @@ async function authenticatedSession(token: Readonly<{ id: string; userId: string
   };
 }
 
-/**
- * Parse a token's scopes column. A malformed scopes field is an auth failure:
- * fail closed (401) rather than silently granting the token full permissions.
- */
-function safeParseScopes(raw: string | null): TokenScopes | null {
-  try {
-    return parseTokenScopes(raw);
-  } catch {
-    throw new McpAuthError("Token scopes are malformed");
-  }
-}
-
-// ---------------------------------------------------------------------------
-// JSON-RPC helpers
-// ---------------------------------------------------------------------------
-type JsonRpcSuccess = Readonly<{ jsonrpc: "2.0"; id: number | string | null; result: unknown }>;
-type JsonRpcError = Readonly<{ jsonrpc: "2.0"; id: number | string | null; error: { code: number; message: string } }>;
-
-function success(id: number | string | null, result: unknown): JsonRpcSuccess {
-  return { jsonrpc: "2.0", id, result };
-}
-function errorRes(id: number | string | null, code: number, message: string): JsonRpcError {
-  return { jsonrpc: "2.0", id, error: { code, message } };
-}
-
-function isJsonRpcError(val: unknown): val is JsonRpcError {
-  return typeof val === "object" && val !== null && "jsonrpc" in val && "error" in val;
-}
-
-/**
- * True when the session's scopes permit every grant a tool requires.
- * A legacy token (`scopes === null`) is implicitly granted everything. This is
- * the discovery-time gate: enforced both during `tools/list` (so agents don't
- * see tools they cannot call) and defensively during `tools/call`.
- */
+/** Check every tool-level grant against the token ceiling before discovery or execution. */
 function toolPermittedTo(session: McpSession, tool: McpTool): boolean {
-  if (session.scopes === null) return true;
-  if (tool.requires.length === 0) return true;
   const scopes = session.scopes;
+  if (scopes === null || tool.requires.length === 0) return true;
   return tool.requires.every((grant: WorkspacePermissionGrant): boolean => scopeGrants(scopes, grant));
 }
 
-// ---------------------------------------------------------------------------
-// MCP route (POST authenticates each request)
-// ---------------------------------------------------------------------------
+/** Set the Elysia response status without coupling protocol helpers to route context types. */
+function setHttpStatus(set: unknown, status: number): void {
+  (set as { status: number }).status = status;
+}
+
+/** Apply a transport validation status and return its JSON-RPC error envelope. */
+function protocolFailure(set: unknown, failure: McpRequestFailure): JsonRpcError {
+  setHttpStatus(set, failure.status);
+  return failure.response;
+}
+
+/** Allow non-browser requests and explicitly trusted browser origins only. */
+function validOrigin(request: Request): boolean {
+  const rawOrigin = request.headers.get("origin");
+  if (rawOrigin === null) return true;
+  let origin: string;
+  try {
+    const parsed = new URL(rawOrigin);
+    if (parsed.origin !== rawOrigin) return false;
+    origin = parsed.origin;
+  } catch {
+    return false;
+  }
+  try {
+    if (origin === new URL(requestBaseUrl(request)).origin) return true;
+  } catch {
+    return false;
+  }
+  const configured = executionSetting("CORS_ORIGIN");
+  if (configured.includes(origin)) return true;
+  return process.env.NODE_ENV !== "production"
+    && (origin === "http://localhost:5173" || origin === "http://127.0.0.1:5173");
+}
+
+/** Reject the removed standalone SSE transport and advertise POST in Allow. */
+function methodNotAllowed(set: unknown): JsonRpcError {
+  setHttpStatus(set, 405);
+  (set as { headers: Record<string, string | number> }).headers["Allow"] = "POST";
+  return mcpError(null, -32600, "The MCP 2026-07-28 Streamable HTTP endpoint accepts POST only");
+}
+
+/** Validate media negotiation and routing headers before dispatching an MCP request. */
+function transportValidation(request: Request, parsed: ParsedMcpRequest): McpRequestFailure | null {
+  if (!isJsonContent(request.headers)) {
+    return { status: 415, response: mcpError(parsed.id, -32600, "Content-Type must be application/json") };
+  }
+  if (!acceptsModernMcp(request.headers)) {
+    return { status: 406, response: mcpError(parsed.id, -32600, "Accept must include application/json and text/event-stream") };
+  }
+  return validateModernMcpHeaders(request.headers, parsed);
+}
+
 export const mcpRoutes = new Elysia()
   .use(authPlugin)
-  .get("/mcp", async ({ token, tokenError, set }): Promise<Response> => {
-    let session: McpSession | null = null;
+  .get("/mcp", ({ set }): JsonRpcError => methodNotAllowed(set))
+  .post("/mcp", async ({ request, token, tokenError, body, set }): Promise<unknown> => {
+    if (!validOrigin(request)) {
+      setHttpStatus(set, 403);
+      return mcpError(null, -32001, "Forbidden: Origin is not allowed for this MCP endpoint");
+    }
+
+    let session: McpSession | null;
     try {
       session = await authenticatedSession(token, tokenError);
     } catch (error: unknown) {
-      if (error instanceof McpAuthError) {
-        (set as Record<string, unknown>)["status"] = 401;
-        return new Response(JSON.stringify(errorRes(null, -32001, error.message)));
-      }
-      throw error;
+      if (!(error instanceof McpAuthError)) throw error;
+      setHttpStatus(set, 401);
+      return mcpError(null, -32001, error.message);
     }
     if (session === null) {
-      (set as Record<string, unknown>)["status"] = 401;
-      return new Response(JSON.stringify(errorRes(null, -32001, "Unauthorized — provide Authorization: Bearer ***")));
-    }
-
-    setRequestTokenScopes(session.scopes);
-
-    const sessionId = randomUUID();
-    const endpoint = `/mcp?session_id=${sessionId}`;
-    const encoder = new TextEncoder();
-
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(encoder.encode(`event: endpoint\ndata: ${endpoint}\n\n`));
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-        "X-Accel-Buffering": "no",
-      },
-    });
-  })
-
-  .post("/mcp", async ({ token, tokenError, body, set }): Promise<unknown> => {
-    let session: McpSession | null = null;
-    try {
-      session = await authenticatedSession(token, tokenError);
-    } catch (error: unknown) {
-      if (error instanceof McpAuthError) {
-        (set as Record<string, unknown>)["status"] = 401;
-        return errorRes(null, -32001, error.message);
-      }
-      throw error;
-    }
-    if (session === null) {
-      (set as Record<string, unknown>)["status"] = 401;
-      return errorRes(null, -32001, "Unauthorized — provide Authorization: Bearer ***");
+      setHttpStatus(set, 401);
+      return mcpError(null, -32001, "Unauthorized — provide Authorization: Bearer ***");
     }
     setRequestTokenScopes(session.scopes);
-    return handleJsonRpc(session, body);
+
+    const parsed = parseModernMcpRequest(body);
+    if ("response" in parsed) return protocolFailure(set, parsed);
+    const transportError = transportValidation(request, parsed);
+    if (transportError !== null) return protocolFailure(set, transportError);
+
+    const dispatched = await dispatchMcpRequest(session, parsed);
+    setHttpStatus(set, dispatched.status);
+    return dispatched.body;
   });
 
-// ---------------------------------------------------------------------------
-// JSON-RPC dispatcher
-// ---------------------------------------------------------------------------
-function parseJsonRpcRequest(rawBody: unknown): { id: string | null; method: string; params: Record<string, unknown> } | { error: unknown } {
-  if (rawBody === null || typeof rawBody !== "object") {
-    return { error: errorRes(null, -32700, "Parse error: body must be a JSON object") };
-  }
-  const req = rawBody as Record<string, unknown>;
-  if (req["jsonrpc"] !== "2.0" || typeof req["method"] !== "string") {
-    return { error: errorRes(null, -32600, "Invalid Request: must have jsonrpc='2.0' and method") };
-  }
-  const id = req["id"] !== undefined && (typeof req["id"] === "string" || typeof req["id"] === "number") ? String(req["id"]) : null;
-  const params = typeof req["params"] === "object" && req["params"] !== null
-    ? req["params"] as Record<string, unknown>
-    : {};
-  return { id, method: req["method"], params };
+/** Describe the supported protocol and server capabilities with private cache hints. */
+function discover(id: JsonRpcId): DispatchResult {
+  return {
+    status: 200,
+    body: mcpSuccess(id, {
+      supportedVersions: [...MCP_SUPPORTED_PROTOCOL_VERSIONS],
+      capabilities: MCP_SERVER_CAPABILITIES,
+      instructions: "Terrence exposes permission-scoped infrastructure workspace, run, state, project, and variable tools.",
+      ttlMs: 300_000,
+      cacheScope: "private",
+    }),
+  };
 }
 
-async function handleJsonRpc(session: McpSession, rawBody: unknown): Promise<unknown> {
-  const parsed = parseJsonRpcRequest(rawBody);
-  if ("error" in parsed) return parsed.error;
-  const { id, method, params } = parsed;
-  try {
-    switch (method) {
-      case "initialize":
-        return handleInitialize(id, params);
-      case "notifications/initialized":
-        return null;
-      case "tools/list":
-        return handleToolsList(id, session);
-      case "tools/call":
-        return await handleToolsCall(session, id, params);
-      default:
-        return errorRes(id, -32601, `Method not found: ${method}`);
-    }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return errorRes(id, -32603, `Internal error: ${msg}`);
+/** Return the permission-filtered, unpaginated tool catalog without cache reuse. */
+function listTools(id: JsonRpcId, session: McpSession, params: Readonly<Record<string, unknown>>): DispatchResult {
+  if (params["cursor"] !== undefined) {
+    return { status: 200, body: mcpError(id, -32602, "Terrence MCP does not paginate its tool catalog; cursor must be omitted") };
   }
-}
-
-function handleInitialize(id: string | null, _params: Record<string, unknown>): unknown {
-  return success(id ?? "init", {
-    protocolVersion: "2024-11-05",
-    capabilities: { tools: {} },
-    serverInfo: { name: "terrence-mcp", version: "1.0.0" },
-  });
-}
-
-/** Expose only the tools the token's grants permit (a legacy token sees all). */
-function handleToolsList(id: string | null, session: McpSession): unknown {
   const tools = allMcpTools
-    .filter((t): boolean => toolPermittedTo(session, t))
-    .map((t) => ({
-      name: t.name,
-      description: t.description,
-      inputSchema: t.inputSchema,
+    .filter((tool): boolean => toolPermittedTo(session, tool))
+    .map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      annotations: tool.annotations,
     }));
-  return success(id ?? "tools", { tools });
+  return {
+    status: 200,
+    body: mcpSuccess(id, { tools, ttlMs: 0, cacheScope: "private" }),
+  };
 }
 
-async function handleToolsCall(session: McpSession, id: string | null, params: Record<string, unknown>): Promise<unknown> {
+/** Authorize and execute a tool, exposing expected failures but logging unexpected exceptions privately. */
+async function callTool(id: JsonRpcId, session: McpSession, params: Readonly<Record<string, unknown>>): Promise<DispatchResult> {
   const toolName = typeof params["name"] === "string" ? params["name"] : "";
-  const tool = allMcpTools.find((t) => t.name === toolName);
-  if (tool === undefined) {
-    return errorRes(id, -32602, `Unknown tool: ${toolName}`);
-  }
-  // Defense in depth: even if an agent fabricates a tool name, the handler
-  // only runs when the token's grants permit it.
+  const tool = allMcpTools.find((candidate) => candidate.name === toolName);
+  if (tool === undefined) return { status: 200, body: mcpError(id, -32602, `Unknown tool: ${toolName}`) };
   if (!toolPermittedTo(session, tool)) {
-    return errorRes(id, -32001, `Not authorized to call tool: ${toolName}`);
+    return { status: 200, body: mcpError(id, -32001, `Not authorized to call tool: ${toolName}`) };
   }
-  const args = typeof params["arguments"] === "object" && params["arguments"] !== null
-    ? params["arguments"] as Record<string, unknown>
-    : {};
+  const rawArguments = params["arguments"] ?? {};
+  if (rawArguments === null || typeof rawArguments !== "object" || Array.isArray(rawArguments)) {
+    return { status: 200, body: mcpError(id, -32602, "tools/call arguments must be an object") };
+  }
   try {
-    const result = await tool.handler(session, args);
-    if (isJsonRpcError(result)) return result;
-    return success(id ?? toolName, {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-    });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return errorRes(id, -32603, `Tool error: ${msg}`);
+    const result = await tool.handler(session, rawArguments as Record<string, unknown>);
+    if (isMcpToolFailure(result)) {
+      return {
+        status: 200,
+        body: mcpSuccess(id, {
+          content: [{ type: "text", text: result.message }],
+          structuredContent: { error: { category: result.category, message: result.message } },
+          isError: true,
+        }),
+      };
+    }
+    const serialized = JSON.stringify(result) ?? "null";
+    return {
+      status: 200,
+      body: mcpSuccess(id, {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) ?? "null" }],
+        structuredContent: JSON.parse(serialized) as unknown,
+        isError: false,
+      }),
+    };
+  } catch (error: unknown) {
+    log.error("MCP tool execution failed", { toolName, requestId: id, error });
+    return { status: 200, body: mcpError(id, -32603, "Tool execution failed") };
   }
 }
+
+/** Dispatch supported stateless MCP methods and reject unknown methods. */
+async function dispatchMcpRequest(session: McpSession, request: ParsedMcpRequest): Promise<DispatchResult> {
+  switch (request.method) {
+    case "server/discover":
+      return discover(request.id);
+    case "tools/list":
+      return listTools(request.id, session, request.params);
+    case "tools/call":
+      return await callTool(request.id, session, request.params);
+    default:
+      return { status: 404, body: mcpError(request.id, -32601, `Method not found: ${request.method}`) };
+  }
+}
+
+export { MCP_PROTOCOL_VERSION };

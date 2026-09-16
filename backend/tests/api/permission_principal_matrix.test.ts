@@ -175,8 +175,8 @@ test("MCP state reads enforce the same principal and organization boundaries", a
         expect(text, principal.name).toContain(canary);
       } else {
         expect(text, principal.name).not.toContain(canary);
-        const body = JSON.parse(text);
-        expect(body.error, principal.name + text).toBeDefined();
+        const body = JSON.parse(text) as { error?: unknown; result?: { isError?: boolean } };
+        expect(body.error !== undefined || body.result?.isError === true, principal.name + text).toBe(true);
       }
     }
   }
@@ -195,9 +195,9 @@ test("MCP rechecks suspension, expiry and revoked browser families on every requ
       const response = await call();
       expect(response.status, condition).toBe(401);
       expect(await response.text(), condition).not.toContain(canary);
-      const stream = await request("/mcp", { headers: jsonHeaders(seed.token) });
-      expect(stream.status, condition + " stream").toBe(401);
-      await stream.body?.cancel();
+      const repeated = await call();
+      expect(repeated.status, condition + " repeated request").toBe(401);
+      expect(await repeated.text(), condition + " repeated request").not.toContain(canary);
     }
   } finally {
     await db.update(users).set({ isSuspended: false }).where(eq(users.id, seed.userId));

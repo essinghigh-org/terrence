@@ -1083,7 +1083,7 @@ export const app = new Elysia()
       headers["Access-Control-Allow-Origin"] = origin;
     }
     headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
-    headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type,Idempotency-Key,If-Match,If-None-Match";
+    headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type,Idempotency-Key,If-Match,If-None-Match,MCP-Protocol-Version,Mcp-Method,Mcp-Name";
     headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,Retry-After,Idempotency-Replayed,X-Request-Id,ETag,Deprecation,Sunset";
   })
   .onAfterHandle(({ request, response, set }: AfterHandleContext): Response | void => {

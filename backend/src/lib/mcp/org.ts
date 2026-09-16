@@ -2,7 +2,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
 import { organizationMemberships, organizations } from "../../db/schema";
 import { checkOrgPermission } from "../utils";
-import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
+import { READ_ONLY_TOOL, toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
 
 /**
  * Organization-level MCP tools. `list_organizations` is membership-scoped (no
@@ -14,6 +14,7 @@ export const orgTools: readonly McpTool[] = [
   {
     name: "list_organizations",
     description: "List organizations accessible by the authenticated token.",
+    annotations: READ_ONLY_TOOL,
     inputSchema: { type: "object", properties: {}, required: [] },
     requires: [],
     handler: async (session: McpSession): Promise<unknown> => {
@@ -62,6 +63,7 @@ export const orgTools: readonly McpTool[] = [
   {
     name: "get_org_settings",
     description: "Get an organization's settings by name.",
+    annotations: READ_ONLY_TOOL,
     inputSchema: {
       type: "object",
       properties: { org: { type: "string", description: "Organization name" } },
