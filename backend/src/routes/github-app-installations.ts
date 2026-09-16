@@ -12,11 +12,13 @@ import { fetchVcsUrl, getGitHubAppAccessToken, getGitHubAppAccessTokenDetails, t
 import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail, type VcsIntegrationUsage } from "../lib/vcs-integration-usage";
 import { AvatarService } from "../lib/avatars";
 import { githubAppApiBase } from "../lib/github-api";
+import { githubAppCredentialStorage, githubAppManifestDocument, githubAppRegistrationUrl, githubAppSettingsUrl } from "../lib/github-app-manifest";
 import {
   activatePendingGitHubAppConfiguration,
   disconnectGitHubApp,
   getGitHubAppConfiguration,
   getGitHubAppRecord,
+  legacyEnvironmentConfiguration,
   markGitHubAppInvalid,
   persistGitHubAppConfiguration,
   persistPendingGitHubAppConfiguration,
@@ -57,6 +59,12 @@ type ManifestSetupState = Readonly<{
   userId: string;
 }>;
 
+type ManifestRegistrationState = ManifestSetupState & Readonly<{
+  registrationUrl: string;
+  manifest: Readonly<Record<string, unknown>>;
+  submitted: boolean;
+}>;
+
 type ManifestInstallState = ManifestSetupState & Readonly<{ pendingId: string }>;
 
 type GitHubAppConfig = Readonly<GitHubAppConfiguration & { installUrl: string }>;
@@ -71,7 +79,7 @@ type VerifiedInstallation = Readonly<{
 const SETUP_STATE_TTL_MS = 10 * 60 * 1000;
 const GITHUB_TIMEOUT_MS = 10_000;
 const setupStates = new Map<string, SetupState>();
-const manifestSetupStates = new Map<string, ManifestSetupState>();
+const manifestSetupStates = new Map<string, ManifestRegistrationState>();
 const manifestInstallStates = new Map<string, ManifestInstallState>();
 
 function stringQuery(query: Readonly<Record<string, unknown>> | undefined, key: string): string {
@@ -111,7 +119,7 @@ function manifestGitHubApiUrl(): string {
   return githubAppApiBase(true) ?? "https://api.github.com";
 }
 
-function manifestPayload(request: Readonly<{ url: string }>): Readonly<Record<string, unknown>> {
+function manifestPayload(request: Readonly<{ url: string }>, publicApp: boolean): Readonly<Record<string, unknown>> {
   const publicUrl = new URL(requestBaseUrl(request));
   publicUrl.pathname = "/";
   publicUrl.search = "";
@@ -120,9 +128,10 @@ function manifestPayload(request: Readonly<{ url: string }>): Readonly<Record<st
     name: `terrence-${publicUrl.hostname}`.slice(0, 34),
     url: publicUrl.toString(),
     description: "Terrence VCS integration",
-    public: false,
+    public: publicApp,
     redirect_url: apiURL(request, "/api/v2/admin/github-app/manifest/callback"),
     setup_url: apiURL(request, "/api/v2/admin/github-app/manifest/install-callback"),
+    setup_on_update: true,
     hook_attributes: {
       url: apiURL(request, "/api/webhooks/github"),
       active: true,
@@ -224,7 +233,8 @@ async function manifestConversion(code: string): Promise<Readonly<{ configuratio
 
 async function siteAdminManifestStateAuthorized(state: ManifestSetupState): Promise<boolean> {
   const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, state.tokenId) });
-  if (token === undefined || token.userId !== state.userId) return false;
+  if (token === undefined || token.userId !== state.userId
+    || (token.expiresAt !== null && token.expiresAt <= Date.now())) return false;
   const user = await db.query.users.findFirst({ where: eq(users.id, state.userId), columns: { isSiteAdmin: true } });
   return user?.isSiteAdmin === true;
 }
@@ -909,12 +919,13 @@ async function checkGitHubAppHealth(
 
 function resolveGitHubAppUrls(
   safeConfiguration: GitHubAppConfiguration | null,
+  health: GitHubAppHealth | null,
 ): Readonly<{ registrationUrl: string; installUrl: string | null }> {
   if (safeConfiguration === null) {
     return { registrationUrl: `${manifestGitHubHttpUrl()}/settings/apps`, installUrl: null };
   }
   return {
-    registrationUrl: `${safeConfiguration.httpUrl}/settings/apps/${encodeURIComponent(safeConfiguration.slug)}`,
+    registrationUrl: githubAppSettingsUrl(safeConfiguration.httpUrl, safeConfiguration.slug, health?.owner ?? safeConfiguration.owner, health?.ownerType),
     installUrl: new URL(`/apps/${encodeURIComponent(safeConfiguration.slug)}/installations/new`, safeConfiguration.httpUrl).toString(),
   };
 }
@@ -981,12 +992,15 @@ function buildGitHubAppAttributes(
 ): Record<string, unknown> {
   const owners = resolvePendingOwners(effectiveRecord?.pending);
   const safeConfiguration = resolveSafeConfiguration(configuration, effectiveRecord);
-  const urls = resolveGitHubAppUrls(safeConfiguration);
+  const urls = resolveGitHubAppUrls(safeConfiguration, health);
   return {
     configured: safeConfiguration !== null,
     status: resolveGitHubAppStatus(effectiveRecord?.status, health, safeConfiguration !== null),
     source: resolveGitHubAppSource(effectiveRecord, safeConfiguration),
     bootstrapConsumed: effectiveRecord?.bootstrapConsumed === true,
+    ...githubAppCredentialStorage(effectiveRecord, configuration !== null),
+    "environment-import-available": legacyEnvironmentConfiguration(true) !== null,
+    "connection-verified": health?.ok === true,
     ...buildGitHubAppIdentity(safeConfiguration),
     "registration-url": urls.registrationUrl,
     "install-url": urls.installUrl,
@@ -1422,27 +1436,82 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     }
     return { data: { id: "github-app", type: "github-app", attributes: { status: "active", appId: validation.appId ?? configuration.appId, slug: validation.slug ?? configuration.slug } } };
   })
-  .get("/api/v2/admin/github-app/manifest/setup", async ({ request, user, token, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/admin/github-app/manifest/setup", async ({ request, query, user, token, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true || token === null || token === undefined || request === undefined) {
       return flowError(set, 404, "Not Found", "Site administrator access is required");
     }
+    const publicValue = stringQuery(query, "public");
+    if (publicValue !== "" && publicValue !== "true" && publicValue !== "false") {
+      return flowError(set, 422, "Invalid GitHub App", "public must be true or false");
+    }
+    let registrationUrl: URL;
+    try {
+      registrationUrl = githubAppRegistrationUrl(manifestGitHubHttpUrl(), stringQuery(query, "organization"));
+    } catch {
+      return flowError(set, 422, "Invalid GitHub Organization", "Enter a GitHub organization login, not a URL");
+    }
     pruneSetupStates();
     const stateId = crypto.randomUUID();
+    registrationUrl.searchParams.set("state", stateId);
     manifestSetupStates.set(stateId, {
       expiresAt: Date.now() + SETUP_STATE_TTL_MS,
       tokenId: token.id,
       userId: user.id,
+      registrationUrl: registrationUrl.toString(),
+      manifest: manifestPayload(request, publicValue === "true"),
+      submitted: false,
     });
-    const destination = new URL("/settings/apps/new", manifestGitHubHttpUrl());
+    // A redirect cannot turn a GET into GitHub's required form POST. Navigate
+    // to a one-use same-origin document with its own narrowly scoped CSP.
+    const destination = new URL(apiURL(request, "/api/v2/admin/github-app/manifest/redirect"));
     destination.searchParams.set("state", stateId);
-    destination.searchParams.set("manifest", JSON.stringify(manifestPayload(request)));
+    return authorizationResponse(request, stateId, destination.toString());
+  })
+  .get("/api/v2/admin/github-app/manifest/redirect", async ({ query, set }: ParamCtx): Promise<unknown> => {
+    pruneSetupStates();
+    const stateId = stringQuery(query, "state");
+    const state = manifestSetupStates.get(stateId);
+    if (state === undefined || state.submitted) {
+      return flowError(set, 400, "Invalid GitHub App Setup", "Setup is missing, expired, or already submitted. Start again from the GitHub App page.");
+    }
+    // Claim synchronously, before the authorization await, so two navigations
+    // cannot both consume the same handoff. Keep it for the later callback.
+    manifestSetupStates.set(stateId, { ...state, submitted: true });
+    if (!(await siteAdminManifestStateAuthorized(state))) {
+      manifestSetupStates.delete(stateId);
+      return flowError(set, 403, "Forbidden", "Site administrator authorization is no longer valid");
+    }
+    const document = githubAppManifestDocument(state.registrationUrl, state.manifest);
+    // The global after-handle hook also applies CSP to set.headers. Setting
+    // both prevents a second form-action 'self' policy from blocking the POST.
+    Object.assign(set.headers as Record<string, string | number>, document.headers);
+    return new Response(document.html, { headers: document.headers });
+  })
+  .get("/api/v2/admin/github-app/manifest/resume", async ({ request, user, token, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true || token === null || token === undefined || request === undefined) {
+      return flowError(set, 404, "Not Found", "Site administrator access is required");
+    }
+    const pending = (await getGitHubAppRecord())?.pending;
+    if (pending === null || pending === undefined) {
+      return flowError(set, 409, "No Pending GitHub App", "There is no unfinished installation to continue");
+    }
+    pruneSetupStates();
+    const stateId = crypto.randomUUID();
+    manifestInstallStates.set(stateId, {
+      expiresAt: Date.now() + SETUP_STATE_TTL_MS,
+      tokenId: token.id,
+      userId: user.id,
+      pendingId: pending.flowId,
+    });
+    const destination = new URL(`/apps/${encodeURIComponent(pending.configuration.slug)}/installations/new`, pending.configuration.httpUrl);
+    destination.searchParams.set("state", stateId);
     return authorizationResponse(request, stateId, destination.toString());
   })
   .get("/api/v2/admin/github-app/manifest/callback", async ({ query, set }: ParamCtx): Promise<unknown> => {
     pruneSetupStates();
     const stateId = stringQuery(query, "state");
     const state = manifestSetupStates.get(stateId);
-    if (state === undefined) return flowError(set, 400, "Invalid GitHub App Manifest Callback", "Setup state is missing, expired, or invalid");
+    if (state === undefined || !state.submitted) return flowError(set, 400, "Invalid GitHub App Manifest Callback", "Setup state is missing, expired, or invalid");
     manifestSetupStates.delete(stateId);
     if (!(await siteAdminManifestStateAuthorized(state))) return flowError(set, 403, "Forbidden", "Site administrator authorization is no longer valid");
     const code = stringQuery(query, "code");
@@ -1454,7 +1523,12 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     const pendingId = crypto.randomUUID();
     await persistPendingGitHubAppConfiguration(converted.configuration, requiredOwners, [], pendingId);
     const installStateId = crypto.randomUUID();
-    manifestInstallStates.set(installStateId, { ...state, pendingId });
+    manifestInstallStates.set(installStateId, {
+      expiresAt: Date.now() + SETUP_STATE_TTL_MS,
+      tokenId: state.tokenId,
+      userId: state.userId,
+      pendingId,
+    });
     const destination = new URL(`/apps/${encodeURIComponent(converted.configuration.slug)}/installations/new`, converted.configuration.httpUrl);
     destination.searchParams.set("state", installStateId);
     return redirect(destination.toString(), 302);
@@ -1462,6 +1536,13 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
   .get("/api/v2/admin/github-app/manifest/install-callback", async ({ query, request, set }: ParamCtx): Promise<unknown> => {
     pruneSetupStates();
     const stateId = stringQuery(query, "state");
+    // A manifest-created app has one setup_url. Later organization-level
+    // installs must still use their own state and organization authorization.
+    if (setupStates.has(stateId) && request !== undefined) {
+      const destination = new URL(apiURL(request, "/api/v2/github-app/installations/callback"));
+      for (const key of ["state", "installation_id", "setup_action"]) destination.searchParams.set(key, stringQuery(query, key));
+      return redirect(destination.toString(), 303);
+    }
     const state = manifestInstallStates.get(stateId);
     if (state === undefined) return flowError(set, 400, "Invalid GitHub App Installation Callback", "Installation state is missing, expired, or invalid");
     manifestInstallStates.delete(stateId);
@@ -1490,7 +1571,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     if (missingOwners.length > 0) {
       await persistPendingGitHubAppConfiguration(pending.configuration, pending.requiredOwners, installations, pending.flowId);
       const nextStateId = crypto.randomUUID();
-      manifestInstallStates.set(nextStateId, { ...state, pendingId: pending.flowId });
+      manifestInstallStates.set(nextStateId, { ...state, expiresAt: Date.now() + SETUP_STATE_TTL_MS, pendingId: pending.flowId });
       const destination = new URL(config.installUrl);
       destination.searchParams.set("state", nextStateId);
       return redirect(destination.toString(), 302);
@@ -1503,8 +1584,8 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       if (replacement === undefined) continue;
       await db.update(githubAppInstallations).set({ installationId: replacement.installationId }).where(eq(githubAppInstallations.id, existing.id));
     }
-    const destination = request === undefined ? "/app/admin" : apiURL(request, "/app/admin");
-    const redirectUrl = new URL(destination);
+    if (request === undefined) return redirect("/app/admin/github-app?github_app=connected", 303);
+    const redirectUrl = new URL(apiURL(request, "/app/admin/github-app"));
     redirectUrl.searchParams.set("github_app", "connected");
     return redirect(redirectUrl.toString(), 303);
   })
