@@ -1,10 +1,13 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { app } from "../../src/app";
+import { allMcpTools } from "../../src/lib/mcp";
+import { log } from "../../src/lib/log";
+import { MCP_SERVER_INFO_META_KEY } from "../../src/lib/mcp/protocol";
 import { MCP_PROTOCOL_VERSION } from "../../src/routes/mcp";
 import { cleanupSeed, persistSeed, seedOrg } from "./compat_contract_helpers";
 
 const seed = seedOrg("mcp-modern");
-const SERVER_INFO_KEY = "io.modelcontextprotocol/serverInfo";
+const SERVER_INFO_KEY = MCP_SERVER_INFO_META_KEY;
 const PROTOCOL_KEY = "io.modelcontextprotocol/protocolVersion";
 const CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities";
 const CLIENT_INFO_KEY = "io.modelcontextprotocol/clientInfo";
@@ -114,6 +117,32 @@ describe("MCP 2026-07-28 modern protocol", () => {
     expect(Array.isArray(payload.result["structuredContent"])).toBe(true);
     expect((payload.result["content"] as { type: string; text: string }[])[0]?.type).toBe("text");
     expect((payload.result["_meta"] as Record<string, unknown>)[SERVER_INFO_KEY]).toMatchObject({ name: "terrence-mcp", version: expect.any(String) });
+  });
+
+  it("does not expose unexpected tool exception details to clients", async () => {
+    const tool = allMcpTools.find((candidate) => candidate.name === "list_organizations");
+    expect(tool).toBeDefined();
+    if (tool === undefined) return;
+    const error = new Error("Internal database details: private_table at db.internal:5432");
+    const handlerSpy = spyOn(tool, "handler").mockRejectedValue(error);
+    const logSpy = spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      const response = await send("tools/call", { name: tool.name, arguments: {} });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: -32603, message: "Tool execution failed" },
+      });
+      expect(logSpy).toHaveBeenCalledWith("MCP tool execution failed", {
+        toolName: tool.name,
+        requestId: 1,
+        error,
+      });
+    } finally {
+      handlerSpy.mockRestore();
+      logSpy.mockRestore();
+    }
   });
 
   it("accepts the Base64 sentinel encoding for Mcp-Name", async () => {
