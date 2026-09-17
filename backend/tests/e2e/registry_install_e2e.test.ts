@@ -1,6 +1,6 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { openSync, closeSync } from "node:fs";
-import { mkdir, open, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { makeRegistryModuleArchive } from "../registry-module-helpers";
@@ -139,20 +139,9 @@ async function startBackend(workDir: string): Promise<Backend> {
     if ((proc as Bun.Subprocess | undefined)?.exitCode !== null) break;
     await sleep(200);
   }
-  let tail = "";
-  try {
-    const log = await open(logPath, "r");
-    try {
-      tail = (await log.readFile("utf8")).split("\n").slice(-60).join("\n");
-    } finally {
-      await log.close();
-    }
-  } catch {
-    // Diagnostic only: startup failure below remains authoritative.
-  }
   if (proc !== undefined) await terminateManagedProcess(proc);
   await rm(dbDir, { recursive: true, force: true });
-  throw new Error(`backend failed to start within 60s\n${tail}`);
+  throw new Error(`backend failed to start within 60s; backend log: ${logPath}`);
 }
 
 async function startTlsProxy(

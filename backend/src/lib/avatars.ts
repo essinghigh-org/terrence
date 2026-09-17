@@ -118,6 +118,20 @@ export function avatarCacheKey(providerId: string, url: string): string {
 // ---------------------------------------------------------------------------
 const pendingWrites = new Map<string, Promise<void>>();
 
+type AvatarRemoteTarget = Readonly<{ providerId: string; url: string }>;
+const remoteTargets = new Map<string, AvatarRemoteTarget>();
+const MAX_REMOTE_TARGETS = 2_048;
+
+function rememberRemoteTarget(key: string, providerId: string, url: string): void {
+  if (remoteTargets.has(key)) remoteTargets.delete(key);
+  remoteTargets.set(key, { providerId, url });
+  while (remoteTargets.size > MAX_REMOTE_TARGETS) {
+    const oldest = remoteTargets.keys().next().value;
+    if (oldest === undefined) break;
+    remoteTargets.delete(oldest);
+  }
+}
+
 async function writeMeta(meta: AvatarMeta): Promise<void> {
   const dir = join(avatarDir(), meta.key.slice(0, 2));
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -128,6 +142,7 @@ async function writeMeta(meta: AvatarMeta): Promise<void> {
 
 function ensureRecorded(providerId: string, url: string): string {
   const key = avatarCacheKey(providerId, url);
+  rememberRemoteTarget(key, providerId, url);
   if (pendingWrites.has(key)) return key;
   // A sweep may have deleted the metadata; re-record in that case.
   if (existsSync(metaPath(key))) return key;
@@ -723,13 +738,17 @@ async function handleAvatarSuccess(
 }
 
 /** Fetch/revalidate the upstream and refresh the local cache. Never throws. */
-async function doRefreshAvatar(meta: AvatarMeta, signal: Readonly<AbortSignal>): Promise<AvatarFetchResult> {
-  const decision = await assertSafeAvatarDestination(meta.url, meta.providerId);
+async function doRefreshAvatar(
+  meta: AvatarMeta,
+  target: AvatarRemoteTarget,
+  signal: Readonly<AbortSignal>,
+): Promise<AvatarFetchResult> {
+  const decision = await assertSafeAvatarDestination(target.url, target.providerId);
   if ("error" in decision) {
     return { ok: false, status: 422, message: decision.error, meta };
   }
   signal.throwIfAborted();
-  const { scheme, hostname, port, path } = parseAvatarUrl(meta.url);
+  const { scheme, hostname, port, path } = parseAvatarUrl(target.url);
   let raw: RawResponse;
   try {
     raw = await requestPinned({
@@ -766,13 +785,17 @@ async function refreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
   refreshFailures.delete(meta.key);
   const running = refreshInFlight.get(meta.key);
   if (running !== undefined) return running;
+  const target = remoteTargets.get(meta.key);
+  if (target === undefined || avatarCacheKey(target.providerId, target.url) !== meta.key) {
+    return { ok: false, status: 503, message: "Avatar source is not active in this process", meta };
+  }
   let host: string;
   try {
-    host = new URL(meta.url).hostname;
+    host = new URL(target.url).hostname;
   } catch {
     return { ok: false, status: 422, message: "Invalid avatar URL", meta };
   }
-  const discovery = discover(host, async (signal): Promise<AvatarFetchResult> => doRefreshAvatar(meta, signal));
+  const discovery = discover(host, async (signal): Promise<AvatarFetchResult> => doRefreshAvatar(meta, target, signal));
   if (discovery === null) return { ok: false, status: 503, message: "Avatar refresh temporarily unavailable", meta };
   const run = (async (): Promise<AvatarFetchResult> => {
     const result = (await discovery) ?? {

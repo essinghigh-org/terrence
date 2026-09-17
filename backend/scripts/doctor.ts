@@ -353,7 +353,9 @@ function printHuman(storageDir: string, db: DatabaseTarget): void {
   for (const c of checks) {
     const label = diagnosticText(c.name).padEnd(maxNameWidth);
     const cleanDetail = diagnosticText(c.detail);
-    console.log(`  [${c.status === "ok" ? "ok" : c.status === "warn" ? "warn" : "FAIL"}] ${label}  ${cleanDetail}`);
+    process.stdout.write(
+      `  [${c.status === "ok" ? "ok" : c.status === "warn" ? "warn" : "FAIL"}] ${label}  ${cleanDetail}\n`,
+    );
   }
   const fails = checks.filter((c) => c.status === "fail").length;
   const warns = checks.filter((c) => c.status === "warn").length;

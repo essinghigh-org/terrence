@@ -1958,55 +1958,49 @@ resource "tfe_admin_organization_settings" "aos" {
 `;
 
           // tfe_scim_group_mapping needs a provisioned SCIM group (created via
-          // the SCIM API with a SCIM bearer token). The group can't be created
-          // by Terraform itself, so provision it here between applies using an
-          // admin-issued SCIM token, then reference it in the second apply.
-          let hasScimMapping = false;
-          let scimMappingTf = "";
-          let scimDsTf = "";
-          {
-            const scimTokRes = await api(
-              backend.port,
-              "POST",
-              "/api/v2/admin/scim-tokens",
-              {
-                data: { type: "authentication-tokens", attributes: { description: `e2e-scim-${suffix}` } },
-              },
-              auth.token,
-            );
-            if (scimTokRes.status === 201) {
-              const scimRaw = scimTokRes.json["data"].attributes.token as string;
-              const scimTokenId = scimTokRes.json["data"].id as string;
-              const groupRes = await fetch(`http://127.0.0.1:${backend.port}/scim/v2/Groups`, {
-                method: "POST",
-                headers: { "Content-Type": "application/scim+json", Authorization: `Bearer ${scimRaw}` },
-                body: JSON.stringify({
-                  schemas: ["urn:ietf:params:scim:schemas:core:2.0:Group"],
-                  displayName: `pe2e-scim-group-${suffix}`,
-                }),
-              });
-              if (groupRes.status === 201) {
-                await groupRes.json();
-                const teamsRes = await api(
-                  backend.port,
-                  "GET",
-                  `/api/v2/organizations/pe2e-org-${suffix}/teams`,
-                  undefined,
-                  auth.token,
-                );
-                const team = (teamsRes.json["data"] as { id: string; attributes: { name: string } }[]).find(
-                  (t): boolean => t.attributes.name === `pe2e-team-${suffix}`,
-                );
-                if (team !== undefined) {
-                  hasScimMapping = true;
-                  scimMappingTf = `resource "tfe_scim_group_mapping" "sgm" {
+          // the SCIM API with a SCIM bearer token). Treat setup failures as test
+          // failures; keep all generated HCL independent of network-returned data.
+          const scimTokRes = await api(
+            backend.port,
+            "POST",
+            "/api/v2/admin/scim-tokens",
+            {
+              data: { type: "authentication-tokens", attributes: { description: `e2e-scim-${suffix}` } },
+            },
+            auth.token,
+          );
+          expect(scimTokRes.status).toBe(201);
+          const scimRaw = scimTokRes.json["data"].attributes.token as string;
+          const scimTokenId = scimTokRes.json["data"].id as string;
+          const groupRes = await fetch(`http://127.0.0.1:${backend.port}/scim/v2/Groups`, {
+            method: "POST",
+            headers: { "Content-Type": "application/scim+json", Authorization: `Bearer ${scimRaw}` },
+            body: JSON.stringify({
+              schemas: ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+              displayName: `pe2e-scim-group-${suffix}`,
+            }),
+          });
+          expect(groupRes.status).toBe(201);
+          await groupRes.body?.cancel();
+          const teamsRes = await api(
+            backend.port,
+            "GET",
+            `/api/v2/organizations/pe2e-org-${suffix}/teams`,
+            undefined,
+            auth.token,
+          );
+          expect(teamsRes.status).toBe(200);
+          const team = (teamsRes.json["data"] as { id: string; attributes: { name: string } }[]).find(
+            (candidate): boolean => candidate.attributes.name === `pe2e-team-${suffix}`,
+          );
+          expect(team).toBeDefined();
+          cliEnv["TF_VAR_scim_token_id"] = scimTokenId;
+          const scimMappingTf = `resource "tfe_scim_group_mapping" "sgm" {
   team_id       = tfe_team.team.id
   scim_group_id = data.tfe_scim_group.d_sgroup.id
 }
 `;
-                }
-                cliEnv["TF_VAR_scim_token_id"] = scimTokenId;
-                scimDsTf = `variable "scim_token_id" {
+          const scimDsTf = `variable "scim_token_id" {
   type      = string
   sensitive = true
 }
@@ -2017,9 +2011,6 @@ data "tfe_scim_token" "d_stok" {
   id = var.scim_token_id
 }
 `;
-              }
-            }
-          }
 
           // tfe_no_code_module needs a PUBLISHED registry module version
           // (status "ok"). Create + upload one between applies, then reference
@@ -2117,18 +2108,16 @@ data "tfe_no_code_module" "d_ncm" {
           expect(o2["run_output_value"]!.value).toBe("probe-value-pe2e");
           expect(o2["ds_audit2"]?.value).toBe(true);
           expect(o2["ds_rgs2"]?.value).toBe(true);
-          if (hasScimMapping || noCodeTf !== "" || scimDsTf !== "") {
+          {
             // The SCIM group mapping / no-code module were created in the second apply.
             const stateList2 = await cli(bin, ["state", "list"], cfgDir, cliEnv);
             cliOk(stateList2, "state list #2");
-            if (hasScimMapping) expect(stateList2.out).toContain("tfe_scim_group_mapping.sgm");
+            expect(stateList2.out).toContain("tfe_scim_group_mapping.sgm");
+            expect(stateList2.out).toContain("data.tfe_scim_group.d_sgroup");
+            expect(stateList2.out).toContain("data.tfe_scim_token.d_stok");
             if (noCodeTf !== "") {
               expect(stateList2.out).toContain("tfe_no_code_module.ncm");
               expect(stateList2.out).toContain("data.tfe_no_code_module.d_ncm");
-            }
-            if (scimDsTf !== "") {
-              expect(stateList2.out).toContain("data.tfe_scim_group.d_sgroup");
-              expect(stateList2.out).toContain("data.tfe_scim_token.d_stok");
             }
           }
           // tfe_workspace_run should be present after the second apply.
