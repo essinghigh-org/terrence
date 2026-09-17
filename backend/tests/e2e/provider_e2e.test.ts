@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { makeRegistryModuleArchive } from "../registry-module-helpers";
 import cliMatrix from "./cli_matrix.json";
 import { safeJsonStringify } from "../../src/lib/log";
+import { CLI_CREDENTIALS_HELPER_CONFIG, installCliCredentialsHelper } from "./cli-credentials-helper";
 import providerSurface from "./provider_surface.json";
 import lifecycleContract from "../../src/data/provider_lifecycle_contract.json" with { type: "json" };
 import {
@@ -464,15 +465,11 @@ function cliOk(result: CliResult, what: string): void {
   }
 }
 
-type LifecycleFailure = Readonly<{
+type LifecycleFailureContext = Readonly<{
   engine: string;
   profile: string;
   fixture_seed: string;
-  execution_mode: "real-cli";
-  stage: string;
   contract_version: number;
-  completedAt: string;
-  error: { name: string; message: string };
 }>;
 
 function lifecycleError(error: unknown): { name: string; message: string } {
@@ -495,12 +492,24 @@ function lifecycleError(error: unknown): { name: string; message: string } {
   return { name: "UnknownError", message: safeJsonStringify(error) };
 }
 
-function writeLifecycleFailureEvidence(directory: string, failure: LifecycleFailure): void {
+function writeLifecycleFailureEvidence(directory: string, failure: LifecycleFailureContext): void {
   mkdirSync(directory, { recursive: true });
   const safeEngine = failure.engine.replace(/[^a-z0-9_-]/gi, "-");
   writeFileSync(
     join(directory, `failure-${safeEngine}-${Date.now()}-${crypto.randomUUID()}.json`),
-    JSON.stringify(failure, null, 2),
+    JSON.stringify(
+      {
+        engine: safeEngine,
+        profile: failure.profile,
+        fixture_seed: failure.fixture_seed,
+        execution_mode: "real-cli",
+        stage: "provider lifecycle failed; see test stderr for diagnostics",
+        contract_version: failure.contract_version,
+        completedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
     { mode: 0o600 },
   );
 }
@@ -609,16 +618,21 @@ async function runFamilyProbes(
   return passed;
 }
 
-function providerTf(proxyPort: number, token: string): string {
+function providerTf(proxyPort: number): string {
   return `terraform {
   required_providers {
     tfe = { source = "hashicorp/tfe", version = "${providerVersion}" }
   }
 }
 
+variable "tfe_token" {
+  type      = string
+  sensitive = true
+}
+
 provider "tfe" {
   hostname        = "127.0.0.1:${proxyPort}"
-  token           = "${token}"
+  token           = var.tfe_token
   ssl_skip_verify = true
 }
 `;
@@ -1597,6 +1611,7 @@ describe("tfe provider e2e", () => {
         const proxy = await startTlsProxy(backend.port, workDir);
         try {
           const auth = await signupAndToken(backend.port);
+          cliEnv["TF_VAR_tfe_token"] = auth.token;
           const dbStatus = await api(backend.port, "GET", "/api/v2/admin/db-migration/status", undefined, auth.token);
           expect(dbStatus.status).toBe(200);
           expect(dbStatus.json["data"]["source-database"] === null).toBe(backend.databaseKind === "postgres");
@@ -1612,7 +1627,7 @@ describe("tfe provider e2e", () => {
           // mkdtemp: unique per run, no check-then-create race (CodeQL).
           const cfgDir = mkdtempSync(join(workDir, "config-"));
           assertCliDirFitsSocket(cfgDir);
-          await writeFile(join(cfgDir, "providers.tf"), providerTf(proxy.port!, auth.token));
+          await writeFile(join(cfgDir, "providers.tf"), providerTf(proxy.port!));
           await writeFile(join(cfgDir, "main.tf"), mainTf(suffix, auth.username));
           await writeFile(join(cfgDir, "outputs.tf"), outputsTf());
 
@@ -1676,7 +1691,7 @@ describe("tfe provider e2e", () => {
           lifecycleStage = "minimal team import";
           const importDir = mkdtempSync(join(workDir, "import-"));
           assertCliDirFitsSocket(importDir);
-          await writeFile(join(importDir, "providers.tf"), providerTf(proxy.port!, auth.token));
+          await writeFile(join(importDir, "providers.tf"), providerTf(proxy.port!));
           await writeFile(
             join(importDir, "main.tf"),
             `resource "tfe_team" "imported" {
@@ -1822,11 +1837,8 @@ data "tfe_hyok_encrypted_data_key" "d_hyok_dek" {
               .attributes["upload-url"];
             expect(new URL(uploadUrl).origin).toBe(`https://127.0.0.1:${proxy.port}`);
 
-            await writeFile(
-              join(workDir, "remote.tfrc"),
-              `credentials "127.0.0.1:${proxy.port}" { token = "${auth.token}" }`,
-              { mode: 0o600 },
-            );
+            await installCliCredentialsHelper(remoteDir);
+            await writeFile(join(workDir, "remote.tfrc"), CLI_CREDENTIALS_HELPER_CONFIG, { mode: 0o600 });
             await writeFile(
               join(remoteDir, "main.tf"),
               `terraform {
@@ -1845,6 +1857,7 @@ output "probe" { value = terraform_data.probe.output }
               SSL_CERT_FILE: join(workDir, "cert.pem"),
               TF_CLI_CONFIG_FILE: join(workDir, "remote.tfrc"),
               HOME: remoteDir,
+              TERRENCE_E2E_CLI_TOKEN: auth.token,
             };
             cliOk(await cli(bin, ["init", "-input=false", "-no-color"], remoteDir, remoteEnv), "remote init");
             cliOk(await cli(bin, ["plan", "-input=false", "-no-color"], remoteDir, remoteEnv), "remote plan");
@@ -1948,7 +1961,7 @@ resource "tfe_admin_organization_settings" "aos" {
           // the SCIM API with a SCIM bearer token). The group can't be created
           // by Terraform itself, so provision it here between applies using an
           // admin-issued SCIM token, then reference it in the second apply.
-          let scimMapping = "";
+          let hasScimMapping = false;
           let scimMappingTf = "";
           let scimDsTf = "";
           {
@@ -1973,7 +1986,7 @@ resource "tfe_admin_organization_settings" "aos" {
                 }),
               });
               if (groupRes.status === 201) {
-                const scimGroupId = ((await groupRes.json()) as { id: string }).id;
+                await groupRes.json();
                 const teamsRes = await api(
                   backend.port,
                   "GET",
@@ -1985,18 +1998,23 @@ resource "tfe_admin_organization_settings" "aos" {
                   (t): boolean => t.attributes.name === `pe2e-team-${suffix}`,
                 );
                 if (team !== undefined) {
-                  scimMapping = scimGroupId;
+                  hasScimMapping = true;
                   scimMappingTf = `resource "tfe_scim_group_mapping" "sgm" {
-  team_id       = "${team.id}"
-  scim_group_id = "${scimGroupId}"
+  team_id       = tfe_team.team.id
+  scim_group_id = data.tfe_scim_group.d_sgroup.id
 }
 `;
                 }
-                scimDsTf = `data "tfe_scim_group" "d_sgroup" {
+                cliEnv["TF_VAR_scim_token_id"] = scimTokenId;
+                scimDsTf = `variable "scim_token_id" {
+  type      = string
+  sensitive = true
+}
+data "tfe_scim_group" "d_sgroup" {
   name = "pe2e-scim-group-${suffix}"
 }
 data "tfe_scim_token" "d_stok" {
-  id = "${scimTokenId}"
+  id = var.scim_token_id
 }
 `;
               }
@@ -2099,11 +2117,11 @@ data "tfe_no_code_module" "d_ncm" {
           expect(o2["run_output_value"]!.value).toBe("probe-value-pe2e");
           expect(o2["ds_audit2"]?.value).toBe(true);
           expect(o2["ds_rgs2"]?.value).toBe(true);
-          if (scimMapping !== "" || noCodeTf !== "" || scimDsTf !== "") {
+          if (hasScimMapping || noCodeTf !== "" || scimDsTf !== "") {
             // The SCIM group mapping / no-code module were created in the second apply.
             const stateList2 = await cli(bin, ["state", "list"], cfgDir, cliEnv);
             cliOk(stateList2, "state list #2");
-            if (scimMapping !== "") expect(stateList2.out).toContain("tfe_scim_group_mapping.sgm");
+            if (hasScimMapping) expect(stateList2.out).toContain("tfe_scim_group_mapping.sgm");
             if (noCodeTf !== "") {
               expect(stateList2.out).toContain("tfe_no_code_module.ncm");
               expect(stateList2.out).toContain("data.tfe_no_code_module.d_ncm");
@@ -2269,17 +2287,14 @@ data "tfe_no_code_module" "d_ncm" {
           );
         } catch (error) {
           lifecycleFailed = true;
+          console.error(`[e2e] provider lifecycle failed at ${lifecycleStage}: ${lifecycleError(error).message}`);
           const evidenceDir = process.env["TERRENCE_E2E_RESULTS_DIR"] ?? workDir;
           try {
             writeLifecycleFailureEvidence(evidenceDir, {
               engine: cliName,
               profile: process.env["TERRENCE_E2E_PROFILE"] ?? "direct-e2e",
               fixture_seed: fixtureSeed,
-              execution_mode: "real-cli",
-              stage: lifecycleStage,
               contract_version: providerLifecycleContract.version,
-              completedAt: new Date().toISOString(),
-              error: lifecycleError(error),
             });
           } catch (evidenceError) {
             console.error(`[e2e] could not write lifecycle failure evidence: ${lifecycleError(evidenceError).message}`);

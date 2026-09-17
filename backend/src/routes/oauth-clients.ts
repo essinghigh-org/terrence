@@ -1,6 +1,6 @@
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
-import { createHmac, createSign } from "node:crypto";
+import { createSign } from "node:crypto";
 import { db, isPostgres } from "../db";
 import {
   agentPools,
@@ -324,7 +324,7 @@ function oauthSignatureBase(
   return [method.toUpperCase(), oauthPercentEncode(baseUrl), oauthPercentEncode(normalizedParameters)].join("&");
 }
 
-function oauth1Authorization(
+async function oauth1Authorization(
   method: "GET" | "POST",
   url: string,
   consumerKey: string,
@@ -332,7 +332,7 @@ function oauth1Authorization(
   token?: string,
   tokenSecret = "",
   extraParameters: Readonly<Record<string, string>> = {},
-): string {
+): Promise<string> {
   const rsa = /-----BEGIN (?:RSA )?PRIVATE KEY-----/.test(consumerSecret);
   const oauthParameters: [string, string][] = [
     ["oauth_consumer_key", consumerKey],
@@ -352,9 +352,20 @@ function oauth1Authorization(
     signer.end();
     signature = signer.sign(consumerSecret, "base64");
   } else {
-    signature = createHmac("sha1", `${oauthPercentEncode(consumerSecret)}&${oauthPercentEncode(tokenSecret)}`)
-      .update(signatureBase)
-      .digest("base64");
+    // RFC 5849 section 3.4.2 mandates HMAC-SHA1 for this OAuth 1 flow. This is
+    // request-message authentication, not password hashing. Web Crypto models
+    // that distinction directly while preserving the required wire signature.
+    const encoder = new TextEncoder();
+    const signingKey = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(`${oauthPercentEncode(consumerSecret)}&${oauthPercentEncode(tokenSecret)}`),
+      { name: "HMAC", hash: "SHA-1" },
+      false,
+      ["sign"],
+    );
+    signature = Buffer.from(await crypto.subtle.sign("HMAC", signingKey, encoder.encode(signatureBase))).toString(
+      "base64",
+    );
   }
   oauthParameters.push(["oauth_signature", signature]);
 
@@ -377,7 +388,7 @@ async function oauth1TokenRequest(
     method: "POST",
     headers: {
       Accept: "application/x-www-form-urlencoded",
-      Authorization: oauth1Authorization("POST", url, oc.key, secret, token, tokenSecret, extraParameters),
+      Authorization: await oauth1Authorization("POST", url, oc.key, secret, token, tokenSecret, extraParameters),
     },
   });
   if (!response.ok) return null;
@@ -399,7 +410,7 @@ async function oauth1ProviderUser(oc: OcItem, url: string, token: string, tokenS
   const response = await oauthFetch(oc, url, {
     headers: {
       Accept: "application/json, text/plain",
-      Authorization: oauth1Authorization("GET", url, oc.key, secret, token, tokenSecret),
+      Authorization: await oauth1Authorization("GET", url, oc.key, secret, token, tokenSecret),
     },
   });
   if (!response.ok) return null;

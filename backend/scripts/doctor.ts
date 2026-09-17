@@ -27,6 +27,7 @@ import { probeLandlockAbi, runSandboxRequired } from "../src/lib/sandbox";
 // of an import-time crash — importing the driver module runs its resolver.)
 import { envEnabled } from "../src/lib/env";
 import { toComparableString } from "../src/lib/comparable";
+import { diagnosticText } from "./doctor-output";
 
 const args = new Set(process.argv.slice(2));
 const asJson = args.has("--json");
@@ -77,7 +78,7 @@ async function resolveTargets(): Promise<{ storageDir: string; db: DatabaseTarge
 /** Check storage: exists, writable, free/total bytes via statfs when the runtime supports it. */
 function checkStorage(storageDir: string): void {
   if (!existsSync(storageDir)) {
-    record("storage", "fail", `STORAGE_DIR does not exist: ${storageDir}`);
+    record("storage", "fail", `STORAGE_DIR does not exist: ${diagnosticText(storageDir)}`);
     return;
   }
   let writable = false;
@@ -345,19 +346,13 @@ function checkWorker(): void {
 
 function printHuman(storageDir: string, db: DatabaseTarget): void {
   console.log(`Terrence doctor — ${new Date().toISOString()}`);
-  console.log(`storage dir: ${storageDir}`);
-  console.log(`database:    ${describeDatabaseTarget(db)}`);
+  console.log(`storage dir: ${diagnosticText(storageDir)}`);
+  console.log(`database:    ${diagnosticText(describeDatabaseTarget(db))}`);
   console.log("");
-  const maxNameWidth = checks.reduce((acc, c) => Math.max(acc, c.name.length), 0);
+  const maxNameWidth = checks.reduce((acc, c) => Math.max(acc, diagnosticText(c.name).length), 0);
   for (const c of checks) {
-    const label = c.name.padEnd(maxNameWidth);
-    // Strip control characters and neutralise any leading markup so a
-    // detail string (which may carry subprocess stderr or DB errors)
-    // cannot forge log lines or inject terminal escape sequences.
-    const cleanDetail = c.detail
-      .replace(/[\r\n]/g, " ")
-      .replace(/[\x00-\x1f\x7f-\x9f]/g, "")
-      .replace(/^</, "\\<");
+    const label = diagnosticText(c.name).padEnd(maxNameWidth);
+    const cleanDetail = diagnosticText(c.detail);
     console.log(`  [${c.status === "ok" ? "ok" : c.status === "warn" ? "warn" : "FAIL"}] ${label}  ${cleanDetail}`);
   }
   const fails = checks.filter((c) => c.status === "fail").length;

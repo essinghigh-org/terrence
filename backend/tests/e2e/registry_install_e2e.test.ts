@@ -1,9 +1,10 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { openSync, closeSync } from "node:fs";
-import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdir, open, readFile, writeFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { makeRegistryModuleArchive } from "../registry-module-helpers";
+import { CLI_CREDENTIALS_HELPER_CONFIG, installCliCredentialsHelper } from "./cli-credentials-helper";
 import cliMatrix from "./cli_matrix.json";
 import {
   createOperationalTestDirectory,
@@ -138,7 +139,17 @@ async function startBackend(workDir: string): Promise<Backend> {
     if ((proc as Bun.Subprocess | undefined)?.exitCode !== null) break;
     await sleep(200);
   }
-  const tail = (await readFile(logPath, "utf8").catch(() => "")).split("\n").slice(-60).join("\n");
+  let tail = "";
+  try {
+    const log = await open(logPath, "r");
+    try {
+      tail = (await log.readFile("utf8")).split("\n").slice(-60).join("\n");
+    } finally {
+      await log.close();
+    }
+  } catch {
+    // Diagnostic only: startup failure below remains authoritative.
+  }
   if (proc !== undefined) await terminateManagedProcess(proc);
   await rm(dbDir, { recursive: true, force: true });
   throw new Error(`backend failed to start within 60s\n${tail}`);
@@ -330,16 +341,16 @@ describe("genuine registry installation", () => {
     );
     expect(org.status).toBe(201);
 
+    await installCliCredentialsHelper(workDir);
     cliEnvBase = {
       SSL_CERT_FILE: proxy.certPath,
       TF_CLI_CONFIG_FILE: join(workDir, "cli.tfrc"),
       CHECKPOINT_DISABLE: "1",
       TF_IN_AUTOMATION: "1",
+      HOME: workDir,
+      TERRENCE_E2E_CLI_TOKEN: token,
     };
-    await writeFile(
-      join(workDir, "cli.tfrc"),
-      `credentials "127.0.0.1:${proxy.port}" {\n  token = "${token}"\n}\ncredentials "127.0.0.2" {\n  token = "${token}"\n}\n`,
-    );
+    await writeFile(join(workDir, "cli.tfrc"), CLI_CREDENTIALS_HELPER_CONFIG, { mode: 0o600 });
 
     // Publish module versions 1.0.0 and 2.0.0 with real archives.
     const created = await api(
@@ -590,7 +601,7 @@ describe("genuine registry installation", () => {
       await mkdir(dir, { recursive: true });
       await writeFile(
         join(dir, "mirror.tfrc"),
-        `credentials "${host}" {\n  token = "${token}"\n}\nprovider_installation {\n  network_mirror {\n    url = "https://${host}/api/registry/v1/provider-mirror/"\n  }\n}\n`,
+        `${CLI_CREDENTIALS_HELPER_CONFIG}provider_installation {\n  network_mirror {\n    url = "https://${host}/api/registry/v1/provider-mirror/"\n  }\n}\n`,
       );
       await writeFile(
         join(dir, "main.tf"),

@@ -29,8 +29,8 @@ import { integrationSetting, integerSetting } from "./runtime-config";
 // The browser ETag is derived from SHA-256 of the cached bytes, so it changes
 // when the avatar changes (not when the URL stays the same); responses use
 // Cache-Control: private, max-age=86400 and 304s carry the cache metadata.
-// The server revalidates upstream with If-None-Match / If-Modified-Since and
-// serves a stale cached copy if the upstream is unreachable.
+// The server refreshes upstream without replaying persisted response metadata
+// into later requests, and serves a stale cached copy if upstream is unreachable.
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile, readdir, stat, unlink, rename } from "node:fs/promises";
@@ -629,14 +629,6 @@ export type AvatarFetchResult = Readonly<{
   meta: AvatarMeta;
 }>;
 
-function buildRevalidationHeaders(meta: AvatarMeta, hasCached: boolean): Record<string, string> {
-  const headers: Record<string, string> = {};
-  if (!hasCached) return headers;
-  if (meta.etag !== null) headers["If-None-Match"] = meta.etag;
-  if (meta.lastModified !== null) headers["If-Modified-Since"] = meta.lastModified;
-  return headers;
-}
-
 function parseAvatarUrl(urlStr: string): { scheme: "http" | "https"; hostname: string; port: number; path: string } {
   const parsed = new URL(urlStr);
   const scheme = parsed.protocol === "https:" ? "https" : "http";
@@ -738,8 +730,6 @@ async function doRefreshAvatar(meta: AvatarMeta, signal: Readonly<AbortSignal>):
   }
   signal.throwIfAborted();
   const { scheme, hostname, port, path } = parseAvatarUrl(meta.url);
-  const hasCached = hasCachedImage(meta.key);
-  const headers = buildRevalidationHeaders(meta, hasCached);
   let raw: RawResponse;
   try {
     raw = await requestPinned({
@@ -748,7 +738,7 @@ async function doRefreshAvatar(meta: AvatarMeta, signal: Readonly<AbortSignal>):
       hostname,
       port,
       path,
-      headers,
+      headers: {},
       timeoutMs: FETCH_TIMEOUT_MS,
       maxBytes: MAX_AVATAR_BYTES,
       signal,
