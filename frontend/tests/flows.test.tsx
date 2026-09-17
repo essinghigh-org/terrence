@@ -511,6 +511,8 @@ test("assigns an SSH key and enables workspace health assessments", async () => 
     const url = getUrlString(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") return json({ data: workspace });
     if (url === "/api/v2/organizations/acme/ssh-keys") {
+      // Keep options loading past the initial render to exercise the readiness check.
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
       return json({ data: [{ id: "ssh-1", attributes: { name: "Deploy key" } }] });
     }
     if (url === "/api/v2/workspaces/ws-1/relationships/ssh-key" && init?.method === "PATCH") {
@@ -543,7 +545,11 @@ test("assigns an SSH key and enables workspace health assessments", async () => 
   );
   const view = render(tree("ssh-key"));
 
-  await waitFor((): void => { expect(view.getByLabelText("Assigned key")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByRole("option", { name: "Deploy key" })).toBeTruthy();
+    expect(view.getByLabelText("Assigned key").hasAttribute("disabled")).toBe(false);
+  });
+
   fireEvent.change(view.getByLabelText("Assigned key"), { target: { value: "ssh-1" } });
   await act(async () => {
     const form = view.getByRole("button", { name: "Save assignment" }).closest("form");
