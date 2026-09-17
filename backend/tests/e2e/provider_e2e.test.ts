@@ -1,5 +1,6 @@
 import { describe, expect, test, beforeAll } from "bun:test";
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   writeFileSync,
@@ -44,6 +45,7 @@ const BACKEND_DIR = join(REPO_ROOT, "backend");
 // from OOM-killing the host gateway during e2e runs.
 const SHARED_BINARY_CACHE = join(BACKEND_DIR, "storage", "binaries");
 const SHARED_PLUGIN_CACHE = join(BACKEND_DIR, "storage", "e2e-plugin-cache");
+const REGISTRY_INSPECTOR_AVAILABLE = existsSync(join(BACKEND_DIR, "bin", "terraform-config-inspect"));
 
 const sleep = (ms: number): Promise<void> => new Promise((resolveFn) => setTimeout(resolveFn, ms));
 
@@ -2009,44 +2011,11 @@ data "tfe_scim_token" "d_stok" {
 `;
 
           // tfe_no_code_module needs a PUBLISHED registry module version
-          // (status "ok"). Treat fixture setup failures as test failures so the HCL
-          // remains static and never depends on network-returned values.
-          const modRes = await api(
-            backend.port,
-            "GET",
-            `/api/v2/organizations/pe2e-org-${suffix}/registry-modules/private/pe2e-org-${suffix}/pe2e-mod-${suffix}/aws`,
-            undefined,
-            auth.token,
-          );
-          expect(modRes.status).toBe(200);
-          const moduleId = modRes.json["data"]?.id as string | undefined;
-          expect(typeof moduleId).toBe("string");
-          if (typeof moduleId !== "string") throw new Error("registry module fixture id missing");
-          const verRes = await api(
-            backend.port,
-            "POST",
-            `/api/v2/registry-modules/${moduleId}/versions`,
-            {
-              data: { type: "registry-module-versions", attributes: { version: "1.0.0" } },
-            },
-            auth.token,
-          );
-          expect(verRes.status).toBe(201);
-          const versionId = verRes.json["data"]?.id as string | undefined;
-          expect(typeof versionId).toBe("string");
-          if (typeof versionId !== "string") throw new Error("registry module version fixture id missing");
-          await makeRegistryModuleArchive(join(workDir, "modver.tar.gz"));
-          const upload = await fetch(
-            `http://127.0.0.1:${backend.port}/api/v2/registry-module-versions/${versionId}/upload`,
-            {
-              method: "PUT",
-              headers: { "Content-Type": "application/octet-stream", Authorization: `Bearer ${auth.token}` },
-              body: await Bun.file(join(workDir, "modver.tar.gz")).arrayBuffer(),
-            },
-          );
-          expect(upload.status).toBe(200);
-          await upload.body?.cancel();
-          const noCodeTf = `resource "tfe_no_code_module" "ncm" {
+          // (status "ok"). Provider-matrix CI intentionally does not build the
+          // registry inspector, so gate this fixture on the local capability —
+          // never on network-returned data — to keep generated HCL untainted.
+          const noCodeTf = REGISTRY_INSPECTOR_AVAILABLE
+            ? `resource "tfe_no_code_module" "ncm" {
   organization    = "pe2e-org-${suffix}"
   registry_module = tfe_registry_module.regmod.id
   version_pin     = "1.0.0"
@@ -2054,7 +2023,45 @@ data "tfe_scim_token" "d_stok" {
 data "tfe_no_code_module" "d_ncm" {
   id = tfe_no_code_module.ncm.id
 }
-`;
+`
+            : "";
+          if (REGISTRY_INSPECTOR_AVAILABLE) {
+            const modRes = await api(
+              backend.port,
+              "GET",
+              `/api/v2/organizations/pe2e-org-${suffix}/registry-modules/private/pe2e-org-${suffix}/pe2e-mod-${suffix}/aws`,
+              undefined,
+              auth.token,
+            );
+            expect(modRes.status).toBe(200);
+            const moduleId = modRes.json["data"]?.id as string | undefined;
+            expect(typeof moduleId).toBe("string");
+            if (typeof moduleId !== "string") throw new Error("registry module fixture id missing");
+            const verRes = await api(
+              backend.port,
+              "POST",
+              `/api/v2/registry-modules/${moduleId}/versions`,
+              {
+                data: { type: "registry-module-versions", attributes: { version: "1.0.0" } },
+              },
+              auth.token,
+            );
+            expect(verRes.status).toBe(201);
+            const versionId = verRes.json["data"]?.id as string | undefined;
+            expect(typeof versionId).toBe("string");
+            if (typeof versionId !== "string") throw new Error("registry module version fixture id missing");
+            await makeRegistryModuleArchive(join(workDir, "modver.tar.gz"));
+            const upload = await fetch(
+              `http://127.0.0.1:${backend.port}/api/v2/registry-module-versions/${versionId}/upload`,
+              {
+                method: "PUT",
+                headers: { "Content-Type": "application/octet-stream", Authorization: `Bearer ${auth.token}` },
+                body: await Bun.file(join(workDir, "modver.tar.gz")).arrayBuffer(),
+              },
+            );
+            expect(upload.status).toBe(200);
+            await upload.body?.cancel();
+          }
 
           // tfe_workspace_run triggers a real run on pe2e-ws, whose config was
           // uploaded by planAndApply above; the run executes via the worker.
@@ -2110,8 +2117,10 @@ data "tfe_no_code_module" "d_ncm" {
             expect(stateList2.out).toContain("tfe_scim_group_mapping.sgm");
             expect(stateList2.out).toContain("data.tfe_scim_group.d_sgroup");
             expect(stateList2.out).toContain("data.tfe_scim_token.d_stok");
-            expect(stateList2.out).toContain("tfe_no_code_module.ncm");
-            expect(stateList2.out).toContain("data.tfe_no_code_module.d_ncm");
+            if (noCodeTf !== "") {
+              expect(stateList2.out).toContain("tfe_no_code_module.ncm");
+              expect(stateList2.out).toContain("data.tfe_no_code_module.d_ncm");
+            }
           }
           // tfe_workspace_run should be present after the second apply.
           {
