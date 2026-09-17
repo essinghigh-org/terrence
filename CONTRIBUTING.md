@@ -22,8 +22,11 @@ ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
 ### Code Style
 
 - **TypeScript strict mode** is enforced. Run `bun run typecheck` from the repo root before committing (it typechecks backend and frontend).
-- **ESLint** is configured for backend, frontend, and scripts. Run `bun run lint` from the repo root. Lint output is informational; the `lint:budget` gate fails only when the error count grows — do not grow it, and ratchet `scripts/lint-budget.ts` down when you fix a class of findings.
-- **Prettier** formatting is not enforced — use your editor defaults.
+- **ESLint** handles linting for backend, frontend, and scripts. Run `bun run lint:budget`; the enforced budget is zero errors and zero warnings.
+- **Biome** handles formatting only; its linter and assists (including import organization) are disabled. Run `bun run format` to format supported files, or `bun run format:check` for a read-only repository check. Existing files have not been bulk-formatted, so this check is not yet a CI gate. For a focused change, use `bun run biome format --write path/to/file.ts` and `bun run biome format path/to/file.ts`. Style uses two spaces, double quotes, semicolons, LF endings, and a 120-column target.
+- Generated migrations, generated assets, runtime data, and fixtures are excluded in `biome.json`. Markdown, YAML, and other unsupported languages are not formatted.
+- Use the Biome editor extension for formatting, but keep ESLint diagnostics enabled. Do not enable Biome lint fixes or import organization.
+- Keep bulk formatting separate from functional changes. The existing pre-commit hook still only handles migration generation; it does not run Biome or rewrite staged files.
 
 ### Testing
 

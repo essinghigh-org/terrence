@@ -8,6 +8,7 @@
   "description": "Self-hosted platform for OpenTofu and Terraform remote workflows",
   "license": "MIT",
   "devDependencies": {
+    "@biomejs/biome": "2.5.13",
     "eslint": "^10.10.0",
     "knip": "^6.34.0",
     "typescript": "npm:@typescript/typescript6@6.0.2",
@@ -37,6 +38,8 @@
     "test:profile:browser": "bun run backend/scripts/test-profile.ts browser",
     "test": "bun run test:backend && bun run test:frontend",
     "test:changed": "bun test --changed=master --max-concurrency=1 --no-orphans",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
     "lint": "eslint .",
     "lint:budget": "bun scripts/lint-budget.ts",
     "lint:fix": "eslint . --fix",
