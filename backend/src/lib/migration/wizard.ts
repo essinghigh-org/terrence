@@ -987,12 +987,12 @@ async function seedMigrationJournal(target: MigrationSql): Promise<void> {
 
 async function verifyJournal(target: MigrationSql): Promise<boolean> {
   const expectedRows = postgresMigrationJournalRows();
-  const targetRows = await target.unsafe<MigrationJournalRow>(
+  const targetRows = await target.unsafe<Readonly<{ hash: string; createdAt: number | string | bigint }>>(
     "SELECT hash, created_at::bigint AS \"createdAt\" FROM drizzle.__drizzle_migrations ORDER BY id",
   );
   if (expectedRows.length !== targetRows.length) return false;
   return expectedRows.every((row, index): boolean =>
-    row.hash === targetRows[index]?.hash && row.createdAt === (targetRows[index]?.createdAt ?? 0));
+    row.hash === targetRows[index]?.hash && row.createdAt === Number(targetRows[index]?.createdAt ?? 0));
 }
 
 function emptyReport(): MigrationReport {

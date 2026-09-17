@@ -131,6 +131,8 @@ export const eventsRoutes = new Elysia({ name: "events" })
     const stream = new ReadableStream<Uint8Array>({
       start(controller: ReadableStreamDefaultController<Uint8Array>) {
         let cleanedUp = false;
+        // eslint-disable-next-line prefer-const -- cleanup can run before the timer is assigned; const would introduce a temporal dead zone
+        let lifetime: ReturnType<typeof setTimeout> | undefined;
         const baseCleanup = (): void => {
           if (cleanedUp) return;
           cleanedUp = true;
@@ -205,7 +207,7 @@ export const eventsRoutes = new Elysia({ name: "events" })
 
         // One-hour lifetime: the permission snapshot ages; closing forces
         // clients to reconnect and re-resolve permissions.
-        const lifetime = setTimeout(cleanup, 60 * 60 * 1000);
+        lifetime = setTimeout(cleanup, 60 * 60 * 1000);
         const abort = (): void => {
           cleanup();
         };

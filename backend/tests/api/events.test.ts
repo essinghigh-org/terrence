@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { app } from "../../src/app";
 import { publish } from "../../src/lib/event-bus";
 import { db } from "../../src/db";
@@ -72,6 +72,22 @@ describe("authenticated SSE event stream", () => {
   it("requires authentication", async () => {
     const response = await app.handle(new Request("http://localhost/api/v2/events"));
     expect(response.status).toBe(401);
+  });
+
+  it("cleans up when the initial connected frame cannot be enqueued", async () => {
+    const enqueue = spyOn(ReadableStreamDefaultController.prototype, "enqueue").mockImplementationOnce((): never => {
+      throw new Error("Test stream closed during initial enqueue");
+    });
+    try {
+      const response = await app.handle(new Request("http://localhost/api/v2/events", { headers }));
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("");
+    } finally {
+      enqueue.mockRestore();
+    }
+    const reader = await openStream(headers);
+    await reader.cancel();
+    reader.releaseLock();
   });
 
   it("streams run.status events to org members", async () => {
