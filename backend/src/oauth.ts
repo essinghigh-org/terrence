@@ -71,15 +71,17 @@ function validRedirectUri(value: string): boolean {
   try {
     const url = new URL(value);
     const port = Number(url.port);
-    return url.protocol === "http:"
-      && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
-      && port >= MIN_PORT
-      && port <= MAX_PORT
-      && url.pathname === "/login"
-      && url.username === ""
-      && url.password === ""
-      && url.search === ""
-      && url.hash === "";
+    return (
+      url.protocol === "http:" &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
+      port >= MIN_PORT &&
+      port <= MAX_PORT &&
+      url.pathname === "/login" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === ""
+    );
   } catch {
     return false;
   }
@@ -95,12 +97,12 @@ function parseAuthorizationRequest(input: unknown): AuthorizationRequest | null 
   };
 
   if (
-    request.clientId !== CLIENT_ID
-    || request.responseType !== "code"
-    || field(input, "code_challenge_method") !== "S256"
-    || !/^[A-Za-z0-9_-]{43}$/.test(request.codeChallenge)
-    || request.state === ""
-    || !validRedirectUri(request.redirectUri)
+    request.clientId !== CLIENT_ID ||
+    request.responseType !== "code" ||
+    field(input, "code_challenge_method") !== "S256" ||
+    !/^[A-Za-z0-9_-]{43}$/.test(request.codeChallenge) ||
+    request.state === "" ||
+    !validRedirectUri(request.redirectUri)
   ) {
     return null;
   }
@@ -118,9 +120,7 @@ function tokenClientId(body: unknown, request: RequestWithHeaders): string {
   if (typeof authorization !== "string" || !authorization.startsWith("Basic ")) return "";
 
   try {
-    return Buffer.from(authorization.slice(6), "base64").toString("utf8") === `${CLIENT_ID}:`
-      ? CLIENT_ID
-      : "";
+    return Buffer.from(authorization.slice(6), "base64").toString("utf8") === `${CLIENT_ID}:` ? CLIENT_ID : "";
   } catch {
     return "";
   }
@@ -150,7 +150,8 @@ function isCrossSiteNavigation(request: RequestInfo | undefined): boolean {
   if (request === undefined) return false;
   const fetchSite = request.headers.get("sec-fetch-site")?.trim().toLowerCase();
   if (fetchSite === "cross-site") return true;
-  if (fetchSite !== undefined && fetchSite !== "" && !["none", "same-origin", "same-site"].includes(fetchSite)) return true;
+  if (fetchSite !== undefined && fetchSite !== "" && !["none", "same-origin", "same-site"].includes(fetchSite))
+    return true;
 
   let requestOrigin: string;
   try {
@@ -193,10 +194,7 @@ function readOauthStateCookie(request: RequestInfo | undefined): string | undefi
  * Issue a PKCE authorization code for `userId` and redirect Terraform's local
  * callback.
  */
-async function approveForUser(
-  authorization: Readonly<AuthorizationRequest>,
-  userId: string,
-): Promise<Response> {
+async function approveForUser(authorization: Readonly<AuthorizationRequest>, userId: string): Promise<Response> {
   const now = Date.now();
   const code = crypto.randomUUID();
   await putAuthCode(code, {
@@ -219,7 +217,11 @@ async function approveForUser(
   });
 }
 
-function oauthError(set: { status?: number | string; headers: Record<string, string | number> }, error: string): { error: string } { // eslint-disable-line @typescript-eslint/prefer-readonly-parameter-types
+function oauthError(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  set: { status?: number | string; headers: Record<string, string | number> },
+  error: string,
+): { error: string } {
   set.status = 400;
   set.headers["Cache-Control"] = "no-store";
   set.headers["Pragma"] = "no-cache";
@@ -234,7 +236,8 @@ function plainError(message: string, status = 400): Response {
 }
 
 export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
-  .get("/oauth/authorization", async ({ query, request }: OAuthQueryCtx): Promise<Response> => { // eslint-disable-line @typescript-eslint/prefer-readonly-parameter-types
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  .get("/oauth/authorization", async ({ query, request }: OAuthQueryCtx): Promise<Response> => {
     const authorization = parseAuthorizationRequest(query);
     if (authorization === null) {
       return plainError("Invalid authorization request.");
@@ -277,7 +280,8 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       },
     });
   })
-  .get("/oauth/authorization/complete", async ({ query, request }: OAuthQueryCtx): Promise<Response> => { // eslint-disable-line @typescript-eslint/prefer-readonly-parameter-types
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  .get("/oauth/authorization/complete", async ({ query, request }: OAuthQueryCtx): Promise<Response> => {
     const oauthState = field(query, "oauth_state");
     const cookieState = readOauthStateCookie(request);
     if (oauthState === "" || cookieState === undefined || oauthState !== cookieState) {
@@ -318,10 +322,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     return await approveForUser(pending.authorization, details.user.id);
   })
   .post("/oauth/token", async ({ body, request, set }): Promise<Record<string, string>> => {
-    if (
-      field(body, "grant_type") !== "authorization_code"
-      || tokenClientId(body, request) !== CLIENT_ID
-    ) {
+    if (field(body, "grant_type") !== "authorization_code" || tokenClientId(body, request) !== CLIENT_ID) {
       return oauthError(set, "invalid_request");
     }
 
@@ -331,9 +332,9 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
 
     const verifier = field(body, "code_verifier");
     if (
-      entry.expiresAt <= Date.now()
-      || field(body, "redirect_uri") !== entry.redirectUri
-      || !await verifyPkceVerifier(verifier, entry.codeChallenge)
+      entry.expiresAt <= Date.now() ||
+      field(body, "redirect_uri") !== entry.redirectUri ||
+      !(await verifyPkceVerifier(verifier, entry.codeChallenge))
     ) {
       return oauthError(set, "invalid_grant");
     }
@@ -347,12 +348,10 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
 
       // Acquire a row lock on PostgreSQL and a serialized write slot on
       // SQLite without overwriting a suspension committed by another request.
-      await tx.update(users)
+      await tx
+        .update(users)
         .set({ isSuspended: false })
-        .where(and(
-          eq(users.id, currentUser.id),
-          or(eq(users.isSuspended, false), isNull(users.isSuspended)),
-        ));
+        .where(and(eq(users.id, currentUser.id), or(eq(users.isSuspended, false), isNull(users.isSuspended))));
       const eligibleUser = await tx.query.users.findFirst({ where: eq(users.id, currentUser.id) });
       if (eligibleUser === undefined || isUserLoginBlocked(eligibleUser)) return false;
 

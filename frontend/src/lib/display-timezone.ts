@@ -17,9 +17,7 @@ function readStoredTimezone(): DisplayTimezone {
   try {
     const stored = window.localStorage.getItem(TIMEZONE_STORAGE_KEY);
     // SAFETY: the stored preference is validated by the fallback below.
-    return stored !== null && STORED_TIMEZONES.has(stored)
-      ? (stored as DisplayTimezone)
-      : "local";
+    return stored !== null && STORED_TIMEZONES.has(stored) ? (stored as DisplayTimezone) : "local";
   } catch {
     // Storage unavailable (privacy mode, SSR): default to local timezone.
     return "local";

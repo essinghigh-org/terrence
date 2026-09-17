@@ -46,7 +46,9 @@ describe("bounded parser properties", () => {
         const hclSource = seed.name === "json-prefix" ? `${prefix}# truncated` : prefix;
         try {
           if (seed.name === "json-prefix") {
-            expect(parseTerraformVariablesJson(prefix).length).toBeLessThanOrEqual(TERRAFORM_VARIABLE_PARSER_LIMITS.maxVariables);
+            expect(parseTerraformVariablesJson(prefix).length).toBeLessThanOrEqual(
+              TERRAFORM_VARIABLE_PARSER_LIMITS.maxVariables,
+            );
           } else {
             const parsed = parseTerraformVariablesWithDiagnostics(hclSource);
             expect(parsed.variables.length).toBeLessThanOrEqual(TERRAFORM_VARIABLE_PARSER_LIMITS.maxVariables);
@@ -56,7 +58,6 @@ describe("bounded parser properties", () => {
           expect(typedParserFailure(error), `${seed.name} case ${caseIndex}: ${String(error)}`).toBe(true);
           if (prefix.length > 0) expect(String(error)).not.toContain(prefix.slice(0, 80));
         }
-
       }
     }
     // A pathological prefix must remain a bounded operation.  This is a

@@ -29,14 +29,16 @@ describe("TOTP seed encryption at rest", () => {
   };
 
   const api = (method: string, path: string, body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
@@ -55,7 +57,9 @@ describe("TOTP seed encryption at rest", () => {
   });
 
   it("enroll stores the seed only encrypted; verify migrates legacy plaintext", async () => {
-    const enroll = await api("POST", "/api/v2/account/mfa/enroll", { data: { attributes: { "current-password": password } } });
+    const enroll = await api("POST", "/api/v2/account/mfa/enroll", {
+      data: { attributes: { "current-password": password } },
+    });
     expect(enroll.status).toBe(200);
     const row = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, userId) });
     expect(row).toBeDefined();
@@ -66,7 +70,9 @@ describe("TOTP seed encryption at rest", () => {
 
     // A valid code flips enrollment on (seed resolves from the encrypted col).
     const enrollBody = (await enroll.json()) as { data: { attributes: { secret: string } } };
-    const { generateTotpCode } = (await import("../../src/lib/totp")) as unknown as { generateTotpCode: (s: string) => string };
+    const { generateTotpCode } = (await import("../../src/lib/totp")) as unknown as {
+      generateTotpCode: (s: string) => string;
+    };
     const code = generateTotpCode(enrollBody.data.attributes.secret);
     const verify = await api("POST", "/api/v2/account/mfa/verify", { data: { attributes: { code } } });
     expect(verify.status).toBe(200);
@@ -81,21 +87,27 @@ describe("TOTP seed encryption at rest", () => {
     const userId2 = `user-legacy-${suffix}`;
     const legacyPasswordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
     await db.insert(users).values({ id: userId2, username: userId2, passwordHash: legacyPasswordHash });
-    await db.insert(apiTokens).values({ id: crypto.randomUUID(), token: hashAuthenticationToken(`legacy-token-${suffix}`), userId: userId2 });
+    await db
+      .insert(apiTokens)
+      .values({ id: crypto.randomUUID(), token: hashAuthenticationToken(`legacy-token-${suffix}`), userId: userId2 });
     const legacySecret = base32(`legacy-${suffix}`);
     await db.insert(user2FA).values({ userId: userId2, secret: legacySecret, enabled: false });
 
     const { verifyTotp } = await import("../../src/lib/totp");
-    const { generateTotpCode } = (await import("../../src/lib/totp")) as unknown as { generateTotpCode: (s: string) => string };
+    const { generateTotpCode } = (await import("../../src/lib/totp")) as unknown as {
+      generateTotpCode: (s: string) => string;
+    };
     const code = generateTotpCode(legacySecret);
     expect(verifyTotp(legacySecret, code)).toBe(true);
 
     const legacyAuth = `legacy-token-${suffix}`;
-    const verify = await app.handle(new Request("http://terrence.test/api/v2/account/mfa/verify", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${legacyAuth}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({ data: { attributes: { code } } }),
-    }));
+    const verify = await app.handle(
+      new Request("http://terrence.test/api/v2/account/mfa/verify", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${legacyAuth}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({ data: { attributes: { code } } }),
+      }),
+    );
     expect(verify.status).toBe(200);
 
     const row = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, userId2) });

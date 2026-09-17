@@ -421,8 +421,8 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
   expect(result["planCurrentOperation"]).toBe("plan");
   expect(result["planTerraformVersion"]).toBe("1.9.5");
   expect(result["planVariables"]).toBe("{}");
-  expect(result["environment"]).toContain("\"TF_VAR_OPENCODE_API_KEY\":\"secret-key-123\"");
-  expect(result["environment"]).toContain("\"TFE_TOKEN\":\"trun-something\"");
+  expect(result["environment"]).toContain('"TF_VAR_OPENCODE_API_KEY":"secret-key-123"');
+  expect(result["environment"]).toContain('"TFE_TOKEN":"trun-something"');
   expect(result["hasPlanJsonUrl"]).toBe(true);
   expect(result["secondClaimStatus"]).toBe(200);
   expect(result["secondClaimJobId"]).toBe("ajob1");

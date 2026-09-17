@@ -96,7 +96,7 @@ test("agent heartbeat and token lastUsedAt writes are throttled (kanban 9.12, 5.
   const databaseUrl = `file:${join(dir, "test.db")}`;
   const result = Bun.spawnSync([Bun.which("bun")!, "-e", script], {
     cwd: join(import.meta.dir, "../.."),
-    env: { ...process.env as Record<string, string>, DATABASE_URL: databaseUrl },
+    env: { ...(process.env as Record<string, string>), DATABASE_URL: databaseUrl },
     stdout: "pipe",
     stderr: "pipe",
   });

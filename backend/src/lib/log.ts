@@ -1,6 +1,12 @@
 import { loggingSetting } from "./runtime-config";
 import { validateSettings } from "./settings-contract";
-import { formatSyslogMessage, resolveHostname, resolveSyslogFormat, type SyslogFormat, UDP_JSON_BODY_BUDGET } from "./syslog-format";
+import {
+  formatSyslogMessage,
+  resolveHostname,
+  resolveSyslogFormat,
+  type SyslogFormat,
+  UDP_JSON_BODY_BUDGET,
+} from "./syslog-format";
 import type { DeepReadonly } from "./types";
 import {
   closeSyslogTransports,
@@ -93,26 +99,28 @@ export function applyLoggingSettings(settings: Readonly<Record<string, unknown>>
   const configuredEnabled = settings["enabled"];
   const configuredFormat = settingString(settings, "syslog-format");
   const next: LoggingConfiguration = {
-    enabled: typeof configuredEnabled === "boolean"
-      ? configuredEnabled
-      : (configuredTargets ?? environment.syslogTargets).length > 0,
-    logLevel: configuredLogLevel === undefined
-      ? environment.logLevel
-      : resolveLogLevel(configuredLogLevel, environment.logLevel),
-    syslogLevel: configuredSyslogLevel === undefined
-      ? environment.syslogLevel
-      : resolveLogLevel(configuredSyslogLevel, environment.syslogLevel),
+    enabled:
+      typeof configuredEnabled === "boolean"
+        ? configuredEnabled
+        : (configuredTargets ?? environment.syslogTargets).length > 0,
+    logLevel:
+      configuredLogLevel === undefined
+        ? environment.logLevel
+        : resolveLogLevel(configuredLogLevel, environment.logLevel),
+    syslogLevel:
+      configuredSyslogLevel === undefined
+        ? environment.syslogLevel
+        : resolveLogLevel(configuredSyslogLevel, environment.syslogLevel),
     syslogTargets: configuredTargets ?? environment.syslogTargets,
     syslogHostname: settingString(settings, "syslog-hostname") ?? environment.syslogHostname,
     syslogApp: settingString(settings, "syslog-app") ?? environment.syslogApp,
-    syslogFormat: configuredFormat === undefined
-      ? environment.syslogFormat
-      : resolveSyslogFormat(configuredFormat),
+    syslogFormat: configuredFormat === undefined ? environment.syslogFormat : resolveSyslogFormat(configuredFormat),
   };
   if (
-    targetSetChanged(loggingConfiguration.syslogTargets, next.syslogTargets)
-    || loggingConfiguration.enabled !== next.enabled
-  ) closeSyslogTransports();
+    targetSetChanged(loggingConfiguration.syslogTargets, next.syslogTargets) ||
+    loggingConfiguration.enabled !== next.enabled
+  )
+    closeSyslogTransports();
   loggingConfiguration = next;
 }
 
@@ -145,12 +153,16 @@ const MAX_ERROR_COLLECTION_ITEMS = 16;
 const MAX_ERROR_CAUSE_DEPTH = 3;
 const ERROR_TRUNCATION_SUFFIX = "…[truncated]";
 const REDACTED_LOG_VALUE = "[REDACTED]";
-const SENSITIVE_LOG_KEY_PATTERN = /(?:authorization|cookie|credential|password|passphrase|secret|token|privatekey|signingkey|apikey)/i;
-const PRIVATE_KEY_PATTERN = /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/gi;
+const SENSITIVE_LOG_KEY_PATTERN =
+  /(?:authorization|cookie|credential|password|passphrase|secret|token|privatekey|signingkey|apikey)/i;
+const PRIVATE_KEY_PATTERN =
+  /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/gi;
 const BEARER_OR_BASIC_PATTERN = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
-const URL_SECRET_PARAMETER_PATTERN = /([?&](?:access[_-]?token|api[_-]?key|id[_-]?token|refresh[_-]?token|secret|password|signature|token)=)[^&#\s]*/gi;
+const URL_SECRET_PARAMETER_PATTERN =
+  /([?&](?:access[_-]?token|api[_-]?key|id[_-]?token|refresh[_-]?token|secret|password|signature|token)=)[^&#\s]*/gi;
 const URL_USERINFO_PASSWORD_PATTERN = /(\b[a-z][a-z\d+.-]*:\/\/[^\/\s:@]*):[^\/\s@]+@/gi;
-const KEY_VALUE_SECRET_PATTERN = /((?:^|[,{\s;])['"]?(?:access[_-]?token|api[_-]?key|authorization|cookie|id[_-]?token|password|passphrase|private[_-]?key|refresh[_-]?token|secret|token)['"]?\s*[:=]\s*)(?:(['"])(?:\\.|(?!\2)[\s\S])*\2|[^,'"}\s]+)/gi;
+const KEY_VALUE_SECRET_PATTERN =
+  /((?:^|[,{\s;])['"]?(?:access[_-]?token|api[_-]?key|authorization|cookie|id[_-]?token|password|passphrase|private[_-]?key|refresh[_-]?token|secret|token)['"]?\s*[:=]\s*)(?:(['"])(?:\\.|(?!\2)[\s\S])*\2|[^,'"}\s]+)/gi;
 const KNOWN_TOKEN_PATTERN = /\b(?:gh[pousr]_|github_pat_|glpat-|xox[baprs]-)[A-Za-z0-9_\-]+/gi;
 
 type ErrorWithOptionalCause = Error & { cause?: unknown; errors?: unknown };
@@ -256,7 +268,12 @@ function serializeNestedError(
     }
     return serializeLogErrorInternal(value, depth, active);
   }
-  return safeErrorScalar(value, MAX_ERROR_DETAIL_STRING_LENGTH) ?? { name: "NonErrorThrown", message: "[Non-error cause omitted]" };
+  return (
+    safeErrorScalar(value, MAX_ERROR_DETAIL_STRING_LENGTH) ?? {
+      name: "NonErrorThrown",
+      message: "[Non-error cause omitted]",
+    }
+  );
 }
 
 function serializeLogErrorInternal(
@@ -273,7 +290,8 @@ function serializeLogErrorInternal(
       name: truncateLogString(redactSensitiveString(value.name), MAX_ERROR_STRING_LENGTH),
       message: truncateLogString(redactSensitiveString(value.message), MAX_ERROR_STRING_LENGTH),
     };
-    if (value.stack !== undefined) serialized["stack"] = truncateLogString(redactSensitiveString(value.stack), MAX_ERROR_STRING_LENGTH);
+    if (value.stack !== undefined)
+      serialized["stack"] = truncateLogString(redactSensitiveString(value.stack), MAX_ERROR_STRING_LENGTH);
     if (value.cause !== undefined) serialized["cause"] = serializeNestedError(value.cause, depth + 1, active);
     if (Array.isArray(value.errors)) {
       const errors = value.errors
@@ -288,10 +306,11 @@ function serializeLogErrorInternal(
     const details: Record<string, SafeErrorScalar> = {};
     for (const key of Object.keys(value)) {
       if (
-        ERROR_RESERVED_KEYS.has(key)
-        || !SAFE_ERROR_DETAIL_KEYS.has(key)
-        || Object.keys(details).length >= MAX_ERROR_DETAIL_KEYS
-      ) continue;
+        ERROR_RESERVED_KEYS.has(key) ||
+        !SAFE_ERROR_DETAIL_KEYS.has(key) ||
+        Object.keys(details).length >= MAX_ERROR_DETAIL_KEYS
+      )
+        continue;
       let detail: unknown;
       try {
         detail = Reflect.get(value, key);
@@ -354,7 +373,9 @@ function sendSyslogEntry(
           appName: configuration.syslogApp,
           procId: String(process.pid),
         },
-        target.transport === "udp" ? { maxBodyBytes: UDP_JSON_BODY_BUDGET, format: configuration.syslogFormat } : { format: configuration.syslogFormat },
+        target.transport === "udp"
+          ? { maxBodyBytes: UDP_JSON_BODY_BUDGET, format: configuration.syslogFormat }
+          : { format: configuration.syslogFormat },
       );
       try {
         sendSyslogFrame(target, frame, { jsonBody: configuration.syslogFormat === "json" });
@@ -367,7 +388,11 @@ function sendSyslogEntry(
   }
 }
 
-function writeConsoleEntry(level: LogLevel, safeMessage: string, safeMeta: Readonly<Record<string, unknown>> | undefined): void {
+function writeConsoleEntry(
+  level: LogLevel,
+  safeMessage: string,
+  safeMeta: Readonly<Record<string, unknown>> | undefined,
+): void {
   try {
     const entry: Record<string, unknown> = {
       timestamp: new Date().toISOString(),
@@ -387,11 +412,11 @@ function writeConsoleEntry(level: LogLevel, safeMessage: string, safeMeta: Reado
 function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<string, unknown>>): void {
   const configuration = loggingConfiguration;
   const safeMessage = redactSensitiveString(message);
-  const safeMeta = meta === undefined ? undefined : redactLogValue(meta) as Readonly<Record<string, unknown>>;
+  const safeMeta = meta === undefined ? undefined : (redactLogValue(meta) as Readonly<Record<string, unknown>>);
   if (
-    configuration.enabled
-    && configuration.syslogTargets.length > 0
-    && isLogLevelEnabled(level, configuration.syslogLevel)
+    configuration.enabled &&
+    configuration.syslogTargets.length > 0 &&
+    isLogLevelEnabled(level, configuration.syslogLevel)
   ) {
     sendSyslogEntry(level, safeMessage, safeMeta, configuration);
   }
@@ -400,10 +425,18 @@ function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<
 }
 
 export const log = {
-  error: (msg: string, meta?: Readonly<Record<string, unknown>>): void => { structuredLog("error", msg, meta); },
-  warn: (msg: string, meta?: Readonly<Record<string, unknown>>): void => { structuredLog("warn", msg, meta); },
-  info: (msg: string, meta?: Readonly<Record<string, unknown>>): void => { structuredLog("info", msg, meta); },
-  debug: (msg: string, meta?: Readonly<Record<string, unknown>>): void => { structuredLog("debug", msg, meta); },
+  error: (msg: string, meta?: Readonly<Record<string, unknown>>): void => {
+    structuredLog("error", msg, meta);
+  },
+  warn: (msg: string, meta?: Readonly<Record<string, unknown>>): void => {
+    structuredLog("warn", msg, meta);
+  },
+  info: (msg: string, meta?: Readonly<Record<string, unknown>>): void => {
+    structuredLog("info", msg, meta);
+  },
+  debug: (msg: string, meta?: Readonly<Record<string, unknown>>): void => {
+    structuredLog("debug", msg, meta);
+  },
 };
 
 /** Test/shutdown hook: close UDP socket and TCP connections. */

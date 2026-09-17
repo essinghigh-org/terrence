@@ -90,11 +90,18 @@ for (const engine of ["terraform", "tofu"] as const) {
         stderr: "pipe",
         timeout: 120_000,
       });
-      const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
       expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
       return stdout;
     };
-    const apply = async (cwd: string, value: string): Promise<{ raw: string; serial: number; stateLineage: string }> => {
+    const apply = async (
+      cwd: string,
+      value: string,
+    ): Promise<{ raw: string; serial: number; stateLineage: string }> => {
       await writeFile(join(cwd, "main.tf"), CONFIG(value));
       await runCli(cwd, "init", "-input=false", "-no-color");
       // -refresh=false keeps the serial advance to exactly one per apply: a
@@ -117,7 +124,9 @@ for (const engine of ["terraform", "tofu"] as const) {
         body,
       });
     const latestSerial = async (): Promise<number> => {
-      const body = (await (await request(`/api/v2/workspaces/${workspaceId}/state-versions`, { headers })).json()) as { data: JsonApiResource[] };
+      const body = (await (await request(`/api/v2/workspaces/${workspaceId}/state-versions`, { headers })).json()) as {
+        data: JsonApiResource[];
+      };
       return Math.max(...body.data.map((entry) => entry.attributes["serial"] as number));
     };
 
@@ -129,7 +138,9 @@ for (const engine of ["terraform", "tofu"] as const) {
       await persistSeed(seed);
       await db.insert(workspaces).values({ id: workspaceId, name: `cli-lifecycle-${engine}`, orgId: seed.orgId });
       await db.insert(runs).values({ id: runId, workspaceId, status: "planned", createdAt: Date.now() });
-      expect((await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, { method: "POST", headers })).status).toBe(200);
+      expect(
+        (await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, { method: "POST", headers })).status,
+      ).toBe(200);
     }, 180_000);
 
     afterAll(async () => {
@@ -178,20 +189,30 @@ for (const engine of ["terraform", "tofu"] as const) {
       const rival = JSON.parse(rivalRaw) as { serial: number; lineage: string };
       expect(rival.lineage).not.toBe(lineage);
       const current = await expectSuccessResponse(
-        await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, { headers }), 200, "state-versions",
+        await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, { headers }),
+        200,
+        "state-versions",
       );
       expect(rival.serial).toBeGreaterThan(current.attributes["serial"] as number);
       // The reservation records the declared lineage; the stale bytes are
       // rejected when they arrive, and current state never moves. Discarding
       // the spent reservation frees the serial for the legitimate writer.
       const reservation = await expectSuccessResponse(
-        await reserve(rival.serial, { lineage: rival.lineage }), 201, "state-versions",
+        await reserve(rival.serial, { lineage: rival.lineage }),
+        201,
+        "state-versions",
       );
-      expect((await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, reservation.id) }))?.expectedLineage).toBe(rival.lineage);
+      expect(
+        (await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, reservation.id) }))?.expectedLineage,
+      ).toBe(rival.lineage);
       expect((await put(reservation.id, rivalRaw)).status).toBe(422);
-      expect((await request(`/api/v2/state-versions/${reservation.id}`, { method: "DELETE", headers })).status).toBe(204);
+      expect((await request(`/api/v2/state-versions/${reservation.id}`, { method: "DELETE", headers })).status).toBe(
+        204,
+      );
       const stillCurrent = await expectSuccessResponse(
-        await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, { headers }), 200, "state-versions",
+        await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, { headers }),
+        200,
+        "state-versions",
       );
       expect(stillCurrent.id).toBe(current.id);
       expect(await (await request(`/api/v2/state-versions/${current.id}/download`, { headers })).text()).toBe(
@@ -207,7 +228,9 @@ for (const engine of ["terraform", "tofu"] as const) {
       // so only advancement — never the exact increment — is asserted.
       expect(second.serial).toBeGreaterThan(await latestSerial());
       const reserved = await expectSuccessResponse(
-        await reserve(second.serial, { lineage, md5: createHash("md5").update(second.raw).digest("hex") }), 201, "state-versions",
+        await reserve(second.serial, { lineage, md5: createHash("md5").update(second.raw).digest("hex") }),
+        201,
+        "state-versions",
       );
       expect((await put(reserved.id, second.raw)).status).toBe(200);
       // Tampered bytes against a checksum-bound reservation cannot replace
@@ -215,7 +238,15 @@ for (const engine of ["terraform", "tofu"] as const) {
       expect((await put(reserved.id, `${second.raw} `)).status).toBe(409);
       const download = await request(`/api/v2/state-versions/${reserved.id}/download`, { headers });
       await writeFile(join(directory, "terraform.tfstate"), await download.text());
-      await runCli(directory, "plan", "-refresh=false", "-lock=false", "-input=false", "-no-color", "-detailed-exitcode");
+      await runCli(
+        directory,
+        "plan",
+        "-refresh=false",
+        "-lock=false",
+        "-input=false",
+        "-no-color",
+        "-detailed-exitcode",
+      );
     }, 240_000);
 
     it("promotes an intermediate engine upload on unlock and keeps it CLI-readable", async () => {
@@ -238,16 +269,23 @@ for (const engine of ["terraform", "tofu"] as const) {
         }),
       });
       expect(created.status).toBe(201);
-      expect((await request(`/api/v2/workspaces/${workspaceId}/actions/unlock`, { method: "POST", headers })).status).toBe(200);
+      expect(
+        (await request(`/api/v2/workspaces/${workspaceId}/actions/unlock`, { method: "POST", headers })).status,
+      ).toBe(200);
       const current = await expectSuccessResponse(
-        await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, { headers }), 200, "state-versions",
+        await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, { headers }),
+        200,
+        "state-versions",
       );
       expect(current.attributes["serial"]).toBe(applied.serial);
       const currentText = await (await request(`/api/v2/state-versions/${current.id}/download`, { headers })).text();
       await writeFile(join(directory, "terraform.tfstate"), currentText);
-      expect(JSON.parse(await runCli(directory, "show", "-json", "terraform.tfstate")).values.outputs.sample.value)
-        .toBe("cli-lifecycle-intermediate");
-      expect((await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, { method: "POST", headers })).status).toBe(200);
+      expect(
+        JSON.parse(await runCli(directory, "show", "-json", "terraform.tfstate")).values.outputs.sample.value,
+      ).toBe("cli-lifecycle-intermediate");
+      expect(
+        (await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, { method: "POST", headers })).status,
+      ).toBe(200);
     }, 240_000);
 
     it("survives a crashed upload mid-body: nothing partial becomes current", async () => {
@@ -256,7 +294,9 @@ for (const engine of ["terraform", "tofu"] as const) {
       expect(applied.serial).toBeGreaterThan(await latestSerial());
       const reserved = await expectSuccessResponse(await reserve(applied.serial, { lineage }), 201, "state-versions");
       const priorCurrent = await expectSuccessResponse(
-        await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, { headers }), 200, "state-versions",
+        await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, { headers }),
+        200,
+        "state-versions",
       );
       const liveHeaders = { ...headers, "Content-Type": "application/json" };
       const encoder = new TextEncoder();
@@ -285,9 +325,13 @@ for (const engine of ["terraform", "tofu"] as const) {
         threw = true;
       }
       expect(threw || status !== 200).toBe(true);
-      expect((await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, reserved.id) }))?.status).toBe("pending");
+      expect((await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, reserved.id) }))?.status).toBe(
+        "pending",
+      );
       const currentAfterCrash = await expectSuccessResponse(
-        await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, { headers }), 200, "state-versions",
+        await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, { headers }),
+        200,
+        "state-versions",
       );
       expect(currentAfterCrash.id).toBe(priorCurrent.id);
       // The crashed PUT releases its server-side upload claim as its handler
@@ -311,35 +355,46 @@ for (const engine of ["terraform", "tofu"] as const) {
       expect(row?.status).toBe("finalized");
       expect(row?.uploadSha256).toBe(createHash("sha256").update(applied.raw).digest("hex"));
       const current = await expectSuccessResponse(
-        await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, { headers }), 200, "state-versions",
+        await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, { headers }),
+        200,
+        "state-versions",
       );
       expect(current.id).toBe(reserved.id);
     }, 240_000);
 
     it("rolls back to engine bytes as a new version and promotes CLI-read recovery", async () => {
       const serial = await latestSerial();
-      const body = (await (await request(`/api/v2/workspaces/${workspaceId}/state-versions`, { headers })).json()) as { data: JsonApiResource[] };
+      const body = (await (await request(`/api/v2/workspaces/${workspaceId}/state-versions`, { headers })).json()) as {
+        data: JsonApiResource[];
+      };
       const latest = body.data.find((entry) => entry.attributes["serial"] === serial);
       expect(latest).toBeDefined();
       const rolledBack = await expectSuccessResponse(
-        await request(`/api/v2/state-versions/${latest?.id ?? ""}/actions/rollback`, { method: "POST", headers }), 201, "state-versions",
+        await request(`/api/v2/state-versions/${latest?.id ?? ""}/actions/rollback`, { method: "POST", headers }),
+        201,
+        "state-versions",
       );
       expect(rolledBack.attributes["serial"]).toBe(serial + 1);
       const rolledText = await (await request(`/api/v2/state-versions/${rolledBack.id}/download`, { headers })).text();
       await writeFile(join(directory, "terraform.tfstate"), rolledText);
       const rolledOutputs = (JSON.parse(rolledText) as { outputs: Record<string, { value: string }> }).outputs;
-      expect(JSON.parse(await runCli(directory, "show", "-json", "terraform.tfstate")).values.outputs.sample.value)
-        .toBe(rolledOutputs["sample"]?.value);
+      expect(
+        JSON.parse(await runCli(directory, "show", "-json", "terraform.tfstate")).values.outputs.sample.value,
+      ).toBe(rolledOutputs["sample"]?.value);
 
       const capture = join(storageDir, "recovery", runId);
       await mkdir(capture, { recursive: true });
       await writeFile(join(capture, "terraform.tfstate"), rolledText);
       await writeFile(join(capture, ".recovered"), "complete");
       const recovered = await expectSuccessResponse(
-        await request(`/api/v2/runs/${runId}/actions/recover-state`, { method: "POST", headers }), 201, "state-versions",
+        await request(`/api/v2/runs/${runId}/actions/recover-state`, { method: "POST", headers }),
+        201,
+        "state-versions",
       );
       expect(recovered.attributes["serial"]).toBe(serial + 2);
-      const recoveredText = await (await request(`/api/v2/state-versions/${recovered.id}/download`, { headers })).text();
+      const recoveredText = await (
+        await request(`/api/v2/state-versions/${recovered.id}/download`, { headers })
+      ).text();
       await writeFile(join(directory, "terraform.tfstate"), recoveredText);
       expect(JSON.parse(await runCli(directory, "state", "pull"))).toMatchObject({ lineage, serial: serial + 2 });
     }, 240_000);

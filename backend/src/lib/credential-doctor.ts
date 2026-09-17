@@ -57,20 +57,29 @@ const NETWORK_TIMEOUT_GUIDANCE = "Check DNS resolution and outbound connectivity
 
 const GUIDANCE: Readonly<Record<string, string>> = {
   issued: "The Terrence workload token was issued for this doctor run.",
-  expired_credentials: "The provider rejected the short-lived credential as expired. Check clock skew and token lifetime on the selected worker or agent.",
-  missing_trust: "The provider does not trust this issuer, audience, or subject. Compare the provider trust policy with the claims shown above.",
+  expired_credentials:
+    "The provider rejected the short-lived credential as expired. Check clock skew and token lifetime on the selected worker or agent.",
+  missing_trust:
+    "The provider does not trust this issuer, audience, or subject. Compare the provider trust policy with the claims shown above.",
   trust_match: "The token claims match the configured audience and subject expectation.",
-  trust_expectation_unconfigured: "No subject expectation is configured for this OIDC configuration; provider-side trust still needs to be verified.",
+  trust_expectation_unconfigured:
+    "No subject expectation is configured for this OIDC configuration; provider-side trust still needs to be verified.",
   reachable: "The provider endpoint returned an HTTP response from the selected worker or agent.",
   dns_failure: NETWORK_TIMEOUT_GUIDANCE,
-  tls_trust_failure: "The selected worker or agent cannot establish a trusted TLS connection. Install the provider CA chain or correct the endpoint certificate.",
+  tls_trust_failure:
+    "The selected worker or agent cannot establish a trusted TLS connection. Install the provider CA chain or correct the endpoint certificate.",
   network_timeout: NETWORK_TIMEOUT_GUIDANCE,
-  blocked_destination: "The provider endpoint is outside the configured outbound network policy. Add the exact provider host or CIDR to the operator allowlist.",
-  invalid_endpoint: "The provider endpoint configuration is invalid. Use the documented HTTPS endpoint without embedded credentials.",
-  provider_identity: "The provider returned a harmless identity/read result. This does not prove authorization for every later resource operation.",
-  provider_permission_denied: "The identity call reached the provider, but the configured identity lacks permission for this harmless read.",
+  blocked_destination:
+    "The provider endpoint is outside the configured outbound network policy. Add the exact provider host or CIDR to the operator allowlist.",
+  invalid_endpoint:
+    "The provider endpoint configuration is invalid. Use the documented HTTPS endpoint without embedded credentials.",
+  provider_identity:
+    "The provider returned a harmless identity/read result. This does not prove authorization for every later resource operation.",
+  provider_permission_denied:
+    "The identity call reached the provider, but the configured identity lacks permission for this harmless read.",
   provider_error: "The provider returned an unexpected response. Inspect the provider-side audit log and trust policy.",
-  provider_unavailable: "The provider returned a server error. Retry from the selected worker or agent and inspect provider availability.",
+  provider_unavailable:
+    "The provider returned a server error. Retry from the selected worker or agent and inspect provider availability.",
 };
 
 function valueAsString(values: Readonly<Record<string, unknown>>, ...keys: readonly string[]): string | undefined {
@@ -91,16 +100,24 @@ function safeVisibleString(value: unknown, maxLength = 512): string | null {
 
 export function providerForOidcConfigType(configType: string): CredentialDoctorProvider | undefined {
   switch (configType) {
-    case "aws-oidc-configurations": return "aws";
-    case "azure-oidc-configurations": return "azure";
-    case "gcp-oidc-configurations": return "gcp";
-    case "vault-oidc-configurations": return "vault";
-    default: return undefined;
+    case "aws-oidc-configurations":
+      return "aws";
+    case "azure-oidc-configurations":
+      return "azure";
+    case "gcp-oidc-configurations":
+      return "gcp";
+    case "vault-oidc-configurations":
+      return "vault";
+    default:
+      return undefined;
   }
 }
 
 /** The audience used by the run environment for a provider configuration. */
-export function credentialDoctorAudience(provider: CredentialDoctorProvider, values: Readonly<Record<string, unknown>>): string {
+export function credentialDoctorAudience(
+  provider: CredentialDoctorProvider,
+  values: Readonly<Record<string, unknown>>,
+): string {
   const configured = valueAsString(values, "audience");
   if (configured !== undefined) return configured;
   if (provider === "gcp") {
@@ -227,15 +244,23 @@ function accessStageFailure(
   return { check: check("provider_access", "failed", failure.code, failure.details), identity: null };
 }
 
-function bearerAccessToken(exchangeJson: Readonly<Record<string, unknown>> | null, status: number): string | ProviderAccessResult {
+function bearerAccessToken(
+  exchangeJson: Readonly<Record<string, unknown>> | null,
+  status: number,
+): string | ProviderAccessResult {
   const accessToken = typeof exchangeJson?.["access_token"] === "string" ? exchangeJson["access_token"] : undefined;
   if (accessToken === undefined || accessToken === "") return providerErrorResult(status);
   return accessToken;
 }
 
 function isTrustFailure(status: number, stage: "exchange" | "identity", lower: string): boolean {
-  return stage === "exchange" && (status === 400 || status === 401 || status === 403
-    || /invalididentitytoken|invalid assertion|federated|subject|audience|trust|no matching/.test(lower));
+  return (
+    stage === "exchange" &&
+    (status === 400 ||
+      status === 401 ||
+      status === 403 ||
+      /invalididentitytoken|invalid assertion|federated|subject|audience|trust|no matching/.test(lower))
+  );
 }
 
 function statusFailureCode(status: number): { code: string; fallback: string } {
@@ -293,7 +318,10 @@ function awsAuthorization(
   body: string,
   now: Readonly<Date>,
 ): Readonly<Record<string, string>> {
-  const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const amzDate = now
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}Z$/, "Z");
   const date = amzDate.slice(0, 8);
   const host = "sts.amazonaws.com";
   const payloadHash = createHash("sha256").update(body).digest("hex");
@@ -317,7 +345,10 @@ function xmlValue(body: string, name: string): string | undefined {
   const value = new RegExp(`<${name}>([^<]{1,4096})</${name}>`).exec(body)?.[1];
   if (value === undefined) return undefined;
   const entities: Readonly<Record<string, string>> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
-  const decoded = value.replace(/&(amp|lt|gt|quot|apos);/g, (match: string, entity: string): string => entities[entity] ?? match);
+  const decoded = value.replace(
+    /&(amp|lt|gt|quot|apos);/g,
+    (match: string, entity: string): string => entities[entity] ?? match,
+  );
   // Single-pass decode only: a value that still carries an entity reference
   // was double-encoded (e.g. &amp;lt;) and is rejected rather than decoded
   // a second time into active markup.
@@ -358,7 +389,10 @@ async function awsAccess(
   const secretKey = xmlValue(exchangeText, "SecretAccessKey");
   const sessionToken = xmlValue(exchangeText, "SessionToken");
   if (accessKey === undefined || secretKey === undefined || sessionToken === undefined) {
-    return { check: check("provider_access", "failed", "provider_error", { http_status: exchange.status }), identity: null };
+    return {
+      check: check("provider_access", "failed", "provider_error", { http_status: exchange.status }),
+      identity: null,
+    };
   }
   const identityBody = "Action=GetCallerIdentity&Version=2011-06-15";
   let identityResponse: Response;
@@ -390,13 +424,17 @@ async function awsAccess(
 function jsonRecord(body: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(body);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
 }
 
-function azureAccessConfig(values: CredentialDoctorConfiguration["values"]): { tenantId: string; clientId: string; subscriptionId: string } | null {
+function azureAccessConfig(
+  values: CredentialDoctorConfiguration["values"],
+): { tenantId: string; clientId: string; subscriptionId: string } | null {
   const tenantId = valueAsString(values, "tenant-id");
   const clientId = valueAsString(values, "client-id", "identity");
   const subscriptionId = valueAsString(values, "subscription-id");
@@ -422,7 +460,12 @@ async function azureAccess(
   });
   let exchange: Response;
   try {
-    exchange = await requester({ method: "POST", url: tokenUrl, headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body });
+    exchange = await requester({
+      method: "POST",
+      url: tokenUrl,
+      headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+      body,
+    });
   } catch (error: unknown) {
     return accessNetworkFailure(error);
   }
@@ -433,7 +476,11 @@ async function azureAccess(
   const identityUrl = `${CREDENTIAL_DOCTOR_ENDPOINTS.azureManagement}/subscriptions/${encodeURIComponent(accessConfig.subscriptionId)}?api-version=2020-01-01`;
   let identityResponse: Response;
   try {
-    identityResponse = await requester({ method: "GET", url: identityUrl, headers: { authorization: `Bearer ${tokenOrFailure}`, accept: "application/json" } });
+    identityResponse = await requester({
+      method: "GET",
+      url: identityUrl,
+      headers: { authorization: `Bearer ${tokenOrFailure}`, accept: "application/json" },
+    });
   } catch (error: unknown) {
     return accessNetworkFailure(error);
   }
@@ -443,7 +490,8 @@ async function azureAccess(
   return {
     check: check("provider_access", "passed", "provider_identity", { http_status: identityResponse.status }),
     identity: {
-      subscription_id: safeVisibleString(identityJson?.["subscriptionId"]) ?? safeVisibleString(accessConfig.subscriptionId),
+      subscription_id:
+        safeVisibleString(identityJson?.["subscriptionId"]) ?? safeVisibleString(accessConfig.subscriptionId),
       tenant_id: safeVisibleString(identityJson?.["tenantId"]),
       display_name: safeVisibleString(identityJson?.["displayName"]),
       state: safeVisibleString(identityJson?.["state"]),
@@ -451,10 +499,12 @@ async function azureAccess(
   };
 }
 
-function firstProjectRecord(identityJson: Readonly<Record<string, unknown>> | null): Record<string, unknown> | undefined {
+function firstProjectRecord(
+  identityJson: Readonly<Record<string, unknown>> | null,
+): Record<string, unknown> | undefined {
   const projects = identityJson?.["projects"];
   return Array.isArray(projects) && typeof projects[0] === "object" && projects[0] !== null
-    ? projects[0] as Record<string, unknown>
+    ? (projects[0] as Record<string, unknown>)
     : undefined;
 }
 
@@ -463,7 +513,12 @@ async function gcpAccess(
   token: CredentialDoctorToken,
   requester: CredentialDoctorRequester,
 ): Promise<ProviderAccessResult> {
-  const providerId = valueAsString(configuration.values, "workload-identity-provider-id", "workload-provider-name", "provider");
+  const providerId = valueAsString(
+    configuration.values,
+    "workload-identity-provider-id",
+    "workload-provider-name",
+    "provider",
+  );
   if (providerId === undefined) return missingTrustResult();
   const exchangeBody = formBody({
     grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
@@ -475,7 +530,12 @@ async function gcpAccess(
   });
   let exchange: Response;
   try {
-    exchange = await requester({ method: "POST", url: CREDENTIAL_DOCTOR_ENDPOINTS.gcpSts, headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body: exchangeBody });
+    exchange = await requester({
+      method: "POST",
+      url: CREDENTIAL_DOCTOR_ENDPOINTS.gcpSts,
+      headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+      body: exchangeBody,
+    });
   } catch (error: unknown) {
     return accessNetworkFailure(error);
   }
@@ -485,7 +545,11 @@ async function gcpAccess(
   if (typeof tokenOrFailure !== "string") return tokenOrFailure;
   let identityResponse: Response;
   try {
-    identityResponse = await requester({ method: "GET", url: CREDENTIAL_DOCTOR_ENDPOINTS.gcpResourceManager, headers: { authorization: `Bearer ${tokenOrFailure}`, accept: "application/json" } });
+    identityResponse = await requester({
+      method: "GET",
+      url: CREDENTIAL_DOCTOR_ENDPOINTS.gcpResourceManager,
+      headers: { authorization: `Bearer ${tokenOrFailure}`, accept: "application/json" },
+    });
   } catch (error: unknown) {
     return accessNetworkFailure(error);
   }
@@ -510,7 +574,8 @@ function vaultLoginConfig(
   const endpoint = credentialDoctorNetworkEndpoint("vault", configuration.values);
   if ("error" in endpoint) return { check: check("provider_access", "failed", "invalid_endpoint"), identity: null };
   const authPath = valueAsString(configuration.values, "auth-path") ?? "jwt";
-  if (!VAULT_AUTH_PATH_PATTERN.test(authPath)) return { check: check("provider_access", "failed", "invalid_endpoint"), identity: null };
+  if (!VAULT_AUTH_PATH_PATTERN.test(authPath))
+    return { check: check("provider_access", "failed", "invalid_endpoint"), identity: null };
   const role = valueAsString(configuration.values, "role-name", "role");
   if (role === undefined) return missingTrustResult();
   return {
@@ -521,21 +586,42 @@ function vaultLoginConfig(
   };
 }
 
-function vaultClientToken(loginJson: Readonly<Record<string, unknown>> | null, status: number): string | ProviderAccessResult {
-  const auth = typeof loginJson?.["auth"] === "object" && loginJson["auth"] !== null ? loginJson["auth"] as Record<string, unknown> : null;
+function vaultClientToken(
+  loginJson: Readonly<Record<string, unknown>> | null,
+  status: number,
+): string | ProviderAccessResult {
+  const auth =
+    typeof loginJson?.["auth"] === "object" && loginJson["auth"] !== null
+      ? (loginJson["auth"] as Record<string, unknown>)
+      : null;
   const clientToken = typeof auth?.["client_token"] === "string" ? auth["client_token"] : undefined;
   if (clientToken === undefined || clientToken === "") return providerErrorResult(status);
   return clientToken;
 }
 
-function vaultIdentityPolicies(lookupJson: Readonly<Record<string, unknown>> | null): { data: Record<string, unknown> | null; policies: string[] } {
-  const data = typeof lookupJson?.["data"] === "object" && lookupJson["data"] !== null ? lookupJson["data"] as Record<string, unknown> : null;
-  return { data, policies: Array.isArray(data?.["policies"])
-    ? data["policies"].map((value): string | null => safeVisibleString(value, 160)).filter((value): value is string => value !== null).slice(0, 32)
-    : [] };
+function vaultIdentityPolicies(lookupJson: Readonly<Record<string, unknown>> | null): {
+  data: Record<string, unknown> | null;
+  policies: string[];
+} {
+  const data =
+    typeof lookupJson?.["data"] === "object" && lookupJson["data"] !== null
+      ? (lookupJson["data"] as Record<string, unknown>)
+      : null;
+  return {
+    data,
+    policies: Array.isArray(data?.["policies"])
+      ? data["policies"]
+          .map((value): string | null => safeVisibleString(value, 160))
+          .filter((value): value is string => value !== null)
+          .slice(0, 32)
+      : [],
+  };
 }
 
-function namespacedHeaders(base: Readonly<Record<string, string>>, namespace: string | undefined): Record<string, string> {
+function namespacedHeaders(
+  base: Readonly<Record<string, string>>,
+  namespace: string | undefined,
+): Record<string, string> {
   return namespace === undefined ? base : { ...base, "x-vault-namespace": namespace };
 }
 
@@ -546,10 +632,18 @@ async function vaultAccess(
 ): Promise<ProviderAccessResult> {
   const loginConfig = vaultLoginConfig(configuration);
   if (!("healthUrl" in loginConfig)) return loginConfig;
-  const headers = namespacedHeaders({ "content-type": "application/json", accept: "application/json" }, loginConfig.namespace);
+  const headers = namespacedHeaders(
+    { "content-type": "application/json", accept: "application/json" },
+    loginConfig.namespace,
+  );
   let login: Response;
   try {
-    login = await requester({ method: "POST", url: `${loginConfig.healthUrl}/v1/auth/${loginConfig.authPath}/login`, headers, body: JSON.stringify({ role: loginConfig.role, jwt: token.token }) });
+    login = await requester({
+      method: "POST",
+      url: `${loginConfig.healthUrl}/v1/auth/${loginConfig.authPath}/login`,
+      headers,
+      body: JSON.stringify({ role: loginConfig.role, jwt: token.token }),
+    });
   } catch (error: unknown) {
     return accessNetworkFailure(error);
   }
@@ -557,10 +651,17 @@ async function vaultAccess(
   if (!login.ok) return accessStageFailure(login, loginText, "exchange");
   const tokenOrFailure = vaultClientToken(jsonRecord(loginText), login.status);
   if (typeof tokenOrFailure !== "string") return tokenOrFailure;
-  const lookupHeaders = namespacedHeaders({ "x-vault-token": tokenOrFailure, accept: "application/json" }, loginConfig.namespace);
+  const lookupHeaders = namespacedHeaders(
+    { "x-vault-token": tokenOrFailure, accept: "application/json" },
+    loginConfig.namespace,
+  );
   let lookup: Response;
   try {
-    lookup = await requester({ method: "GET", url: `${loginConfig.healthUrl}/v1/auth/token/lookup-self`, headers: lookupHeaders });
+    lookup = await requester({
+      method: "GET",
+      url: `${loginConfig.healthUrl}/v1/auth/token/lookup-self`,
+      headers: lookupHeaders,
+    });
   } catch (error: unknown) {
     return accessNetworkFailure(error);
   }
@@ -583,26 +684,40 @@ async function providerAccess(
   requester: CredentialDoctorRequester,
 ): Promise<{ check: CredentialDoctorCheck; identity: Readonly<Record<string, unknown>> | null }> {
   switch (configuration.provider) {
-    case "aws": return awsAccess(configuration, token, requester);
-    case "azure": return azureAccess(configuration, token, requester);
-    case "gcp": return gcpAccess(configuration, token, requester);
-    case "vault": return vaultAccess(configuration, token, requester);
+    case "aws":
+      return awsAccess(configuration, token, requester);
+    case "azure":
+      return azureAccess(configuration, token, requester);
+    case "gcp":
+      return gcpAccess(configuration, token, requester);
+    case "vault":
+      return vaultAccess(configuration, token, requester);
   }
 }
 
-function trustCheck(
-  configuration: CredentialDoctorConfiguration,
-  token: CredentialDoctorToken,
-): CredentialDoctorCheck {
+function trustCheck(configuration: CredentialDoctorConfiguration, token: CredentialDoctorToken): CredentialDoctorCheck {
   const expectedAudience = credentialDoctorAudience(configuration.provider, configuration.values);
   const audience = token.claims["aud"];
-  if (audience !== expectedAudience) return check("trust", "failed", "missing_trust", { expected_audience: expectedAudience, actual_audience: typeof audience === "string" ? audience : null });
+  if (audience !== expectedAudience)
+    return check("trust", "failed", "missing_trust", {
+      expected_audience: expectedAudience,
+      actual_audience: typeof audience === "string" ? audience : null,
+    });
   const expiresAt = safeNumber(token.claims["exp"]);
-  if (expiresAt === undefined || expiresAt <= Math.floor(Date.now() / 1000)) return check("trust", "failed", "expired_credentials");
+  if (expiresAt === undefined || expiresAt <= Math.floor(Date.now() / 1000))
+    return check("trust", "failed", "expired_credentials");
   const expectedSubject = valueAsString(configuration.values, "expected-subject", "subject");
   const subject = token.claims["sub"];
-  if (expectedSubject !== undefined && subject !== expectedSubject) return check("trust", "failed", "missing_trust", { expected_subject: expectedSubject, actual_subject: typeof subject === "string" ? subject : null });
-  if (expectedSubject === undefined) return check("trust", "warning", "trust_expectation_unconfigured", { audience: expectedAudience, subject: typeof subject === "string" ? subject : null });
+  if (expectedSubject !== undefined && subject !== expectedSubject)
+    return check("trust", "failed", "missing_trust", {
+      expected_subject: expectedSubject,
+      actual_subject: typeof subject === "string" ? subject : null,
+    });
+  if (expectedSubject === undefined)
+    return check("trust", "warning", "trust_expectation_unconfigured", {
+      audience: expectedAudience,
+      subject: typeof subject === "string" ? subject : null,
+    });
   return check("trust", "passed", "trust_match", { audience: expectedAudience, subject: expectedSubject });
 }
 
@@ -625,7 +740,10 @@ export async function runCredentialDoctor(
     expires_at: token.claims["exp"] ?? null,
   });
   const trust = trustCheck(configuration, token);
-  const network = await networkCheck(credentialDoctorNetworkEndpoint(configuration.provider, configuration.values), requester);
+  const network = await networkCheck(
+    credentialDoctorNetworkEndpoint(configuration.provider, configuration.values),
+    requester,
+  );
   if (network.status === "failed") {
     return {
       status: overallStatus([tokenCheck, trust, network]),

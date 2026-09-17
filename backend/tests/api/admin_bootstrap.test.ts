@@ -6,7 +6,11 @@ import { join } from "node:path";
 const testDirs: string[] = [];
 const backendDir = join(import.meta.dir, "../..");
 
-async function runProbe(source: string, password: string, env: Record<string, string> = {}): Promise<Record<string, unknown>> {
+async function runProbe(
+  source: string,
+  password: string,
+  env: Record<string, string> = {},
+): Promise<Record<string, unknown>> {
   const testDir = await mkdtemp(join(tmpdir(), "terrence-admin-bootstrap-"));
   testDirs.push(testDir);
   const child = Bun.spawn([process.execPath, "-e", source], {
@@ -31,14 +35,17 @@ async function runProbe(source: string, password: string, env: Record<string, st
 }
 
 afterEach(async () => {
-  await Promise.all(testDirs.splice(0).map(async (dir: string): Promise<void> => {
-    await rm(dir, { recursive: true, force: true });
-  }));
+  await Promise.all(
+    testDirs.splice(0).map(async (dir: string): Promise<void> => {
+      await rm(dir, { recursive: true, force: true });
+    }),
+  );
 });
 
 describe("initial administrator bootstrap", () => {
   it("creates one forced-change site admin and unlocks it after password rotation", async () => {
-    const result = await runProbe(`
+    const result = await runProbe(
+      `
       const { bootstrapInitialAdmin } = await import("./src/lib/bootstrap.ts");
       const { db } = await import("./src/db/index.ts");
       const { organizationMemberships, organizations, users } = await import("./src/db/schema.ts");
@@ -125,7 +132,9 @@ describe("initial administrator bootstrap", () => {
         cleared: updated?.mustChangePassword === false,
       }));
       process.exit(0);
-    `, "temporary-admin-password");
+    `,
+      "temporary-admin-password",
+    );
 
     expect(result).toEqual({
       first: "created",
@@ -152,7 +161,8 @@ describe("initial administrator bootstrap", () => {
   });
 
   it("rejects an unsafe bootstrap password without creating a user", async () => {
-    const result = await runProbe(`
+    const result = await runProbe(
+      `
       const { bootstrapInitialAdmin } = await import("./src/lib/bootstrap.ts");
       const { db } = await import("./src/db/index.ts");
       let error = "";
@@ -163,7 +173,9 @@ describe("initial administrator bootstrap", () => {
       }
       console.log(JSON.stringify({ error, count: (await db.query.users.findMany()).length }));
       process.exit(0);
-    `, "too-short");
+    `,
+      "too-short",
+    );
 
     expect(result).toEqual({
       error: "ADMIN_PASSWORD must be at least 10 characters",
@@ -172,7 +184,8 @@ describe("initial administrator bootstrap", () => {
   });
 
   it("creates the first administrator through the IACT-compatible API exactly once", async () => {
-    const result = await runProbe(`
+    const result = await runProbe(
+      `
       const { app } = await import("./src/app.ts");
       const { db } = await import("./src/db/index.ts");
 
@@ -213,7 +226,10 @@ describe("initial administrator bootstrap", () => {
         memberships: (await db.query.organizationMemberships.findMany()).length,
       }));
       process.exit(0);
-    `, "unused-admin-password", { IACT_TOKEN: "initial-admin-token" });
+    `,
+      "unused-admin-password",
+      { IACT_TOKEN: "initial-admin-token" },
+    );
 
     expect(result).toEqual({
       denied: 404,
@@ -229,7 +245,8 @@ describe("initial administrator bootstrap", () => {
   });
 
   it("accepts the bootstrap secret via header as an alternative to the query string (kanban 5.3)", async () => {
-    const result = await runProbe(`
+    const result = await runProbe(
+      `
       const { app } = await import("./src/app.ts");
       const { db } = await import("./src/db/index.ts");
 
@@ -254,14 +271,18 @@ describe("initial administrator bootstrap", () => {
         users: (await db.query.users.findMany()).length,
       }));
       process.exit(0);
-    `, "unused-admin-password", { IACT_TOKEN: "initial-admin-token" });
+    `,
+      "unused-admin-password",
+      { IACT_TOKEN: "initial-admin-token" },
+    );
 
     expect(result).toEqual({ status: 200, responseStatus: "created", users: 1 });
   });
 
   it("query-token form is opt-in (IACT_QUERY_TOKEN_ENABLED) and header form is the default", async () => {
     // Default: query form disabled — even the correct token via query is 404.
-    const defaultResult = await runProbe(`
+    const defaultResult = await runProbe(
+      `
       const { app } = await import("./src/app.ts");
       const { db } = await import("./src/db/index.ts");
 
@@ -285,11 +306,15 @@ describe("initial administrator bootstrap", () => {
         users: (await db.query.users.findMany()).length,
       }));
       process.exit(0);
-    `, "unused-admin-password", { IACT_TOKEN: "initial-admin-token" });
+    `,
+      "unused-admin-password",
+      { IACT_TOKEN: "initial-admin-token" },
+    );
     expect(defaultResult).toEqual({ queryForm: 404, headerForm: 200, users: 1 });
 
     // Opt-in restores the reference installer's query form.
-    const optInResult = await runProbe(`
+    const optInResult = await runProbe(
+      `
       const { app } = await import("./src/app.ts");
       const { db } = await import("./src/db/index.ts");
 
@@ -308,12 +333,16 @@ describe("initial administrator bootstrap", () => {
         users: (await db.query.users.findMany()).length,
       }));
       process.exit(0);
-    `, "unused-admin-password", { IACT_TOKEN: "initial-admin-token", IACT_QUERY_TOKEN_ENABLED: "1" });
+    `,
+      "unused-admin-password",
+      { IACT_TOKEN: "initial-admin-token", IACT_QUERY_TOKEN_ENABLED: "1" },
+    );
     expect(optInResult).toEqual({ queryForm: 200, users: 1 });
   });
 
   it("resets a solo admin password with TERRENCE_ADMIN_PASSWORD_RESET=1 (issue #631)", async () => {
-    const result = await runProbe(`
+    const result = await runProbe(
+      `
       const { bootstrapInitialAdmin, resetAdminPassword, assertStorageWritable } = await import("./src/lib/bootstrap.ts");
       const { db } = await import("./src/db/index.ts");
       const { app } = await import("./src/app.ts");
@@ -367,7 +396,9 @@ describe("initial administrator bootstrap", () => {
         storageErrorHasFix: storageError.includes("chown -R") && storageError.includes("STORAGE_DIR is not writable"),
       }));
       process.exit(0);
-    `, "original-admin-password");
+    `,
+      "original-admin-password",
+    );
 
     expect(result).toEqual({
       bootstrapped: "created",

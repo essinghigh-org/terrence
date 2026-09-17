@@ -31,14 +31,16 @@ let sensitiveVarId = "";
 let plainVarId = "";
 
 function request(path: string, method = "GET", token = adminToken, body?: unknown): Promise<Response> {
-  return app.handle(new Request(`http://terrence.test${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
+  return app.handle(
+    new Request(`http://terrence.test${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
 }
 
 async function withStrict<T>(fn: () => Promise<T>): Promise<T> {
@@ -52,11 +54,27 @@ async function withStrict<T>(fn: () => Promise<T>): Promise<T> {
 
 beforeAll(async () => {
   await db.insert(users).values([
-    { id: adminId, username: `strict-admin-${suffix}`, email: `strict-admin-${suffix}@example.com`, passwordHash: "unused", isSiteAdmin: true },
-    { id: userId, username: `strict-user-${suffix}`, email: `strict-user-${suffix}@example.com`, passwordHash: "unused", isSiteAdmin: false },
+    {
+      id: adminId,
+      username: `strict-admin-${suffix}`,
+      email: `strict-admin-${suffix}@example.com`,
+      passwordHash: "unused",
+      isSiteAdmin: true,
+    },
+    {
+      id: userId,
+      username: `strict-user-${suffix}`,
+      email: `strict-user-${suffix}@example.com`,
+      passwordHash: "unused",
+      isSiteAdmin: false,
+    },
   ]);
   await db.insert(apiTokens).values([
-    { id: `strict-atok-admin-${suffix}`, token: createHash("sha256").update(adminToken).digest("hex"), userId: adminId },
+    {
+      id: `strict-atok-admin-${suffix}`,
+      token: createHash("sha256").update(adminToken).digest("hex"),
+      userId: adminId,
+    },
     { id: `strict-atok-user-${suffix}`, token: createHash("sha256").update(userToken).digest("hex"), userId },
   ]);
 
@@ -73,13 +91,19 @@ beforeAll(async () => {
   workspaceId = ((await workspaceResponse.json()) as { data: { id: string } }).data.id;
 
   const sshResponse = await request(`/api/v2/organizations/${orgName}/ssh-keys`, "POST", adminToken, {
-    data: { type: "ssh-keys", attributes: { name: "strict-deploy-key", value: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" } },
+    data: {
+      type: "ssh-keys",
+      attributes: { name: "strict-deploy-key", value: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" },
+    },
   });
   expect(sshResponse.status).toBe(201);
   sshKeyId = ((await sshResponse.json()) as { data: { id: string } }).data.id;
 
   const sensitiveVarResponse = await request(`/api/v2/workspaces/${workspaceId}/vars`, "POST", adminToken, {
-    data: { type: "vars", attributes: { key: "SENSITIVE_SECRET", value: "hunter2", category: "terraform", sensitive: true } },
+    data: {
+      type: "vars",
+      attributes: { key: "SENSITIVE_SECRET", value: "hunter2", category: "terraform", sensitive: true },
+    },
   });
   expect(sensitiveVarResponse.status).toBe(201);
   sensitiveVarId = ((await sensitiveVarResponse.json()) as { data: { id: string } }).data.id;
@@ -112,19 +136,25 @@ describe("admin system-info (kanban 12.10)", () => {
     const data = body.data;
     expect(typeof data["version"]).toBe("string");
     expect(typeof data["uptime-seconds"]).toBe("number");
-    expect((data["uptime-seconds"] as number)).toBeGreaterThan(0);
+    expect(data["uptime-seconds"] as number).toBeGreaterThan(0);
     expect(typeof data["started-at"]).toBe("string");
     expect((data["storage"] as { dir: string }).dir).toBeTruthy();
     expect(typeof (data["database"] as Record<string, unknown>)["sizeBytes"]).toBe("number");
     expect(typeof (data["database"] as Record<string, unknown>)["journalMode"]).toBe("string");
     expect(typeof (data["worker"] as { enabled: boolean }).enabled).toBe("boolean");
-    const worker = data["worker"] as { "run-concurrency-limit": number; "local-runs-executing": number; "runs-queued": number };
+    const worker = data["worker"] as {
+      "run-concurrency-limit": number;
+      "local-runs-executing": number;
+      "runs-queued": number;
+    };
     expect(typeof worker["run-concurrency-limit"]).toBe("number");
     expect(worker["run-concurrency-limit"]).toBeGreaterThan(0);
     expect(typeof worker["local-runs-executing"]).toBe("number");
     expect(typeof worker["runs-queued"]).toBe("number");
     expect((data["worker"] as { enabled: boolean }).enabled).toBe(process.env["TERRENCE_DISABLE_WORKER"] !== "1");
-    expect((data["worker"] as { "drain-mode": boolean })["drain-mode"]).toBe(process.env["TERRENCE_DISABLE_WORKER"] === "1");
+    expect((data["worker"] as { "drain-mode": boolean })["drain-mode"]).toBe(
+      process.env["TERRENCE_DISABLE_WORKER"] === "1",
+    );
     expect(typeof (data["sandbox"] as { abi: number }).abi).toBe("number");
     expect(typeof (data["integrations"] as { "saml-enabled": boolean })["saml-enabled"]).toBe("boolean");
     expect(typeof (data["agents"] as { total: number }).total).toBe("number");
@@ -201,7 +231,11 @@ describe("strict audit mode (kanban 12.16)", () => {
 
   it("records reads of sensitive variables but not plain ones", async () => {
     await withStrict(async () => {
-      const sensitiveRead = await request(`/api/v2/workspaces/${workspaceId}/vars/${sensitiveVarId}`, "GET", adminToken);
+      const sensitiveRead = await request(
+        `/api/v2/workspaces/${workspaceId}/vars/${sensitiveVarId}`,
+        "GET",
+        adminToken,
+      );
       expect(sensitiveRead.status).toBe(200);
       const plainRead = await request(`/api/v2/workspaces/${workspaceId}/vars/${plainVarId}`, "GET", adminToken);
       expect(plainRead.status).toBe(200);

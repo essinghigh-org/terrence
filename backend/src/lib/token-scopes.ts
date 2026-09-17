@@ -202,9 +202,13 @@ export type TokenScopes = Readonly<{
 const PERMISSION_KEYS = new Set<string>(ALL_PERMISSION_GRANTS);
 
 function isTagFilter(value: unknown): value is TokenScopeTagFilter {
-  return typeof value === "object" && value !== null
-    && typeof (value as Record<string, unknown>)["key"] === "string" && (value as Record<string, unknown>)["key"] !== ""
-    && typeof (value as Record<string, unknown>)["value"] === "string";
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Record<string, unknown>)["key"] === "string" &&
+    (value as Record<string, unknown>)["key"] !== "" &&
+    typeof (value as Record<string, unknown>)["value"] === "string"
+  );
 }
 
 function isCombinator(value: unknown): value is "AND" | "OR" {
@@ -231,7 +235,9 @@ function parseTagRule(raw: unknown, path: string, depth = 0): TokenScopeTagRule 
     if (obj["rules"].length === 0) throw new Error(`${path}.rules must contain at least one rule`);
     return {
       combinator: obj["combinator"],
-      rules: obj["rules"].map((rule: unknown, index: number): TokenScopeTagRule => parseTagRule(rule, `${path}.rules[${index}]`, depth + 1)),
+      rules: obj["rules"].map(
+        (rule: unknown, index: number): TokenScopeTagRule => parseTagRule(rule, `${path}.rules[${index}]`, depth + 1),
+      ),
     };
   }
   if (!isTagFilter(obj)) {
@@ -266,7 +272,9 @@ function parseTagExpression(raw: unknown): TokenScopeTags | null {
   if (obj["rules"].length === 0) throw new Error("scopes.tags.rules must contain at least one rule");
   return {
     combinator: obj["combinator"],
-    rules: obj["rules"].map((rule: unknown, index: number): TokenScopeTagRule => parseTagRule(rule, `scopes.tags.rules[${index}]`)),
+    rules: obj["rules"].map(
+      (rule: unknown, index: number): TokenScopeTagRule => parseTagRule(rule, `scopes.tags.rules[${index}]`),
+    ),
   };
 }
 
@@ -285,33 +293,38 @@ function parseScopesRaw(raw: unknown): unknown {
 }
 
 function assertScopesObject(parsed: unknown): Record<string, unknown> {
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("scopes must be an object");
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+    throw new Error("scopes must be an object");
   return parsed as Record<string, unknown>;
 }
 
 function parseOrgsField(obj: Readonly<Record<string, unknown>>): string[] {
   const orgs = obj["orgs"];
-  if (!Array.isArray(orgs) || orgs.length === 0 || orgs.some((o): boolean => typeof o !== "string" || o === "")) throw new Error("scopes.orgs must be a non-empty array of organization IDs");
+  if (!Array.isArray(orgs) || orgs.length === 0 || orgs.some((o): boolean => typeof o !== "string" || o === ""))
+    throw new Error("scopes.orgs must be a non-empty array of organization IDs");
   return orgs as string[];
 }
 
 function parseProjectsField(obj: Readonly<Record<string, unknown>>): string[] | null {
   const projects = obj["projects"];
   if (projects === null || projects === undefined) return null;
-  if (!(Array.isArray(projects) && projects.every((p): boolean => typeof p === "string" && p !== ""))) throw new Error("scopes.projects must be an array of project IDs or null");
+  if (!(Array.isArray(projects) && projects.every((p): boolean => typeof p === "string" && p !== "")))
+    throw new Error("scopes.projects must be an array of project IDs or null");
   return projects as string[];
 }
 
 function parseWorkspacesField(obj: Readonly<Record<string, unknown>>): string[] | null {
   const workspaces = obj["workspaces"];
   if (workspaces === null || workspaces === undefined) return null;
-  if (!(Array.isArray(workspaces) && workspaces.every((w): boolean => typeof w === "string" && w !== ""))) throw new Error("scopes.workspaces must be an array of workspace IDs or null");
+  if (!(Array.isArray(workspaces) && workspaces.every((w): boolean => typeof w === "string" && w !== "")))
+    throw new Error("scopes.workspaces must be an array of workspace IDs or null");
   return workspaces as string[];
 }
 
 function parsePermissionsField(obj: Readonly<Record<string, unknown>>): Readonly<Record<string, boolean>> {
   const permissions = obj["permissions"];
-  if (typeof permissions !== "object" || permissions === null || Array.isArray(permissions)) throw new Error("scopes.permissions must be an object");
+  if (typeof permissions !== "object" || permissions === null || Array.isArray(permissions))
+    throw new Error("scopes.permissions must be an object");
   for (const [key, value] of Object.entries(permissions as Record<string, unknown>)) {
     if (!PERMISSION_KEYS.has(key)) throw new Error(`scopes.permissions contains unknown permission: ${key}`);
     if (typeof value !== "boolean") throw new Error(`scopes.permissions.${key} must be a boolean`);

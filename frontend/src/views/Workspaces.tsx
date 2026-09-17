@@ -121,10 +121,23 @@ const runStatusFilters = {
   attention: ["policy_soft_failed", "policy_hard_failed", "policy_override", "errored"],
   errored: ["errored"],
   running: [
-    "queuing", "pending", "fetching", "fetching_completed", "plan_queued",
-    "pre_plan_running", "pre_plan_completed", "planning",
-    "cost_estimating", "cost_estimated", "policy_checking", "policy_checked",
-    "post_plan_running", "post_plan_completed", "confirmed", "apply_queued", "applying",
+    "queuing",
+    "pending",
+    "fetching",
+    "fetching_completed",
+    "plan_queued",
+    "pre_plan_running",
+    "pre_plan_completed",
+    "planning",
+    "cost_estimating",
+    "cost_estimated",
+    "policy_checking",
+    "policy_checked",
+    "post_plan_running",
+    "post_plan_completed",
+    "confirmed",
+    "apply_queued",
+    "applying",
   ],
   "on-hold": ["planned", "planned_and_saved"],
   completed: ["applied", "planned_and_finished", "discarded", "canceled"],
@@ -154,16 +167,16 @@ function runsByWorkspace(
 type ResolvedWorkspacePage = Readonly<
   | { kind: "redirect"; page: number }
   | {
-    kind: "ready";
-    workspaces: Workspace[];
-    latestRuns: ReadonlyMap<string, RunSummary>;
-    matchingCount: number;
-    pageCount: number;
-    totalsUnavailable: boolean;
-    totalWorkspaceCount: number;
-    lockedWorkspaceCount: number;
-    runStatusCounts: Readonly<Record<string, number>>;
-  }
+      kind: "ready";
+      workspaces: Workspace[];
+      latestRuns: ReadonlyMap<string, RunSummary>;
+      matchingCount: number;
+      pageCount: number;
+      totalsUnavailable: boolean;
+      totalWorkspaceCount: number;
+      lockedWorkspaceCount: number;
+      runStatusCounts: Readonly<Record<string, number>>;
+    }
 >;
 
 function readyWorkspacePage(result: WorkspacePage, pages: number): Extract<ResolvedWorkspacePage, { kind: "ready" }> {
@@ -188,7 +201,12 @@ function resolveWorkspacePage(result: WorkspacePage, page: number): ResolvedWork
   return readyWorkspacePage(result, pages);
 }
 
-function WorkspaceNameCell({ workspace, orgName, pinned, onTogglePin }: Readonly<{
+function WorkspaceNameCell({
+  workspace,
+  orgName,
+  pinned,
+  onTogglePin,
+}: Readonly<{
   workspace: Workspace;
   orgName: string;
   pinned: boolean;
@@ -208,21 +226,12 @@ function WorkspaceNameCell({ workspace, orgName, pinned, onTogglePin }: Readonly
           variant="ghost"
           size="sm"
           className="h-6 w-6 p-0"
-          aria-label={pinned
-            ? `Unpin ${workspace.attributes.name}`
-            : `Pin ${workspace.attributes.name}`}
-          title={pinned
-            ? "Unpin from sidebar shortcuts"
-            : "Pin to sidebar shortcuts"}
+          aria-label={pinned ? `Unpin ${workspace.attributes.name}` : `Pin ${workspace.attributes.name}`}
+          title={pinned ? "Unpin from sidebar shortcuts" : "Pin to sidebar shortcuts"}
           onClick={onTogglePin}
         >
           <Star
-            className={cn(
-              "size-3.5",
-              pinned
-                ? "fill-warning text-warning"
-                : "text-muted-foreground",
-            )}
+            className={cn("size-3.5", pinned ? "fill-warning text-warning" : "text-muted-foreground")}
             aria-hidden="true"
           />
         </Button>
@@ -235,16 +244,24 @@ function WorkspaceTagsCell({ tags }: Readonly<{ tags: readonly string[] }>): Rea
   return (
     <TableCell>
       <div className="flex max-w-56 flex-wrap gap-1">
-        {tags.map((tag): React.JSX.Element => (
-          <Badge key={tag} variant="secondary" className="max-w-48 truncate">{tag}</Badge>
-        ))}
+        {tags.map(
+          (tag): React.JSX.Element => (
+            <Badge key={tag} variant="secondary" className="max-w-48 truncate">
+              {tag}
+            </Badge>
+          ),
+        )}
         {tags.length === 0 && <span className="text-muted-foreground">None</span>}
       </div>
     </TableCell>
   );
 }
 
-function WorkspaceProjectCell({ projectId, projectName, orgName }: Readonly<{
+function WorkspaceProjectCell({
+  projectId,
+  projectName,
+  orgName,
+}: Readonly<{
   projectId: string | undefined;
   projectName: string;
   orgName: string;
@@ -307,7 +324,11 @@ function WorkspaceStatusCell({ run }: Readonly<{ run: RunSummary | undefined }>)
   );
 }
 
-function WorkspaceManageCell({ workspaceName, canTag, onTags }: Readonly<{
+function WorkspaceManageCell({
+  workspaceName,
+  canTag,
+  onTags,
+}: Readonly<{
   workspaceName: string;
   canTag: boolean;
   onTags: () => void;
@@ -315,16 +336,13 @@ function WorkspaceManageCell({ workspaceName, canTag, onTags }: Readonly<{
   return (
     <TableCell className="text-right">
       {canTag ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label={`Manage tags for ${workspaceName}`}
-          onClick={onTags}
-        >
+        <Button variant="ghost" size="sm" aria-label={`Manage tags for ${workspaceName}`} onClick={onTags}>
           <Tags data-icon="inline-start" />
           Tags
         </Button>
-      ) : <span className="text-muted-foreground">—</span>}
+      ) : (
+        <span className="text-muted-foreground">—</span>
+      )}
     </TableCell>
   );
 }
@@ -358,7 +376,7 @@ function WorkspaceTotalsBar({
         onClick={onClearFilters}
         className={cn(
           "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-colors hover:border-primary/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
-          !hasFilters && "border-primary/50 bg-primary/5 ring-1 ring-primary/30"
+          !hasFilters && "border-primary/50 bg-primary/5 ring-1 ring-primary/30",
         )}
       >
         <div className="text-xs font-medium text-muted-foreground">Total Workspaces</div>
@@ -367,36 +385,49 @@ function WorkspaceTotalsBar({
       <button
         type="button"
         aria-pressed={statusFilter === "running"}
-        onClick={(): void => { onToggleStatus("running"); }}
+        onClick={(): void => {
+          onToggleStatus("running");
+        }}
         className={cn(
           "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-colors hover:border-primary/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
-          statusFilter === "running" && "border-primary/50 bg-primary/5 ring-1 ring-primary/30"
+          statusFilter === "running" && "border-primary/50 bg-primary/5 ring-1 ring-primary/30",
         )}
       >
         <div className="text-xs font-medium text-muted-foreground">Active Runs</div>
-        <div className="mt-1 tabular-nums text-2xl font-bold text-primary">{totalsUnavailable ? "—" : activeRunsCount}</div>
+        <div className="mt-1 tabular-nums text-2xl font-bold text-primary">
+          {totalsUnavailable ? "—" : activeRunsCount}
+        </div>
       </button>
       <button
         type="button"
         aria-pressed={statusFilter === "attention"}
-        onClick={(): void => { onToggleStatus("attention"); }}
+        onClick={(): void => {
+          onToggleStatus("attention");
+        }}
         className={cn(
           "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-colors hover:border-destructive/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
-          statusFilter === "attention" && "border-destructive/50 bg-destructive/5 ring-1 ring-destructive/30"
+          statusFilter === "attention" && "border-destructive/50 bg-destructive/5 ring-1 ring-destructive/30",
         )}
       >
         <div className="text-xs font-medium text-muted-foreground">Attention Needed</div>
-        <div className={cn("mt-1 tabular-nums text-2xl font-bold", !totalsUnavailable && attentionNeededCount > 0 ? "text-destructive" : "")}>
+        <div
+          className={cn(
+            "mt-1 tabular-nums text-2xl font-bold",
+            !totalsUnavailable && attentionNeededCount > 0 ? "text-destructive" : "",
+          )}
+        >
           {totalsUnavailable ? "—" : attentionNeededCount}
         </div>
       </button>
       <button
         type="button"
         aria-pressed={statusFilter === "locked"}
-        onClick={(): void => { onToggleStatus("locked"); }}
+        onClick={(): void => {
+          onToggleStatus("locked");
+        }}
         className={cn(
           "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-colors hover:border-warning/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
-          statusFilter === "locked" && "border-warning/50 bg-warning/5 ring-1 ring-warning/30"
+          statusFilter === "locked" && "border-warning/50 bg-warning/5 ring-1 ring-warning/30",
         )}
       >
         <div className="text-xs font-medium text-muted-foreground">Locked Workspaces</div>
@@ -460,28 +491,34 @@ function WorkspaceFilterBar({
       {savedViews.length > 0 && (
         <div className="flex w-full flex-wrap items-center gap-2">
           <span className="text-sm font-medium">Saved views:</span>
-          {savedViews.map((view): React.JSX.Element => (
-            <span key={view.name} className="inline-flex items-center gap-1">
-              <Button
-                variant={activeViewName === view.name ? "secondary" : "outline"}
-                size="sm"
-                className="h-7 px-2 text-xs"
-                onClick={(): void => { onApplySavedView(view); }}
-                aria-pressed={activeViewName === view.name}
-              >
-                {view.name}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 w-6 p-0 text-muted-foreground hover:text-destructive"
-                aria-label={`Delete saved view ${view.name}`}
-                onClick={(): void => { onDeleteSavedView(view.name); }}
-              >
-                <X className="size-3" aria-hidden="true" />
-              </Button>
-            </span>
-          ))}
+          {savedViews.map(
+            (view): React.JSX.Element => (
+              <span key={view.name} className="inline-flex items-center gap-1">
+                <Button
+                  variant={activeViewName === view.name ? "secondary" : "outline"}
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={(): void => {
+                    onApplySavedView(view);
+                  }}
+                  aria-pressed={activeViewName === view.name}
+                >
+                  {view.name}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-6 p-0 text-muted-foreground hover:text-destructive"
+                  aria-label={`Delete saved view ${view.name}`}
+                  onClick={(): void => {
+                    onDeleteSavedView(view.name);
+                  }}
+                >
+                  <X className="size-3" aria-hidden="true" />
+                </Button>
+              </span>
+            ),
+          )}
         </div>
       )}
       <Input
@@ -498,9 +535,15 @@ function WorkspaceFilterBar({
         }}
       />
       <div className="w-36 shrink-0">
-        <Select id="workspace-status-filter" name="status" aria-label="Status filter" value={statusFilter} onValueChange={(value: string): void => {
-          onStatusFilterChange(value);
-        }}>
+        <Select
+          id="workspace-status-filter"
+          name="status"
+          aria-label="Status filter"
+          value={statusFilter}
+          onValueChange={(value: string): void => {
+            onStatusFilterChange(value);
+          }}
+        >
           <option value="">All statuses</option>
           <option value="attention">Needs attention</option>
           <option value="errored">Errored</option>
@@ -511,13 +554,23 @@ function WorkspaceFilterBar({
         </Select>
       </div>
       <div className="w-36 shrink-0">
-        <Select id="workspace-project-filter" name="project" aria-label="Project filter" value={projectFilter} onValueChange={(value: string): void => {
-          onProjectFilterChange(value);
-        }}>
+        <Select
+          id="workspace-project-filter"
+          name="project"
+          aria-label="Project filter"
+          value={projectFilter}
+          onValueChange={(value: string): void => {
+            onProjectFilterChange(value);
+          }}
+        >
           <option value="">All projects</option>
-          {projects.map((project): React.JSX.Element => (
-            <option key={project.id} value={project.id}>{project.attributes.name}</option>
-          ))}
+          {projects.map(
+            (project): React.JSX.Element => (
+              <option key={project.id} value={project.id}>
+                {project.attributes.name}
+              </option>
+            ),
+          )}
         </Select>
       </div>
       <Select aria-label="Workspace sort order" value={sort} onValueChange={onSortChange} className="w-36">
@@ -525,17 +578,20 @@ function WorkspaceFilterBar({
         <option value="-name">Name Z–A</option>
       </Select>
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
-        <Button size="sm" variant="outline" disabled={exportProgress !== null} onClick={onExport}>Export matching workspaces</Button>
-        {exportProgress !== null && <>
-          <span role="status" className="text-xs">Exported {exportProgress} workspaces…</span>
-          <Button size="sm" variant="ghost" onClick={onCancelExport}>Cancel export</Button>
-        </>}
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={!hasFilters}
-          onClick={onClearFilters}
-        >
+        <Button size="sm" variant="outline" disabled={exportProgress !== null} onClick={onExport}>
+          Export matching workspaces
+        </Button>
+        {exportProgress !== null && (
+          <>
+            <span role="status" className="text-xs">
+              Exported {exportProgress} workspaces…
+            </span>
+            <Button size="sm" variant="ghost" onClick={onCancelExport}>
+              Cancel export
+            </Button>
+          </>
+        )}
+        <Button size="sm" variant="ghost" disabled={!hasFilters} onClick={onClearFilters}>
           <X data-icon="inline-start" />
           Clear
         </Button>
@@ -551,7 +607,7 @@ function WorkspaceFilterBar({
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger
-            render={(
+            render={
               <Button
                 size="sm"
                 variant="outline"
@@ -561,23 +617,25 @@ function WorkspaceFilterBar({
                 <Columns3 data-icon="inline-start" />
                 Columns
               </Button>
-            )}
+            }
           />
           <DropdownMenuContent align="end" className="w-52">
             <DropdownMenuGroup>
               <DropdownMenuLabel>Visible columns</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {WORKSPACE_TABLE_COLUMNS.map((column): React.JSX.Element => (
-                <DropdownMenuCheckboxItem
-                  key={column.id}
-                  checked={visibleColumns.includes(column.id)}
-                  onCheckedChange={(checked: boolean): void => {
-                    onToggleColumn(column.id, checked);
-                  }}
-                >
-                  {column.label}
-                </DropdownMenuCheckboxItem>
-              ))}
+              {WORKSPACE_TABLE_COLUMNS.map(
+                (column): React.JSX.Element => (
+                  <DropdownMenuCheckboxItem
+                    key={column.id}
+                    checked={visibleColumns.includes(column.id)}
+                    onCheckedChange={(checked: boolean): void => {
+                      onToggleColumn(column.id, checked);
+                    }}
+                  >
+                    {column.label}
+                  </DropdownMenuCheckboxItem>
+                ),
+              )}
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -616,17 +674,19 @@ function WorkspaceTableEmptyState({
           compact
           illustration={hasFilters ? undefined : "empty"}
           title={hasFilters ? "No workspaces match the current filters" : "No workspaces yet"}
-          description={hasFilters
-            ? "Clear or adjust the filters to see more workspaces."
-            : canManageWorkspaces
-              ? "Create your first workspace to get started."
-              : "No workspaces are available in this organization."}
+          description={
+            hasFilters
+              ? "Clear or adjust the filters to see more workspaces."
+              : canManageWorkspaces
+                ? "Create your first workspace to get started."
+                : "No workspaces are available in this organization."
+          }
           {...(hasFilters
             ? { actionLabel: "Clear filters", onAction: onClearFilters }
             : canManageWorkspaces
-              // The CTA was missing in exactly the case that needed
-              // it most: an organization with no workspaces at all.
-              ? {
+              ? // The CTA was missing in exactly the case that needed
+                // it most: an organization with no workspaces at all.
+                {
                   actionLabel: "New workspace",
                   onAction: onCreate,
                   docsHref: "/app/docs/workspaces",
@@ -696,7 +756,11 @@ function WorkspaceTable({
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={tableColumnCount} className="p-0"><TableSkeleton rows={4} cols={tableColumnCount} /></TableCell></TableRow>
+              <TableRow>
+                <TableCell colSpan={tableColumnCount} className="p-0">
+                  <TableSkeleton rows={4} cols={tableColumnCount} />
+                </TableCell>
+              </TableRow>
             ) : loadError !== "" && visibleWorkspaces.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={tableColumnCount}>
@@ -721,15 +785,25 @@ function WorkspaceTable({
                 onClearFilters={onClearFilters}
                 onCreate={onCreate}
               />
-            ) : visibleWorkspaces.map(renderRow)}
+            ) : (
+              visibleWorkspaces.map(renderRow)
+            )}
           </TableBody>
         </Table>
         <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-xs text-muted-foreground">
-          <span>{matchingCount} matching workspaces · {totalOnPage} on this page</span>
+          <span>
+            {matchingCount} matching workspaces · {totalOnPage} on this page
+          </span>
           <nav aria-label="Workspace pagination" className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" disabled={pageBusy || page <= 1} onClick={onPrevPage}>Previous</Button>
-            <span aria-current="page">Page {page} of {pageCount}</span>
-            <Button variant="ghost" size="sm" disabled={pageBusy || page >= pageCount} onClick={onNextPage}>Next</Button>
+            <Button variant="ghost" size="sm" disabled={pageBusy || page <= 1} onClick={onPrevPage}>
+              Previous
+            </Button>
+            <span aria-current="page">
+              Page {page} of {pageCount}
+            </span>
+            <Button variant="ghost" size="sm" disabled={pageBusy || page >= pageCount} onClick={onNextPage}>
+              Next
+            </Button>
           </nav>
         </div>
       </div>
@@ -767,7 +841,12 @@ function TagManagerDialog({
   onClose: () => void;
 }>): React.JSX.Element {
   return (
-    <Dialog open={tagWorkspace !== null} onOpenChange={(open: boolean): void => { if (!open) onClose(); }}>
+    <Dialog
+      open={tagWorkspace !== null}
+      onOpenChange={(open: boolean): void => {
+        if (!open) onClose();
+      }}
+    >
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Tags for {tagWorkspace?.attributes.name}</DialogTitle>
@@ -783,7 +862,9 @@ function TagManagerDialog({
                 autoComplete="off"
                 value={tagKey}
                 disabled={editingTagKey !== null}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onTagKeyChange(event.currentTarget.value); }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onTagKeyChange(event.currentTarget.value);
+                }}
               />
             </Field>
             <Field>
@@ -793,17 +874,15 @@ function TagManagerDialog({
                 name="tag-value"
                 autoComplete="off"
                 value={tagValue}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onTagValueChange(event.currentTarget.value); }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onTagValueChange(event.currentTarget.value);
+                }}
               />
             </Field>
           </FieldGroup>
           <DialogFooter className="mt-4">
             {editingTagKey !== null && (
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={onCancelEdit}
-              >
+              <Button type="button" variant="ghost" onClick={onCancelEdit}>
                 Cancel edit
               </Button>
             )}
@@ -814,34 +893,46 @@ function TagManagerDialog({
           </DialogFooter>
         </form>
         <Table>
-          <TableHeader><TableRow><TableHead>Key</TableHead><TableHead>Value</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Key</TableHead>
+              <TableHead>Value</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
           <TableBody>
-            {tagBindings.map((tag): React.JSX.Element => (
-              <TableRow key={tag.id}>
-                <TableCell className="font-medium">{tag.attributes.key}</TableCell>
-                <TableCell>{tag.attributes.value ?? ""}</TableCell>
-                <TableCell>
-                  <div className="flex justify-end gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={`Edit tag ${tag.attributes.key}`}
-                      onClick={(): void => { onEditTag(tag); }}
-                    >
-                      <Pencil />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={`Delete tag ${tag.attributes.key}`}
-                      onClick={(): void => { onDeleteTag(tag); }}
-                    >
-                      <Trash2 />
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
+            {tagBindings.map(
+              (tag): React.JSX.Element => (
+                <TableRow key={tag.id}>
+                  <TableCell className="font-medium">{tag.attributes.key}</TableCell>
+                  <TableCell>{tag.attributes.value ?? ""}</TableCell>
+                  <TableCell>
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Edit tag ${tag.attributes.key}`}
+                        onClick={(): void => {
+                          onEditTag(tag);
+                        }}
+                      >
+                        <Pencil />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Delete tag ${tag.attributes.key}`}
+                        onClick={(): void => {
+                          onDeleteTag(tag);
+                        }}
+                      >
+                        <Trash2 />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ),
+            )}
             {tagBindings.length === 0 && (
               <TableRow>
                 <TableCell colSpan={3} className="py-6 text-center text-sm text-muted-foreground">
@@ -874,20 +965,13 @@ function SaveViewDialog({
   onCancel: () => void;
 }>): React.JSX.Element {
   return (
-    <Dialog
-      open={viewDialogOpen}
-      onOpenChange={onViewDialogOpenChange}
-    >
+    <Dialog open={viewDialogOpen} onOpenChange={onViewDialogOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Save view</DialogTitle>
-          <DialogDescription>
-            Save the current search, status, and project filters as a named view.
-          </DialogDescription>
+          <DialogDescription>Save the current search, status, and project filters as a named view.</DialogDescription>
         </DialogHeader>
-        <form
-          onSubmit={onSubmit}
-        >
+        <form onSubmit={onSubmit}>
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="saved-view-name">View name</FieldLabel>
@@ -897,14 +981,20 @@ function SaveViewDialog({
                 autoComplete="off"
                 value={viewName}
                 autoFocus
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onViewNameChange(event.currentTarget.value); }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onViewNameChange(event.currentTarget.value);
+                }}
                 placeholder="e.g. Production attention…"
               />
             </Field>
           </FieldGroup>
           <DialogFooter className="mt-4">
-            <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
-            <Button type="submit" disabled={viewName.trim() === ""}>Save view</Button>
+            <Button type="button" variant="outline" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={viewName.trim() === ""}>
+              Save view
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -926,12 +1016,14 @@ function DeleteTagDialog({
       open={pendingTagDelete !== null}
       onOpenChange={onOpenChange}
       title="Remove tag?"
-      description={pendingTagDelete === null ? undefined : (
-        <>
-          Tag <strong className="font-mono">{pendingTagDelete.attributes.key}</strong> will be removed
-          from this workspace. Runs that filter on this tag will stop matching it.
-        </>
-      )}
+      description={
+        pendingTagDelete === null ? undefined : (
+          <>
+            Tag <strong className="font-mono">{pendingTagDelete.attributes.key}</strong> will be removed from this
+            workspace. Runs that filter on this tag will stop matching it.
+          </>
+        )
+      }
       confirmText="Remove tag"
       confirmVariant="destructive"
       onConfirm={onConfirm}
@@ -939,7 +1031,10 @@ function DeleteTagDialog({
   );
 }
 
-function FirstWorkspaceSection({ canManageWorkspaces, onCreate }: Readonly<{
+function FirstWorkspaceSection({
+  canManageWorkspaces,
+  onCreate,
+}: Readonly<{
   canManageWorkspaces: boolean;
   onCreate: () => void;
 }>): React.JSX.Element {
@@ -948,18 +1043,27 @@ function FirstWorkspaceSection({ canManageWorkspaces, onCreate }: Readonly<{
       <EmptyState
         illustration="guide"
         title={canManageWorkspaces ? "Create your first workspace" : "No workspaces yet"}
-        description={canManageWorkspaces
-          ? "A workspace holds the code, state, and history for one part of your infrastructure. Start with your network, a server, or an application. You can organize workspaces into projects later."
-          : "Ask an organization owner to create a workspace or give you access to one."}
+        description={
+          canManageWorkspaces
+            ? "A workspace holds the code, state, and history for one part of your infrastructure. Start with your network, a server, or an application. You can organize workspaces into projects later."
+            : "Ask an organization owner to create a workspace or give you access to one."
+        }
         {...(canManageWorkspaces ? { actionLabel: "New workspace", onAction: onCreate } : {})}
         docsHref="/app/docs/workspaces"
       />
-      <p className="border-t px-6 py-4 text-center text-sm text-muted-foreground">Bring a Git repository or use your existing Terraform or OpenTofu CLI. Plans require your approval by default.</p>
+      <p className="border-t px-6 py-4 text-center text-sm text-muted-foreground">
+        Bring a Git repository or use your existing Terraform or OpenTofu CLI. Plans require your approval by default.
+      </p>
     </section>
   );
 }
 
-function hasActiveFilters(search: string, statusFilter: string, projectFilter: string, activeViewName: string): boolean {
+function hasActiveFilters(
+  search: string,
+  statusFilter: string,
+  projectFilter: string,
+  activeViewName: string,
+): boolean {
   return search !== "" || statusFilter !== "" || projectFilter !== "" || activeViewName !== "";
 }
 
@@ -1025,43 +1129,51 @@ export function Workspaces(): React.JSX.Element {
     return `/organizations/${encodeURIComponent(orgName)}/workspaces?${query}`;
   }, [orgName, projectFilter, search, sort, statusFilter]);
 
-  const loadData = useCallback(async (quiet = false): Promise<void> => {
-    loadController.current?.abort();
-    const controller = new AbortController();
-    loadController.current = controller;
-    if (!quiet) { setLoading(true); setWorkspaces([]); }
-    setLoadError("");
-    try {
-      const result = await fetchApi<WorkspacePage>(
-        `${workspaceQuery}&page[number]=${page}&include=current_run,workspace_summary`,
-        { signal: controller.signal },
-      );
-      if (controller.signal.aborted) return;
-      const resolved = resolveWorkspacePage(result, page);
-      if (resolved.kind === "redirect") {
-        setPageState({ key: filterKey, number: resolved.page });
-        return;
+  const loadData = useCallback(
+    async (quiet = false): Promise<void> => {
+      loadController.current?.abort();
+      const controller = new AbortController();
+      loadController.current = controller;
+      if (!quiet) {
+        setLoading(true);
+        setWorkspaces([]);
       }
-      setWorkspaces(resolved.workspaces);
-      setLatestRuns(resolved.latestRuns);
-      setMatchingCount(resolved.matchingCount);
-      setPageCount(resolved.pageCount);
-      setTotalsUnavailable(resolved.totalsUnavailable);
-      setTotalWorkspaceCount(resolved.totalWorkspaceCount);
-      setLockedWorkspaceCount(resolved.lockedWorkspaceCount);
-      setRunStatusCounts(resolved.runStatusCounts);
-    } catch (error: unknown) {
-      if (controller.signal.aborted) return;
-      setLoadError(error instanceof Error ? error.message : "Could not load workspaces");
-      setTotalsUnavailable(true);
-    } finally {
-      if (!controller.signal.aborted && !quiet) setLoading(false);
-    }
-  }, [filterKey, page, workspaceQuery]);
+      setLoadError("");
+      try {
+        const result = await fetchApi<WorkspacePage>(
+          `${workspaceQuery}&page[number]=${page}&include=current_run,workspace_summary`,
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted) return;
+        const resolved = resolveWorkspacePage(result, page);
+        if (resolved.kind === "redirect") {
+          setPageState({ key: filterKey, number: resolved.page });
+          return;
+        }
+        setWorkspaces(resolved.workspaces);
+        setLatestRuns(resolved.latestRuns);
+        setMatchingCount(resolved.matchingCount);
+        setPageCount(resolved.pageCount);
+        setTotalsUnavailable(resolved.totalsUnavailable);
+        setTotalWorkspaceCount(resolved.totalWorkspaceCount);
+        setLockedWorkspaceCount(resolved.lockedWorkspaceCount);
+        setRunStatusCounts(resolved.runStatusCounts);
+      } catch (error: unknown) {
+        if (controller.signal.aborted) return;
+        setLoadError(error instanceof Error ? error.message : "Could not load workspaces");
+        setTotalsUnavailable(true);
+      } finally {
+        if (!controller.signal.aborted && !quiet) setLoading(false);
+      }
+    },
+    [filterKey, page, workspaceQuery],
+  );
 
   useEffect((): (() => void) => {
     if (orgName !== "") void loadData();
-    return (): void => { loadController.current?.abort(); };
+    return (): void => {
+      loadController.current?.abort();
+    };
   }, [loadData, orgName]);
 
   // Auxiliary metadata must not hold up the first useful workspace page.
@@ -1070,10 +1182,19 @@ export function Workspaces(): React.JSX.Element {
     setProjects([]);
     setCanManageWorkspaces(false);
     setProjectDataError(false);
-    void fetchAllApiPages<Project>(`/organizations/${encodeURIComponent(orgName)}/projects?page%5Bsize%5D=100`, controller.signal)
-      .then((data): void => { if (!controller.signal.aborted) setProjects(data); })
-      .catch((): void => { if (!controller.signal.aborted) setProjectDataError(true); });
-    void fetchApi<{ data?: Organization }>(`/organizations/${encodeURIComponent(orgName)}`, { signal: controller.signal })
+    void fetchAllApiPages<Project>(
+      `/organizations/${encodeURIComponent(orgName)}/projects?page%5Bsize%5D=100`,
+      controller.signal,
+    )
+      .then((data): void => {
+        if (!controller.signal.aborted) setProjects(data);
+      })
+      .catch((): void => {
+        if (!controller.signal.aborted) setProjectDataError(true);
+      });
+    void fetchApi<{ data?: Organization }>(`/organizations/${encodeURIComponent(orgName)}`, {
+      signal: controller.signal,
+    })
       .then((response): void => {
         if (controller.signal.aborted) return;
         const attributes = response.data?.attributes;
@@ -1081,11 +1202,21 @@ export function Workspaces(): React.JSX.Element {
         setDefaultIacBinary(attributes?.["default-iac-binary"] === "terraform" ? "terraform" : "tofu");
         const version = attributes?.["default-terraform-version"];
         setDefaultTerraformVersion(typeof version === "string" && version !== "" ? version : "latest");
-      }).catch((): void => { /* Creation remains unavailable when authorization cannot load. */ });
-    return (): void => { controller.abort(); };
+      })
+      .catch((): void => {
+        /* Creation remains unavailable when authorization cannot load. */
+      });
+    return (): void => {
+      controller.abort();
+    };
   }, [orgName]);
 
-  useEffect((): (() => void) => (): void => { exportController.current?.abort(); }, [orgName]);
+  useEffect(
+    (): (() => void) => (): void => {
+      exportController.current?.abort();
+    },
+    [orgName],
+  );
 
   const exportWorkspaces = async (): Promise<void> => {
     exportController.current?.abort();
@@ -1096,19 +1227,33 @@ export function Workspaces(): React.JSX.Element {
       const query = new URL(workspaceQuery, "http://terrence.local");
       query.searchParams.set("page[size]", "100");
       const result = await fetchAllApiPages<Workspace>(`${query.pathname}${query.search}`, controller.signal, {
-        onProgress: (records): void => { if (!controller.signal.aborted) setExportProgress(records); },
+        onProgress: (records): void => {
+          if (!controller.signal.aborted) setExportProgress(records);
+        },
       });
       controller.signal.throwIfAborted();
-      const blob = new Blob([JSON.stringify({
-        organization: orgName,
-        exportedAt: new Date().toISOString(),
-        workspaces: result.map((workspace): Record<string, unknown> => ({
-          id: workspace.id, name: workspace.attributes.name,
-          locked: workspace.attributes.locked === true,
-          projectId: workspace.relationships?.project?.data?.id ?? null,
-          tags: workspace.attributes["tag-names"] ?? [],
-        })),
-      }, null, 2)], { type: "application/json" });
+      const blob = new Blob(
+        [
+          JSON.stringify(
+            {
+              organization: orgName,
+              exportedAt: new Date().toISOString(),
+              workspaces: result.map(
+                (workspace): Record<string, unknown> => ({
+                  id: workspace.id,
+                  name: workspace.attributes.name,
+                  locked: workspace.attributes.locked === true,
+                  projectId: workspace.relationships?.project?.data?.id ?? null,
+                  tags: workspace.attributes["tag-names"] ?? [],
+                }),
+              ),
+            },
+            null,
+            2,
+          ),
+        ],
+        { type: "application/json" },
+      );
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -1116,7 +1261,12 @@ export function Workspaces(): React.JSX.Element {
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (error: unknown) {
-      if (!controller.signal.aborted) toast.add({ title: "Workspace export failed", description: error instanceof Error ? error.message : "Could not export workspaces", type: "error" });
+      if (!controller.signal.aborted)
+        toast.add({
+          title: "Workspace export failed",
+          description: error instanceof Error ? error.message : "Could not export workspaces",
+          type: "error",
+        });
     } finally {
       if (exportController.current === controller) setExportProgress(null);
     }
@@ -1165,7 +1315,9 @@ export function Workspaces(): React.JSX.Element {
 
   const visibleWorkspaces = useMemo((): Workspace[] => {
     const pinnedNames = new Set(
-      getPinnedWorkspaces().filter((entry): boolean => entry.orgName === orgName).map((entry): string => entry.workspaceName),
+      getPinnedWorkspaces()
+        .filter((entry): boolean => entry.orgName === orgName)
+        .map((entry): string => entry.workspaceName),
     );
     const matches = [...workspaces];
     // Pinned shortcuts float to the top of this page; all other rows retain API order.
@@ -1177,13 +1329,19 @@ export function Workspaces(): React.JSX.Element {
     });
   }, [orgName, pinsRevision, workspaces]);
 
-  const activeRunsCount = runStatusFilters.running.reduce((total, status): number => total + (runStatusCounts[status] ?? 0), 0);
-  const attentionNeededCount = runStatusFilters.attention.reduce((total, status): number => total + (runStatusCounts[status] ?? 0), 0);
+  const activeRunsCount = runStatusFilters.running.reduce(
+    (total, status): number => total + (runStatusCounts[status] ?? 0),
+    0,
+  );
+  const attentionNeededCount = runStatusFilters.attention.reduce(
+    (total, status): number => total + (runStatusCounts[status] ?? 0),
+    0,
+  );
 
   const loadTags = async (workspace: Workspace): Promise<void> => {
     try {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const response = await fetchApi(`/workspaces/${workspace.id}/tag-bindings`) as { data?: TagBinding[] };
+      // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+      const response = (await fetchApi(`/workspaces/${workspace.id}/tag-bindings`)) as { data?: TagBinding[] };
       setTagBindings(Array.isArray(response.data) ? response.data : []);
     } catch (error: unknown) {
       toast.add({
@@ -1241,10 +1399,12 @@ export function Workspaces(): React.JSX.Element {
       await fetchApi(`/workspaces/${tagWorkspace.id}/tag-bindings`, {
         method: "PATCH",
         body: JSON.stringify({
-          data: [{
-            type: "tag-bindings",
-            attributes: { key: tagKey.trim(), value: tagValue.trim() },
-          }],
+          data: [
+            {
+              type: "tag-bindings",
+              attributes: { key: tagKey.trim(), value: tagValue.trim() },
+            },
+          ],
         }),
       });
       setTagKey("");
@@ -1296,7 +1456,8 @@ export function Workspaces(): React.JSX.Element {
     setProjectFilter("");
     setActiveViewName("");
   };
-  const tableColumnCount = WORKSPACE_TABLE_COLUMNS.filter((column): boolean => visibleColumns.includes(column.id)).length + 2;
+  const tableColumnCount =
+    WORKSPACE_TABLE_COLUMNS.filter((column): boolean => visibleColumns.includes(column.id)).length + 2;
 
   const toggleStatusFilter = (status: string): void => {
     setStatusFilter(statusFilter === status ? "" : status);
@@ -1305,11 +1466,12 @@ export function Workspaces(): React.JSX.Element {
 
   const toggleColumn = (columnId: string, checked: boolean): void => {
     setVisibleColumns((current): string[] =>
-      checked ? [...current, columnId] : current.filter((id: string): boolean => id !== columnId));
+      checked ? [...current, columnId] : current.filter((id: string): boolean => id !== columnId),
+    );
   };
 
   const toggleDensity = (): void => {
-    setDensity((current): TableDensity => current === "dense" ? "comfortable" : "dense");
+    setDensity((current): TableDensity => (current === "dense" ? "comfortable" : "dense"));
   };
 
   const renderWorkspaceRow = (workspace: Workspace): React.JSX.Element => (
@@ -1325,11 +1487,11 @@ export function Workspaces(): React.JSX.Element {
         }}
       />
       {visibleColumns.includes("repository") && (
-        <TableCell className="max-w-64"><WorkspaceRepositoryLink repo={workspace.attributes["vcs-repo"]} /></TableCell>
+        <TableCell className="max-w-64">
+          <WorkspaceRepositoryLink repo={workspace.attributes["vcs-repo"]} />
+        </TableCell>
       )}
-      {visibleColumns.includes("tags") && (
-        <WorkspaceTagsCell tags={workspace.attributes["tag-names"] ?? []} />
-      )}
+      {visibleColumns.includes("tags") && <WorkspaceTagsCell tags={workspace.attributes["tag-names"] ?? []} />}
       {visibleColumns.includes("project") && (
         <WorkspaceProjectCell
           projectId={workspace.relationships?.project?.data?.id}
@@ -1337,16 +1499,14 @@ export function Workspaces(): React.JSX.Element {
           orgName={orgName}
         />
       )}
-      {visibleColumns.includes("latest-change") && (
-        <WorkspaceLatestChangeCell run={latestRuns.get(workspace.id)} />
-      )}
-      {visibleColumns.includes("status") && (
-        <WorkspaceStatusCell run={latestRuns.get(workspace.id)} />
-      )}
+      {visibleColumns.includes("latest-change") && <WorkspaceLatestChangeCell run={latestRuns.get(workspace.id)} />}
+      {visibleColumns.includes("status") && <WorkspaceStatusCell run={latestRuns.get(workspace.id)} />}
       <WorkspaceManageCell
         workspaceName={workspace.attributes.name}
         canTag={workspace.attributes.permissions?.["can-update"] === true}
-        onTags={(): void => { openTags(workspace); }}
+        onTags={(): void => {
+          openTags(workspace);
+        }}
       />
     </TableRow>
   );
@@ -1357,98 +1517,147 @@ export function Workspaces(): React.JSX.Element {
         eyebrow={orgName}
         title="Workspaces"
         description="Review workspace health, current runs, and configuration at a glance."
-        action={canManageWorkspaces && !firstWorkspace ? (
-          <Button onClick={(): void => { setCreateOpen(true); }}>
-            <Plus data-icon="inline-start" />
-            New workspace
-          </Button>
-        ) : undefined}
+        action={
+          canManageWorkspaces && !firstWorkspace ? (
+            <Button
+              onClick={(): void => {
+                setCreateOpen(true);
+              }}
+            >
+              <Plus data-icon="inline-start" />
+              New workspace
+            </Button>
+          ) : undefined
+        }
       />
 
       {firstWorkspace ? (
-        <FirstWorkspaceSection canManageWorkspaces={canManageWorkspaces} onCreate={(): void => { setCreateOpen(true); }} />
+        <FirstWorkspaceSection
+          canManageWorkspaces={canManageWorkspaces}
+          onCreate={(): void => {
+            setCreateOpen(true);
+          }}
+        />
       ) : (
-      <>
-      {/* Organization totals remain visible while filtering. */}
-      <WorkspaceTotalsBar
-        hasFilters={hasFilters}
-        totalsUnavailable={totalsUnavailable}
-        totalWorkspaceCount={totalWorkspaceCount}
-        activeRunsCount={activeRunsCount}
-        attentionNeededCount={attentionNeededCount}
-        lockedWorkspaceCount={lockedWorkspaceCount}
-        statusFilter={statusFilter}
-        onClearFilters={clearFilters}
-        onToggleStatus={toggleStatusFilter}
-      />
+        <>
+          {/* Organization totals remain visible while filtering. */}
+          <WorkspaceTotalsBar
+            hasFilters={hasFilters}
+            totalsUnavailable={totalsUnavailable}
+            totalWorkspaceCount={totalWorkspaceCount}
+            activeRunsCount={activeRunsCount}
+            attentionNeededCount={attentionNeededCount}
+            lockedWorkspaceCount={lockedWorkspaceCount}
+            statusFilter={statusFilter}
+            onClearFilters={clearFilters}
+            onToggleStatus={toggleStatusFilter}
+          />
 
-      {totalsUnavailable && (
-        <p role="status" className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
-          Organization-wide workspace totals are unavailable. Try refreshing the list.
-        </p>
-      )}
+          {totalsUnavailable && (
+            <p
+              role="status"
+              className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
+            >
+              Organization-wide workspace totals are unavailable. Try refreshing the list.
+            </p>
+          )}
 
-      <WorkspaceFilterBar
-        savedViews={savedViews}
-        activeViewName={activeViewName}
-        onApplySavedView={applySavedView}
-        onDeleteSavedView={handleDeleteView}
-        search={search}
-        onSearchChange={(value: string): void => { setSearch(value); setActiveViewName(""); }}
-        statusFilter={statusFilter}
-        onStatusFilterChange={(value: string): void => { setStatusFilter(value); setActiveViewName(""); }}
-        projectFilter={projectFilter}
-        onProjectFilterChange={(value: string): void => { setProjectFilter(value); setActiveViewName(""); }}
-        projects={projects}
-        sort={sort}
-        onSortChange={setSort}
-        exportProgress={exportProgress}
-        onExport={exportWorkspaces}
-        onCancelExport={(): void => { exportController.current?.abort(); setExportProgress(null); }}
-        hasFilters={hasFilters}
-        onClearFilters={clearFilters}
-        onOpenSaveView={(): void => { setViewDialogOpen(true); }}
-        density={density}
-        onToggleDensity={toggleDensity}
-        visibleColumns={visibleColumns}
-        onToggleColumn={toggleColumn}
-      />
+          <WorkspaceFilterBar
+            savedViews={savedViews}
+            activeViewName={activeViewName}
+            onApplySavedView={applySavedView}
+            onDeleteSavedView={handleDeleteView}
+            search={search}
+            onSearchChange={(value: string): void => {
+              setSearch(value);
+              setActiveViewName("");
+            }}
+            statusFilter={statusFilter}
+            onStatusFilterChange={(value: string): void => {
+              setStatusFilter(value);
+              setActiveViewName("");
+            }}
+            projectFilter={projectFilter}
+            onProjectFilterChange={(value: string): void => {
+              setProjectFilter(value);
+              setActiveViewName("");
+            }}
+            projects={projects}
+            sort={sort}
+            onSortChange={setSort}
+            exportProgress={exportProgress}
+            onExport={exportWorkspaces}
+            onCancelExport={(): void => {
+              exportController.current?.abort();
+              setExportProgress(null);
+            }}
+            hasFilters={hasFilters}
+            onClearFilters={clearFilters}
+            onOpenSaveView={(): void => {
+              setViewDialogOpen(true);
+            }}
+            density={density}
+            onToggleDensity={toggleDensity}
+            visibleColumns={visibleColumns}
+            onToggleColumn={toggleColumn}
+          />
 
-      {projectDataError && (
-        <p role="status" className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
-          Projects could not be refreshed. Workspace results are still available.
-        </p>
-      )}
-      {loadError !== "" && (
-        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          <span>Could not refresh workspaces. {loadError}</span>
-          <Button size="sm" variant="outline" onClick={(): void => { void loadData(); }}>Try again</Button>
-        </div>
-      )}
+          {projectDataError && (
+            <p
+              role="status"
+              className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
+            >
+              Projects could not be refreshed. Workspace results are still available.
+            </p>
+          )}
+          {loadError !== "" && (
+            <div
+              role="alert"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+            >
+              <span>Could not refresh workspaces. {loadError}</span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(): void => {
+                  void loadData();
+                }}
+              >
+                Try again
+              </Button>
+            </div>
+          )}
 
-      <WorkspaceTable
-        visibleColumns={visibleColumns}
-        tableColumnCount={tableColumnCount}
-        loading={loading}
-        loadError={loadError}
-        hasFilters={hasFilters}
-        canManageWorkspaces={canManageWorkspaces}
-        visibleWorkspaces={visibleWorkspaces}
-        renderRow={renderWorkspaceRow}
-        matchingCount={matchingCount}
-        totalOnPage={workspaces.length}
-        page={page}
-        pageCount={pageCount}
-        onPrevPage={(): void => { setPageState({ key: filterKey, number: page - 1 }); }}
-        onNextPage={(): void => { setPageState({ key: filterKey, number: page + 1 }); }}
-        pageBusy={loading}
-        onRetry={(): void => { void loadData(); }}
-        density={density}
-        onClearFilters={clearFilters}
-        onCreate={(): void => { setCreateOpen(true); }}
-      />
-
-      </>
+          <WorkspaceTable
+            visibleColumns={visibleColumns}
+            tableColumnCount={tableColumnCount}
+            loading={loading}
+            loadError={loadError}
+            hasFilters={hasFilters}
+            canManageWorkspaces={canManageWorkspaces}
+            visibleWorkspaces={visibleWorkspaces}
+            renderRow={renderWorkspaceRow}
+            matchingCount={matchingCount}
+            totalOnPage={workspaces.length}
+            page={page}
+            pageCount={pageCount}
+            onPrevPage={(): void => {
+              setPageState({ key: filterKey, number: page - 1 });
+            }}
+            onNextPage={(): void => {
+              setPageState({ key: filterKey, number: page + 1 });
+            }}
+            pageBusy={loading}
+            onRetry={(): void => {
+              void loadData();
+            }}
+            density={density}
+            onClearFilters={clearFilters}
+            onCreate={(): void => {
+              setCreateOpen(true);
+            }}
+          />
+        </>
       )}
 
       {canManageWorkspaces && (
@@ -1479,7 +1688,9 @@ export function Workspaces(): React.JSX.Element {
         onCancelEdit={cancelEditTag}
         onEditTag={startEditTag}
         onDeleteTag={setPendingTagDelete}
-        onClose={(): void => { setTagWorkspace(null); }}
+        onClose={(): void => {
+          setTagWorkspace(null);
+        }}
       />
 
       <SaveViewDialog
@@ -1488,7 +1699,9 @@ export function Workspaces(): React.JSX.Element {
         viewName={viewName}
         onViewNameChange={setViewName}
         onSubmit={handleSaveViewSubmit}
-        onCancel={(): void => { setViewDialogOpen(false); }}
+        onCancel={(): void => {
+          setViewDialogOpen(false);
+        }}
       />
       <DeleteTagDialog
         pendingTagDelete={pendingTagDelete}

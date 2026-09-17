@@ -30,9 +30,11 @@ describe("TF policy evaluations (audit finding 3)", () => {
   const outsiderToken = `outsider-${suffix}`;
 
   const request = (path: string, auth?: string) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      headers: auth === undefined ? {} : { Authorization: "Bearer " + auth },
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        headers: auth === undefined ? {} : { Authorization: "Bearer " + auth },
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([
@@ -96,7 +98,7 @@ describe("TF policy evaluations (audit finding 3)", () => {
   it("links evaluations from the run read and sideloads them with stage types", async () => {
     const res = await request(`/api/v2/runs/${runId}?include=tf_policy_evaluations`, token);
     expect(res.status).toBe(200);
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       data: { relationships: Record<string, { data?: unknown }> };
       included: { id: string; type: string; attributes: Record<string, unknown> }[];
     };
@@ -112,7 +114,7 @@ describe("TF policy evaluations (audit finding 3)", () => {
   it("serves paginated outcomes with per-policy entries the CLI renders", async () => {
     const res = await request(`/api/v2/tf-policy-evaluations/${evalId}/tf-policy-set-outcomes`, token);
     expect(res.status).toBe(200);
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       data: { id: string; type: string; attributes: Record<string, unknown> }[];
       meta: { pagination: Record<string, unknown> };
     };
@@ -130,20 +132,24 @@ describe("TF policy evaluations (audit finding 3)", () => {
       `/api/v2/tf-policy-evaluations/${evalId}/tf-policy-set-outcomes?filter[status]=failed`,
       token,
     );
-    const filteredBody = await filtered.json() as { data: { id: string }[] };
+    const filteredBody = (await filtered.json()) as { data: { id: string }[] };
     expect(filteredBody.data.map((item): string => item.id)).toEqual([`outcome-fail-${suffix}`]);
   });
 
   it("hides evaluations and outcomes from outsiders", async () => {
     expect((await request(`/api/v2/runs/${runId}/tf-policy-evaluations`, outsiderToken)).status).toBe(404);
-    expect((await request(`/api/v2/tf-policy-evaluations/${evalId}/tf-policy-set-outcomes`, outsiderToken)).status).toBe(404);
-    expect((await request(`/api/v2/tf-policy-evaluations/missing-${suffix}/tf-policy-set-outcomes`, token)).status).toBe(404);
+    expect(
+      (await request(`/api/v2/tf-policy-evaluations/${evalId}/tf-policy-set-outcomes`, outsiderToken)).status,
+    ).toBe(404);
+    expect(
+      (await request(`/api/v2/tf-policy-evaluations/missing-${suffix}/tf-policy-set-outcomes`, token)).status,
+    ).toBe(404);
   });
 
   it("reads a single outcome through its self link", async () => {
     const res = await request(`/api/v2/tf-policy-set-outcomes/outcome-pass-${suffix}`, token);
     expect(res.status).toBe(200);
-    const body = await res.json() as { data: { id: string; type: string } };
+    const body = (await res.json()) as { data: { id: string; type: string } };
     expect(body.data.type).toBe("tf-policy-set-outcomes");
     expect((await request(`/api/v2/tf-policy-set-outcomes/outcome-pass-${suffix}`, outsiderToken)).status).toBe(404);
   });

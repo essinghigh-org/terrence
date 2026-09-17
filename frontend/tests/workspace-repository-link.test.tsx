@@ -9,9 +9,7 @@ afterEach((): void => {
 
 test("links a valid GitHub App-backed repository", () => {
   const view = render(
-    <WorkspaceRepositoryLink
-      repo={{ identifier: "acme/infrastructure", "github-app-installation-id": "ghain-1" }}
-    />,
+    <WorkspaceRepositoryLink repo={{ identifier: "acme/infrastructure", "github-app-installation-id": "ghain-1" }} />,
   );
 
   const link = view.getByRole("link", { name: "Open GitHub repository acme/infrastructure" });
@@ -24,9 +22,7 @@ test("does not infer a GitHub URL for provider-unknown or malformed repositories
   const view = render(
     <>
       <WorkspaceRepositoryLink repo={{ identifier: "acme/infrastructure" }} />
-      <WorkspaceRepositoryLink
-        repo={{ identifier: "acme/../secrets", "github-app-installation-id": "ghain-1" }}
-      />
+      <WorkspaceRepositoryLink repo={{ identifier: "acme/../secrets", "github-app-installation-id": "ghain-1" }} />
     </>,
   );
 

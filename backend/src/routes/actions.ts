@@ -66,9 +66,17 @@ function invocationResource(row: typeof actionInvocations.$inferSelect): Record<
 }
 
 function actionOrgData(data: Record<string, unknown>): Record<string, unknown> {
-  const rels = data["relationships"] !== null && typeof data["relationships"] === "object" ? (data["relationships"] as Record<string, unknown>) : {};
-  const orgRel = rels["organization"] !== null && typeof rels["organization"] === "object" ? (rels["organization"] as Record<string, unknown>) : {};
-  return orgRel["data"] !== null && typeof orgRel["data"] === "object" ? (orgRel["data"] as Record<string, unknown>) : {};
+  const rels =
+    data["relationships"] !== null && typeof data["relationships"] === "object"
+      ? (data["relationships"] as Record<string, unknown>)
+      : {};
+  const orgRel =
+    rels["organization"] !== null && typeof rels["organization"] === "object"
+      ? (rels["organization"] as Record<string, unknown>)
+      : {};
+  return orgRel["data"] !== null && typeof orgRel["data"] === "object"
+    ? (orgRel["data"] as Record<string, unknown>)
+    : {};
 }
 
 function parseActionRequest(
@@ -76,14 +84,27 @@ function parseActionRequest(
   set: Ctx["set"],
 ): { attrs: Record<string, unknown>; orgName: string; name: string } | { error: unknown } {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const data = payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
-  const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? (data["attributes"] as Record<string, unknown>) : {};
+  const data =
+    payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
+  const attrs =
+    data["attributes"] !== null && typeof data["attributes"] === "object"
+      ? (data["attributes"] as Record<string, unknown>)
+      : {};
   const orgData = actionOrgData(data);
-  const orgName = typeof orgData["id"] === "string" ? orgData["id"] : typeof attrs["organization"] === "string" ? attrs["organization"] : "";
+  const orgName =
+    typeof orgData["id"] === "string"
+      ? orgData["id"]
+      : typeof attrs["organization"] === "string"
+        ? attrs["organization"]
+        : "";
   const name = typeof attrs["name"] === "string" ? attrs["name"].trim() : "";
   if (orgName === "" || name === "") {
     (set as { status: number }).status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "organization and name are required" }] } };
+    return {
+      error: {
+        errors: [{ status: "422", title: "Unprocessable Entity", detail: "organization and name are required" }],
+      },
+    };
   }
   return { attrs, orgName, name };
 }
@@ -95,10 +116,23 @@ async function insertAction(
 ): Promise<typeof actions.$inferSelect> {
   const actionType = typeof attrs["action-type"] === "string" ? attrs["action-type"] : "custom";
   const description = typeof attrs["description"] === "string" ? attrs["description"] : null;
-  const configuration = attrs["configuration"] !== null && typeof attrs["configuration"] === "object" ? (attrs["configuration"] as Record<string, unknown>) : {};
+  const configuration =
+    attrs["configuration"] !== null && typeof attrs["configuration"] === "object"
+      ? (attrs["configuration"] as Record<string, unknown>)
+      : {};
   const id = newResourceId("action");
   const now = Date.now();
-  await db.insert(actions).values({ id, orgId, name, description, actionType, status: "active", configuration, createdAt: now, updatedAt: now });
+  await db.insert(actions).values({
+    id,
+    orgId,
+    name,
+    description,
+    actionType,
+    status: "active",
+    configuration,
+    createdAt: now,
+    updatedAt: now,
+  });
   const row = await db.query.actions.findFirst({ where: eq(actions.id, id) });
   if (row === undefined) throw new Error("Created action could not be loaded");
   return row;
@@ -128,10 +162,20 @@ async function checkInvocationTargets(
   set: Ctx["set"],
 ): Promise<{ attrs: Record<string, unknown>; runId: string | null; stackId: string | null } | { error: unknown }> {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const data = payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
-  const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? (data["attributes"] as Record<string, unknown>) : {};
-  const runId = typeof attrs["run-id"] === "string" ? attrs["run-id"] : typeof attrs["runId"] === "string" ? attrs["runId"] : null;
-  const stackId = typeof attrs["stack-id"] === "string" ? attrs["stack-id"] : typeof attrs["stackId"] === "string" ? attrs["stackId"] : null;
+  const data =
+    payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
+  const attrs =
+    data["attributes"] !== null && typeof data["attributes"] === "object"
+      ? (data["attributes"] as Record<string, unknown>)
+      : {};
+  const runId =
+    typeof attrs["run-id"] === "string" ? attrs["run-id"] : typeof attrs["runId"] === "string" ? attrs["runId"] : null;
+  const stackId =
+    typeof attrs["stack-id"] === "string"
+      ? attrs["stack-id"]
+      : typeof attrs["stackId"] === "string"
+        ? attrs["stackId"]
+        : null;
   if (runId !== null) {
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined) {
@@ -157,7 +201,10 @@ async function insertInvocation(
 ): Promise<typeof actionInvocations.$inferSelect> {
   const id = newResourceId("actinv");
   const now = Date.now();
-  const output = attrs["output"] !== null && typeof attrs["output"] === "object" ? (attrs["output"] as Record<string, unknown>) : null;
+  const output =
+    attrs["output"] !== null && typeof attrs["output"] === "object"
+      ? (attrs["output"] as Record<string, unknown>)
+      : null;
   await db.insert(actionInvocations).values({
     id,
     actionId: action.id,
@@ -191,7 +238,10 @@ export const actionsRoutes = new Elysia({ name: "actions" })
       if (org === undefined || !(await checkOrganizationPermission(org.id, user.id, null, null, "read-workspaces"))) {
         return { data: [], meta: { pagination: { "current-page": 1, "total-pages": 0, "total-count": 0 } } };
       }
-      const where = actionType !== null ? and(eq(actions.orgId, org.id), eq(actions.actionType, actionType)) : eq(actions.orgId, org.id);
+      const where =
+        actionType !== null
+          ? and(eq(actions.orgId, org.id), eq(actions.actionType, actionType))
+          : eq(actions.orgId, org.id);
       rows = await db.query.actions.findMany({ where, orderBy: [desc(actions.createdAt)] });
     } else {
       // Unscoped listing is restricted to the caller's own organizations,
@@ -207,7 +257,10 @@ export const actionsRoutes = new Elysia({ name: "actions" })
           visibleOrgIds.push(membership.orgId);
         }
       }
-      const scoped = actionType !== null ? and(inArray(actions.orgId, visibleOrgIds), eq(actions.actionType, actionType)) : inArray(actions.orgId, visibleOrgIds);
+      const scoped =
+        actionType !== null
+          ? and(inArray(actions.orgId, visibleOrgIds), eq(actions.actionType, actionType))
+          : inArray(actions.orgId, visibleOrgIds);
       rows = await db.query.actions.findMany({
         where: visibleOrgIds.length > 0 ? scoped : sql`false`,
         orderBy: [desc(actions.createdAt)],
@@ -215,14 +268,20 @@ export const actionsRoutes = new Elysia({ name: "actions" })
       });
     }
     const h = (set as { headers: Record<string, string | number> }).headers;
-    (h)["TFP-API-Version"] = TFP_API_VERSION;
-    return { data: rows.map(actionResource), meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } } };
+    h["TFP-API-Version"] = TFP_API_VERSION;
+    return {
+      data: rows.map(actionResource),
+      meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } },
+    };
   })
   .post("/api/v2/actions", async ({ body, user, orgId: tokenOrgId, teamId, set }: Ctx): Promise<unknown> => {
     const parsed = parseActionRequest(body, set);
     if ("error" in parsed) return parsed.error;
     const org = await cachedOrgByName(parsed.orgName);
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-workspaces"))) {
+    if (
+      org === undefined ||
+      !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-workspaces"))
+    ) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -250,7 +309,9 @@ export const actionsRoutes = new Elysia({ name: "actions" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    if (!(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-workspaces"))) {
+    if (
+      !(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-workspaces"))
+    ) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -258,16 +319,19 @@ export const actionsRoutes = new Elysia({ name: "actions" })
     (set as { status: number }).status = 204;
     return null;
   })
-  .post("/api/v2/actions/:id/invocations", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: Ctx): Promise<unknown> => {
-    const actionId = params["id"] ?? "";
-    const resolved = await resolveInvocationAction(actionId, user?.id, tokenOrgId ?? null, teamId ?? null, set);
-    if ("error" in resolved) return resolved.error;
-    const targets = await checkInvocationTargets(body, set);
-    if ("error" in targets) return targets.error;
-    const row = await insertInvocation(resolved.action, targets.runId, targets.stackId, targets.attrs);
-    (set as { status: number }).status = 201;
-    return { data: invocationResource(row) };
-  })
+  .post(
+    "/api/v2/actions/:id/invocations",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: Ctx): Promise<unknown> => {
+      const actionId = params["id"] ?? "";
+      const resolved = await resolveInvocationAction(actionId, user?.id, tokenOrgId ?? null, teamId ?? null, set);
+      if ("error" in resolved) return resolved.error;
+      const targets = await checkInvocationTargets(body, set);
+      if ("error" in targets) return targets.error;
+      const row = await insertInvocation(resolved.action, targets.runId, targets.stackId, targets.attrs);
+      (set as { status: number }).status = 201;
+      return { data: invocationResource(row) };
+    },
+  )
   .get("/api/v2/runs/:run_id/actions", async ({ params, user, set }: Ctx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     if (user === null || user === undefined) {
@@ -288,10 +352,16 @@ export const actionsRoutes = new Elysia({ name: "actions" })
       (set as { status: number }).status = 404;
       return { data: [], meta: { pagination: { "current-page": 1, "total-pages": 0, "total-count": 0 } } };
     }
-    const rows = await db.query.actionInvocations.findMany({ where: eq(actionInvocations.runId, runId), orderBy: [desc(actionInvocations.createdAt)] });
+    const rows = await db.query.actionInvocations.findMany({
+      where: eq(actionInvocations.runId, runId),
+      orderBy: [desc(actionInvocations.createdAt)],
+    });
     const h = (set as { headers: Record<string, string | number> }).headers;
-    (h)["TFP-API-Version"] = TFP_API_VERSION;
-    return { data: rows.map(invocationResource), meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } } };
+    h["TFP-API-Version"] = TFP_API_VERSION;
+    return {
+      data: rows.map(invocationResource),
+      meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } },
+    };
   })
   .get("/api/v2/actions/:id/output", async ({ user, params, set }: Ctx): Promise<unknown> => {
     const id = params["id"] ?? "";
@@ -300,14 +370,23 @@ export const actionsRoutes = new Elysia({ name: "actions" })
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const action = await db.query.actions.findFirst({ where: eq(actions.id, id) });
-    if (action !== undefined && !(await checkOrganizationPermission(action.orgId, user.id, null, null, "read-workspaces"))) {
+    if (
+      action !== undefined &&
+      !(await checkOrganizationPermission(action.orgId, user.id, null, null, "read-workspaces"))
+    ) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found", detail: `Action ${id} has no output` }] };
     }
-    const invs = await db.query.actionInvocations.findMany({ where: eq(actionInvocations.actionId, id), orderBy: [desc(actionInvocations.createdAt)], limit: 1 });
+    const invs = await db.query.actionInvocations.findMany({
+      where: eq(actionInvocations.actionId, id),
+      orderBy: [desc(actionInvocations.createdAt)],
+      limit: 1,
+    });
     const latest = invs[0];
     if (latest?.output !== null && latest?.output !== undefined) {
-      return { data: { type: "action-output", id: latest.id, attributes: { output: latest.output, status: latest.status } } };
+      return {
+        data: { type: "action-output", id: latest.id, attributes: { output: latest.output, status: latest.status } },
+      };
     }
     const inv = await db.query.actionInvocations.findFirst({ where: eq(actionInvocations.id, id) });
     if (inv?.output !== null && inv?.output !== undefined) {
@@ -328,12 +407,21 @@ export const actionsRoutes = new Elysia({ name: "actions" })
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const stack = await db.query.stacks.findFirst({ where: eq(stacks.id, stackId) });
-    if (stack === undefined || !(await checkOrganizationPermission(stack.orgId, user.id, null, null, "read-workspaces"))) {
+    if (
+      stack === undefined ||
+      !(await checkOrganizationPermission(stack.orgId, user.id, null, null, "read-workspaces"))
+    ) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const rows = await db.query.actionInvocations.findMany({ where: eq(actionInvocations.stackId, stackId), orderBy: [desc(actionInvocations.createdAt)] });
+    const rows = await db.query.actionInvocations.findMany({
+      where: eq(actionInvocations.stackId, stackId),
+      orderBy: [desc(actionInvocations.createdAt)],
+    });
     const h = (set as { headers: Record<string, string | number> }).headers;
-    (h)["TFP-API-Version"] = TFP_API_VERSION;
-    return { data: rows.map(invocationResource), meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } } };
+    h["TFP-API-Version"] = TFP_API_VERSION;
+    return {
+      data: rows.map(invocationResource),
+      meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } },
+    };
   });

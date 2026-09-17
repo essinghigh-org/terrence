@@ -60,7 +60,7 @@ test("latest-version resolution falls back to last-known-good, never hard-coded 
   const result = Bun.spawnSync([Bun.which("bun")!, "-e", script], {
     cwd: join(import.meta.dir, "../.."),
     env: {
-      ...process.env as Record<string, string>,
+      ...(process.env as Record<string, string>),
       STORAGE_DIR: join(dir, "storage"),
       TERRENCE_BINARY_CACHE_DIR: join(dir, "binaries"),
     },

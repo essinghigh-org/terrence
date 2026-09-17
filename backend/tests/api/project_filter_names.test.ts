@@ -3,12 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens,
-  organizationMemberships,
-  organizations,
-  users,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, users } from "../../src/db/schema";
 
 describe("projects filter[names] (audit finding 11)", () => {
   const suffix = crypto.randomUUID();
@@ -18,14 +13,16 @@ describe("projects filter[names] (audit finding 11)", () => {
   const token = `user-token-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: "Bearer " + token,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: "Bearer " + token,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   const createProject = (name: string) =>
     request(`/api/v2/organizations/${orgName}/projects`, "POST", {
@@ -33,16 +30,14 @@ describe("projects filter[names] (audit finding 11)", () => {
     });
 
   const namesOf = async (res: Response): Promise<string[]> => {
-    const body = await res.json() as { data: { attributes: { name: string } }[] };
+    const body = (await res.json()) as { data: { attributes: { name: string } }[] };
     return body.data.map((item): string => item.attributes.name);
   };
 
   beforeAll(async () => {
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
-    await db.insert(organizationMemberships).values([
-      { id: crypto.randomUUID(), userId, orgId, role: "owner" },
-    ]);
+    await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId, role: "owner" }]);
     await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: hashAuthenticationToken(token), userId }]);
     for (const name of ["alpha", "beta", "gamma"]) {
       const res = await createProject(name);
@@ -76,7 +71,7 @@ describe("projects filter[names] (audit finding 11)", () => {
   it("returns an empty page with zero total for unknown names", async () => {
     const res = await request(`/api/v2/organizations/${orgName}/projects?filter[names]=missing`);
     expect(res.status).toBe(200);
-    const body = await res.json() as { data: unknown[]; meta: { pagination: { "total-count": number } } };
+    const body = (await res.json()) as { data: unknown[]; meta: { pagination: { "total-count": number } } };
     expect(body.data).toEqual([]);
     expect(body.meta.pagination["total-count"]).toBe(0);
   });

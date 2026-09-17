@@ -13,11 +13,29 @@ import { createRun } from "../../routes/runs";
 import type { DeepReadonly } from "../types";
 import { planStatusForRun } from "../response";
 import { readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../plan-json";
-import { READ_ONLY_TOOL, OPEN_WORLD_ADDITIVE_TOOL, OPEN_WORLD_DESTRUCTIVE_TOOL, DESTRUCTIVE_TOOL, toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
+import {
+  READ_ONLY_TOOL,
+  OPEN_WORLD_ADDITIVE_TOOL,
+  OPEN_WORLD_DESTRUCTIVE_TOOL,
+  DESTRUCTIVE_TOOL,
+  toolBadRequest,
+  toolError,
+  type McpSession,
+  type McpTool,
+} from "./types";
 
 function runCreationAttributes(args: Readonly<Record<string, unknown>>): Record<string, unknown> {
   const attributes: Record<string, unknown> = {};
-  for (const key of ["message", "terraform-version", "is-destroy", "auto-apply", "plan-only", "save-plan", "refresh", "refresh-only"]) {
+  for (const key of [
+    "message",
+    "terraform-version",
+    "is-destroy",
+    "auto-apply",
+    "plan-only",
+    "save-plan",
+    "refresh",
+    "refresh-only",
+  ]) {
     const value = args[key];
     if (value !== null && value !== undefined) attributes[key] = value;
   }
@@ -25,9 +43,14 @@ function runCreationAttributes(args: Readonly<Record<string, unknown>>): Record<
   return attributes;
 }
 
-function requestedRunIncludes(args: Readonly<Record<string, unknown>>): Readonly<{ plan: boolean; workspace: boolean }> {
+function requestedRunIncludes(
+  args: Readonly<Record<string, unknown>>,
+): Readonly<{ plan: boolean; workspace: boolean }> {
   const include = args["include"];
-  const names = (typeof include === "string" ? include : Array.isArray(include) ? include.join(",") : "").split(",").map((part): string => part.trim()).filter((part): boolean => part !== "");
+  const names = (typeof include === "string" ? include : Array.isArray(include) ? include.join(",") : "")
+    .split(",")
+    .map((part): string => part.trim())
+    .filter((part): boolean => part !== "");
   return { plan: names.includes("plan"), workspace: names.includes("workspace") };
 }
 
@@ -38,12 +61,13 @@ type AgentPoolSelection = Readonly<{ id: string | null; error: string | null }>;
 
 async function selectApplyAgentPool(authorized: AuthorizedRun): Promise<AgentPoolSelection> {
   if (authorized.workspace.executionMode !== "agent") return { id: null, error: null };
-  const pool = authorized.workspace.agentPoolId === null
-    ? undefined
-    : await db.query.agentPools.findFirst({ where: eq(agentPools.id, authorized.workspace.agentPoolId) });
+  const pool =
+    authorized.workspace.agentPoolId === null
+      ? undefined
+      : await db.query.agentPools.findFirst({ where: eq(agentPools.id, authorized.workspace.agentPoolId) });
   if (
-    pool?.orgId !== authorized.workspace.orgId
-    || !(await agentPoolAllowsWorkspace(pool, authorized.workspace.id, authorized.workspace.projectId))
+    pool?.orgId !== authorized.workspace.orgId ||
+    !(await agentPoolAllowsWorkspace(pool, authorized.workspace.id, authorized.workspace.projectId))
   ) {
     return { id: null, error: "The workspace does not have an allowed agent pool" };
   }
@@ -52,25 +76,27 @@ async function selectApplyAgentPool(authorized: AuthorizedRun): Promise<AgentPoo
 
 async function addRunComment(runId: string, comment: unknown, userId: string | null): Promise<void> {
   if (typeof comment === "string" && comment.trim() !== "") {
-    await db.insert(runComments).values({ id: newResourceId("rc"), runId, userId, body: comment.trim(), createdAt: Date.now() });
+    await db
+      .insert(runComments)
+      .values({ id: newResourceId("rc"), runId, userId, body: comment.trim(), createdAt: Date.now() });
   }
 }
 
-async function queueAgentApply(
-  runId: string,
-  agentPoolId: string,
-  before: ApplyRun,
-): Promise<unknown> {
+async function queueAgentApply(runId: string, agentPoolId: string, before: ApplyRun): Promise<unknown> {
   return db.transaction(async (transaction) => {
     const tx = transaction as unknown as typeof db;
     const confirmedTimestamps = {
       ...(before.statusTimestamps ?? {}),
       "confirmed-at": new Date().toISOString(),
     };
-    const confirmed = await tx.update(runs).set({
-      status: "confirmed",
-      statusTimestamps: confirmedTimestamps,
-    }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+    const confirmed = await tx
+      .update(runs)
+      .set({
+        status: "confirmed",
+        statusTimestamps: confirmedTimestamps,
+      })
+      .where(and(eq(runs.id, runId), eq(runs.status, before.status)))
+      .returning({ id: runs.id });
     if (confirmed.length === 0) return undefined;
     return insertAgentApplyJobTx(tx, runId, agentPoolId, confirmedTimestamps);
   });
@@ -103,13 +129,17 @@ async function applyRunDirectly(
   before: ApplyRun,
   runId: string,
 ): Promise<unknown> {
-  const confirmed = await db.update(runs).set({
-    status: "confirmed",
-    statusTimestamps: {
-      ...(before.statusTimestamps ?? {}),
-      "confirmed-at": new Date().toISOString(),
-    },
-  }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+  const confirmed = await db
+    .update(runs)
+    .set({
+      status: "confirmed",
+      statusTimestamps: {
+        ...(before.statusTimestamps ?? {}),
+        "confirmed-at": new Date().toISOString(),
+      },
+    })
+    .where(and(eq(runs.id, runId), eq(runs.status, before.status)))
+    .returning({ id: runs.id });
   if (confirmed.length === 0) return toolBadRequest("Run apply is already queued");
   await auditLog("apply", "runs", runId, session.userId ?? null, authorized.workspace.orgId, {
     workspaceId: authorized.workspace.id,
@@ -119,7 +149,9 @@ async function applyRunDirectly(
   });
   await addRunComment(runId, args["comment"], session.userId ?? null);
   const { executeApply } = await import("../../worker");
-  executeApply(authorized.run.id).catch((err: unknown): void => { if (err !== null && err !== undefined) console.error(err); });
+  executeApply(authorized.run.id).catch((err: unknown): void => {
+    if (err !== null && err !== undefined) console.error(err);
+  });
   return { id: authorized.run.id, status: "applying" };
 }
 
@@ -147,13 +179,26 @@ export const runTools: readonly McpTool[] = [
     requires: ["runs:read"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
       const wsId = String(args["workspace_id"]);
-      const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "run-read");
+      const ws = await findAuthorizedWorkspace(
+        wsId,
+        session.userId ?? undefined,
+        session.orgId,
+        session.teamId,
+        "run-read",
+      );
       if (ws === undefined) return toolError("Workspace not found or not authorized");
       const runId = typeof args["run_id"] === "string" ? args["run_id"] : undefined;
       if (runId !== undefined) {
         const run = await db.query.runs.findFirst({
           where: eq(runs.id, runId),
-          columns: { id: true, workspaceId: true, status: true, message: true, createdAt: true, statusTimestamps: true },
+          columns: {
+            id: true,
+            workspaceId: true,
+            status: true,
+            message: true,
+            createdAt: true,
+            statusTimestamps: true,
+          },
         });
         if (run === undefined) return toolBadRequest(`Run "${runId}" not found`);
         if (run.workspaceId !== wsId) return toolError("Run does not belong to the specified workspace");
@@ -196,7 +241,8 @@ export const runTools: readonly McpTool[] = [
         refresh: { type: "boolean", description: "Refresh state before planning (default true)" },
         "refresh-only": { type: "boolean", description: "Only refresh state, no changes" },
         "target-addrs": {
-          type: "array", items: { type: "string" },
+          type: "array",
+          items: { type: "string" },
           description: "Addresses to target for the plan",
         },
         "terraform-version": { type: "string", description: "Terraform/OpenTofu version to use" },
@@ -212,7 +258,7 @@ export const runTools: readonly McpTool[] = [
         workspaceId,
         attributes,
         undefined,
-        session.userId === null ? null : { id: session.userId } as typeof users.$inferSelect,
+        session.userId === null ? null : ({ id: session.userId } as typeof users.$inferSelect),
         session.orgId ?? undefined,
         session.teamId ?? undefined,
         set,
@@ -244,10 +290,20 @@ export const runTools: readonly McpTool[] = [
       const runId = String(args["run_id"]);
       const authorized = await findAuthorizedRun(runId, session.userId ?? undefined, session.orgId, session.teamId);
       if (authorized === undefined) return toolError("Run not found or not authorized");
-      if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, null, session.teamId, "apply"))) {
+      if (
+        !(await checkWorkspacePermission(
+          authorized.workspace,
+          session.userId ?? undefined,
+          null,
+          session.teamId,
+          "apply",
+        ))
+      ) {
         return toolError("Not authorized to apply this run");
       }
-      const before = await db.query.runs.findFirst({ where: and(eq(runs.id, runId), inArray(runs.status, ["planned", "planned_and_saved"])) });
+      const before = await db.query.runs.findFirst({
+        where: and(eq(runs.id, runId), inArray(runs.status, ["planned", "planned_and_saved"])),
+      });
       if (before === undefined) return toolBadRequest("Run must have a completed saved plan before apply");
       const pool = await selectApplyAgentPool(authorized);
       if (pool.error !== null) return toolBadRequest(pool.error);
@@ -272,17 +328,37 @@ export const runTools: readonly McpTool[] = [
       const runId = String(args["run_id"]);
       const authorized = await findAuthorizedRun(runId, session.userId ?? undefined, session.orgId, session.teamId);
       if (authorized === undefined) return toolError("Run not found or not authorized");
-      if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, session.orgId, session.teamId, "discard"))) {
+      if (
+        !(await checkWorkspacePermission(
+          authorized.workspace,
+          session.userId ?? undefined,
+          session.orgId,
+          session.teamId,
+          "discard",
+        ))
+      ) {
         return toolError("Not authorized to discard this run");
       }
-      const updated = await db.update(runs).set({ status: "discarded" }).where(and(
-        eq(runs.id, runId),
-        eq(runs.status, authorized.run.status),
-        inArray(runs.status, ["pending", "planned", "planned_and_saved", "policy_soft_failed", "unreachable"]),
-      )).returning();
+      const updated = await db
+        .update(runs)
+        .set({ status: "discarded" })
+        .where(
+          and(
+            eq(runs.id, runId),
+            eq(runs.status, authorized.run.status),
+            inArray(runs.status, ["pending", "planned", "planned_and_saved", "policy_soft_failed", "unreachable"]),
+          ),
+        )
+        .returning();
       if (updated.length === 0) return toolBadRequest("Run is not discardable");
       if (typeof args["comment"] === "string" && args["comment"].trim() !== "") {
-        await db.insert(runComments).values({ id: newResourceId("rc"), runId, userId: session.userId ?? null, body: args["comment"].trim(), createdAt: Date.now() });
+        await db.insert(runComments).values({
+          id: newResourceId("rc"),
+          runId,
+          userId: session.userId ?? null,
+          body: args["comment"].trim(),
+          createdAt: Date.now(),
+        });
       }
       await auditLog("discard", "runs", runId, session.userId ?? null, authorized.workspace.orgId, {
         workspaceId: authorized.workspace.id,
@@ -308,22 +384,53 @@ export const runTools: readonly McpTool[] = [
       const runId = String(args["run_id"]);
       const authorized = await findAuthorizedRun(runId, session.userId ?? undefined, session.orgId, session.teamId);
       if (authorized === undefined) return toolError("Run not found or not authorized");
-      if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, session.orgId, session.teamId, "cancel"))) {
+      if (
+        !(await checkWorkspacePermission(
+          authorized.workspace,
+          session.userId ?? undefined,
+          session.orgId,
+          session.teamId,
+          "cancel",
+        ))
+      ) {
         return toolError("Not authorized to cancel this run");
       }
-      const updated = await db.update(runs).set({
-        status: "canceled",
-        statusTimestamps: { ...(authorized.run.statusTimestamps ?? {}), "cancel-requested-at": new Date().toISOString() },
-      }).where(and(
-        eq(runs.id, runId),
-        eq(runs.status, authorized.run.status),
-        inArray(runs.status, [
-          "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
-          "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated",
-          "policy_checking", "policy_override", "policy_checked", "post_plan_running",
-          "post_plan_completed", "confirmed", "apply_queued", "applying",
-        ]),
-      )).returning();
+      const updated = await db
+        .update(runs)
+        .set({
+          status: "canceled",
+          statusTimestamps: {
+            ...(authorized.run.statusTimestamps ?? {}),
+            "cancel-requested-at": new Date().toISOString(),
+          },
+        })
+        .where(
+          and(
+            eq(runs.id, runId),
+            eq(runs.status, authorized.run.status),
+            inArray(runs.status, [
+              "pending",
+              "fetching",
+              "fetching_completed",
+              "pre_plan_running",
+              "pre_plan_completed",
+              "queuing",
+              "plan_queued",
+              "planning",
+              "cost_estimating",
+              "cost_estimated",
+              "policy_checking",
+              "policy_override",
+              "policy_checked",
+              "post_plan_running",
+              "post_plan_completed",
+              "confirmed",
+              "apply_queued",
+              "applying",
+            ]),
+          ),
+        )
+        .returning();
       if (updated.length === 0) return toolBadRequest("Run is not cancelable");
       const { cancelRunExecution, cleanupSavedPlan } = await import("../../worker");
       cancelRunExecution(runId);
@@ -353,10 +460,18 @@ export const runTools: readonly McpTool[] = [
       const runId = String(args["run_id"]);
       const authorized = await findAuthorizedRun(runId, session.userId ?? undefined, session.orgId, session.teamId);
       if (authorized === undefined) return toolError("Run not found or not authorized");
-      if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, session.orgId, session.teamId, "run-read"))) {
+      if (
+        !(await checkWorkspacePermission(
+          authorized.workspace,
+          session.userId ?? undefined,
+          session.orgId,
+          session.teamId,
+          "run-read",
+        ))
+      ) {
         return toolError("Not authorized to read this run");
       }
-      const planJson = await readPlanJsonSideArtifact(runId, "sanitized") ?? await readPlanJsonArtifact(runId);
+      const planJson = (await readPlanJsonSideArtifact(runId, "sanitized")) ?? (await readPlanJsonArtifact(runId));
       if (planJson === undefined) return toolBadRequest("Plan JSON output is unavailable for this run");
       return { run_id: runId, plan: sanitizePlanJson(planJson) };
     },

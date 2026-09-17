@@ -39,7 +39,9 @@ const DB_LOCK_RENEWAL_MS = DB_LOCK_TTL_MS / 2;
 /** Try to claim `name`. Returns true if this attempt now owns it. */
 async function claimLock(name: string, owner: string, now: number): Promise<boolean> {
   const expiresAt = now + DB_LOCK_TTL_MS;
-  await db.insert(locks).values({ name, owner, expiresAt })
+  await db
+    .insert(locks)
+    .values({ name, owner, expiresAt })
     .onConflictDoUpdate({
       target: locks.name,
       set: { owner, expiresAt },
@@ -55,7 +57,8 @@ async function claimLock(name: string, owner: string, now: number): Promise<bool
  * told it no longer owns the name.
  */
 async function renewLock(name: string, owner: string, now: number): Promise<boolean> {
-  const updated = await db.update(locks)
+  const updated = await db
+    .update(locks)
     .set({ expiresAt: now + DB_LOCK_TTL_MS })
     .where(and(eq(locks.name, name), eq(locks.owner, owner)))
     .returning({ name: locks.name });
@@ -72,11 +75,7 @@ async function releaseLock(name: string, owner: string): Promise<void> {
  * instances; concurrent callers on the same name wait (bounded) for the holder
  * to finish. Throws if the lock cannot be acquired within DB_LOCK_MAX_WAIT_MS.
  */
-export async function withDbLock<T>(
-  name: string,
-  operation: () => Promise<T>,
-  now = Date.now(),
-): Promise<T> {
+export async function withDbLock<T>(name: string, operation: () => Promise<T>, now = Date.now()): Promise<T> {
   const owner = `db-lock-${crypto.randomUUID()}`;
   const deadline = now + DB_LOCK_MAX_WAIT_MS;
   let acquired = false;
@@ -91,7 +90,9 @@ export async function withDbLock<T>(
         // expiring mid-write and being reclaimed by another replica.
         renewalTimer = setInterval((): void => {
           renewLock(name, owner, Date.now()).then(
-            (ok): void => { if (!ok) lost = true; },
+            (ok): void => {
+              if (!ok) lost = true;
+            },
             (error: unknown): void => {
               lost = true;
               log.error("Failed to renew database lock", { name, error });

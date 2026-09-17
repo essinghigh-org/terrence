@@ -29,9 +29,7 @@ afterEach((): void => {
   globalThis.fetch = originalFetch;
 });
 
-function buildFetchMock(
-  options: Readonly<{ readonly rejectWorkspace?: boolean }> = {},
-): ReturnType<typeof mock> {
+function buildFetchMock(options: Readonly<{ readonly rejectWorkspace?: boolean }> = {}): ReturnType<typeof mock> {
   return mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
@@ -80,9 +78,7 @@ function buildFetchMock(
     }
     if (url === "/api/v2/runs/run-focus/logs") {
       return json({
-        data: [
-          { attributes: { phase: "plan", "output-text": "PLAN_FULLSCREEN_LINE" } },
-        ],
+        data: [{ attributes: { phase: "plan", "output-text": "PLAN_FULLSCREEN_LINE" } }],
       });
     }
     if (url === "/api/v2/runs/run-focus/plan") {
@@ -130,7 +126,7 @@ function buildFetchMock(
 }
 
 function renderRunDetail(fetchMock: ReturnType<typeof mock>): ReturnType<typeof render> {
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
   return render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-focus"]}>
       <Routes>
@@ -150,9 +146,11 @@ test("run detail does not wait for workspace data", async () => {
   await waitFor((): void => {
     expect(view.getByText("PLAN_FULLSCREEN_LINE")).toBeTruthy();
   });
-  expect(fetchMock.mock.calls.some(([input]): boolean =>
-    requestUrl(input) === "/api/v2/organizations/acme/workspaces/production",
-  )).toBe(false);
+  expect(
+    fetchMock.mock.calls.some(
+      ([input]): boolean => requestUrl(input) === "/api/v2/organizations/acme/workspaces/production",
+    ),
+  ).toBe(false);
 });
 
 test("fullscreen log dialog returns focus to its trigger button on close", async () => {
@@ -162,7 +160,7 @@ test("fullscreen log dialog returns focus to its trigger button on close", async
     expect(view.getByText("PLAN_FULLSCREEN_LINE")).toBeTruthy();
   });
 
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const trigger = view.getByRole("button", { name: "Open raw plan log fullscreen" }) as HTMLButtonElement;
   trigger.focus();
   fireEvent.click(trigger);
@@ -170,7 +168,7 @@ test("fullscreen log dialog returns focus to its trigger button on close", async
   await waitFor((): void => {
     expect(view.getByRole("dialog", { name: "Raw plan log" })).toBeTruthy();
   });
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const closeButton = view.getByRole("button", { name: "Close fullscreen log" }) as HTMLButtonElement;
 
   // Focus moved into the dialog, away from the trigger.
@@ -195,7 +193,7 @@ test("fullscreen log dialog restores focus when closed with Escape", async () =>
     expect(view.getByText("PLAN_FULLSCREEN_LINE")).toBeTruthy();
   });
 
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const trigger = view.getByRole("button", { name: "Open raw plan log fullscreen" }) as HTMLButtonElement;
   trigger.focus();
   fireEvent.click(trigger);

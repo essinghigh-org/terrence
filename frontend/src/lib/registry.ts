@@ -34,11 +34,12 @@ export type RegistryModuleSection = Readonly<{
   resources: readonly Readonly<{ name: string; type: string; mode: "managed" | "data" }>[];
 }>;
 
-export type RegistryModuleMetadata = RegistryModuleSection & Readonly<{
-  submodules: readonly RegistryModuleSection[];
-  examples: readonly RegistryModuleSection[];
-  diagnostics: readonly string[];
-}>;
+export type RegistryModuleMetadata = RegistryModuleSection &
+  Readonly<{
+    submodules: readonly RegistryModuleSection[];
+    examples: readonly RegistryModuleSection[];
+    diagnostics: readonly string[];
+  }>;
 
 export type RegistryModule = Readonly<{
   id: string;
@@ -67,7 +68,8 @@ export type RegistryModule = Readonly<{
   permissions: Readonly<{ canDelete: boolean; canResync: boolean; canRetry: boolean }>;
 }>;
 
-const REGISTRY_SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+const REGISTRY_SEMVER_PATTERN =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
 type ParsedRegistryVersion = Readonly<{
   major: string;
@@ -80,8 +82,12 @@ function parsedRegistryVersion(value: string): ParsedRegistryVersion | null {
   const match = REGISTRY_SEMVER_PATTERN.exec(value);
   if (match === null) return null;
   const prerelease = match[4] === undefined ? [] : match[4].split(".");
-  if (prerelease.some((identifier): boolean =>
-    /^\d+$/u.test(identifier) && identifier !== "0" && identifier.startsWith("0"))) return null;
+  if (
+    prerelease.some(
+      (identifier): boolean => /^\d+$/u.test(identifier) && identifier !== "0" && identifier.startsWith("0"),
+    )
+  )
+    return null;
   return {
     major: match[1] ?? "0",
     minor: match[2] ?? "0",
@@ -255,46 +261,54 @@ function sectionFrom(value: unknown): RegistryModuleSection | null {
     const type = isString(entry["type"]) ? entry["type"] : "";
     const description = isString(entry["description"]) ? entry["description"] : null;
     if (name === "" || type === "") return [];
-    return [{
-      name,
-      type,
-      description,
-      defaultValue: entry["default-value"],
-      required: entry["required"] === true,
-      sensitive: entry["sensitive"] === true,
-      nullable: entry["nullable"] === true,
-    }];
+    return [
+      {
+        name,
+        type,
+        description,
+        defaultValue: entry["default-value"],
+        required: entry["required"] === true,
+        sensitive: entry["sensitive"] === true,
+        nullable: entry["nullable"] === true,
+      },
+    ];
   };
   const outputFrom = (entry: unknown): RegistryModuleSection["outputs"][number][] => {
     if (!isRecord(entry)) return [];
     const name = isString(entry["name"]) ? entry["name"] : "";
     if (name === "") return [];
-    return [{
-      name,
-      description: isString(entry["description"]) ? entry["description"] : null,
-      sensitive: entry["sensitive"] === true,
-    }];
+    return [
+      {
+        name,
+        description: isString(entry["description"]) ? entry["description"] : null,
+        sensitive: entry["sensitive"] === true,
+      },
+    ];
   };
   const referenceFrom = (entry: unknown): RegistryModuleSection["providers"][number][] => {
     if (!isRecord(entry)) return [];
     const name = isString(entry["name"]) ? entry["name"] : "";
     if (name === "") return [];
-    return [{
-      name,
-      source: isString(entry["source"]) ? entry["source"] : null,
-      versionConstraint: isString(entry["version-constraint"]) ? entry["version-constraint"] : null,
-    }];
+    return [
+      {
+        name,
+        source: isString(entry["source"]) ? entry["source"] : null,
+        versionConstraint: isString(entry["version-constraint"]) ? entry["version-constraint"] : null,
+      },
+    ];
   };
   const resourceFrom = (entry: unknown): RegistryModuleSection["resources"][number][] => {
     if (!isRecord(entry)) return [];
     const name = isString(entry["name"]) ? entry["name"] : "";
     const type = isString(entry["type"]) ? entry["type"] : "";
     if (name === "" || type === "") return [];
-    return [{
-      name,
-      type,
-      mode: entry["mode"] === "data" ? "data" : "managed",
-    }];
+    return [
+      {
+        name,
+        type,
+        mode: entry["mode"] === "data" ? "data" : "managed",
+      },
+    ];
   };
   return {
     path: stringField("path") ?? "",
@@ -318,14 +332,18 @@ function metadataFrom(value: unknown): RegistryModuleMetadata | null {
     : [];
   return {
     ...section,
-    submodules: Array.isArray(value["submodules"]) ? value["submodules"].flatMap((entry): RegistryModuleSection[] => {
-      const parsed = sectionFrom(entry);
-      return parsed === null ? [] : [parsed];
-    }) : [],
-    examples: Array.isArray(value["examples"]) ? value["examples"].flatMap((entry): RegistryModuleSection[] => {
-      const parsed = sectionFrom(entry);
-      return parsed === null ? [] : [parsed];
-    }) : [],
+    submodules: Array.isArray(value["submodules"])
+      ? value["submodules"].flatMap((entry): RegistryModuleSection[] => {
+          const parsed = sectionFrom(entry);
+          return parsed === null ? [] : [parsed];
+        })
+      : [],
+    examples: Array.isArray(value["examples"])
+      ? value["examples"].flatMap((entry): RegistryModuleSection[] => {
+          const parsed = sectionFrom(entry);
+          return parsed === null ? [] : [parsed];
+        })
+      : [],
     diagnostics,
   };
 }
@@ -351,6 +369,9 @@ export function registryModuleVersionFromResource(resource: unknown): RegistryMo
   };
 }
 
-export function registryModulePath(orgName: string, module: Pick<RegistryModule, "namespace" | "name" | "provider">): string {
+export function registryModulePath(
+  orgName: string,
+  module: Pick<RegistryModule, "namespace" | "name" | "provider">,
+): string {
   return `/app/${encodeURIComponent(orgName)}/registry/modules/${encodeURIComponent(module.namespace)}/${encodeURIComponent(module.name)}/${encodeURIComponent(module.provider)}`;
 }

@@ -21,12 +21,5 @@
     // it off; first-party code is clean. See root tsconfig.json.
     "skipLibCheck": true
   },
-  "include": [
-    "scripts",
-    "tests",
-    "src/lib/theme.ts",
-    "src/lib/type-guards.ts",
-    "src/lib/json.ts",
-    "src/globals.d.ts"
-  ]
+  "include": ["scripts", "tests", "src/lib/theme.ts", "src/lib/type-guards.ts", "src/lib/json.ts", "src/globals.d.ts"]
 }

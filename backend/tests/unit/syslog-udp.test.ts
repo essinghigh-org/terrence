@@ -10,7 +10,11 @@ describe("syslog UDP transport end to end", (): void => {
 
   afterEach((): void => {
     closeSyslogTransports();
-    try { probe?.close(); } catch { /* already closed */ }
+    try {
+      probe?.close();
+    } catch {
+      /* already closed */
+    }
     probe = null;
   });
 
@@ -53,7 +57,9 @@ describe("syslog UDP transport end to end", (): void => {
     const got = await Promise.race([
       received,
       new Promise<string>((_, reject): void => {
-        setTimeout((): void => { reject(new Error("collector never received the frame")); }, 3_000);
+        setTimeout((): void => {
+          reject(new Error("collector never received the frame"));
+        }, 3_000);
       }),
     ]);
     expect(got).toBe(frame);
@@ -62,7 +68,9 @@ describe("syslog UDP transport end to end", (): void => {
   it("frames bare JSON newline-delimited over TCP", async (): Promise<void> => {
     const chunks: Buffer[] = [];
     const server = createServer((socket): void => {
-      socket.on("data", (chunk: Buffer): void => { chunks.push(chunk); });
+      socket.on("data", (chunk: Buffer): void => {
+        chunks.push(chunk);
+      });
     });
     const port = await new Promise<number>((resolve): void => {
       server.listen(0, "127.0.0.1", (): void => {

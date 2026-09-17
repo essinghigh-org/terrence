@@ -27,26 +27,34 @@ function requestUrl(input: string | URL | Request): string {
 
 test("reads JSON, text, and empty API responses", async () => {
   expect(await readResponseBody(new Response(null, { status: 204 }))).toBeNull();
-  expect(await readResponseBody(new Response('{"ok":true}', {
-    headers: { "Content-Type": "application/vnd.api+json" },
-  }))).toEqual({ ok: true });
+  expect(
+    await readResponseBody(
+      new Response('{"ok":true}', {
+        headers: { "Content-Type": "application/vnd.api+json" },
+      }),
+    ),
+  ).toEqual({ ok: true });
   expect(await readResponseBody(new Response("plain text"))).toBe("plain text");
 });
 
 test("rejects repeated pages instead of silently returning incomplete data", async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
-// SAFETY: the mock's handling mirrors the backend contract for this test.
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     calls.push(url);
-    return Response.json(url.includes("page%5Bnumber%5D=2")
-      ? { data: [{ id: "run-2" }], meta: { pagination: { "next-page": 2 } } }
-      : { data: [{ id: "run-1" }], meta: { pagination: { "next-page": 2 } } });
+    return Response.json(
+      url.includes("page%5Bnumber%5D=2")
+        ? { data: [{ id: "run-2" }], meta: { pagination: { "next-page": 2 } } }
+        : { data: [{ id: "run-1" }], meta: { pagination: { "next-page": 2 } } },
+    );
   }) as typeof fetch;
 
   try {
-    expect(await fetchAllApiPages<{ id: string }>("/workspaces/ws-1/runs").catch((error: unknown): unknown => error)).toMatchObject({ message: expect.stringContaining("repeated a page") });
+    expect(
+      await fetchAllApiPages<{ id: string }>("/workspaces/ws-1/runs").catch((error: unknown): unknown => error),
+    ).toMatchObject({ message: expect.stringContaining("repeated a page") });
     expect(calls).toHaveLength(2);
   } finally {
     globalThis.fetch = originalFetch;
@@ -65,7 +73,9 @@ test("fetchAllApiPages respects MAX_PAGINATED_PAGES budget and halts safely", as
   }) as unknown as typeof fetch;
 
   try {
-    expect(await fetchAllApiPages<{ id: string }>("/items").catch((error: unknown): unknown => error)).toMatchObject({ message: expect.stringContaining("exceeds 100 pages") });
+    expect(await fetchAllApiPages<{ id: string }>("/items").catch((error: unknown): unknown => error)).toMatchObject({
+      message: expect.stringContaining("exceeds 100 pages"),
+    });
     expect(pageCounter).toBe(MAX_PAGINATED_PAGES + 1);
   } finally {
     globalThis.fetch = originalFetch;
@@ -85,7 +95,7 @@ test("invalidates an authenticated session after a 401 response", async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
   setAuthToken("invalid-token");
-// SAFETY: the mock's handling mirrors the backend contract for this test.
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     calls.push(requestUrl(input));
     return Response.json(
@@ -113,7 +123,7 @@ test("invalidates an authenticated session after a 401 response", async () => {
 test("uses absolute /api/* endpoints verbatim instead of double-prefixing", async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
-// SAFETY: the mock's handling mirrors the backend contract for this test.
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     calls.push(requestUrl(input));
     return Response.json({ version: "test", build: "unknown" });
@@ -130,7 +140,7 @@ test("uses absolute /api/* endpoints verbatim instead of double-prefixing", asyn
 test("lets fetch infer content types for binary bodies", async () => {
   const originalFetch = globalThis.fetch;
   const contentTypes: (string | null)[] = [];
-// SAFETY: the mock's handling mirrors the backend contract for this test.
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     contentTypes.push(new Headers(init?.headers).get("Content-Type"));
     return Response.json({ data: {} });
@@ -150,7 +160,7 @@ test("rotates an expired browser session before sending the API request", async 
   const originalFetch = globalThis.fetch;
   const calls: { url: string; authorization: string | null; credentials?: RequestCredentials }[] = [];
   setAuthToken("expired-access", Date.now() - 1, true);
-// SAFETY: the mock's handling mirrors the backend contract for this test.
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     calls.push({
@@ -199,7 +209,7 @@ test("shares one refresh rotation across concurrent API retries", async () => {
     releaseRefresh = resolve;
   });
   setAuthToken("old-access", Date.now() + 60_000, true);
-// SAFETY: the mock's handling mirrors the backend contract for this test.
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     const authorization = new Headers(init?.headers).get("Authorization");
@@ -225,10 +235,7 @@ test("shares one refresh rotation across concurrent API retries", async () => {
 
   try {
     const results = await Promise.all([fetchApi("/one"), fetchApi("/two")]);
-    expect(results).toEqual([
-      { data: { id: "/api/v2/one" } },
-      { data: { id: "/api/v2/two" } },
-    ]);
+    expect(results).toEqual([{ data: { id: "/api/v2/one" } }, { data: { id: "/api/v2/two" } }]);
     expect(oldAccessCalls).toBe(2);
     expect(refreshCalls).toBe(1);
   } finally {
@@ -239,7 +246,7 @@ test("shares one refresh rotation across concurrent API retries", async () => {
 test("logs out browser sessions server-side without treating API tokens as refreshable", async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
-// SAFETY: the mock's handling mirrors the backend contract for this test.
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     calls.push(requestUrl(input));
     return new Response(null, { status: 204 });
@@ -263,7 +270,7 @@ test("logs out browser sessions server-side without treating API tokens as refre
 test("bootstrapAuth recovers a browser session through the refresh cookie", async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
-// SAFETY: the mock's handling mirrors the backend contract for this test.
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     calls.push(url);
@@ -298,15 +305,12 @@ test("bootstrapAuth recovers a browser session through the refresh cookie", asyn
 test("bootstrapAuth purges legacy localStorage token and does not adopt it", async () => {
   const originalFetch = globalThis.fetch;
   let refreshed = 0;
-// SAFETY: the mock's handling mirrors the backend contract for this test.
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url.endsWith("/users/refresh")) {
       refreshed += 1;
-      return Response.json(
-        { errors: [{ status: "401", title: "Unauthorized" }] },
-        { status: 401 },
-      );
+      return Response.json({ errors: [{ status: "401", title: "Unauthorized" }] }, { status: 401 });
     }
     throw new Error(`Unexpected request: ${url}`);
   }) as typeof fetch;
@@ -336,15 +340,12 @@ test("bootstrapAuth purges legacy localStorage token and does not adopt it", asy
 test("bootstrapAuth returns null when no refresh session exists", async () => {
   const originalFetch = globalThis.fetch;
   let refreshed = 0;
-// SAFETY: the mock's handling mirrors the backend contract for this test.
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url.endsWith("/users/refresh")) {
       refreshed += 1;
-      return Response.json(
-        { errors: [{ status: "401", title: "Unauthorized" }] },
-        { status: 401 },
-      );
+      return Response.json({ errors: [{ status: "401", title: "Unauthorized" }] }, { status: 401 });
     }
     throw new Error(`Unexpected request: ${url}`);
   }) as typeof fetch;
@@ -362,8 +363,18 @@ test("bootstrapAuth returns null when no refresh session exists", async () => {
 test("extractFieldErrors maps JSON:API source.pointer entries to fields (26.9)", () => {
   // SAFETY: the fixture entries match the JSON:API error document shape.
   const rawErrors = [
-    { status: "422", title: "Unprocessable Entity", detail: "Name is required", source: { pointer: "/data/attributes/name" } },
-    { status: "422", title: "Unprocessable Entity", detail: "URL must be valid", source: { pointer: "/data/attributes/url" } },
+    {
+      status: "422",
+      title: "Unprocessable Entity",
+      detail: "Name is required",
+      source: { pointer: "/data/attributes/name" },
+    },
+    {
+      status: "422",
+      title: "Unprocessable Entity",
+      detail: "URL must be valid",
+      source: { pointer: "/data/attributes/url" },
+    },
     // An entry with a pointer and detail is surfaced regardless of status
     { status: "404", title: "Not Found", detail: "gone", source: { pointer: "/data/attributes/repo" } },
     // No pointer - the generic title/detail path carries it, not field errors
@@ -379,29 +390,42 @@ test("extractFieldErrors maps JSON:API source.pointer entries to fields (26.9)",
 
 test("extractFieldErrors ignores malformed pointers and empty details", () => {
   // SAFETY: the fixture entries match the JSON:API error document shape.
-  expect(extractFieldErrors([
-    { detail: "d", source: { pointer: "/data/attributes/ok" } },
-    { detail: "", source: { pointer: "/data/attributes/empty" } },
-    { detail: "no pointer" },
-  ] as JsonObject[])).toEqual({ ok: "d" });
+  expect(
+    extractFieldErrors([
+      { detail: "d", source: { pointer: "/data/attributes/ok" } },
+      { detail: "", source: { pointer: "/data/attributes/empty" } },
+      { detail: "no pointer" },
+    ] as JsonObject[]),
+  ).toEqual({ ok: "d" });
 });
 
 test("fetchApi surfaces field-level 422 details on ApiError", async () => {
   const originalFetch = globalThis.fetch;
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = ((async (): Promise<Response> => new Response(
-    JSON.stringify({
-      errors: [
-        { status: "422", title: "Unprocessable Entity", detail: "Name is required", source: { pointer: "/data/attributes/name" } },
-        { status: "422", title: "Unprocessable Entity", detail: "Bad URL", source: { pointer: "/data/attributes/url" } },
-      ],
-    }),
-    { status: 422, headers: { "Content-Type": "application/vnd.api+json" } },
-  ))) as unknown as typeof fetch;
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = (async (): Promise<Response> =>
+    new Response(
+      JSON.stringify({
+        errors: [
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail: "Name is required",
+            source: { pointer: "/data/attributes/name" },
+          },
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail: "Bad URL",
+            source: { pointer: "/data/attributes/url" },
+          },
+        ],
+      }),
+      { status: 422, headers: { "Content-Type": "application/vnd.api+json" } },
+    )) as unknown as typeof fetch;
 
   try {
     setAuthToken("tk", Date.now() + 60_000);
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+    // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
     const caught = (await fetchApi("/notification-configurations").catch((e: unknown) => e)) as ApiError;
     expect(caught).toBeInstanceOf(ApiError);
     expect(caught.status).toBe(422);
@@ -414,16 +438,23 @@ test("fetchApi surfaces field-level 422 details on ApiError", async () => {
 
 test("normalizes stable error codes and request references for UI diagnostics", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (): Promise<Response> => new Response(
-    JSON.stringify({ errors: [{ status: "409", code: "STATE_SERIAL_CONFLICT", detail: "State changed before promotion" }] }),
-    {
-      status: 409,
-      headers: { "Content-Type": "application/vnd.api+json", "X-Request-Id": "req-state-123" },
-    },
-  )) as unknown as typeof fetch;
+  globalThis.fetch = (async (): Promise<Response> =>
+    new Response(
+      JSON.stringify({
+        errors: [{ status: "409", code: "STATE_SERIAL_CONFLICT", detail: "State changed before promotion" }],
+      }),
+      {
+        status: 409,
+        headers: { "Content-Type": "application/vnd.api+json", "X-Request-Id": "req-state-123" },
+      },
+    )) as unknown as typeof fetch;
   try {
     let failure: unknown;
-    try { await fetchApi("/state-versions/sv-1/actions/rollback", { method: "POST" }); } catch (error: unknown) { failure = error; }
+    try {
+      await fetchApi("/state-versions/sv-1/actions/rollback", { method: "POST" });
+    } catch (error: unknown) {
+      failure = error;
+    }
     expect(failure).toBeInstanceOf(ApiError);
     expect((failure as ApiError).code).toBe("STATE_SERIAL_CONFLICT");
     expect((failure as ApiError).requestId).toBe("req-state-123");
@@ -444,7 +475,11 @@ test("workspace 404 refresh recovery never replays mutations", async () => {
         return Response.json({ errors: [{ status: "404", title: "Not Found" }] }, { status: 404 });
       }) as typeof fetch;
       let failure: unknown;
-      try { await fetchApi("/workspaces/ws-test/vars", { method }); } catch (error) { failure = error; }
+      try {
+        await fetchApi("/workspaces/ws-test/vars", { method });
+      } catch (error) {
+        failure = error;
+      }
       expect(failure).toBeInstanceOf(ApiError);
       expect(calls).toEqual(["/api/v2/workspaces/ws-test/vars"]);
     }
@@ -453,7 +488,6 @@ test("workspace 404 refresh recovery never replays mutations", async () => {
     setAuthToken("");
   }
 });
-
 
 test("raw downloads preserve JSON bytes and use the authenticated API error path", async () => {
   const originalFetch = globalThis.fetch;
@@ -466,9 +500,17 @@ test("raw downloads preserve JSON bytes and use the authenticated API error path
     }) as unknown as typeof fetch;
     const blob = await fetchApiBlob("/state-versions/sv-1/download");
     expect(await blob.text()).toBe(bytes);
-    globalThis.fetch = (async (): Promise<Response> => new Response(JSON.stringify({ errors: [{ detail: "State download is unavailable" }] }), { status: 422, headers: { "Content-Type": "application/json" } })) as unknown as typeof fetch;
+    globalThis.fetch = (async (): Promise<Response> =>
+      new Response(JSON.stringify({ errors: [{ detail: "State download is unavailable" }] }), {
+        status: 422,
+        headers: { "Content-Type": "application/json" },
+      })) as unknown as typeof fetch;
     let failure: unknown;
-    try { await fetchApiBlob("/state-versions/sv-1/download"); } catch (error) { failure = error; }
+    try {
+      await fetchApiBlob("/state-versions/sv-1/download");
+    } catch (error) {
+      failure = error;
+    }
     expect(failure).toBeInstanceOf(ApiError);
     expect((failure as Error).message).toBe("State download is unavailable");
   } finally {
@@ -486,9 +528,17 @@ test("explicit traversal enforces its record budget and stops after cancellation
       calls++;
       return Response.json({ data: [{ id: "a" }, { id: "b" }], meta: { pagination: { "next-page": 2 } } });
     }) as unknown as typeof fetch;
-    expect(await fetchAllApiPages("/items", undefined, { maxRecords: 1 }).catch((error: unknown): unknown => error)).toMatchObject({ message: expect.stringContaining("exceeds 1 records") });
+    expect(
+      await fetchAllApiPages("/items", undefined, { maxRecords: 1 }).catch((error: unknown): unknown => error),
+    ).toMatchObject({ message: expect.stringContaining("exceeds 1 records") });
     expect(calls).toBe(1);
-    expect(await fetchAllApiPages("/items", controller.signal, { onProgress: () => { controller.abort(); } }).catch((error: unknown): unknown => error)).toBeInstanceOf(Error);
+    expect(
+      await fetchAllApiPages("/items", controller.signal, {
+        onProgress: () => {
+          controller.abort();
+        },
+      }).catch((error: unknown): unknown => error),
+    ).toBeInstanceOf(Error);
     expect(calls).toBe(2);
     const seen: number[] = [];
     globalThis.fetch = (async () => {
@@ -497,10 +547,18 @@ test("explicit traversal enforces its record budget and stops after cancellation
         ? Response.json({ data: [{ id: "a" }], meta: { pagination: { "next-page": 2 } } })
         : Response.json({ errors: [{ detail: "Permission revoked" }] }, { status: 403 });
     }) as unknown as typeof fetch;
-    expect(await fetchAllApiPages("/items", undefined, { onProgress: (count) => { seen.push(count); } }).catch((error: unknown): unknown => error)).toMatchObject({ message: expect.stringContaining("Permission revoked") });
+    expect(
+      await fetchAllApiPages("/items", undefined, {
+        onProgress: (count) => {
+          seen.push(count);
+        },
+      }).catch((error: unknown): unknown => error),
+    ).toMatchObject({ message: expect.stringContaining("Permission revoked") });
     expect(calls).toBe(4);
     expect(seen).toEqual([1]);
-  } finally { globalThis.fetch = originalFetch; }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("explicit traversal retries throttled pages without duplication and bounds maintenance retries", async () => {

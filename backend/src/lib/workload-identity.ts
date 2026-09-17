@@ -60,10 +60,14 @@ export type WorkloadIdentityConfiguration = Readonly<{
 }>;
 
 export function inspectWorkspaceIdentityConfiguration(keys: readonly string[]): WorkloadIdentityConfiguration {
-  const providers = [...new Set(keys.flatMap((key): string[] => {
-    const match = /^TFC_([A-Z]+)_PROVIDER_AUTH(?:_|$)/.exec(key);
-    return match?.[1] === undefined ? [] : [match[1].toLowerCase()];
-  }))].sort();
+  const providers = [
+    ...new Set(
+      keys.flatMap((key): string[] => {
+        const match = /^TFC_([A-Z]+)_PROVIDER_AUTH(?:_|$)/.exec(key);
+        return match?.[1] === undefined ? [] : [match[1].toLowerCase()];
+      }),
+    ),
+  ].sort();
   return { configured: providers.length > 0 || keys.some((key): boolean => key.startsWith("TFC_OIDC_")), providers };
 }
 
@@ -126,7 +130,10 @@ async function generateKeyRow(): Promise<KeyRow> {
 
 async function publishKey(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- row flows into the drizzle insert values by design
-  row: KeyRow, _fencingToken: number, retireActive: boolean): Promise<KeyRow> {
+  row: KeyRow,
+  _fencingToken: number,
+  retireActive: boolean,
+): Promise<KeyRow> {
   // Lease is already held via acquireKeyLeadership's in-process tail +
   // DB fencingToken. The old pre-transaction lease check raced with
   // parallel test files sharing the same Postgres DB (each file gets its
@@ -135,10 +142,10 @@ async function publishKey(
   // cross-process races.
   await db.transaction(async (tx): Promise<void> => {
     if (retireActive) {
-      await tx.update(workloadIdentityKeys).set({ status: "retired", retiredAt: Date.now() }).where(and(
-        eq(workloadIdentityKeys.status, "active"),
-        isNull(workloadIdentityKeys.revokedAt),
-      ));
+      await tx
+        .update(workloadIdentityKeys)
+        .set({ status: "retired", retiredAt: Date.now() })
+        .where(and(eq(workloadIdentityKeys.status, "active"), isNull(workloadIdentityKeys.revokedAt)));
     }
     await tx.insert(workloadIdentityKeys).values(row);
   });
@@ -153,43 +160,59 @@ type KeyLeadership = Readonly<{ fencingToken: number; release: () => Promise<voi
 async function acquireKeyLeadership(): Promise<KeyLeadership> {
   const previous = leadershipTail;
   let unlock: (() => void) | undefined;
-  leadershipTail = new Promise<void>((resolve): void => { unlock = resolve; });
+  leadershipTail = new Promise<void>((resolve): void => {
+    unlock = resolve;
+  });
   await previous;
   const deadline = Date.now() + 15_000;
   try {
-    await db.insert(workloadIdentityLeases).values({
-      id: WORKLOAD_IDENTITY_LEASE_ID,
-      owner: null,
-      leaseExpiresAt: null,
-      fencingToken: 0,
-      updatedAt: Date.now(),
-    }).onConflictDoNothing();
+    await db
+      .insert(workloadIdentityLeases)
+      .values({
+        id: WORKLOAD_IDENTITY_LEASE_ID,
+        owner: null,
+        leaseExpiresAt: null,
+        fencingToken: 0,
+        updatedAt: Date.now(),
+      })
+      .onConflictDoNothing();
     while (Date.now() < deadline) {
       const now = Date.now();
-      const claimed = await db.update(workloadIdentityLeases).set({
-        owner: WORKLOAD_IDENTITY_OWNER,
-        leaseExpiresAt: now + WORKLOAD_IDENTITY_LEASE_MS,
-        fencingToken: sql`${workloadIdentityLeases.fencingToken} + 1`,
-        updatedAt: now,
-      }).where(and(
-        eq(workloadIdentityLeases.id, WORKLOAD_IDENTITY_LEASE_ID),
-        or(
-          isNull(workloadIdentityLeases.owner),
-          isNull(workloadIdentityLeases.leaseExpiresAt),
-          lt(workloadIdentityLeases.leaseExpiresAt, now),
-        ),
-      )).returning({ fencingToken: workloadIdentityLeases.fencingToken });
+      const claimed = await db
+        .update(workloadIdentityLeases)
+        .set({
+          owner: WORKLOAD_IDENTITY_OWNER,
+          leaseExpiresAt: now + WORKLOAD_IDENTITY_LEASE_MS,
+          fencingToken: sql`${workloadIdentityLeases.fencingToken} + 1`,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(workloadIdentityLeases.id, WORKLOAD_IDENTITY_LEASE_ID),
+            or(
+              isNull(workloadIdentityLeases.owner),
+              isNull(workloadIdentityLeases.leaseExpiresAt),
+              lt(workloadIdentityLeases.leaseExpiresAt, now),
+            ),
+          ),
+        )
+        .returning({ fencingToken: workloadIdentityLeases.fencingToken });
       const lease = claimed[0];
       if (lease !== undefined) {
         return {
           fencingToken: lease.fencingToken,
           release: async (): Promise<void> => {
             try {
-              await db.update(workloadIdentityLeases).set({ owner: null, leaseExpiresAt: null, updatedAt: Date.now() }).where(and(
-                eq(workloadIdentityLeases.id, WORKLOAD_IDENTITY_LEASE_ID),
-                eq(workloadIdentityLeases.owner, WORKLOAD_IDENTITY_OWNER),
-                eq(workloadIdentityLeases.fencingToken, lease.fencingToken),
-              ));
+              await db
+                .update(workloadIdentityLeases)
+                .set({ owner: null, leaseExpiresAt: null, updatedAt: Date.now() })
+                .where(
+                  and(
+                    eq(workloadIdentityLeases.id, WORKLOAD_IDENTITY_LEASE_ID),
+                    eq(workloadIdentityLeases.owner, WORKLOAD_IDENTITY_OWNER),
+                    eq(workloadIdentityLeases.fencingToken, lease.fencingToken),
+                  ),
+                );
             } finally {
               unlock?.();
               unlock = undefined;
@@ -197,7 +220,9 @@ async function acquireKeyLeadership(): Promise<KeyLeadership> {
           },
         };
       }
-      await new Promise<void>((resolve): void => { setTimeout(resolve, 50); });
+      await new Promise<void>((resolve): void => {
+        setTimeout(resolve, 50);
+      });
     }
     throw new Error("Timed out acquiring the workload identity signing-key lease");
   } catch (error: unknown) {
@@ -233,7 +258,9 @@ export async function currentWorkloadIdentityKey(): Promise<KeyRow> {
   if (active !== undefined) return active;
   if (keyCreation !== null) return keyCreation;
   const pending = createKeyIfMissing();
-  keyCreation = pending.finally((): void => { keyCreation = null; });
+  keyCreation = pending.finally((): void => {
+    keyCreation = null;
+  });
   void keyCreation.catch((): void => undefined);
   return pending;
 }
@@ -257,11 +284,16 @@ export async function trimWorkloadIdentityKeys(): Promise<void> {
       columns: { keyId: true },
     });
     const liveKeyIds = [...new Set(liveTokens.map((token) => token.keyId))];
-    await db.update(workloadIdentityKeys).set({ status: "revoked", revokedAt: Date.now() }).where(and(
-      inArray(workloadIdentityKeys.status, ["retired", "active"]),
-      ne(workloadIdentityKeys.id, current.id),
-      ...(liveKeyIds.length === 0 ? [] : [notInArray(workloadIdentityKeys.keyId, liveKeyIds)]),
-    ));
+    await db
+      .update(workloadIdentityKeys)
+      .set({ status: "revoked", revokedAt: Date.now() })
+      .where(
+        and(
+          inArray(workloadIdentityKeys.status, ["retired", "active"]),
+          ne(workloadIdentityKeys.id, current.id),
+          ...(liveKeyIds.length === 0 ? [] : [notInArray(workloadIdentityKeys.keyId, liveKeyIds)]),
+        ),
+      );
     await pruneExpiredWorkloadIdentityTokens();
   } finally {
     await leadership.release();
@@ -315,7 +347,12 @@ function moduleTestClaims(input: ModuleTestIdentityInput, iat: number, exp: numb
   };
 }
 
-async function issue(claims: TokenClaims, runId: string, audience: string, ttlSeconds: number): Promise<IssuedIdentityToken> {
+async function issue(
+  claims: TokenClaims,
+  runId: string,
+  audience: string,
+  ttlSeconds: number,
+): Promise<IssuedIdentityToken> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const key = await currentWorkloadIdentityKey();
     const privateKey = await decryptSecret(key.encryptedPrivateKey);
@@ -338,7 +375,9 @@ async function issue(claims: TokenClaims, runId: string, audience: string, ttlSe
       expiresAt,
       revokedAt: null,
     });
-    const usable = await db.query.workloadIdentityKeys.findFirst({ where: and(eq(workloadIdentityKeys.id, key.id), isNull(workloadIdentityKeys.revokedAt)) });
+    const usable = await db.query.workloadIdentityKeys.findFirst({
+      where: and(eq(workloadIdentityKeys.id, key.id), isNull(workloadIdentityKeys.revokedAt)),
+    });
     if (usable !== undefined) return { token, jti, keyId: key.keyId, generatedAt, expiresAt };
     await db.update(workloadIdentityTokens).set({ revokedAt: Date.now() }).where(eq(workloadIdentityTokens.jti, jti));
   }
@@ -353,7 +392,9 @@ async function issue(claims: TokenClaims, runId: string, audience: string, ttlSe
  * bearer credential behind; the caller must use it immediately and the hard
  * expiry remains the final boundary.
  */
-export async function issueCredentialDoctorIdentityToken(input: CredentialDoctorIdentityInput): Promise<IssuedIdentityToken> {
+export async function issueCredentialDoctorIdentityToken(
+  input: CredentialDoctorIdentityInput,
+): Promise<IssuedIdentityToken> {
   const ttlSeconds = Math.min(300, Math.max(30, Math.floor(input.ttlSeconds ?? 300)));
   const key = await currentWorkloadIdentityKey();
   const privateKey = await decryptSecret(key.encryptedPrivateKey);
@@ -388,11 +429,19 @@ export async function issueWorkspaceIdentityToken(input: WorkspaceIdentityInput)
   const generatedAt = Math.floor(Date.now() / 1000);
   const exp = generatedAt + Math.max(1, Math.floor(input.ttlSeconds));
   const jti = crypto.randomUUID();
-  return issue(workspaceClaims(input, generatedAt, exp, jti), input.runId, input.audience, Math.max(1, Math.floor(input.ttlSeconds)));
+  return issue(
+    workspaceClaims(input, generatedAt, exp, jti),
+    input.runId,
+    input.audience,
+    Math.max(1, Math.floor(input.ttlSeconds)),
+  );
 }
 
 export async function issueModuleTestIdentityToken(input: ModuleTestIdentityInput): Promise<IssuedIdentityToken> {
-  const ttl = Math.min(MAX_MODULE_TEST_TTL, Math.max(MIN_MODULE_TEST_TTL, Math.floor(input.ttlSeconds || DEFAULT_MODULE_TEST_TTL)));
+  const ttl = Math.min(
+    MAX_MODULE_TEST_TTL,
+    Math.max(MIN_MODULE_TEST_TTL, Math.floor(input.ttlSeconds || DEFAULT_MODULE_TEST_TTL)),
+  );
   const generatedAt = Math.floor(Date.now() / 1000);
   const exp = generatedAt + ttl;
   const jti = crypto.randomUUID();
@@ -400,31 +449,48 @@ export async function issueModuleTestIdentityToken(input: ModuleTestIdentityInpu
 }
 
 export async function revokeWorkloadIdentityTokens(runId: string, jtis?: readonly string[]): Promise<void> {
-  await db.update(workloadIdentityTokens).set({ revokedAt: Date.now() }).where(and(
-    eq(workloadIdentityTokens.runId, runId),
-    isNull(workloadIdentityTokens.revokedAt),
-    ...(jtis === undefined ? [] : [inArray(workloadIdentityTokens.jti, [...jtis])]),
-  ));
+  await db
+    .update(workloadIdentityTokens)
+    .set({ revokedAt: Date.now() })
+    .where(
+      and(
+        eq(workloadIdentityTokens.runId, runId),
+        isNull(workloadIdentityTokens.revokedAt),
+        ...(jtis === undefined ? [] : [inArray(workloadIdentityTokens.jti, [...jtis])]),
+      ),
+    );
 }
 
 export async function pruneExpiredWorkloadIdentityTokens(now = Date.now()): Promise<number> {
   // Grace period: keep revoked/expired rows for 24h for audit, then hard-delete
   const cutoff = now - 24 * 60 * 60 * 1000;
-  const result = await db.delete(workloadIdentityTokens).where(lt(workloadIdentityTokens.expiresAt, cutoff)).returning({ jti: workloadIdentityTokens.jti });
+  const result = await db
+    .delete(workloadIdentityTokens)
+    .where(lt(workloadIdentityTokens.expiresAt, cutoff))
+    .returning({ jti: workloadIdentityTokens.jti });
   return result.length;
 }
 
 function keyIdFromWorkloadToken(token: string): string {
   const decoded = jwt.decode(token, { complete: true });
   const header = decoded !== null && typeof decoded === "object" && "header" in decoded ? decoded.header : undefined;
-  const keyId = header !== null && typeof header === "object" && header !== undefined && "kid" in header && typeof header.kid === "string" ? header.kid : "";
+  const keyId =
+    header !== null &&
+    typeof header === "object" &&
+    header !== undefined &&
+    "kid" in header &&
+    typeof header.kid === "string"
+      ? header.kid
+      : "";
   if (keyId === "") throw new Error("Workload identity token has no key id");
   return keyId;
 }
 
 export async function verifyWorkloadIdentityToken(token: string, audience?: string): Promise<Record<string, unknown>> {
   const keyId = keyIdFromWorkloadToken(token);
-  const key = await db.query.workloadIdentityKeys.findFirst({ where: and(eq(workloadIdentityKeys.keyId, keyId), isNull(workloadIdentityKeys.revokedAt)) });
+  const key = await db.query.workloadIdentityKeys.findFirst({
+    where: and(eq(workloadIdentityKeys.keyId, keyId), isNull(workloadIdentityKeys.revokedAt)),
+  });
   if (key === undefined) throw new Error("Workload identity token key is unavailable");
   const publicKey = createPublicKey({ key: key.publicJwk, format: "jwk" });
   const verified = jwt.verify(token, publicKey, {
@@ -432,18 +498,28 @@ export async function verifyWorkloadIdentityToken(token: string, audience?: stri
     issuer: workloadIdentityIssuer(),
     ...(audience === undefined ? {} : { audience }),
   });
-  if (typeof verified === "string" || typeof verified.jti !== "string") throw new Error("Invalid workload identity token claims");
-  const record = await db.query.workloadIdentityTokens.findFirst({ where: eq(workloadIdentityTokens.jti, verified.jti) });
-  if (record === undefined || record.revokedAt !== null || record.expiresAt <= Date.now()) throw new Error("Workload identity token has been revoked or expired");
+  if (typeof verified === "string" || typeof verified.jti !== "string")
+    throw new Error("Invalid workload identity token claims");
+  const record = await db.query.workloadIdentityTokens.findFirst({
+    where: eq(workloadIdentityTokens.jti, verified.jti),
+  });
+  if (record === undefined || record.revokedAt !== null || record.expiresAt <= Date.now())
+    throw new Error("Workload identity token has been revoked or expired");
   return verified;
 }
 
 export type CredentialProvider = "aws" | "gcp" | "azure" | "vault" | "hcp" | "kubernetes";
-export type CredentialConfiguration = Readonly<{ provider: CredentialProvider; tag?: string; values: Readonly<Record<string, unknown>> }>;
+export type CredentialConfiguration = Readonly<{
+  provider: CredentialProvider;
+  tag?: string;
+  values: Readonly<Record<string, unknown>>;
+}>;
 
 function audienceFor(provider: CredentialProvider, values: Readonly<Record<string, unknown>>): string {
   const configured = values["audience"];
-  return typeof configured === "string" && configured.trim() !== "" ? configured.trim() : `${provider}.workload.identity`;
+  return typeof configured === "string" && configured.trim() !== ""
+    ? configured.trim()
+    : `${provider}.workload.identity`;
 }
 
 type ProviderEnvironmentContext = Readonly<{
@@ -463,8 +539,10 @@ function setAwsProviderEnvironment({ values, audience, tokenPath, set }: Provide
 
 function setGcpProviderEnvironment({ values, audience, tokenPath, set }: ProviderEnvironmentContext): void {
   set("TFC_GCP_PROVIDER_AUTH", "true");
-  if (typeof values["service-account-email"] === "string") set("TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL", values["service-account-email"]);
-  if (typeof values["workload-provider-name"] === "string") set("TFC_GCP_WORKLOAD_PROVIDER_NAME", values["workload-provider-name"]);
+  if (typeof values["service-account-email"] === "string")
+    set("TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL", values["service-account-email"]);
+  if (typeof values["workload-provider-name"] === "string")
+    set("TFC_GCP_WORKLOAD_PROVIDER_NAME", values["workload-provider-name"]);
   set("TFC_GCP_WORKLOAD_IDENTITY_AUDIENCE", audience);
   set("GOOGLE_OIDC_TOKEN_FILE", tokenPath);
 }
@@ -489,7 +567,11 @@ function setVaultProviderEnvironment({ values, audience, set }: ProviderEnvironm
 
 function setHcpProviderEnvironment({ values, audience, set }: ProviderEnvironmentContext): void {
   set("TFC_HCP_PROVIDER_AUTH", "true");
-  for (const key of ["run-provider-resource-name", "plan-provider-resource-name", "apply-provider-resource-name"] as const) {
+  for (const key of [
+    "run-provider-resource-name",
+    "plan-provider-resource-name",
+    "apply-provider-resource-name",
+  ] as const) {
     if (typeof values[key] === "string") set(`TFC_HCP_${key.replaceAll("-", "_").toUpperCase()}`, values[key]);
   }
   set("TFC_HCP_WORKLOAD_IDENTITY_AUDIENCE", audience);
@@ -502,7 +584,9 @@ function setKubernetesProviderEnvironment({ audience, token, tokenPath, set }: P
   set("KUBE_TOKEN", token.token);
 }
 
-const PROVIDER_ENVIRONMENT_SETTERS: Readonly<Record<CredentialProvider, (context: ProviderEnvironmentContext) => void>> = {
+const PROVIDER_ENVIRONMENT_SETTERS: Readonly<
+  Record<CredentialProvider, (context: ProviderEnvironmentContext) => void>
+> = {
   aws: setAwsProviderEnvironment,
   gcp: setGcpProviderEnvironment,
   azure: setAzureProviderEnvironment,
@@ -527,12 +611,19 @@ function setProviderEnvironment(
     [`TFC_OIDC_TOKEN_FILE${suffix}`]: tokenPath,
     [`TFC_OIDC_TOKEN${suffix}`]: token.token,
   };
-  const set = (key: string, value: string): void => { env[`${key}${suffix}`] = value; };
+  const set = (key: string, value: string): void => {
+    env[`${key}${suffix}`] = value;
+  };
   PROVIDER_ENVIRONMENT_SETTERS[provider]({ values, audience, token, tokenPath, set });
   return env;
 }
 
-async function writeTokenFile(directory: string, provider: CredentialProvider, token: IssuedIdentityToken, tag = ""): Promise<string> {
+async function writeTokenFile(
+  directory: string,
+  provider: CredentialProvider,
+  token: IssuedIdentityToken,
+  tag = "",
+): Promise<string> {
   const tokenDirectory = join(directory, ".terrence", "oidc");
   await mkdir(tokenDirectory, { recursive: true, mode: 0o700 });
   const safeTag = tag === "" ? "" : `-${tag.replaceAll(/[^A-Za-z0-9_-]/g, "_")}`;
@@ -553,7 +644,18 @@ async function environmentFor(
     const token = await issueToken(configuration.provider, audience);
     firstToken ??= token;
     const path = await writeTokenFile(directory, configuration.provider, token, configuration.tag);
-    Object.assign(environment, setProviderEnvironment(configuration.provider, configuration.values, audience, workloadIdentityIssuer(), token, path, configuration.tag));
+    Object.assign(
+      environment,
+      setProviderEnvironment(
+        configuration.provider,
+        configuration.values,
+        audience,
+        workloadIdentityIssuer(),
+        token,
+        path,
+        configuration.tag,
+      ),
+    );
   }
   return { environment, token: firstToken };
 }
@@ -568,9 +670,11 @@ function workspaceProviderValues(
 ): Record<string, unknown> {
   const valueFor = (key: string): string | undefined => {
     const prefix = `TFC_${provider.toUpperCase()}_${key}`;
-    return values.get(`${prefix}${tag === "" ? "" : `_${tag}`}`)
-      ?? values.get(`TFC_DEFAULT_${provider.toUpperCase()}_${key}`)
-      ?? (tag === "" ? undefined : values.get(prefix));
+    return (
+      values.get(`${prefix}${tag === "" ? "" : `_${tag}`}`) ??
+      values.get(`TFC_DEFAULT_${provider.toUpperCase()}_${key}`) ??
+      (tag === "" ? undefined : values.get(prefix))
+    );
   };
   const providerValues: Record<string, unknown> = { audience: valueFor("WORKLOAD_IDENTITY_AUDIENCE") };
   if (provider === "aws") providerValues["role-arn"] = valueFor("RUN_ROLE_ARN");
@@ -605,7 +709,11 @@ export async function moduleTestIdentityEnvironment(
   configuration: CredentialConfiguration,
   directory: string,
 ): Promise<Readonly<{ environment: Record<string, string>; token: IssuedIdentityToken }>> {
-  const result = await environmentFor([configuration], directory, async (_provider, audience): Promise<IssuedIdentityToken> => issueModuleTestIdentityToken({ ...input, audience }));
+  const result = await environmentFor(
+    [configuration],
+    directory,
+    async (_provider, audience): Promise<IssuedIdentityToken> => issueModuleTestIdentityToken({ ...input, audience }),
+  );
   if (result.token === undefined) throw new Error("Unable to issue module test workload identity token");
   return { environment: result.environment, token: result.token };
 }
@@ -615,13 +723,15 @@ export async function workspaceIdentityEnvironment(
   variables: readonly Readonly<{ key: string; value: string; category: string }>[],
   directory: string,
 ): Promise<Readonly<{ environment: Record<string, string>; tokens: IssuedIdentityToken[] }>> {
-  const values = new Map(variables.filter((variable) => variable.category === "env").map((variable) => [variable.key, variable.value]));
+  const values = new Map(
+    variables.filter((variable) => variable.category === "env").map((variable) => [variable.key, variable.value]),
+  );
   const providers: CredentialConfiguration[] = [];
   const providerTags = (provider: CredentialProvider): string[] => {
     const prefix = `TFC_${provider.toUpperCase()}_PROVIDER_AUTH`;
     return [...values.entries()]
       .filter(([key, value]) => (key === prefix || key.startsWith(`${prefix}_`)) && value.toLowerCase() === "true")
-      .map(([key]) => key === prefix ? "" : key.slice(prefix.length + 1))
+      .map(([key]) => (key === prefix ? "" : key.slice(prefix.length + 1)))
       .filter((tag, index, tags) => tags.indexOf(tag) === index);
   };
   for (const provider of ["aws", "gcp", "azure", "vault", "hcp", "kubernetes"] as const) {
@@ -631,11 +741,15 @@ export async function workspaceIdentityEnvironment(
     }
   }
   const tokens: IssuedIdentityToken[] = [];
-  const result = await environmentFor(providers, directory, async (_provider, audience): Promise<IssuedIdentityToken> => {
-    const token = await issueWorkspaceIdentityToken({ ...input, audience });
-    tokens.push(token);
-    return token;
-  });
+  const result = await environmentFor(
+    providers,
+    directory,
+    async (_provider, audience): Promise<IssuedIdentityToken> => {
+      const token = await issueWorkspaceIdentityToken({ ...input, audience });
+      tokens.push(token);
+      return token;
+    },
+  );
   const environment = { ...result.environment };
   for (const [key, audience] of values.entries()) {
     const match = /^TFC_WORKLOAD_IDENTITY_AUDIENCE(?:_(.+))?$/.exec(key);
@@ -650,8 +764,18 @@ export async function workspaceIdentityEnvironment(
 
 export function moduleTestTokenTtl(value: unknown): number | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "number" || !Number.isInteger(value) || value < MIN_MODULE_TEST_TTL || value > MAX_MODULE_TEST_TTL) return undefined;
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < MIN_MODULE_TEST_TTL ||
+    value > MAX_MODULE_TEST_TTL
+  )
+    return undefined;
   return value;
 }
 
-export const moduleTestTokenTtlBounds = { default: DEFAULT_MODULE_TEST_TTL, min: MIN_MODULE_TEST_TTL, max: MAX_MODULE_TEST_TTL } as const;
+export const moduleTestTokenTtlBounds = {
+  default: DEFAULT_MODULE_TEST_TTL,
+  min: MIN_MODULE_TEST_TTL,
+  max: MAX_MODULE_TEST_TTL,
+} as const;

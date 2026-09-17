@@ -28,14 +28,16 @@ describe("private registry module tests", () => {
   let previousBinary: string | undefined;
 
   const request = (path: string, method = "GET", body?: unknown): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     directory = await mkdtemp(join(tmpdir(), "terrence-module-tests-"));
@@ -46,14 +48,17 @@ describe("private registry module tests", () => {
     argumentsPath = join(directory, "arguments.txt");
     await mkdir(testDirectory, { recursive: true });
     await Promise.all([
-      writeFile(join(moduleDirectory, "main.tf"), "variable \"replicas\" { type = number }\n"),
-      writeFile(join(testDirectory, "basic.tftest.hcl"), "run \"basic\" { command = plan }\n"),
-      writeFile(binaryPath, [
-        "#!/bin/sh",
-        `printf '%s\\n' "$@" > '${argumentsPath}'`,
-        "printf '%s\\n' '{\"type\":\"test_summary\",\"test_summary\":{\"passed\":2,\"failed\":0,\"errored\":0,\"skipped\":1}}'",
-        "",
-      ].join("\n")),
+      writeFile(join(moduleDirectory, "main.tf"), 'variable "replicas" { type = number }\n'),
+      writeFile(join(testDirectory, "basic.tftest.hcl"), 'run "basic" { command = plan }\n'),
+      writeFile(
+        binaryPath,
+        [
+          "#!/bin/sh",
+          `printf '%s\\n' "$@" > '${argumentsPath}'`,
+          'printf \'%s\\n\' \'{"type":"test_summary","test_summary":{"passed":2,"failed":0,"errored":0,"skipped":1}}\'',
+          "",
+        ].join("\n"),
+      ),
     ]);
     await chmod(binaryPath, 0o700);
     const tar = Bun.spawn(["tar", "-czf", archivePath, "-C", moduleDirectory, "."], {
@@ -148,23 +153,21 @@ describe("private registry module tests", () => {
   });
 
   it("rejects unsafe test paths before invoking Terraform", async () => {
-    const response = await request(
-      `/api/v2/registry-modules/${moduleId}/versions/${versionId}/test`,
-      "POST",
-      {
-        data: {
-          type: "module-tests",
-          attributes: { "test-directory": "../outside" },
-        },
+    const response = await request(`/api/v2/registry-modules/${moduleId}/versions/${versionId}/test`, "POST", {
+      data: {
+        type: "module-tests",
+        attributes: { "test-directory": "../outside" },
       },
-    );
+    });
     expect(response.status).toBe(422);
     expect(await response.json()).toEqual({
-      errors: [{
-        status: "422",
-        title: "Unprocessable Entity",
-        detail: "test-directory must be a safe relative path",
-      }],
+      errors: [
+        {
+          status: "422",
+          title: "Unprocessable Entity",
+          detail: "test-directory must be a safe relative path",
+        },
+      ],
     });
   });
 });

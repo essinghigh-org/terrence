@@ -20,7 +20,9 @@ describe("DegradedBanner (kanban 14.13)", () => {
       <DegradedBanner
         title="Stale data"
         actionLabel="Try again"
-        onAction={(): void => { clicked += 1; }}
+        onAction={(): void => {
+          clicked += 1;
+        }}
       />,
     );
     const button = getByRole("button");

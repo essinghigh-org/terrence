@@ -22,7 +22,15 @@ import { PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION, parsePersistedJobPayload } from "
 import { createOperationContext } from "./operation-context";
 import type { DeepReadonly } from "./types";
 
-export type DurableJobKind = "module-test" | "stack-configuration" | "stack-deployment" | "explorer-inventory" | "explorer-catalog" | "plan-explanation" | "vcs-webhook" | "outbox-delivery";
+export type DurableJobKind =
+  | "module-test"
+  | "stack-configuration"
+  | "stack-deployment"
+  | "explorer-inventory"
+  | "explorer-catalog"
+  | "plan-explanation"
+  | "vcs-webhook"
+  | "outbox-delivery";
 export type DurableJob = Readonly<typeof durableJobs.$inferSelect>;
 export type DurableJobContext = Readonly<{
   heartbeat: () => Promise<boolean>;
@@ -60,9 +68,11 @@ export class DurableJobBudgetError extends Error {
   public readonly status: 413 | 429;
 
   constructor(admission: ResourceBudgetAdmission) {
-    super(admission.reason === "artifact-bytes-limit"
-      ? "Durable job artifact estimate exceeds the configured byte budget"
-      : `Durable job queue capacity is temporarily unavailable (${admission.reason ?? "capacity"})`);
+    super(
+      admission.reason === "artifact-bytes-limit"
+        ? "Durable job artifact estimate exceeds the configured byte budget"
+        : `Durable job queue capacity is temporarily unavailable (${admission.reason ?? "capacity"})`,
+    );
     this.name = "DurableJobBudgetError";
     this.admission = admission;
     this.status = admission.reason === "artifact-bytes-limit" ? 413 : 429;
@@ -116,7 +126,13 @@ async function assertDurableJobBudget(row: ResourceBudgetJob, excludeJobId?: str
 }
 
 function resourceBudgetJobFromInsert(
-  row: Readonly<{ id: string; kind: string; payload: Readonly<Record<string, unknown>>; runAfter: number; createdAt: number }>,
+  row: Readonly<{
+    id: string;
+    kind: string;
+    payload: Readonly<Record<string, unknown>>;
+    runAfter: number;
+    createdAt: number;
+  }>,
 ): ResourceBudgetJob {
   return resourceBudgetJobFromDurable(row);
 }
@@ -133,29 +149,44 @@ async function requeueExistingDurableJob(
   // changing it; otherwise a deduped retry could bypass the same limits
   // enforced for a fresh row (or double-count a running row).
   if (options.budget !== undefined) {
-    await assertDurableJobBudget(resourceBudgetJobFromInsert({
-      id: existing.id,
-      kind: existing.kind,
-      payload: requeuedPayload,
-      runAfter,
-      createdAt: existing.createdAt,
-    }), existing.id);
+    await assertDurableJobBudget(
+      resourceBudgetJobFromInsert({
+        id: existing.id,
+        kind: existing.kind,
+        payload: requeuedPayload,
+        runAfter,
+        createdAt: existing.createdAt,
+      }),
+      existing.id,
+    );
   }
   const now = Date.now();
-  const requeued = await db.update(durableJobs).set({
-    status: "queued",
-    payload: requeuedPayload,
-    payloadSchemaVersion: PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION,
-    attempts: 0,
-    runAfter,
-    lockedBy: null,
-    lockToken: null,
-    leaseExpiresAt: null,
-    heartbeatAt: null,
-    lastError: null,
-    updatedAt: now,
-  }).where(and(eq(durableJobs.id, existing.id), options.rescheduleRunning ? inArray(durableJobs.status, ["running", "succeeded", "failed", "canceled"]) : inArray(durableJobs.status, ["succeeded", "failed", "canceled"]))).returning();
-  return (requeued[0] ?? await db.query.durableJobs.findFirst({ where: eq(durableJobs.id, existing.id) })) as DurableJob;
+  const requeued = await db
+    .update(durableJobs)
+    .set({
+      status: "queued",
+      payload: requeuedPayload,
+      payloadSchemaVersion: PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION,
+      attempts: 0,
+      runAfter,
+      lockedBy: null,
+      lockToken: null,
+      leaseExpiresAt: null,
+      heartbeatAt: null,
+      lastError: null,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(durableJobs.id, existing.id),
+        options.rescheduleRunning
+          ? inArray(durableJobs.status, ["running", "succeeded", "failed", "canceled"])
+          : inArray(durableJobs.status, ["succeeded", "failed", "canceled"]),
+      ),
+    )
+    .returning();
+  return (requeued[0] ??
+    (await db.query.durableJobs.findFirst({ where: eq(durableJobs.id, existing.id) }))) as DurableJob;
 }
 
 async function enqueueExistingDurableJob(
@@ -165,18 +196,19 @@ async function enqueueExistingDurableJob(
 ): Promise<DurableJob | typeof NO_EXISTING_DURABLE_JOB> {
   if (options.dedupeKey === undefined) return NO_EXISTING_DURABLE_JOB;
   const existing = await db.query.durableJobs.findFirst({
-    where: and(
-      eq(durableJobs.kind, kind),
-      eq(durableJobs.dedupeKey, options.dedupeKey),
-    ),
+    where: and(eq(durableJobs.kind, kind), eq(durableJobs.dedupeKey, options.dedupeKey)),
   });
   if (existing === undefined) return NO_EXISTING_DURABLE_JOB;
   const runAfter = options.runAfter ?? Date.now();
   if (existing.status === "running" && !options.rescheduleRunning) return existing;
   if (existing.status === "queued") {
     if (runAfter >= existing.runAfter) return existing;
-    const earlier = await db.update(durableJobs).set({ runAfter, updatedAt: Date.now() }).where(and(eq(durableJobs.id, existing.id), eq(durableJobs.status, "queued"))).returning();
-    return (earlier[0] ?? existing);
+    const earlier = await db
+      .update(durableJobs)
+      .set({ runAfter, updatedAt: Date.now() })
+      .where(and(eq(durableJobs.id, existing.id), eq(durableJobs.status, "queued")))
+      .returning();
+    return earlier[0] ?? existing;
   }
   return requeueExistingDurableJob(existing, payload, options, runAfter);
 }
@@ -209,13 +241,15 @@ export async function enqueueDurableJob(
     updatedAt: now,
   };
   if (options.budget !== undefined) {
-    await assertDurableJobBudget(resourceBudgetJobFromInsert({
-      id: row.id,
-      kind: row.kind,
-      payload: durablePayload,
-      runAfter: row.runAfter ?? now,
-      createdAt: row.createdAt ?? now,
-    }));
+    await assertDurableJobBudget(
+      resourceBudgetJobFromInsert({
+        id: row.id,
+        kind: row.kind,
+        payload: durablePayload,
+        runAfter: row.runAfter ?? now,
+        createdAt: row.createdAt ?? now,
+      }),
+    );
   }
   try {
     await db.insert(durableJobs).values(row);
@@ -231,18 +265,18 @@ export async function enqueueDurableJob(
 }
 
 async function requeueExpiredJobs(now: number): Promise<void> {
-  await db.update(durableJobs).set({
-    status: "queued",
-    lockedBy: null,
-    lockToken: null,
-    leaseExpiresAt: null,
-    heartbeatAt: null,
-    updatedAt: now,
-    lastError: "Worker lease expired; job reclaimed after restart",
-  }).where(and(
-    eq(durableJobs.status, "running"),
-    lt(durableJobs.leaseExpiresAt, now),
-  ));
+  await db
+    .update(durableJobs)
+    .set({
+      status: "queued",
+      lockedBy: null,
+      lockToken: null,
+      leaseExpiresAt: null,
+      heartbeatAt: null,
+      updatedAt: now,
+      lastError: "Worker lease expired; job reclaimed after restart",
+    })
+    .where(and(eq(durableJobs.status, "running"), lt(durableJobs.leaseExpiresAt, now)));
 }
 
 export async function claimDurableJob(
@@ -282,20 +316,20 @@ export async function claimDurableJob(
   const candidate = selected === undefined ? undefined : candidateRows.find((row): boolean => row.id === selected.id);
   if (candidate === undefined) return undefined;
   const lockToken = crypto.randomUUID();
-  const updated = await db.update(durableJobs).set({
-    status: "running",
-    attempts: candidate.attempts + 1,
-    lockedBy: workerId,
-    lockToken,
-    leaseExpiresAt: now + LEASE_MS,
-    heartbeatAt: now,
-    updatedAt: now,
-    lastError: null,
-  }).where(and(
-    eq(durableJobs.id, candidate.id),
-    eq(durableJobs.status, "queued"),
-    lte(durableJobs.runAfter, now),
-  )).returning();
+  const updated = await db
+    .update(durableJobs)
+    .set({
+      status: "running",
+      attempts: candidate.attempts + 1,
+      lockedBy: workerId,
+      lockToken,
+      leaseExpiresAt: now + LEASE_MS,
+      heartbeatAt: now,
+      updatedAt: now,
+      lastError: null,
+    })
+    .where(and(eq(durableJobs.id, candidate.id), eq(durableJobs.status, "queued"), lte(durableJobs.runAfter, now)))
+    .returning();
   return updated[0];
 }
 
@@ -310,10 +344,7 @@ export async function collectDurableJobBudgetSnapshot(): Promise<ResourceBudgetS
  * returned because durable payloads may contain workspace or integration
  * material that is irrelevant to queue diagnosis.
  */
-export async function collectDurableJobQueueInspector(
-  limit = 200,
-  now = Date.now(),
-): Promise<Record<string, unknown>> {
+export async function collectDurableJobQueueInspector(limit = 200, now = Date.now()): Promise<Record<string, unknown>> {
   const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
   const [queuedRows, runningRows] = await Promise.all([
     db.query.durableJobs.findMany({
@@ -363,15 +394,21 @@ export async function collectDurableJobQueueInspector(
 }
 
 export async function heartbeatDurableJob(job: DeepReadonly<DurableJob>, now = Date.now()): Promise<boolean> {
-  const updated = await db.update(durableJobs).set({
-    leaseExpiresAt: now + LEASE_MS,
-    heartbeatAt: now,
-    updatedAt: now,
-  }).where(and(
-    eq(durableJobs.id, job.id),
-    eq(durableJobs.status, "running"),
-    eq(durableJobs.lockToken, job.lockToken ?? ""),
-  )).returning({ id: durableJobs.id });
+  const updated = await db
+    .update(durableJobs)
+    .set({
+      leaseExpiresAt: now + LEASE_MS,
+      heartbeatAt: now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(durableJobs.id, job.id),
+        eq(durableJobs.status, "running"),
+        eq(durableJobs.lockToken, job.lockToken ?? ""),
+      ),
+    )
+    .returning({ id: durableJobs.id });
   return updated.length === 1;
 }
 
@@ -389,39 +426,56 @@ async function isDurableJobStopped(job: DeepReadonly<DurableJob>): Promise<boole
 }
 
 export async function cancelDurableJob(jobId: string): Promise<boolean> {
-  const updated = await db.update(durableJobs).set({ status: "canceled", updatedAt: Date.now() }).where(and(
-    eq(durableJobs.id, jobId),
-    inArray(durableJobs.status, ["queued", "running"]),
-  )).returning({ id: durableJobs.id });
+  const updated = await db
+    .update(durableJobs)
+    .set({ status: "canceled", updatedAt: Date.now() })
+    .where(and(eq(durableJobs.id, jobId), inArray(durableJobs.status, ["queued", "running"])))
+    .returning({ id: durableJobs.id });
   return updated.length === 1;
 }
 
 export async function cancelDurableJobs(kind: DurableJobKind, dedupeKey: string): Promise<number> {
-  const updated = await db.update(durableJobs).set({ status: "canceled", updatedAt: Date.now() }).where(and(
-    eq(durableJobs.kind, kind),
-    eq(durableJobs.dedupeKey, dedupeKey),
-    inArray(durableJobs.status, ["queued", "running"]),
-  )).returning({ id: durableJobs.id });
+  const updated = await db
+    .update(durableJobs)
+    .set({ status: "canceled", updatedAt: Date.now() })
+    .where(
+      and(
+        eq(durableJobs.kind, kind),
+        eq(durableJobs.dedupeKey, dedupeKey),
+        inArray(durableJobs.status, ["queued", "running"]),
+      ),
+    )
+    .returning({ id: durableJobs.id });
   return updated.length;
 }
 
-async function finishDurableJob(job: DeepReadonly<DurableJob>, status: "succeeded" | "failed" | "queued", error?: string): Promise<boolean> {
+async function finishDurableJob(
+  job: DeepReadonly<DurableJob>,
+  status: "succeeded" | "failed" | "queued",
+  error?: string,
+): Promise<boolean> {
   const now = Date.now();
   const retry = status === "queued";
-  const updated = await db.update(durableJobs).set({
-    status,
-    lockedBy: null,
-    lockToken: null,
-    leaseExpiresAt: null,
-    heartbeatAt: null,
-    updatedAt: now,
-    runAfter: retry ? now + Math.min(60_000, 1000 * 2 ** Math.max(0, job.attempts - 1)) : now,
-    lastError: error ?? null,
-  }).where(and(
-    eq(durableJobs.id, job.id),
-    eq(durableJobs.status, "running"),
-    eq(durableJobs.lockToken, job.lockToken ?? ""),
-  )).returning({ id: durableJobs.id });
+  const updated = await db
+    .update(durableJobs)
+    .set({
+      status,
+      lockedBy: null,
+      lockToken: null,
+      leaseExpiresAt: null,
+      heartbeatAt: null,
+      updatedAt: now,
+      runAfter: retry ? now + Math.min(60_000, 1000 * 2 ** Math.max(0, job.attempts - 1)) : now,
+      lastError: error ?? null,
+    })
+    .where(
+      and(
+        eq(durableJobs.id, job.id),
+        eq(durableJobs.status, "running"),
+        eq(durableJobs.lockToken, job.lockToken ?? ""),
+      ),
+    )
+    .returning({ id: durableJobs.id });
   return updated.length === 1;
 }
 
@@ -433,21 +487,22 @@ async function runJob(
   const operation = createOperationContext();
   let heartbeatFailures = 0;
   const heartbeatTimer = setInterval((): void => {
-    void heartbeatDurableJob(job).then((ok): void => {
-      if (!ok) {
+    void heartbeatDurableJob(job)
+      .then((ok): void => {
+        if (!ok) {
+          heartbeatFailures += 1;
+          operation.cancel("lease-lost", new Error("Durable job lease was lost"));
+        } else heartbeatFailures = 0;
+        if (heartbeatFailures >= 3) {
+          log.warn("Durable job heartbeat repeatedly failed, stopping heartbeat", { jobId: job.id });
+          clearInterval(heartbeatTimer);
+        }
+      })
+      .catch((error: unknown): void => {
         heartbeatFailures += 1;
-        operation.cancel("lease-lost", new Error("Durable job lease was lost"));
-      }
-      else heartbeatFailures = 0;
-      if (heartbeatFailures >= 3) {
-        log.warn("Durable job heartbeat repeatedly failed, stopping heartbeat", { jobId: job.id });
-        clearInterval(heartbeatTimer);
-      }
-    }).catch((error: unknown): void => {
-      heartbeatFailures += 1;
-      log.warn("Durable job heartbeat failed", { jobId: job.id, error: String(error), failures: heartbeatFailures });
-      if (heartbeatFailures >= 3) clearInterval(heartbeatTimer);
-    });
+        log.warn("Durable job heartbeat failed", { jobId: job.id, error: String(error), failures: heartbeatFailures });
+        if (heartbeatFailures >= 3) clearInterval(heartbeatTimer);
+      });
   }, LEASE_MS / 3);
   try {
     await handler(job, {
@@ -460,7 +515,10 @@ async function runJob(
       canceled: async (): Promise<boolean> => {
         const stopped = await isDurableJobStopped(job);
         if (stopped) {
-          const row = await db.query.durableJobs.findFirst({ where: eq(durableJobs.id, job.id), columns: { status: true, lockToken: true } });
+          const row = await db.query.durableJobs.findFirst({
+            where: eq(durableJobs.id, job.id),
+            columns: { status: true, lockToken: true },
+          });
           operation.cancel(
             row?.status === "canceled" ? "user-cancel" : "lease-lost",
             new Error("Durable job was canceled or ownership expired"),
@@ -476,9 +534,10 @@ async function runJob(
     if (operation.signal.aborted) {
       const stopped = await isDurableJobStopped(job).catch((): boolean => true);
       if (!stopped) {
-        const reason = operation.signal.reason instanceof Error
-          ? operation.signal.reason.message
-          : "Durable job operation was canceled";
+        const reason =
+          operation.signal.reason instanceof Error
+            ? operation.signal.reason.message
+            : "Durable job operation was canceled";
         await finishDurableJob(job, job.attempts >= DURABLE_MAX_ATTEMPTS ? "failed" : "queued", reason);
       }
       return;
@@ -497,15 +556,15 @@ async function runJob(
   }
 }
 
-export function startDurableJobWorker(
-  handlers: Readonly<Partial<Record<DurableJobKind, DurableJobHandler>>>,
-): void {
+export function startDurableJobWorker(handlers: Readonly<Partial<Record<DurableJobKind, DurableJobHandler>>>): void {
   if (envFlag("TERRENCE_DISABLE_WORKER") || workerRunning) return;
   workerRunning = true;
   const workerId = `durable-${process.pid}-${crypto.randomUUID()}`;
   const kinds = Object.keys(handlers) as DurableJobKind[];
   const schedulePoll = (): void => {
-    const timer = setTimeout((): void => { void poll(); }, jitteredPollDelay(POLL_MS));
+    const timer = setTimeout((): void => {
+      void poll();
+    }, jitteredPollDelay(POLL_MS));
     timer.unref?.();
   };
   const poll = async (): Promise<void> => {

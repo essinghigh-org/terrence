@@ -44,7 +44,8 @@ export type SsoSettingsSnapshot = Readonly<{
   ldapEnabled: boolean;
 }>;
 
-function bool(value: unknown, fallback = false): boolean {  return typeof value === "boolean" ? value : fallback;
+function bool(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
 }
 
 function str(value: unknown): string | null {
@@ -93,12 +94,13 @@ export async function ldapSettings(): Promise<LdapSettings> {
   if (bool(raw["enabled"]) && !encryptionConfigured) {
     log.warn("LDAP settings are enabled without a valid encryption mode; LDAP login is disabled");
   }
-  const encryption = encryptionConfigured
-    ? encryptionValue as LdapSettings["encryption"]
-    : "plain";
-  const port = typeof raw["port"] === "number" && Number.isInteger(raw["port"]) && raw["port"] >= 1 && raw["port"] <= 65535
-    ? raw["port"]
-    : encryption === "ldaps" ? 636 : 389;
+  const encryption = encryptionConfigured ? (encryptionValue as LdapSettings["encryption"]) : "plain";
+  const port =
+    typeof raw["port"] === "number" && Number.isInteger(raw["port"]) && raw["port"] >= 1 && raw["port"] <= 65535
+      ? raw["port"]
+      : encryption === "ldaps"
+        ? 636
+        : 389;
   return {
     enabled: bool(raw["enabled"]) && encryptionConfigured,
     allowEmailLinking: bool(raw["link-by-email"]),
@@ -133,10 +135,11 @@ export class SsoConflictError extends Error {
   public readonly username: string;
 
   constructor(provider: SsoProvider, username: string, message?: string) {
-    super(message ?? (
-      `Sign-in blocked: username "${username}" is already in use by a local account. `
-      + "Rename the local account or change the identity provider username, then retry."
-    ));
+    super(
+      message ??
+        `Sign-in blocked: username "${username}" is already in use by a local account. ` +
+          "Rename the local account or change the identity provider username, then retry.",
+    );
     this.provider = provider;
     this.username = username;
   }
@@ -167,8 +170,8 @@ function normalizeSsoIdentity(identity: SsoIdentity): NormalizedSsoIdentity {
     throw new SsoConflictError(
       identity.provider,
       identity.username,
-      `Sign-in blocked: username "${identity.username}" does not contain any usable characters. `
-      + "Change the identity provider username, then retry.",
+      `Sign-in blocked: username "${identity.username}" does not contain any usable characters. ` +
+        "Change the identity provider username, then retry.",
     );
   }
   return { subject, username, email: validEmail(identity.email) };
@@ -180,14 +183,17 @@ async function insertSsoIdentityLink(
   subject: string,
   email: string | null,
 ): Promise<void> {
-  await db.insert(identityLinks).values({
-    id: newResourceId("idlink"),
-    userId,
-    provider: identity.provider,
-    externalId: subject,
-    emailAtLinkTime: email,
-    createdAt: Date.now(),
-  }).onConflictDoNothing();
+  await db
+    .insert(identityLinks)
+    .values({
+      id: newResourceId("idlink"),
+      userId,
+      provider: identity.provider,
+      externalId: subject,
+      emailAtLinkTime: email,
+      createdAt: Date.now(),
+    })
+    .onConflictDoNothing();
 }
 
 async function ssoUserById(userId: string): Promise<typeof users.$inferSelect> {
@@ -202,18 +208,27 @@ async function provisionExistingSsoIdentity(
   existing: DeepReadonly<typeof users.$inferSelect>,
 ): Promise<SsoProvisionResult> {
   const verifiedEmailAt = identity.emailVerified === true && normalized.email !== null ? Date.now() : undefined;
-  if (existing.email === null && normalized.email !== null
-    && identity.emailVerified === true && identity.allowEmailLinking === true) {
+  if (
+    existing.email === null &&
+    normalized.email !== null &&
+    identity.emailVerified === true &&
+    identity.allowEmailLinking === true
+  ) {
     try {
-      await db.update(users).set({ email: normalized.email, emailVerifiedAt: verifiedEmailAt }).where(and(
-        eq(users.id, existing.id),
-        isNull(users.email),
-        sql`NOT EXISTS (
+      await db
+        .update(users)
+        .set({ email: normalized.email, emailVerifiedAt: verifiedEmailAt })
+        .where(
+          and(
+            eq(users.id, existing.id),
+            isNull(users.email),
+            sql`NOT EXISTS (
           SELECT 1 FROM ${users} AS email_owner
           WHERE email_owner.id <> ${existing.id}
             AND lower(email_owner.email) = ${normalized.email}
         )`,
-      ));
+          ),
+        );
     } catch (error: unknown) {
       if (!isUniqueConstraintError(error)) throw error;
     }
@@ -229,12 +244,14 @@ async function provisionByVerifiedEmail(
   identity: SsoIdentity,
   normalized: NormalizedSsoIdentity,
 ): Promise<SsoProvisionResult | undefined> {
-  if (normalized.email === null || identity.emailVerified !== true || identity.allowEmailLinking !== true) return undefined;
+  if (normalized.email === null || identity.emailVerified !== true || identity.allowEmailLinking !== true)
+    return undefined;
   const byEmail = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${normalized.email}` });
   if (byEmail === undefined) return undefined;
   const claimed = byEmail.ssoProvider !== null || byEmail.ssoSubject !== null;
   if (claimed) throw new SsoConflictError(identity.provider, normalized.username);
-  const linked = await db.update(users)
+  const linked = await db
+    .update(users)
     .set({ ssoProvider: identity.provider, ssoSubject: normalized.subject, emailVerifiedAt: Date.now() })
     .where(and(eq(users.id, byEmail.id), isNull(users.ssoProvider), isNull(users.ssoSubject)))
     .returning({ id: users.id });
@@ -250,8 +267,8 @@ async function assertSsoUsernameAvailable(identity: SsoIdentity, username: strin
   throw new SsoConflictError(
     identity.provider,
     username,
-    `Sign-in blocked: username "${username}" is already in use by ${owner}. `
-    + "Rename the existing account or change the identity provider username, then retry.",
+    `Sign-in blocked: username "${username}" is already in use by ${owner}. ` +
+      "Rename the existing account or change the identity provider username, then retry.",
   );
 }
 
@@ -267,8 +284,8 @@ async function resolveSsoInsertCollision(
     throw new SsoConflictError(
       identity.provider,
       username,
-      `Sign-in blocked: username "${username}" is already in use by a local account. `
-      + "Rename the local account or change the identity provider username, then retry.",
+      `Sign-in blocked: username "${username}" is already in use by a local account. ` +
+        "Rename the local account or change the identity provider username, then retry.",
     );
   }
   if (email !== null) {
@@ -277,8 +294,8 @@ async function resolveSsoInsertCollision(
       throw new SsoConflictError(
         identity.provider,
         username,
-        `Sign-in blocked: the email "${email}" is already in use by another account. `
-        + "Change the identity provider email, then retry.",
+        `Sign-in blocked: the email "${email}" is already in use by another account. ` +
+          "Change the identity provider email, then retry.",
       );
     }
   }
@@ -303,16 +320,19 @@ async function createProvisionedSsoUser(
   // Two parallel first logins can both pass the identity/username lookups and
   // both reach this insert; onConflictDoNothing makes the second one a no-op,
   // and the re-read below returns the winning row.
-  await db.insert(users).values({
-    id: userId,
-    username: normalized.username,
-    email: insertEmail,
-    passwordHash: unusableHash,
-    ssoProvider: identity.provider,
-    ssoSubject: normalized.subject,
-    emailVerifiedAt: identity.emailVerified === true && insertEmail !== null ? Date.now() : null,
-    isSiteAdmin: false,
-  }).onConflictDoNothing();
+  await db
+    .insert(users)
+    .values({
+      id: userId,
+      username: normalized.username,
+      email: insertEmail,
+      passwordHash: unusableHash,
+      ssoProvider: identity.provider,
+      ssoSubject: normalized.subject,
+      emailVerifiedAt: identity.emailVerified === true && insertEmail !== null ? Date.now() : null,
+      isSiteAdmin: false,
+    })
+    .onConflictDoNothing();
   const raced = await db.query.users.findFirst({
     where: and(eq(users.ssoProvider, identity.provider), eq(users.ssoSubject, normalized.subject)),
   });
@@ -381,12 +401,13 @@ async function loadSamlGroupMappingData(database: SsoDatabase, userId: string): 
     database.query.teams.findMany({ where: inArray(teams.orgId, orgIds) }),
   ]);
   const teamIds = orgTeams.map((team): string => team.id);
-  const existingTeamMemberships = teamIds.length === 0
-    ? []
-    : await database.query.teamMemberships.findMany({
-      where: and(eq(teamMemberships.userId, userId), inArray(teamMemberships.teamId, teamIds)),
-      columns: { teamId: true },
-    });
+  const existingTeamMemberships =
+    teamIds.length === 0
+      ? []
+      : await database.query.teamMemberships.findMany({
+          where: and(eq(teamMemberships.userId, userId), inArray(teamMemberships.teamId, teamIds)),
+          columns: { teamId: true },
+        });
   return {
     samlOrgs,
     memberships,
@@ -406,7 +427,7 @@ async function applySamlGroupMapping(
   const groupSet = new Set(groups.map((group): string => group.trim()).filter((group): boolean => group !== ""));
   const { samlOrgs, memberships, orgTeams, existingTeamIds } = mapping;
   const membershipByOrg = new Map(memberships.map((membership) => [membership.orgId, membership]));
-  const teamsByOrg = new Map<string, typeof orgTeams[number][]>();
+  const teamsByOrg = new Map<string, (typeof orgTeams)[number][]>();
   for (const team of orgTeams) teamsByOrg.set(team.orgId, [...(teamsByOrg.get(team.orgId) ?? []), team]);
   const teamInserts: (typeof teamMemberships.$inferInsert)[] = [];
   const membershipInserts: (typeof organizationMemberships.$inferInsert)[] = [];
@@ -426,17 +447,21 @@ async function applySamlGroupMapping(
       });
     } else if (isOwner && existing.role !== "owner" && existing.ssoSource === "saml") {
       // Preserve admin-granted provenance so pruning never removes the row.
-      await database.update(organizationMemberships).set({ role: "owner" })
-        .where(and(
-          eq(organizationMemberships.orgId, org.id),
-          eq(organizationMemberships.userId, userId),
-          eq(organizationMemberships.ssoSource, "saml"),
-        ));
+      await database
+        .update(organizationMemberships)
+        .set({ role: "owner" })
+        .where(
+          and(
+            eq(organizationMemberships.orgId, org.id),
+            eq(organizationMemberships.userId, userId),
+            eq(organizationMemberships.ssoSource, "saml"),
+          ),
+        );
     }
 
-    const matchedTeams = (teamsByOrg.get(org.id) ?? []).filter((team): boolean => team.ssoTeamId !== null
-      ? groupSet.has(team.ssoTeamId)
-      : groupSet.has(team.name));
+    const matchedTeams = (teamsByOrg.get(org.id) ?? []).filter((team): boolean =>
+      team.ssoTeamId !== null ? groupSet.has(team.ssoTeamId) : groupSet.has(team.name),
+    );
     if (matchedTeams.length === 0) continue;
     const inserts = matchedTeams
       .filter((team): boolean => !existingTeamIds.has(team.id))
@@ -449,7 +474,8 @@ async function applySamlGroupMapping(
       }));
     teamInserts.push(...inserts);
   }
-  if (membershipInserts.length > 0) await database.insert(organizationMemberships).values(membershipInserts).onConflictDoNothing();
+  if (membershipInserts.length > 0)
+    await database.insert(organizationMemberships).values(membershipInserts).onConflictDoNothing();
   if (teamInserts.length > 0) await database.insert(teamMemberships).values(teamInserts).onConflictDoNothing();
 }
 
@@ -471,7 +497,7 @@ async function pruneSamlGroupMappings(
 ): Promise<void> {
   const groupSet = new Set(groups.map((group): string => group.trim()).filter((group): boolean => group !== ""));
   const { samlOrgs, memberships, orgTeams } = mapping;
-  const teamByOrg = new Map<string, typeof orgTeams[number][]>();
+  const teamByOrg = new Map<string, (typeof orgTeams)[number][]>();
   for (const team of orgTeams) {
     const list = teamByOrg.get(team.orgId) ?? [];
     list.push(team);
@@ -480,15 +506,19 @@ async function pruneSamlGroupMappings(
   for (const org of samlOrgs) {
     const teamsForOrg = teamByOrg.get(org.id) ?? [];
     // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle rows are mutable by contract
-    const matches = (team: Readonly<typeof teamsForOrg[number]>): boolean =>
+    const matches = (team: Readonly<(typeof teamsForOrg)[number]>): boolean =>
       team.ssoTeamId !== null ? groupSet.has(team.ssoTeamId) : groupSet.has(team.name);
     const staleTeamIds = teamsForOrg.filter((team): boolean => !matches(team)).map((team): string => team.id);
     if (staleTeamIds.length > 0) {
-      await database.delete(teamMemberships).where(and(
-        eq(teamMemberships.userId, userId),
-        inArray(teamMemberships.teamId, staleTeamIds),
-        eq(teamMemberships.ssoSource, "saml"),
-      ));
+      await database
+        .delete(teamMemberships)
+        .where(
+          and(
+            eq(teamMemberships.userId, userId),
+            inArray(teamMemberships.teamId, staleTeamIds),
+            eq(teamMemberships.ssoSource, "saml"),
+          ),
+        );
     }
     // Only SAML-mapper-created organization memberships are managed here.
     const membership = memberships.find((candidate): boolean => candidate.orgId === org.id);
@@ -498,13 +528,17 @@ async function pruneSamlGroupMappings(
     if (isOwner || matchedTeam) {
       const role: "owner" | "member" = isOwner ? "owner" : "member";
       if (membership.role !== role) {
-        await database.update(organizationMemberships).set({ role })
+        await database
+          .update(organizationMemberships)
+          .set({ role })
           .where(eq(organizationMemberships.id, membership.id));
       }
       continue;
     }
     if (membership.role !== "member") {
-      await database.update(organizationMemberships).set({ role: "member" })
+      await database
+        .update(organizationMemberships)
+        .set({ role: "member" })
         .where(eq(organizationMemberships.id, membership.id));
     }
   }
@@ -528,7 +562,7 @@ function escapeHtml(value: string): string {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replaceAll("\"", "&quot;")
+    .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 }
 
@@ -541,22 +575,20 @@ export function ssoHtmlPage(
   // Only same-origin relative redirects are allowed; absolute or scheme-relative
   // URLs are dropped so an attacker cannot inject an external navigation.
   const candidate = options.redirectUrl;
-  const safeRedirect = candidate !== undefined
-    && /^\/(?![/\\])/.test(candidate)
-    && !/[\u0000-\u001F\u007F]/.test(candidate)
-    ? candidate
-    : undefined;
-  const body = options.token !== undefined
-    ? `<p id="sso-token">${escapeHtml(options.token)}</p><p>Copy this token and use it as your user token. It is shown only once.</p>`
-    : `<p id="sso-message">${escapeHtml(message)}</p>`;
-  const redirect = safeRedirect !== undefined
-    ? `<p><a href="${escapeHtml(safeRedirect)}">Continue to Terrence</a></p>`
-    : "";
+  const safeRedirect =
+    candidate !== undefined && /^\/(?![/\\])/.test(candidate) && !/[\u0000-\u001F\u007F]/.test(candidate)
+      ? candidate
+      : undefined;
+  const body =
+    options.token !== undefined
+      ? `<p id="sso-token">${escapeHtml(options.token)}</p><p>Copy this token and use it as your user token. It is shown only once.</p>`
+      : `<p id="sso-message">${escapeHtml(message)}</p>`;
+  const redirect =
+    safeRedirect !== undefined ? `<p><a href="${escapeHtml(safeRedirect)}">Continue to Terrence</a></p>` : "";
   // The client redirects via <meta http-equiv="refresh">; no inline script is
   // used, so the CSP can keep script-src 'none'.
-  const refresh = safeRedirect !== undefined
-    ? `<meta http-equiv="refresh" content="0;url=${escapeHtml(safeRedirect)}">`
-    : "";
+  const refresh =
+    safeRedirect !== undefined ? `<meta http-equiv="refresh" content="0;url=${escapeHtml(safeRedirect)}">` : "";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -580,7 +612,8 @@ export function ssoHtmlResponse(body: string, status = 200): Response {
     status,
     headers: {
       "Cache-Control": "no-store",
-      "Content-Security-Policy": "default-src 'none'; script-src 'none'; style-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "Content-Security-Policy":
+        "default-src 'none'; script-src 'none'; style-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
       "Content-Type": "text/html; charset=utf-8",
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
@@ -588,8 +621,11 @@ export function ssoHtmlResponse(body: string, status = 200): Response {
   });
 }
 
-// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- primitive/header union has no mutable state
-export function appendSetCookies(response: Readonly<Response>, value: string | number | readonly string[] | undefined): void {
+export function appendSetCookies(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- primitive/header union has no mutable state
+  response: Readonly<Response>,
+  value: string | number | readonly string[] | undefined,
+): void {
   if (Array.isArray(value)) {
     for (const cookie of value as readonly string[]) response.headers.append("Set-Cookie", cookie);
   } else if (value !== undefined) {

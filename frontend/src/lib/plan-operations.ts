@@ -29,10 +29,39 @@ export type ResourceChange = {
   change: Change;
 };
 
-export type Operation = "create" | "update" | "delete" | "replace" | "read" | "import" | "move" | "remove" | "unsupported" | "no-op";
+export type Operation =
+  | "create"
+  | "update"
+  | "delete"
+  | "replace"
+  | "read"
+  | "import"
+  | "move"
+  | "remove"
+  | "unsupported"
+  | "no-op";
 
-export const OPERATION_OPTIONS: readonly Operation[] = ["create", "update", "delete", "replace", "move", "import", "remove", "read", "unsupported"];
-export const APPLY_OPERATION_OPTIONS: readonly Operation[] = ["create", "update", "delete", "replace", "move", "import", "remove", "unsupported"];
+export const OPERATION_OPTIONS: readonly Operation[] = [
+  "create",
+  "update",
+  "delete",
+  "replace",
+  "move",
+  "import",
+  "remove",
+  "read",
+  "unsupported",
+];
+export const APPLY_OPERATION_OPTIONS: readonly Operation[] = [
+  "create",
+  "update",
+  "delete",
+  "replace",
+  "move",
+  "import",
+  "remove",
+  "unsupported",
+];
 
 // Reads are data-source refreshes, not real changes; everything else is
 // selected by default.
@@ -56,7 +85,11 @@ export const operationConfig = {
 
 export function operationFor(actions: readonly string[]): Operation {
   // Action reasons explain why; only the action says whether an object is destroyed.
-  if (actions.length === 0 || actions.some((action): boolean => !["no-op", "create", "read", "update", "delete", "forget"].includes(action))) return "unsupported";
+  if (
+    actions.length === 0 ||
+    actions.some((action): boolean => !["no-op", "create", "read", "update", "delete", "forget"].includes(action))
+  )
+    return "unsupported";
   if (actions.length === 2 && actions.includes("create") && actions.includes("delete")) return "replace";
   if (actions.length !== 1) return "unsupported";
   if (actions[0] === "forget") return "remove";

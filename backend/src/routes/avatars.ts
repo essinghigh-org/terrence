@@ -1,13 +1,9 @@
 import { notFound, type JsonApiErrorBody } from "../lib/utils";
-import {
-  AVATAR_CLIENT_CACHE,
-  PROVIDER_ICON_REVALIDATE_MS,
-  AvatarService,
-  type AvatarMeta,
-} from "../lib/avatars";
+import { AVATAR_CLIENT_CACHE, PROVIDER_ICON_REVALIDATE_MS, AvatarService, type AvatarMeta } from "../lib/avatars";
 
 const KEY_PATTERN = /^[0-9a-f]{64}$/;
-const SVG_AVATAR_CONTENT_SECURITY_POLICY = "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'none'; style-src 'none'; sandbox";
+const SVG_AVATAR_CONTENT_SECURITY_POLICY =
+  "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'none'; style-src 'none'; sandbox";
 const SVG_AVATAR_CONTENT_DISPOSITION = 'attachment; filename="avatar.svg"';
 
 type AvatarHandlerCtx = Readonly<{
@@ -23,7 +19,10 @@ type AvatarSet = {
 
 type AvatarOutcome = Response | JsonApiErrorBody;
 
-async function resolveAvatarMeta(key: string, s: AvatarSet): Promise<{ meta: AvatarMeta } | { response: AvatarOutcome }> {
+async function resolveAvatarMeta(
+  key: string,
+  s: AvatarSet,
+): Promise<{ meta: AvatarMeta } | { response: AvatarOutcome }> {
   if (!KEY_PATTERN.test(key)) {
     s.status = 404;
     return { response: notFound() };
@@ -39,10 +38,16 @@ async function resolveAvatarMeta(key: string, s: AvatarSet): Promise<{ meta: Ava
   return { meta };
 }
 
-async function refreshAvatarMeta(key: string, meta: AvatarMeta, s: AvatarSet): Promise<{ current: AvatarMeta } | { response: AvatarOutcome }> {
+async function refreshAvatarMeta(
+  key: string,
+  meta: AvatarMeta,
+  s: AvatarSet,
+): Promise<{ current: AvatarMeta } | { response: AvatarOutcome }> {
   let current: AvatarMeta = meta;
-  const expiresAt = meta.providerId === "provider-icon" && meta.fetchedAt !== null
-    ? meta.fetchedAt + PROVIDER_ICON_REVALIDATE_MS : meta.expiresAt;
+  const expiresAt =
+    meta.providerId === "provider-icon" && meta.fetchedAt !== null
+      ? meta.fetchedAt + PROVIDER_ICON_REVALIDATE_MS
+      : meta.expiresAt;
   const fresh = meta.state === "fetched" && expiresAt !== null && Date.now() < expiresAt;
   if (!AvatarService.hasCached(key) || !fresh) {
     const result = await AvatarService.refresh(meta);
@@ -61,7 +66,12 @@ async function refreshAvatarMeta(key: string, meta: AvatarMeta, s: AvatarSet): P
   return { current };
 }
 
-async function serveAvatar(key: string, current: AvatarMeta, request: { headers: Headers }, s: AvatarSet): Promise<AvatarOutcome> {
+async function serveAvatar(
+  key: string,
+  current: AvatarMeta,
+  request: { headers: Headers },
+  s: AvatarSet,
+): Promise<AvatarOutcome> {
   const bytes = await AvatarService.readBytes(key);
   if (bytes === null) {
     s.status = 404;
@@ -78,8 +88,12 @@ async function serveAvatar(key: string, current: AvatarMeta, request: { headers:
     headers.set("Content-Disposition", SVG_AVATAR_CONTENT_DISPOSITION);
     headers.set("Content-Security-Policy", SVG_AVATAR_CONTENT_SECURITY_POLICY);
   }
-  const providerMaxAge = Math.max(0, Math.ceil(((current.fetchedAt ?? 0) + PROVIDER_ICON_REVALIDATE_MS - Date.now()) / 1000));
-  const clientCache = current.providerId === "provider-icon" ? `private, max-age=${providerMaxAge}` : AVATAR_CLIENT_CACHE;
+  const providerMaxAge = Math.max(
+    0,
+    Math.ceil(((current.fetchedAt ?? 0) + PROVIDER_ICON_REVALIDATE_MS - Date.now()) / 1000),
+  );
+  const clientCache =
+    current.providerId === "provider-icon" ? `private, max-age=${providerMaxAge}` : AVATAR_CLIENT_CACHE;
   const incoming = request.headers;
   if (incoming.get("if-none-match") === etag) {
     // A proper 304 carries the cache metadata so the browser can keep it.
@@ -100,7 +114,11 @@ async function serveAvatar(key: string, current: AvatarMeta, request: { headers:
   return new Response(new Uint8Array(bytes), { headers });
 }
 
-export const avatarHandler = async ({ params, request, set }: AvatarHandlerCtx): Promise<Response | JsonApiErrorBody> => {
+export const avatarHandler = async ({
+  params,
+  request,
+  set,
+}: AvatarHandlerCtx): Promise<Response | JsonApiErrorBody> => {
   const key = params["key"] ?? "";
   const s = set;
   const resolved = await resolveAvatarMeta(key, s);

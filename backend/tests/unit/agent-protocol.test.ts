@@ -25,10 +25,13 @@ describe("agent protocol compatibility contract", () => {
   });
 
   test("selects v1 from a multi-version offer and ignores an unknown future capability", () => {
-    const offer = parseAgentProtocolOffer({
-      protocol_versions: ["2", "1"],
-      capabilities: ["operation.plan", "future.artifact.v2"],
-    }, headers({}));
+    const offer = parseAgentProtocolOffer(
+      {
+        protocol_versions: ["2", "1"],
+        capabilities: ["operation.plan", "future.artifact.v2"],
+      },
+      headers({}),
+    );
     const negotiated = negotiateAgentProtocol(offer);
     expect(negotiated.version).toBe("1");
     expect(negotiated.capabilities).toEqual(["operation.plan"]);
@@ -36,11 +39,14 @@ describe("agent protocol compatibility contract", () => {
   });
 
   test("rejects an unknown required capability without changing the offer", () => {
-    const offer = parseAgentProtocolOffer({
-      protocol_version: "1",
-      capabilities: ["operation.plan"],
-      required_capabilities: ["future.artifact.v2"],
-    }, headers({}));
+    const offer = parseAgentProtocolOffer(
+      {
+        protocol_version: "1",
+        capabilities: ["operation.plan"],
+        required_capabilities: ["future.artifact.v2"],
+      },
+      headers({}),
+    );
     expect(() => negotiateAgentProtocol(offer)).toThrow(AgentProtocolNegotiationError);
     try {
       negotiateAgentProtocol(offer);

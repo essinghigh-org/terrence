@@ -21,35 +21,112 @@ type ParamCtx = Readonly<{
 
 type TeamProjectItem = Readonly<typeof teamProjects.$inferSelect>;
 
-type AccessLevel = { readonly projectAccess: Record<string, string>; readonly workspaceAccess: Record<string, unknown> };
+type AccessLevel = {
+  readonly projectAccess: Record<string, string>;
+  readonly workspaceAccess: Record<string, unknown>;
+};
 const defaultAccessLevels: Record<string, AccessLevel> = {
   read: {
     projectAccess: { settings: "read", teams: "none" },
-    workspaceAccess: { create: false, move: false, locking: false, delete: false, runs: "read", variables: "read", "state-versions": "read", "sentinel-mocks": "none", "run-tasks": false, "policy-overrides": false },
+    workspaceAccess: {
+      create: false,
+      move: false,
+      locking: false,
+      delete: false,
+      runs: "read",
+      variables: "read",
+      "state-versions": "read",
+      "sentinel-mocks": "none",
+      "run-tasks": false,
+      "policy-overrides": false,
+    },
   },
   write: {
     projectAccess: { settings: "read", teams: "none" },
-    workspaceAccess: { create: false, move: false, locking: true, delete: false, runs: "apply", variables: "write", "state-versions": "write", "sentinel-mocks": "read", "run-tasks": false, "policy-overrides": false },
+    workspaceAccess: {
+      create: false,
+      move: false,
+      locking: true,
+      delete: false,
+      runs: "apply",
+      variables: "write",
+      "state-versions": "write",
+      "sentinel-mocks": "read",
+      "run-tasks": false,
+      "policy-overrides": false,
+    },
   },
   maintain: {
     projectAccess: { settings: "read", teams: "none" },
-    workspaceAccess: { create: true, move: false, locking: true, delete: true, runs: "apply", variables: "write", "state-versions": "write", "sentinel-mocks": "read", "run-tasks": true, "policy-overrides": true },
+    workspaceAccess: {
+      create: true,
+      move: false,
+      locking: true,
+      delete: true,
+      runs: "apply",
+      variables: "write",
+      "state-versions": "write",
+      "sentinel-mocks": "read",
+      "run-tasks": true,
+      "policy-overrides": true,
+    },
   },
   admin: {
     projectAccess: { settings: "delete", teams: "manage" },
-    workspaceAccess: { create: true, move: true, locking: true, delete: true, runs: "apply", variables: "write", "state-versions": "write", "sentinel-mocks": "read", "run-tasks": true, "policy-overrides": true },
+    workspaceAccess: {
+      create: true,
+      move: true,
+      locking: true,
+      delete: true,
+      runs: "apply",
+      variables: "write",
+      "state-versions": "write",
+      "sentinel-mocks": "read",
+      "run-tasks": true,
+      "policy-overrides": true,
+    },
   },
 };
 
-const FALLBACK_ACCESS: AccessLevel = { projectAccess: { settings: "read", teams: "none" }, workspaceAccess: { create: false, move: false, locking: false, delete: false, runs: "read", variables: "none", "state-versions": "none", "sentinel-mocks": "none", "run-tasks": false, "policy-overrides": false } };
+const FALLBACK_ACCESS: AccessLevel = {
+  projectAccess: { settings: "read", teams: "none" },
+  workspaceAccess: {
+    create: false,
+    move: false,
+    locking: false,
+    delete: false,
+    runs: "read",
+    variables: "none",
+    "state-versions": "none",
+    "sentinel-mocks": "none",
+    "run-tasks": false,
+    "policy-overrides": false,
+  },
+};
 const ACCESS_LEVELS = new Set(["read", "write", "maintain", "admin", "custom"]);
 const PROJECT_ACCESS_KEYS = new Set(["settings", "teams"]);
-const WORKSPACE_ACCESS_KEYS = new Set(["create", "move", "locking", "delete", "runs", "variables", "state-versions", "sentinel-mocks", "run-tasks", "policy-overrides"]);
+const WORKSPACE_ACCESS_KEYS = new Set([
+  "create",
+  "move",
+  "locking",
+  "delete",
+  "runs",
+  "variables",
+  "state-versions",
+  "sentinel-mocks",
+  "run-tasks",
+  "policy-overrides",
+]);
 
 type AccessFailure = { status: number; body: unknown };
 
 function accessFailure(status: number, detail: string): AccessFailure {
-  return { status, body: { errors: [{ status: String(status), title: status === 422 ? "Unprocessable Entity" : "Not Found", detail }] } };
+  return {
+    status,
+    body: {
+      errors: [{ status: String(status), title: status === 422 ? "Unprocessable Entity" : "Not Found", detail }],
+    },
+  };
 }
 
 function optionalAccessLevel(value: unknown, allowed: readonly string[]): boolean {
@@ -57,27 +134,38 @@ function optionalAccessLevel(value: unknown, allowed: readonly string[]): boolea
 }
 
 function validProjectAccessMap(project: Record<string, unknown>): boolean {
-  return Object.keys(project).every((key): boolean => PROJECT_ACCESS_KEYS.has(key))
-    && optionalAccessLevel(project["settings"], ["read", "update", "delete"])
-    && optionalAccessLevel(project["teams"], ["none", "read", "manage"]);
+  return (
+    Object.keys(project).every((key): boolean => PROJECT_ACCESS_KEYS.has(key)) &&
+    optionalAccessLevel(project["settings"], ["read", "update", "delete"]) &&
+    optionalAccessLevel(project["teams"], ["none", "read", "manage"])
+  );
 }
 
 const WORKSPACE_BOOLEAN_KEYS = ["create", "move", "locking", "delete", "run-tasks", "policy-overrides"];
 
 function validWorkspaceAccessMap(workspace: Record<string, unknown>): boolean {
-  return Object.keys(workspace).every((key): boolean => WORKSPACE_ACCESS_KEYS.has(key))
-    && !WORKSPACE_BOOLEAN_KEYS.some((key): boolean => workspace[key] !== undefined && typeof workspace[key] !== "boolean")
-    && optionalAccessLevel(workspace["runs"], ["read", "plan", "apply"])
-    && optionalAccessLevel(workspace["variables"], ["none", "read", "write"])
-    && optionalAccessLevel(workspace["state-versions"], ["none", "read-outputs", "read", "write"])
-    && optionalAccessLevel(workspace["sentinel-mocks"], ["none", "read"]);
+  return (
+    Object.keys(workspace).every((key): boolean => WORKSPACE_ACCESS_KEYS.has(key)) &&
+    !WORKSPACE_BOOLEAN_KEYS.some(
+      (key): boolean => workspace[key] !== undefined && typeof workspace[key] !== "boolean",
+    ) &&
+    optionalAccessLevel(workspace["runs"], ["read", "plan", "apply"]) &&
+    optionalAccessLevel(workspace["variables"], ["none", "read", "write"]) &&
+    optionalAccessLevel(workspace["state-versions"], ["none", "read-outputs", "read", "write"]) &&
+    optionalAccessLevel(workspace["sentinel-mocks"], ["none", "read"])
+  );
 }
 
 function normalizedCustomAccess(projectAccess: unknown, workspaceAccess: unknown): AccessLevel | undefined {
   const rawProject = projectAccess ?? {};
   const rawWorkspace = workspaceAccess ?? {};
-  if (typeof rawProject !== "object" || Array.isArray(rawProject)
-    || typeof rawWorkspace !== "object" || Array.isArray(rawWorkspace)) return undefined;
+  if (
+    typeof rawProject !== "object" ||
+    Array.isArray(rawProject) ||
+    typeof rawWorkspace !== "object" ||
+    Array.isArray(rawWorkspace)
+  )
+    return undefined;
   const project = rawProject as Record<string, unknown>;
   const workspace = rawWorkspace as Record<string, unknown>;
   if (!validProjectAccessMap(project) || !validWorkspaceAccessMap(workspace)) return undefined;
@@ -93,7 +181,10 @@ function teamProjectRelId(rels: Record<string, unknown>, key: string, type: stri
   return data?.["type"] === type && typeof data["id"] === "string" ? data["id"] : "";
 }
 
-function teamProjectPatchUpdates(resolved: { access: string; customAccess: AccessLevel | undefined }): Record<string, unknown> {
+function teamProjectPatchUpdates(resolved: {
+  access: string;
+  customAccess: AccessLevel | undefined;
+}): Record<string, unknown> {
   return {
     access: resolved.access,
     projectAccess: resolved.customAccess?.projectAccess ?? null,
@@ -101,7 +192,9 @@ function teamProjectPatchUpdates(resolved: { access: string; customAccess: Acces
   };
 }
 
-function parseTeamProjectCreate(body: unknown): { teamId: string; projectId: string; attributes: Record<string, unknown> } | { failure: AccessFailure } {
+function parseTeamProjectCreate(
+  body: unknown,
+): { teamId: string; projectId: string; attributes: Record<string, unknown> } | { failure: AccessFailure } {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"] as Record<string, unknown> | undefined;
   if (data?.["type"] !== "team-projects") {
@@ -109,15 +202,24 @@ function parseTeamProjectCreate(body: unknown): { teamId: string; projectId: str
   }
   const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
   const rels = (data?.["relationships"] as Record<string, unknown>) ?? {};
-  return { teamId: teamProjectRelId(rels, "team", "teams"), projectId: teamProjectRelId(rels, "project", "projects"), attributes };
+  return {
+    teamId: teamProjectRelId(rels, "team", "teams"),
+    projectId: teamProjectRelId(rels, "project", "projects"),
+    attributes,
+  };
 }
 
-function resolveTeamProjectAccess(attributes: Record<string, unknown>): { access: string; customAccess: AccessLevel | undefined } | { failure: AccessFailure } {
+function resolveTeamProjectAccess(
+  attributes: Record<string, unknown>,
+): { access: string; customAccess: AccessLevel | undefined } | { failure: AccessFailure } {
   const access = typeof attributes["access"] === "string" ? attributes["access"] : "";
   if (!ACCESS_LEVELS.has(access)) {
     return { failure: accessFailure(422, "Invalid access level") };
   }
-  const customAccess = access === "custom" ? normalizedCustomAccess(attributes["project-access"], attributes["workspace-access"]) : undefined;
+  const customAccess =
+    access === "custom"
+      ? normalizedCustomAccess(attributes["project-access"], attributes["workspace-access"])
+      : undefined;
   if (access === "custom" && customAccess === undefined) {
     return { failure: accessFailure(422, "Invalid custom permission map") };
   }
@@ -132,9 +234,20 @@ function resolvePatchAccess(
   if (!ACCESS_LEVELS.has(nextAccess)) {
     return { failure: accessFailure(422, "Invalid access level") };
   }
-  const nextProjectAccess = attributes["project-access"] !== undefined ? attributes["project-access"] : (tp.access === "custom" ? tp.projectAccess : undefined);
-  const nextWorkspaceAccess = attributes["workspace-access"] !== undefined ? attributes["workspace-access"] : (tp.access === "custom" ? tp.workspaceAccess : undefined);
-  const customAccess = nextAccess === "custom" ? normalizedCustomAccess(nextProjectAccess, nextWorkspaceAccess) : undefined;
+  const nextProjectAccess =
+    attributes["project-access"] !== undefined
+      ? attributes["project-access"]
+      : tp.access === "custom"
+        ? tp.projectAccess
+        : undefined;
+  const nextWorkspaceAccess =
+    attributes["workspace-access"] !== undefined
+      ? attributes["workspace-access"]
+      : tp.access === "custom"
+        ? tp.workspaceAccess
+        : undefined;
+  const customAccess =
+    nextAccess === "custom" ? normalizedCustomAccess(nextProjectAccess, nextWorkspaceAccess) : undefined;
   if (nextAccess === "custom" && customAccess === undefined) {
     return { failure: accessFailure(422, "Invalid custom permission map") };
   }
@@ -202,98 +315,168 @@ function teamProjectResource(tp: TeamProjectItem): Record<string, unknown> {
 
 export const teamProjectRoutes = new Elysia({ name: "team-projects" })
   .use(authPlugin)
-  .get("/api/v2/team-projects", async ({ request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const url = new URL(request.url);
-    const projectId = url.searchParams.get("filter[project][id]");
-    if (!projectId) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "filter[project][id] is required" }] };
-    }
-    const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
-    if (!project) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkOrgPermission(user?.id, project.orgId, "member", tokenOrgId, tokenTeamId))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const list = await db.query.teamProjects.findMany({ where: eq(teamProjects.projectId, project.id) });
-    return { data: list.filter((tp): boolean => tp.organizationId === null || tp.organizationId === project.orgId).map((tp) => teamProjectResource(tp)) };
-  })
-  .post("/api/v2/team-projects", async ({ body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const parsed = parseTeamProjectCreate(body);
-    if ("failure" in parsed) {
-      (set as { status: number }).status = parsed.failure.status;
-      return parsed.failure.body;
-    }
+  .get(
+    "/api/v2/team-projects",
+    async ({ request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const url = new URL(request.url);
+      const projectId = url.searchParams.get("filter[project][id]");
+      if (!projectId) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [{ status: "422", title: "Unprocessable Entity", detail: "filter[project][id] is required" }],
+        };
+      }
+      const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
+      if (!project) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (!(await checkOrgPermission(user?.id, project.orgId, "member", tokenOrgId, tokenTeamId))) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const list = await db.query.teamProjects.findMany({ where: eq(teamProjects.projectId, project.id) });
+      return {
+        data: list
+          .filter((tp): boolean => tp.organizationId === null || tp.organizationId === project.orgId)
+          .map((tp) => teamProjectResource(tp)),
+      };
+    },
+  )
+  .post(
+    "/api/v2/team-projects",
+    async ({ body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const parsed = parseTeamProjectCreate(body);
+      if ("failure" in parsed) {
+        (set as { status: number }).status = parsed.failure.status;
+        return parsed.failure.body;
+      }
 
-    const [team, project] = await Promise.all([
-      db.query.teams.findFirst({ where: eq(teams.id, parsed.teamId) }),
-      db.query.projects.findFirst({ where: eq(projects.id, parsed.projectId) }),
-    ]);
+      const [team, project] = await Promise.all([
+        db.query.teams.findFirst({ where: eq(teams.id, parsed.teamId) }),
+        db.query.projects.findFirst({ where: eq(projects.id, parsed.projectId) }),
+      ]);
 
-    if (!team || !project) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (team.orgId !== project.orgId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "team and project must belong to the same organization" }] }; }
-    if (!(await checkOrgPermission(user?.id, project.orgId, "owner", tokenOrgId, tokenTeamId))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
+      if (!team || !project) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (team.orgId !== project.orgId) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "team and project must belong to the same organization",
+            },
+          ],
+        };
+      }
+      if (!(await checkOrgPermission(user?.id, project.orgId, "owner", tokenOrgId, tokenTeamId))) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
 
-    const resolved = resolveTeamProjectAccess(parsed.attributes);
-    if ("failure" in resolved) {
-      (set as { status: number }).status = resolved.failure.status;
-      return resolved.failure.body;
-    }
+      const resolved = resolveTeamProjectAccess(parsed.attributes);
+      if ("failure" in resolved) {
+        (set as { status: number }).status = resolved.failure.status;
+        return resolved.failure.body;
+      }
 
-    return findOrCreateTeamProject(team, project, resolved.access, resolved.customAccess, set);
-  })
-  .get("/api/v2/team-projects/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const tp = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, params["id"] ?? "") });
-    if (!tp) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const [project, team] = await Promise.all([
-      db.query.projects.findFirst({ where: eq(projects.id, tp.projectId) }),
-      db.query.teams.findFirst({ where: eq(teams.id, tp.teamId) }),
-    ]);
-    if (!project || team?.orgId !== project.orgId || (tp.organizationId !== null && tp.organizationId !== project.orgId) || !(await checkOrgPermission(user?.id, project.orgId, "member", tokenOrgId, tokenTeamId))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    return { data: teamProjectResource(tp) };
-  })
-  .patch("/api/v2/team-projects/:id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const tp = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, params["id"] ?? "") });
-    if (!tp) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const [project, team] = await Promise.all([
-      db.query.projects.findFirst({ where: eq(projects.id, tp.projectId) }),
-      db.query.teams.findFirst({ where: eq(teams.id, tp.teamId) }),
-    ]);
-    if (!project || team?.orgId !== project.orgId || (tp.organizationId !== null && tp.organizationId !== project.orgId) || !(await checkOrgPermission(user?.id, project.orgId, "owner", tokenOrgId, tokenTeamId))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const parsed = parseTeamProjectCreate(body);
-    if ("failure" in parsed) {
-      (set as { status: number }).status = parsed.failure.status;
-      return parsed.failure.body;
-    }
-    const resolved = resolvePatchAccess(tp, parsed.attributes);
-    if ("failure" in resolved) {
-      (set as { status: number }).status = resolved.failure.status;
-      return resolved.failure.body;
-    }
+      return findOrCreateTeamProject(team, project, resolved.access, resolved.customAccess, set);
+    },
+  )
+  .get(
+    "/api/v2/team-projects/:id",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const tp = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, params["id"] ?? "") });
+      if (!tp) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const [project, team] = await Promise.all([
+        db.query.projects.findFirst({ where: eq(projects.id, tp.projectId) }),
+        db.query.teams.findFirst({ where: eq(teams.id, tp.teamId) }),
+      ]);
+      if (
+        !project ||
+        team?.orgId !== project.orgId ||
+        (tp.organizationId !== null && tp.organizationId !== project.orgId) ||
+        !(await checkOrgPermission(user?.id, project.orgId, "member", tokenOrgId, tokenTeamId))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: teamProjectResource(tp) };
+    },
+  )
+  .patch(
+    "/api/v2/team-projects/:id",
+    async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const tp = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, params["id"] ?? "") });
+      if (!tp) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const [project, team] = await Promise.all([
+        db.query.projects.findFirst({ where: eq(projects.id, tp.projectId) }),
+        db.query.teams.findFirst({ where: eq(teams.id, tp.teamId) }),
+      ]);
+      if (
+        !project ||
+        team?.orgId !== project.orgId ||
+        (tp.organizationId !== null && tp.organizationId !== project.orgId) ||
+        !(await checkOrgPermission(user?.id, project.orgId, "owner", tokenOrgId, tokenTeamId))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const parsed = parseTeamProjectCreate(body);
+      if ("failure" in parsed) {
+        (set as { status: number }).status = parsed.failure.status;
+        return parsed.failure.body;
+      }
+      const resolved = resolvePatchAccess(tp, parsed.attributes);
+      if ("failure" in resolved) {
+        (set as { status: number }).status = resolved.failure.status;
+        return resolved.failure.body;
+      }
 
-    const updates = teamProjectPatchUpdates(resolved);
+      const updates = teamProjectPatchUpdates(resolved);
 
-    await db.update(teamProjects).set(updates).where(eq(teamProjects.id, tp.id));
-    const updated = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, tp.id) });
-    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
-    return { data: teamProjectResource(updated) };
-  })
-  .delete("/api/v2/team-projects/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const tp = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, params["id"] ?? "") });
-    if (!tp) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const [project, team] = await Promise.all([
-      db.query.projects.findFirst({ where: eq(projects.id, tp.projectId) }),
-      db.query.teams.findFirst({ where: eq(teams.id, tp.teamId) }),
-    ]);
-    if (!project || team?.orgId !== project.orgId || (tp.organizationId !== null && tp.organizationId !== project.orgId) || !(await checkOrgPermission(user?.id, project.orgId, "owner", tokenOrgId, tokenTeamId))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    await db.delete(teamProjects).where(eq(teamProjects.id, tp.id));
-    (set as { status: number }).status = 204;
-    return {};
-  });
+      await db.update(teamProjects).set(updates).where(eq(teamProjects.id, tp.id));
+      const updated = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, tp.id) });
+      if (updated === undefined) {
+        (set as { status: number }).status = 500;
+        return { errors: [{ status: "500", title: "Internal Server Error" }] };
+      }
+      return { data: teamProjectResource(updated) };
+    },
+  )
+  .delete(
+    "/api/v2/team-projects/:id",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const tp = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, params["id"] ?? "") });
+      if (!tp) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const [project, team] = await Promise.all([
+        db.query.projects.findFirst({ where: eq(projects.id, tp.projectId) }),
+        db.query.teams.findFirst({ where: eq(teams.id, tp.teamId) }),
+      ]);
+      if (
+        !project ||
+        team?.orgId !== project.orgId ||
+        (tp.organizationId !== null && tp.organizationId !== project.orgId) ||
+        !(await checkOrgPermission(user?.id, project.orgId, "owner", tokenOrgId, tokenTeamId))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await db.delete(teamProjects).where(eq(teamProjects.id, tp.id));
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  );

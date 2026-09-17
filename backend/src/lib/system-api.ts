@@ -18,7 +18,8 @@ export async function createSystemApiToken(
 ): Promise<{ token: string; record: typeof systemApiTokens.$inferSelect }> {
   const normalizedDescription = description.trim();
   if (normalizedDescription === "") throw new Error("description is required");
-  if (!Number.isFinite(ttlHours) || ttlHours <= 0 || ttlHours > 8760) throw new Error("ttl must be between 1 and 8760 hours");
+  if (!Number.isFinite(ttlHours) || ttlHours <= 0 || ttlHours > 8760)
+    throw new Error("ttl must be between 1 and 8760 hours");
   const token = `tfe-system-${randomBytes(32).toString("base64url")}`;
   const values = {
     id: newResourceId("system-token"),
@@ -32,7 +33,9 @@ export async function createSystemApiToken(
   return { token, record };
 }
 
-export function systemTokenResource(record: DeepReadonly<typeof systemApiTokens.$inferSelect>): Record<string, unknown> {
+export function systemTokenResource(
+  record: DeepReadonly<typeof systemApiTokens.$inferSelect>,
+): Record<string, unknown> {
   return {
     id: record.id,
     type: "system-api-tokens",
@@ -47,16 +50,24 @@ export function systemTokenResource(record: DeepReadonly<typeof systemApiTokens.
 }
 
 export function systemAuthError(
-  context: Readonly<{ systemToken?: unknown; token?: unknown; user?: unknown; orgId?: unknown; teamId?: unknown; run?: unknown }>,
+  context: Readonly<{
+    systemToken?: unknown;
+    token?: unknown;
+    user?: unknown;
+    orgId?: unknown;
+    teamId?: unknown;
+    run?: unknown;
+  }>,
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Elysia set object is mutated to set the HTTP status by design
   set: { status?: number; headers: Record<string, string | number> },
 ): Record<string, unknown> | undefined {
   if (context.systemToken !== undefined && context.systemToken !== null) return undefined;
-  const hasApplicationCredential = context.token !== null && context.token !== undefined
-    || context.user !== null && context.user !== undefined
-    || context.orgId !== null && context.orgId !== undefined
-    || context.teamId !== null && context.teamId !== undefined
-    || context.run !== null && context.run !== undefined;
+  const hasApplicationCredential =
+    (context.token !== null && context.token !== undefined) ||
+    (context.user !== null && context.user !== undefined) ||
+    (context.orgId !== null && context.orgId !== undefined) ||
+    (context.teamId !== null && context.teamId !== undefined) ||
+    (context.run !== null && context.run !== undefined);
   set.status = hasApplicationCredential ? 404 : 401;
   return { errors: [{ status: String(set.status), title: hasApplicationCredential ? "Not Found" : "Unauthorized" }] };
 }

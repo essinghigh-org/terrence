@@ -4,13 +4,14 @@ export function normalizeGithubApiBase(raw: string, requireHttps = false): strin
   try {
     const url = new URL(raw);
     if (
-      (url.protocol !== "https:" && url.protocol !== "http:")
-      || (requireHttps && url.protocol !== "https:")
-      || url.username !== ""
-      || url.password !== ""
-      || url.search !== ""
-      || url.hash !== ""
-    ) return undefined;
+      (url.protocol !== "https:" && url.protocol !== "http:") ||
+      (requireHttps && url.protocol !== "https:") ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.search !== "" ||
+      url.hash !== ""
+    )
+      return undefined;
     return url.toString().replace(/\/$/u, "");
   } catch {
     return undefined;

@@ -27,7 +27,7 @@ export type PasswordPolicyRules = Readonly<{
   requireDigit: boolean;
   requireSymbol: boolean;
   disallowUsername: boolean;
-}>
+}>;
 
 export function loadPasswordPolicy(): PasswordPolicyRules {
   return {
@@ -43,7 +43,7 @@ export function loadPasswordPolicy(): PasswordPolicyRules {
 export type PasswordCheckResult = {
   ok: boolean;
   errors: string[];
-}
+};
 
 /**
  * Validate a candidate password against the configured policy. `username` is

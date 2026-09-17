@@ -24,7 +24,7 @@ describe("the reference format API Authentication (Local Auth MVP)", () => {
             },
           },
         }),
-      })
+      }),
     );
 
     expect(response.status).toBe(201);
@@ -49,7 +49,7 @@ describe("the reference format API Authentication (Local Auth MVP)", () => {
         body: JSON.stringify({
           data: { type: "users", attributes: { username: dupUser, password: "securepassword" } },
         }),
-      })
+      }),
     );
     expect(firstRes.status).toBe(201);
     const firstData = await firstRes.json();
@@ -61,7 +61,7 @@ describe("the reference format API Authentication (Local Auth MVP)", () => {
         body: JSON.stringify({
           data: { type: "users", attributes: { username: dupUser, password: "anotherpassword" } },
         }),
-      })
+      }),
     );
     expect(secondRes.status).toBe(201);
     const secondData = await secondRes.json();
@@ -106,7 +106,7 @@ describe("the reference format API Authentication (Local Auth MVP)", () => {
             },
           },
         }),
-      })
+      }),
     );
 
     expect(response.status).toBe(401);
@@ -127,7 +127,7 @@ describe("the reference format API Authentication (Local Auth MVP)", () => {
             },
           },
         }),
-      })
+      }),
     );
 
     expect(response.status).toBe(200);
@@ -150,11 +150,13 @@ describe("the reference format API Authentication (Local Auth MVP)", () => {
     const passwordHash = await Bun.password.hash(blockedPassword, { algorithm: "bcrypt", cost: 10 });
     await db.insert(users).values({ id: blockedId, username: blockedId, passwordHash, isSuspended: true });
     try {
-      const response = await app.handle(new Request("http://localhost/api/v2/users/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/vnd.api+json" },
-        body: JSON.stringify({ data: { attributes: { username: blockedId, password: blockedPassword } } }),
-      }));
+      const response = await app.handle(
+        new Request("http://localhost/api/v2/users/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/vnd.api+json" },
+          body: JSON.stringify({ data: { attributes: { username: blockedId, password: blockedPassword } } }),
+        }),
+      );
       expect(response.status).toBe(401);
       expect((await db.query.apiTokens.findMany({ where: eq(apiTokens.userId, blockedId) })).length).toBe(0);
     } finally {

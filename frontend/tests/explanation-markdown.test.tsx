@@ -4,7 +4,9 @@ import { MarkdownContent } from "../src/components/MarkdownContent";
 
 test("renders explanation markdown without injecting HTML", () => {
   const view = render(
-    <MarkdownContent markdown={"**Destroying:** `repo-a`\n\n- **Risk:** `secret`\n- <script>alert(1)</script>\n\n~~old~~"} />,
+    <MarkdownContent
+      markdown={"**Destroying:** `repo-a`\n\n- **Risk:** `secret`\n- <script>alert(1)</script>\n\n~~old~~"}
+    />,
   );
 
   expect(view.getByText("Destroying:", { selector: "strong" })).toBeTruthy();

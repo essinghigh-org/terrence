@@ -27,13 +27,27 @@ describe("strict database configuration", (): void => {
       writeFileSync(bootConfigPath(directory), JSON.stringify({ database: { driver: "sqlite" } }));
       expect(resolveDatabaseConfigWithOrigin({}, directory).origin).toBe("persisted");
       expect(resolveDatabaseConfigWithOrigin({ DATABASE_URL: ":memory:" }, directory).origin).toBe("environment");
-    } finally { rmSync(directory, { recursive: true, force: true }); }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
   it("rejects invalid explicit URLs rather than falling back to storage defaults", (): void => {
-    for (const url of ["", " ", "file:", "file:/tmp/invalid\u0000.db", "postgres://user:private-marker@", "mysql://user:private-marker@example.com/db"]) {
-      throws((): void => { resolveDatabaseConfig({ DATABASE_URL: url }, testDir); }, (error: unknown): boolean => {
-        return error instanceof BootConfigError && !error.message.includes("private-marker");
-      });
+    for (const url of [
+      "",
+      " ",
+      "file:",
+      "file:/tmp/invalid\u0000.db",
+      "postgres://user:private-marker@",
+      "mysql://user:private-marker@example.com/db",
+    ]) {
+      throws(
+        (): void => {
+          resolveDatabaseConfig({ DATABASE_URL: url }, testDir);
+        },
+        (error: unknown): boolean => {
+          return error instanceof BootConfigError && !error.message.includes("private-marker");
+        },
+      );
     }
   });
 
@@ -44,9 +58,14 @@ describe("strict database configuration", (): void => {
       { driver: "sqlite", urll: "private-marker" },
       { driver: "private-marker" },
     ]) {
-      throws((): void => { parseBootConfig({ database }, "test"); }, (error: unknown): boolean => {
-        return error instanceof BootConfigError && !error.message.includes("private-marker");
-      });
+      throws(
+        (): void => {
+          parseBootConfig({ database }, "test");
+        },
+        (error: unknown): boolean => {
+          return error instanceof BootConfigError && !error.message.includes("private-marker");
+        },
+      );
     }
   });
 });
@@ -98,60 +117,68 @@ describe("resolveDatabaseConfig", () => {
   });
 
   it("rejects a postgres DATABASE_URL without a host", () => {
-    expect(() => resolveDatabaseConfig(env({ DATABASE_URL: "postgres:///nodb" }), testDir))
-      .toThrow(BootConfigError);
+    expect(() => resolveDatabaseConfig(env({ DATABASE_URL: "postgres:///nodb" }), testDir)).toThrow(BootConfigError);
   });
 
   it("rejects a non-postgres scheme on a postgres-looking URL", () => {
-    expect(() => resolveDatabaseConfig(env({ DATABASE_URL: "mysql://127.0.0.1/db" }), testDir))
-      .toThrow(BootConfigError);
+    expect(() => resolveDatabaseConfig(env({ DATABASE_URL: "mysql://127.0.0.1/db" }), testDir)).toThrow(
+      BootConfigError,
+    );
   });
 
   it("rejects an unsupported scheme in DATABASE_URL", () => {
-    expect(() => resolveDatabaseConfig(env({ DATABASE_URL: "mongodb://127.0.0.1/db" }), testDir))
-      .toThrow(/unsupported scheme/);
+    expect(() => resolveDatabaseConfig(env({ DATABASE_URL: "mongodb://127.0.0.1/db" }), testDir)).toThrow(
+      /unsupported scheme/,
+    );
   });
 
   it("reads the boot config file when DATABASE_URL is unset", () => {
-    writeFile("terrence.json", JSON.stringify({
-      database: { driver: "postgres", url: "postgres://db.internal:5432/terrence" },
-    }));
+    writeFile(
+      "terrence.json",
+      JSON.stringify({
+        database: { driver: "postgres", url: "postgres://db.internal:5432/terrence" },
+      }),
+    );
     const resolved = resolveDatabaseConfig(env(), testDir);
     expect(resolved).toEqual({ driver: "postgres", url: "postgres://db.internal:5432/terrence" });
   });
 
   it("resolves urlSecret from the storage secret store", async () => {
     await withStorageDir(() => writeDatabaseUrlSecret(testDir, "database-url", "postgres://s:***@h:5432/db"));
-    writeFile("terrence.json", JSON.stringify({
-      database: { driver: "postgres", urlSecret: "database-url" },
-    }));
+    writeFile(
+      "terrence.json",
+      JSON.stringify({
+        database: { driver: "postgres", urlSecret: "database-url" },
+      }),
+    );
     const resolved = resolveDatabaseConfig(env(), testDir);
     expect(resolved).toEqual({ driver: "postgres", url: "postgres://s:***@h:5432/db" });
   });
 
   it("fails fast when the urlSecret blob is missing", () => {
-    writeFile("terrence.json", JSON.stringify({
-      database: { driver: "postgres", urlSecret: "no-such-secret" },
-    }));
-    expect(() => resolveDatabaseConfig(env(), testDir))
-      .toThrow(/Missing storage secret "no-such-secret"/);
+    writeFile(
+      "terrence.json",
+      JSON.stringify({
+        database: { driver: "postgres", urlSecret: "no-such-secret" },
+      }),
+    );
+    expect(() => resolveDatabaseConfig(env(), testDir)).toThrow(/Missing storage secret "no-such-secret"/);
   });
 
   it("fails fast when the urlSecret blob cannot be decrypted", () => {
-    writeFile("terrence.json", JSON.stringify({
-      database: { driver: "postgres", urlSecret: "broken" },
-    }));
+    writeFile(
+      "terrence.json",
+      JSON.stringify({
+        database: { driver: "postgres", urlSecret: "broken" },
+      }),
+    );
     mkdirSync(join(testDir, "secrets"), { recursive: true });
     writeFileSync(join(testDir, "secrets", "broken"), "enc:v1:not-a-valid-blob");
-    expect(() => resolveDatabaseConfig(env(), testDir))
-      .toThrow(/Cannot decrypt storage secret "broken"/);
+    expect(() => resolveDatabaseConfig(env(), testDir)).toThrow(/Cannot decrypt storage secret "broken"/);
   });
 
   it("lets DATABASE_URL override the config file", () => {
-    const resolved = resolveDatabaseConfig(
-      env({ DATABASE_URL: "file:/tmp/env-wins.db" }),
-      testDir,
-    );
+    const resolved = resolveDatabaseConfig(env({ DATABASE_URL: "file:/tmp/env-wins.db" }), testDir);
     expect(resolved).toEqual({ driver: "sqlite", url: "file:/tmp/env-wins.db" });
   });
 
@@ -173,40 +200,33 @@ describe("resolveDatabaseConfig", () => {
 
 describe("parseBootConfig", () => {
   it("accepts urlSecret as a secret-store reference (not an inline URL)", () => {
-    const config = parseBootConfig(
-      { database: { driver: "postgres", urlSecret: "database-url" } },
-      "test",
-    );
+    const config = parseBootConfig({ database: { driver: "postgres", urlSecret: "database-url" } }, "test");
     expect(config.database?.urlSecret).toBe("database-url");
     expect(config.database?.url).toBeUndefined();
   });
 
   it("rejects an inline URL in urlSecret", () => {
-    expect(() => parseBootConfig(
-      { database: { driver: "postgres", urlSecret: "postgres://s:p@h/db" } },
-      "test",
-    )).toThrow(/secret name/);
+    expect(() =>
+      parseBootConfig({ database: { driver: "postgres", urlSecret: "postgres://s:p@h/db" } }, "test"),
+    ).toThrow(/secret name/);
   });
 
   it("rejects url and urlSecret together", () => {
-    expect(() => parseBootConfig(
-      { database: { driver: "postgres", url: "postgres://h/db", urlSecret: "database-url" } },
-      "test",
-    )).toThrow(/mutually exclusive/);
+    expect(() =>
+      parseBootConfig({ database: { driver: "postgres", url: "postgres://h/db", urlSecret: "database-url" } }, "test"),
+    ).toThrow(/mutually exclusive/);
   });
 
   it("rejects urlSecret on the sqlite driver", () => {
-    expect(() => parseBootConfig(
-      { database: { driver: "sqlite", urlSecret: "database-url" } },
-      "test",
-    )).toThrow(/only valid for the postgres driver/);
+    expect(() => parseBootConfig({ database: { driver: "sqlite", urlSecret: "database-url" } }, "test")).toThrow(
+      /only valid for the postgres driver/,
+    );
   });
 
   it("rejects path-traversal secret names", () => {
-    expect(() => parseBootConfig(
-      { database: { driver: "postgres", urlSecret: "../.encryption-key" } },
-      "test",
-    )).toThrow(/secret name/);
+    expect(() =>
+      parseBootConfig({ database: { driver: "postgres", urlSecret: "../.encryption-key" } }, "test"),
+    ).toThrow(/secret name/);
   });
 
   it("accepts an empty file (no database key)", () => {
@@ -214,10 +234,9 @@ describe("parseBootConfig", () => {
   });
 
   it("rejects an http URL for postgres", () => {
-    expect(() => parseBootConfig(
-      { database: { driver: "postgres", url: "http://host/db" } },
-      "test",
-    )).toThrow(/postgres:\/\//);
+    expect(() => parseBootConfig({ database: { driver: "postgres", url: "http://host/db" } }, "test")).toThrow(
+      /postgres:\/\//,
+    );
   });
 
   it("preserves unknown top-level keys", () => {
@@ -243,8 +262,7 @@ describe("resolveStorageSecret", () => {
   });
 
   it("rejects a missing secret with a clear error", () => {
-    expect(() => resolveStorageSecret(testDir, "missing-secret"))
-      .toThrow(/Missing storage secret "missing-secret"/);
+    expect(() => resolveStorageSecret(testDir, "missing-secret")).toThrow(/Missing storage secret "missing-secret"/);
   });
 
   it("rejects an empty secret file", () => {
@@ -292,10 +310,12 @@ describe("writeBootDatabaseConfig", () => {
   });
 
   it("rejects an invalid driver on write", () => {
-    expect(() => { writeBootDatabaseConfig(testDir, { driver: "sqlite", url: "file:/x.db" }); })
-      .not.toThrow();
-    expect(() => { writeBootDatabaseConfig(testDir, { driver: "mysql" as never, url: "x" }); })
-      .toThrow(BootConfigError);
+    expect(() => {
+      writeBootDatabaseConfig(testDir, { driver: "sqlite", url: "file:/x.db" });
+    }).not.toThrow();
+    expect(() => {
+      writeBootDatabaseConfig(testDir, { driver: "mysql" as never, url: "x" });
+    }).toThrow(BootConfigError);
   });
 
   it("leaves no leftover .tmp file", () => {

@@ -22,33 +22,55 @@ describe("7.4 Authentication test matrix", () => {
       new Request("http://localhost/api/v2/users", {
         method: "POST",
         headers: { "Content-Type": "application/vnd.api+json" },
-        body: JSON.stringify({ data: { type: "users", attributes: { username: `authmx_${suffix}`, password: "Test12345!" } } }),
+        body: JSON.stringify({
+          data: { type: "users", attributes: { username: `authmx_${suffix}`, password: "Test12345!" } },
+        }),
       }),
     );
-    const body = await res.json() as { data: { id: string } };
+    const body = (await res.json()) as { data: { id: string } };
     userId = body.data.id;
 
     rawHashedToken = opaqueToken(`user`);
     hashedToken = hashAuthenticationToken(rawHashedToken);
-    await db.insert(apiTokens).values({ id: `authmx-hash-${suffix}`, token: hashedToken, userId, description: "auth-matrix hashed", createdAt: Date.now(), expiresAt: null } as never);
+    await db.insert(apiTokens).values({
+      id: `authmx-hash-${suffix}`,
+      token: hashedToken,
+      userId,
+      description: "auth-matrix hashed",
+      createdAt: Date.now(),
+      expiresAt: null,
+    } as never);
 
     legacyTokenPlain = `legacy-${suffix}-${randomBytes(8).toString("hex")}`;
     legacyTokenId = `authmx-legacy-${suffix}`;
-    await db.insert(apiTokens).values({ id: legacyTokenId, token: legacyTokenPlain, userId, description: "auth-matrix legacy", createdAt: Date.now(), expiresAt: null } as never);
+    await db.insert(apiTokens).values({
+      id: legacyTokenId,
+      token: legacyTokenPlain,
+      userId,
+      description: "auth-matrix legacy",
+      createdAt: Date.now(),
+      expiresAt: null,
+    } as never);
   });
 
   it("481 legacy UUID token still authenticates (and upgrades to hash)", async () => {
-    const res = await app.handle(new Request(`http://localhost${AUTHED_ROUTE}`, { headers: auth(legacyTokenPlain) as never }));
+    const res = await app.handle(
+      new Request(`http://localhost${AUTHED_ROUTE}`, { headers: auth(legacyTokenPlain) as never }),
+    );
     expect(res.status).toBe(401);
   });
 
   it("482 new (hashed) token format authenticates", async () => {
-    const res = await app.handle(new Request(`http://localhost${AUTHED_ROUTE}`, { headers: auth(rawHashedToken) as never }));
+    const res = await app.handle(
+      new Request(`http://localhost${AUTHED_ROUTE}`, { headers: auth(rawHashedToken) as never }),
+    );
     expect(res.status).not.toBe(401);
   });
 
   it("483 malformed version marker (unknown prefix) rejected", async () => {
-    const res = await app.handle(new Request(`http://localhost${AUTHED_ROUTE}`, { headers: auth("not-a-real-prefix-xyz123") as never }));
+    const res = await app.handle(
+      new Request(`http://localhost${AUTHED_ROUTE}`, { headers: auth("not-a-real-prefix-xyz123") as never }),
+    );
     expect(res.status).toBe(401);
   });
 
@@ -62,7 +84,14 @@ describe("7.4 Authentication test matrix", () => {
     const raw = opaqueToken("user");
     const hash = hashAuthenticationToken(raw);
     const id = `authmx-exp-${suffix}`;
-    await db.insert(apiTokens).values({ id, token: hash, userId, description: "expired", createdAt: Date.now(), expiresAt: Date.now() - 1000 } as never);
+    await db.insert(apiTokens).values({
+      id,
+      token: hash,
+      userId,
+      description: "expired",
+      createdAt: Date.now(),
+      expiresAt: Date.now() - 1000,
+    } as never);
     const res = await app.handle(new Request(`http://localhost${AUTHED_ROUTE}`, { headers: auth(raw) as never }));
     expect(res.status).toBe(401);
   });
@@ -71,9 +100,13 @@ describe("7.4 Authentication test matrix", () => {
     const raw = opaqueToken("user");
     const hash = hashAuthenticationToken(raw);
     const id = `authmx-del-${suffix}`;
-    await db.insert(apiTokens).values({ id, token: hash, userId, description: "to-delete", createdAt: Date.now(), expiresAt: null } as never);
+    await db
+      .insert(apiTokens)
+      .values({ id, token: hash, userId, description: "to-delete", createdAt: Date.now(), expiresAt: null } as never);
     // Valid first
-    expect((await app.handle(new Request(`http://localhost${AUTHED_ROUTE}`, { headers: auth(raw) as never }))).status).not.toBe(401);
+    expect(
+      (await app.handle(new Request(`http://localhost${AUTHED_ROUTE}`, { headers: auth(raw) as never }))).status,
+    ).not.toBe(401);
     // Delete then invalid
     await db.delete(apiTokens).where(eq(apiTokens.id, id));
     const res2 = await app.handle(new Request(`http://localhost${AUTHED_ROUTE}`, { headers: auth(raw) as never }));

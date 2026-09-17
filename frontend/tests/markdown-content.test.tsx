@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
 import { render } from "@testing-library/react";
-import { MARKDOWN_PARSER_LIMITS, MarkdownContent, MarkdownParseError, parseMarkdown } from "../src/components/MarkdownContent";
+import {
+  MARKDOWN_PARSER_LIMITS,
+  MarkdownContent,
+  MarkdownParseError,
+  parseMarkdown,
+} from "../src/components/MarkdownContent";
 
 test("renders tables from pipe-delimited markdown", () => {
   const view = render(
@@ -48,7 +53,9 @@ test("renders h4 headings", () => {
 
 test("renders bare-relative doc links as anchors and blocks dangerous schemes", () => {
   const view = render(
-    <MarkdownContent markdown={"See [Runs](runs) or [the overview](./overview). [Bad](javascript:alert) stays text."} />,
+    <MarkdownContent
+      markdown={"See [Runs](runs) or [the overview](./overview). [Bad](javascript:alert) stays text."}
+    />,
   );
 
   const runs = view.getByText("Runs");
@@ -60,7 +67,6 @@ test("renders bare-relative doc links as anchors and blocks dangerous schemes", 
   expect(view.container.textContent).toContain("Bad");
   expect(view.container.querySelector("a[href^='javascript']")).toBeNull();
 });
-
 
 test("renders malformed and streamed table prefixes without hanging", () => {
   const malformed = "| not followed by a table separator";
@@ -74,12 +80,11 @@ test("renders malformed and streamed table prefixes without hanging", () => {
 });
 
 test("every deterministic truncated prefix parses or returns a typed failure", () => {
-  const source = "# heading\n\n```hcl\nvariable \\\"x\\\" {\n  type = string\n}\n```\n\n- item";
+  const source = '# heading\n\n```hcl\nvariable \\"x\\" {\n  type = string\n}\n```\n\n- item';
   for (let end = 0; end <= source.length; end += 1) {
     expect(() => parseMarkdown(source.slice(0, end))).not.toThrow();
   }
-  expect(() => parseMarkdown("x".repeat(MARKDOWN_PARSER_LIMITS.maxSourceCharacters + 1)))
-    .toThrow(MarkdownParseError);
+  expect(() => parseMarkdown("x".repeat(MARKDOWN_PARSER_LIMITS.maxSourceCharacters + 1))).toThrow(MarkdownParseError);
   const manyBlocks = Array.from({ length: MARKDOWN_PARSER_LIMITS.maxBlocks + 1 }, () => "x").join("\n\n");
   expect(() => parseMarkdown(manyBlocks)).toThrow(MarkdownParseError);
   const view = render(<MarkdownContent markdown={"x".repeat(MARKDOWN_PARSER_LIMITS.maxSourceCharacters + 1)} />);
@@ -88,7 +93,7 @@ test("every deterministic truncated prefix parses or returns a typed failure", (
 
 test("seeded markdown prefixes preserve parser progress and output bounds", () => {
   const seeds = [
-    "# heading\n\n```hcl\nvariable \"x\" {\n  type = string\n}\n```\n\n- item",
+    '# heading\n\n```hcl\nvariable "x" {\n  type = string\n}\n```\n\n- item',
     "| name | value |\n|---|---|\n| one | **two** |\n> quote\n",
   ];
   let randomState = 0x753;

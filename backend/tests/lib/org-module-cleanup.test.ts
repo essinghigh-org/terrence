@@ -30,7 +30,9 @@ describe("deleteOrganization module archives", (): void => {
     archivePath = join(root, "module.tar.gz");
     await writeFile(archivePath, "archive bytes");
     await db.insert(organizations).values({ id: orgId, name: orgId });
-    await db.insert(registryModules).values({ id: moduleId, orgId, namespace: orgId, name: "cleanup", provider: "aws" });
+    await db
+      .insert(registryModules)
+      .values({ id: moduleId, orgId, namespace: orgId, name: "cleanup", provider: "aws" });
     await db.insert(registryModuleVersions).values({ id: versionId, moduleId, version: "1.0.0", archivePath });
 
     await deleteOrganization(orgId);
@@ -38,6 +40,8 @@ describe("deleteOrganization module archives", (): void => {
     expect(await exists(archivePath)).toBe(false);
     expect(await db.query.organizations.findFirst({ where: eq(organizations.id, orgId) })).toBeUndefined();
     expect(await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) })).toBeUndefined();
-    expect(await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) })).toBeUndefined();
+    expect(
+      await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) }),
+    ).toBeUndefined();
   });
 });

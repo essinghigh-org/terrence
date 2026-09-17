@@ -17,7 +17,7 @@ describe("the reference format API v2 - Organizations", () => {
         body: JSON.stringify({
           data: { type: "users", attributes: { username, password: "securepassword" } },
         }),
-      })
+      }),
     );
     expect(res.status).toBe(201);
 
@@ -28,7 +28,7 @@ describe("the reference format API v2 - Organizations", () => {
         body: JSON.stringify({
           data: { attributes: { username, password: "securepassword" } },
         }),
-      })
+      }),
     );
     userToken = (await loginRes.json()).data.attributes.token;
   });
@@ -39,19 +39,19 @@ describe("the reference format API v2 - Organizations", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
-          data: { type: "organizations", attributes: { name: orgName, email: "admin@homelab.local" } }
-        })
-      })
+          data: { type: "organizations", attributes: { name: orgName, email: "admin@homelab.local" } },
+        }),
+      }),
     );
     expect(res.status).toBe(201);
     const data = await res.json();
     expect(data.data.attributes.name).toBe(orgName);
 
     const orgInDb = await db.query.organizations.findFirst({
-      where: eq(organizations.name, orgName)
+      where: eq(organizations.name, orgName),
     });
     expect(orgInDb).toBeDefined();
   });
@@ -59,11 +59,13 @@ describe("the reference format API v2 - Organizations", () => {
   it("keeps legacy reserved-name organizations editable", async () => {
     await db.update(organizations).set({ name: "docs" }).where(eq(organizations.name, orgName));
     try {
-      const res = await app.handle(new Request("http://localhost/api/v2/organizations/docs", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/vnd.api+json", Authorization: `Bearer ${userToken}` },
-        body: JSON.stringify({ data: { attributes: { name: "docs", email: "updated@example.com" } } }),
-      }));
+      const res = await app.handle(
+        new Request("http://localhost/api/v2/organizations/docs", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/vnd.api+json", Authorization: `Bearer ${userToken}` },
+          body: JSON.stringify({ data: { attributes: { name: "docs", email: "updated@example.com" } } }),
+        }),
+      );
       expect(res.status).toBe(200);
       expect((await res.json()).data.attributes.email).toBe("updated@example.com");
     } finally {
@@ -79,12 +81,12 @@ describe("the reference format API v2 - Organizations", () => {
           method: "POST",
           headers: {
             "Content-Type": "application/vnd.api+json",
-            "Authorization": `Bearer ${userToken}`
+            Authorization: `Bearer ${userToken}`,
           },
           body: JSON.stringify({
-            data: { type: "organizations", attributes: { name } }
-          })
-        })
+            data: { type: "organizations", attributes: { name } },
+          }),
+        }),
       );
       expect(res.status).toBe(422);
     }
@@ -95,12 +97,12 @@ describe("the reference format API v2 - Organizations", () => {
           method: "PATCH",
           headers: {
             "Content-Type": "application/vnd.api+json",
-            "Authorization": `Bearer ${userToken}`
+            Authorization: `Bearer ${userToken}`,
           },
           body: JSON.stringify({
-            data: { type: "organizations", attributes: { name } }
-          })
-        })
+            data: { type: "organizations", attributes: { name } },
+          }),
+        }),
       );
       expect(res.status).toBe(422);
     }
@@ -116,9 +118,9 @@ describe("the reference format API v2 - Organizations", () => {
       new Request(`http://localhost/api/v2/organizations/${orgName}`, {
         method: "GET",
         headers: {
-          "Authorization": `Bearer ${userToken}`
-        }
-      })
+          Authorization: `Bearer ${userToken}`,
+        },
+      }),
     );
     expect(res.status).toBe(200);
     const data = await res.json();
@@ -130,9 +132,9 @@ describe("the reference format API v2 - Organizations", () => {
       new Request("http://localhost/api/v2/organizations", {
         method: "GET",
         headers: {
-          "Authorization": `Bearer ${userToken}`
-        }
-      })
+          Authorization: `Bearer ${userToken}`,
+        },
+      }),
     );
     expect(res.status).toBe(200);
     const data = await res.json();

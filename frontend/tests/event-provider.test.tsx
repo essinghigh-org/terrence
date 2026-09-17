@@ -31,9 +31,13 @@ function createFakeStream(): {
 
 function Probe({ eventName, matchId }: Readonly<{ eventName: string; matchId: string }>): React.JSX.Element {
   const [hits, setHits] = useState(0);
-  useTerrenceEvent(eventName, (data): boolean => data["run-id"] === matchId, (): void => {
-    setHits((value): number => value + 1);
-  });
+  useTerrenceEvent(
+    eventName,
+    (data): boolean => data["run-id"] === matchId,
+    (): void => {
+      setHits((value): number => value + 1);
+    },
+  );
   return <span data-testid={`probe-${eventName}-${matchId}`}>{hits}</span>;
 }
 

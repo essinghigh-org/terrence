@@ -42,14 +42,16 @@ const gitlabPayload = {
     git_http_url: "https://gitlab.example/platform/infrastructure.git",
     web_url: "https://gitlab.example/platform/infrastructure",
   },
-  commits: [{
-    id: "1234567890abcdef1234567890abcdef12345678",
-    message: "Update infrastructure",
-    url: "https://gitlab.example/platform/infrastructure/-/commit/1234567890abcdef1234567890abcdef12345678",
-    added: ["main.tf"],
-    modified: [],
-    removed: [],
-  }],
+  commits: [
+    {
+      id: "1234567890abcdef1234567890abcdef12345678",
+      message: "Update infrastructure",
+      url: "https://gitlab.example/platform/infrastructure/-/commit/1234567890abcdef1234567890abcdef12345678",
+      added: ["main.tf"],
+      modified: [],
+      removed: [],
+    },
+  ],
 };
 
 const bitbucketPayload = {
@@ -61,21 +63,23 @@ const bitbucketPayload = {
     },
   },
   push: {
-    changes: [{
-      new: {
-        type: "branch",
-        name: "main",
-        target: {
-          hash: "abcdef1234567890abcdef1234567890abcdef12",
-          message: "Update infrastructure",
-          links: {
-            html: {
-              href: "https://bitbucket.org/platform/infrastructure/commits/abcdef1234567890abcdef1234567890abcdef12",
+    changes: [
+      {
+        new: {
+          type: "branch",
+          name: "main",
+          target: {
+            hash: "abcdef1234567890abcdef1234567890abcdef12",
+            message: "Update infrastructure",
+            links: {
+              html: {
+                href: "https://bitbucket.org/platform/infrastructure/commits/abcdef1234567890abcdef1234567890abcdef12",
+              },
             },
           },
         },
       },
-    }],
+    ],
   },
 };
 
@@ -219,15 +223,17 @@ describe("GitLab and Bitbucket webhooks", () => {
 
   test("validates GitLab token, parses a push, queues a run, and downloads configuration", async () => {
     const rawBody = JSON.stringify(gitlabPayload);
-    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/gitlab", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/vnd.api+json",
-        "x-gitlab-event": "Push Hook",
-        "x-gitlab-token": "gitlab-secret",
-      },
-      body: rawBody,
-    }));
+    const response = await app.handle(
+      new Request("http://127.0.0.1/api/webhooks/gitlab", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "x-gitlab-event": "Push Hook",
+          "x-gitlab-token": "gitlab-secret",
+        },
+        body: rawBody,
+      }),
+    );
     expect(response.status).toBe(200);
     const version = await waitForUploaded(gitlabWorkspaceId);
     const run = await db.query.runs.findFirst({ where: eq(runs.workspaceId, gitlabWorkspaceId) });
@@ -241,11 +247,12 @@ describe("GitLab and Bitbucket webhooks", () => {
       },
     });
     expect(run?.planOnly).toBe(false);
-    const runCreatedEvent = run === undefined
-      ? undefined
-      : await db.query.auditLogs.findFirst({
-          where: and(eq(auditLogs.resourceType, "runs"), eq(auditLogs.resourceId, run.id)),
-        });
+    const runCreatedEvent =
+      run === undefined
+        ? undefined
+        : await db.query.auditLogs.findFirst({
+            where: and(eq(auditLogs.resourceType, "runs"), eq(auditLogs.resourceId, run.id)),
+          });
     expect(runCreatedEvent?.details).toMatchObject({
       source: "gitlab",
       triggerReason: "push",
@@ -257,77 +264,106 @@ describe("GitLab and Bitbucket webhooks", () => {
     });
     if (run === undefined || version === undefined) throw new Error("Expected GitLab run and configuration version");
     await reportRunVcsStatus(run.id, "applied");
-    expect(requestBodies.some(({ body, url }): boolean =>
-      url.includes(`/statuses/${gitlabPayload.checkout_sha}`)
-      && new URLSearchParams(body).get("state") === "success")).toBe(true);
+    expect(
+      requestBodies.some(
+        ({ body, url }): boolean =>
+          url.includes(`/statuses/${gitlabPayload.checkout_sha}`) &&
+          new URLSearchParams(body).get("state") === "success",
+      ),
+    ).toBe(true);
 
-    await db.update(configurationVersions)
+    await db
+      .update(configurationVersions)
       .set({ archivePath: null, status: "archived" })
       .where(eq(configurationVersions.id, version.id));
     expect(await refetchConfigurationVersion(version.id)).toBe(true);
-    expect((await db.query.configurationVersions.findFirst({
-      where: eq(configurationVersions.id, version.id),
-    }))?.status).toBe("uploaded");
+    expect(
+      (
+        await db.query.configurationVersions.findFirst({
+          where: eq(configurationVersions.id, version.id),
+        })
+      )?.status,
+    ).toBe("uploaded");
   });
 
   test("prefers provider delivery UUID headers for durable identity", async () => {
     const gitlabBody = JSON.stringify(gitlabPayload);
-    const gitlabResponse = await app.handle(new Request("http://127.0.0.1/api/webhooks/gitlab", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/vnd.api+json",
-        "x-gitlab-event": "Push Hook",
-        "x-gitlab-token": "gitlab-secret",
-        "x-gitlab-event-uuid": gitlabHeaderDeliveryUuid,
-      },
-      body: gitlabBody,
-    }));
+    const gitlabResponse = await app.handle(
+      new Request("http://127.0.0.1/api/webhooks/gitlab", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "x-gitlab-event": "Push Hook",
+          "x-gitlab-token": "gitlab-secret",
+          "x-gitlab-event-uuid": gitlabHeaderDeliveryUuid,
+        },
+        body: gitlabBody,
+      }),
+    );
     expect(gitlabResponse.status).toBe(200);
-    expect((await db.query.githubWebhookDeliveries.findFirst({
-      where: eq(githubWebhookDeliveries.id, `gitlab:${gitlabHeaderDeliveryUuid}`),
-    }))?.status).toBe("processed");
+    expect(
+      (
+        await db.query.githubWebhookDeliveries.findFirst({
+          where: eq(githubWebhookDeliveries.id, `gitlab:${gitlabHeaderDeliveryUuid}`),
+        })
+      )?.status,
+    ).toBe("processed");
 
     const bitbucketBody = JSON.stringify(bitbucketPayload);
-    const bitbucketResponse = await app.handle(new Request("http://127.0.0.1/api/webhooks/bitbucket", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/vnd.api+json",
-        "x-event-key": "repo:push",
-        "x-hub-signature": bitbucketSignature(bitbucketBody),
-        "x-request-uuid": bitbucketHeaderDeliveryUuid,
-      },
-      body: bitbucketBody,
-    }));
+    const bitbucketResponse = await app.handle(
+      new Request("http://127.0.0.1/api/webhooks/bitbucket", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "x-event-key": "repo:push",
+          "x-hub-signature": bitbucketSignature(bitbucketBody),
+          "x-request-uuid": bitbucketHeaderDeliveryUuid,
+        },
+        body: bitbucketBody,
+      }),
+    );
     expect(bitbucketResponse.status).toBe(200);
-    expect((await db.query.githubWebhookDeliveries.findFirst({
-      where: eq(githubWebhookDeliveries.id, `bitbucket:${bitbucketHeaderDeliveryUuid}`),
-    }))?.status).toBe("processed");
+    expect(
+      (
+        await db.query.githubWebhookDeliveries.findFirst({
+          where: eq(githubWebhookDeliveries.id, `bitbucket:${bitbucketHeaderDeliveryUuid}`),
+        })
+      )?.status,
+    ).toBe("processed");
 
-    await db.delete(githubWebhookDeliveries).where(eq(githubWebhookDeliveries.id, `gitlab:${gitlabHeaderDeliveryUuid}`));
-    await db.delete(githubWebhookDeliveries).where(eq(githubWebhookDeliveries.id, `bitbucket:${bitbucketHeaderDeliveryUuid}`));
+    await db
+      .delete(githubWebhookDeliveries)
+      .where(eq(githubWebhookDeliveries.id, `gitlab:${gitlabHeaderDeliveryUuid}`));
+    await db
+      .delete(githubWebhookDeliveries)
+      .where(eq(githubWebhookDeliveries.id, `bitbucket:${bitbucketHeaderDeliveryUuid}`));
   });
 
   test("empty-commit GitLab push creates no run", async () => {
     const rawBody = JSON.stringify({
       ...gitlabPayload,
-      commits: [{
-        id: gitlabPayload.checkout_sha,
-        message: "trigger workflows",
-        url: `https://gitlab.example/platform/infrastructure/-/commit/${gitlabPayload.checkout_sha}`,
-        added: [],
-        modified: [],
-        removed: [],
-      }],
+      commits: [
+        {
+          id: gitlabPayload.checkout_sha,
+          message: "trigger workflows",
+          url: `https://gitlab.example/platform/infrastructure/-/commit/${gitlabPayload.checkout_sha}`,
+          added: [],
+          modified: [],
+          removed: [],
+        },
+      ],
     });
-    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/gitlab", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/vnd.api+json",
-        "x-gitlab-event": "Push Hook",
-        "x-gitlab-token": "gitlab-secret",
-      },
-      body: rawBody,
-    }));
+    const response = await app.handle(
+      new Request("http://127.0.0.1/api/webhooks/gitlab", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "x-gitlab-event": "Push Hook",
+          "x-gitlab-token": "gitlab-secret",
+        },
+        body: rawBody,
+      }),
+    );
     expect(response.status).toBe(200);
     const deadline = Date.now() + 1_000;
     while (Date.now() < deadline) {
@@ -335,36 +371,44 @@ describe("GitLab and Bitbucket webhooks", () => {
       if (runCount > 0) break;
       await Bun.sleep(25);
     }
-    expect((await db.query.runs.findMany({ where: eq(runs.workspaceId, gitlabWorkspaceId) }))).toHaveLength(0);
-    expect((await db.query.configurationVersions.findMany({ where: eq(configurationVersions.workspaceId, gitlabWorkspaceId) }))).toHaveLength(0);
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, gitlabWorkspaceId) })).toHaveLength(0);
+    expect(
+      await db.query.configurationVersions.findMany({
+        where: eq(configurationVersions.workspaceId, gitlabWorkspaceId),
+      }),
+    ).toHaveLength(0);
     expect(fetches).toHaveLength(0);
   });
 
   test("rejects an invalid GitLab token without creating a run", async () => {
-    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/gitlab", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/vnd.api+json",
-        "x-gitlab-event": "Push Hook",
-        "x-gitlab-token": "wrong",
-      },
-      body: JSON.stringify(gitlabPayload),
-    }));
+    const response = await app.handle(
+      new Request("http://127.0.0.1/api/webhooks/gitlab", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "x-gitlab-event": "Push Hook",
+          "x-gitlab-token": "wrong",
+        },
+        body: JSON.stringify(gitlabPayload),
+      }),
+    );
     expect(response.status).toBe(401);
     expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, gitlabWorkspaceId) })).toHaveLength(0);
   });
 
   test("validates Bitbucket HMAC, parses a push, queues a run, and downloads configuration", async () => {
     const rawBody = JSON.stringify(bitbucketPayload);
-    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/bitbucket", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/vnd.api+json",
-        "x-event-key": "repo:push",
-        "x-hub-signature": bitbucketSignature(rawBody),
-      },
-      body: rawBody,
-    }));
+    const response = await app.handle(
+      new Request("http://127.0.0.1/api/webhooks/bitbucket", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "x-event-key": "repo:push",
+          "x-hub-signature": bitbucketSignature(rawBody),
+        },
+        body: rawBody,
+      }),
+    );
     expect(response.status).toBe(200);
     const version = await waitForUploaded(bitbucketWorkspaceId);
     const run = await db.query.runs.findFirst({ where: eq(runs.workspaceId, bitbucketWorkspaceId) });
@@ -384,11 +428,13 @@ describe("GitLab and Bitbucket webhooks", () => {
     });
     if (run === undefined) throw new Error("Expected Bitbucket run");
     await reportRunVcsStatus(run.id, "errored");
-    expect(requestBodies.some(({ body, url }): boolean => {
-      if (!url.endsWith("/statuses/build")) return false;
-      const parsed = JSON.parse(body) as { state?: unknown };
-      return parsed.state === "FAILED";
-    })).toBe(true);
+    expect(
+      requestBodies.some(({ body, url }): boolean => {
+        if (!url.endsWith("/statuses/build")) return false;
+        const parsed = JSON.parse(body) as { state?: unknown };
+        return parsed.state === "FAILED";
+      }),
+    ).toBe(true);
   });
 
   test("processes valid branch and tag changes in a multi-ref push", async () => {
@@ -419,15 +465,17 @@ describe("GitLab and Bitbucket webhooks", () => {
       },
     };
     const rawBody = JSON.stringify(payload);
-    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/bitbucket", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/vnd.api+json",
-        "x-event-key": "repo:push",
-        "x-hub-signature": bitbucketSignature(rawBody),
-      },
-      body: rawBody,
-    }));
+    const response = await app.handle(
+      new Request("http://127.0.0.1/api/webhooks/bitbucket", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "x-event-key": "repo:push",
+          "x-hub-signature": bitbucketSignature(rawBody),
+        },
+        body: rawBody,
+      }),
+    );
     expect(response.status).toBe(200);
 
     const [mainVersion, releaseVersion, tagVersion] = await Promise.all([
@@ -444,15 +492,17 @@ describe("GitLab and Bitbucket webhooks", () => {
   });
 
   test("rejects an invalid Bitbucket signature without creating a run", async () => {
-    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/bitbucket", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/vnd.api+json",
-        "x-event-key": "repo:push",
-        "x-hub-signature": "sha256=wrong",
-      },
-      body: JSON.stringify(bitbucketPayload),
-    }));
+    const response = await app.handle(
+      new Request("http://127.0.0.1/api/webhooks/bitbucket", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "x-event-key": "repo:push",
+          "x-hub-signature": "sha256=wrong",
+        },
+        body: JSON.stringify(bitbucketPayload),
+      }),
+    );
     expect(response.status).toBe(401);
     expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, bitbucketWorkspaceId) })).toHaveLength(0);
   });
@@ -463,15 +513,17 @@ describe("GitLab and Bitbucket webhooks", () => {
   // computing the HMAC rejected every non-canonical delivery.
   test("verifies a Bitbucket signature over a pretty-printed (non-canonical) body", async () => {
     const rawBody = JSON.stringify(bitbucketPayload, null, 2);
-    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/bitbucket", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/vnd.api+json",
-        "x-event-key": "repo:push",
-        "x-hub-signature": bitbucketSignature(rawBody),
-      },
-      body: rawBody,
-    }));
+    const response = await app.handle(
+      new Request("http://127.0.0.1/api/webhooks/bitbucket", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "x-event-key": "repo:push",
+          "x-hub-signature": bitbucketSignature(rawBody),
+        },
+        body: rawBody,
+      }),
+    );
     expect(response.status).toBe(200);
     const version = await waitForUploaded(bitbucketWorkspaceId);
     expect(version).toMatchObject({
@@ -490,15 +542,17 @@ describe("GitLab and Bitbucket webhooks", () => {
     // bytes differ, so the signature MUST NOT verify.
     const prettyBody = JSON.stringify(bitbucketPayload, null, 2);
     const compactSignature = bitbucketSignature(JSON.stringify(bitbucketPayload));
-    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/bitbucket", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/vnd.api+json",
-        "x-event-key": "repo:push",
-        "x-hub-signature": compactSignature,
-      },
-      body: prettyBody,
-    }));
+    const response = await app.handle(
+      new Request("http://127.0.0.1/api/webhooks/bitbucket", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "x-event-key": "repo:push",
+          "x-hub-signature": compactSignature,
+        },
+        body: prettyBody,
+      }),
+    );
     expect(response.status).toBe(401);
     expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, bitbucketWorkspaceId) })).toHaveLength(0);
   });

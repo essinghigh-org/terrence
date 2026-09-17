@@ -43,17 +43,31 @@ function applyReference(state: ReferenceState, event: StateEvent, eventKey: stri
   const published = new Set(state.published);
   const activeExecutions = new Set(state.activeExecutions);
   const deletedExecutions = new Set(state.deletedExecutions);
-  if (event.kind === "reserve" && event.id !== undefined && event.serial !== undefined && event.serial > state.latestSerial) {
+  if (
+    event.kind === "reserve" &&
+    event.id !== undefined &&
+    event.serial !== undefined &&
+    event.serial > state.latestSerial
+  ) {
     reservations.set(event.id, event.serial);
     return { ...state, reservations, appliedEvents };
   }
-  if (event.kind === "commit" && event.id !== undefined && event.serial !== undefined
-    && reservations.get(event.id) === event.serial && event.serial > state.latestSerial) {
+  if (
+    event.kind === "commit" &&
+    event.id !== undefined &&
+    event.serial !== undefined &&
+    reservations.get(event.id) === event.serial &&
+    event.serial > state.latestSerial
+  ) {
     committed.add(event.id);
     return { ...state, latestSerial: event.serial, committed, appliedEvents };
   }
-  if (event.kind === "publish" && event.id !== undefined && event.serial === state.latestSerial
-    && committed.has(event.id)) {
+  if (
+    event.kind === "publish" &&
+    event.id !== undefined &&
+    event.serial === state.latestSerial &&
+    committed.has(event.id)
+  ) {
     published.add(event.id);
     return { ...state, published, appliedEvents };
   }

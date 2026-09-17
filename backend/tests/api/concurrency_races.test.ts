@@ -1,14 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "../../src/db";
-import {
-  agentJobs,
-  agentPools,
-  assessmentResults,
-  organizations,
-  runs,
-  workspaces,
-} from "../../src/db/schema";
+import { agentJobs, agentPools, assessmentResults, organizations, runs, workspaces } from "../../src/db/schema";
 import { confirmRunForApply } from "../../src/lib/operations";
 import { pollAssessmentQueue, pollWorkerQueue } from "../../src/worker";
 import { canTransitionRunStatus } from "../../src/lib/run-status";
@@ -94,18 +87,31 @@ beforeAll(async () => {
 afterAll(async () => {
   // Agent jobs reference runs and pools; delete them first so no FK violation
   // or orphaned queued job leaks into later suites.
-  await db.delete(agentJobs).where(inArray(agentJobs.runId, [
-    RUN_A1, RUN_A2, RUN_A3, RUN_B, RUN_C, RUN_D, RUN_E, RUN_F, CONFIRM_RUN,
-  ]));
-  await db.delete(runs).where(inArray(runs.id, [
-    RUN_A1, RUN_A2, RUN_A3, RUN_B, RUN_C, RUN_D, RUN_E, RUN_F, CONFIRM_RUN,
-  ]));
+  await db
+    .delete(agentJobs)
+    .where(inArray(agentJobs.runId, [RUN_A1, RUN_A2, RUN_A3, RUN_B, RUN_C, RUN_D, RUN_E, RUN_F, CONFIRM_RUN]));
+  await db
+    .delete(runs)
+    .where(inArray(runs.id, [RUN_A1, RUN_A2, RUN_A3, RUN_B, RUN_C, RUN_D, RUN_E, RUN_F, CONFIRM_RUN]));
   await db.delete(assessmentResults).where(
-    inArray(assessmentResults.id, Array.from({ length: 6 }, (_, i) => `conc-asm-${suffix}-${i}`)),
+    inArray(
+      assessmentResults.id,
+      Array.from({ length: 6 }, (_, i) => `conc-asm-${suffix}-${i}`),
+    ),
   );
-  await db.delete(workspaces).where(inArray(workspaces.id, [
-    workspaceAId, workspaceBId, workspaceCId, workspaceDId, workspaceEId, workspaceFId, workspaceGId,
-  ]));
+  await db
+    .delete(workspaces)
+    .where(
+      inArray(workspaces.id, [
+        workspaceAId,
+        workspaceBId,
+        workspaceCId,
+        workspaceDId,
+        workspaceEId,
+        workspaceFId,
+        workspaceGId,
+      ]),
+    );
   await db.delete(agentPools).where(inArray(agentPools.id, [agentPoolId, confirmPoolId]));
   await db.delete(organizations).where(eq(organizations.id, orgId));
 });
@@ -229,11 +235,19 @@ describe("concurrency: queue claim races", () => {
     const staleWorkspaceId = `conc-ws-stale-${suffix}`;
     const staleRunId = `conc-run-stale-${suffix}`;
     try {
-      await db.insert(agentPools).values({ id: stalePoolId, orgId, name: `conc-pool-stale-${suffix}`, organizationScoped: true });
+      await db
+        .insert(agentPools)
+        .values({ id: stalePoolId, orgId, name: `conc-pool-stale-${suffix}`, organizationScoped: true });
       await db.insert(workspaces).values({
-        id: staleWorkspaceId, orgId, name: "conc-ws-stale", executionMode: "agent", agentPoolId: stalePoolId,
+        id: staleWorkspaceId,
+        orgId,
+        name: "conc-ws-stale",
+        executionMode: "agent",
+        agentPoolId: stalePoolId,
       });
-      await db.insert(runs).values({ id: staleRunId, workspaceId: staleWorkspaceId, status: "planned", createdAt: Date.now() });
+      await db
+        .insert(runs)
+        .values({ id: staleRunId, workspaceId: staleWorkspaceId, status: "planned", createdAt: Date.now() });
 
       // The pool vanishes while the run still targets it. Confirmation must
       // fail WITHOUT flipping the run to confirmed and without a job: the old

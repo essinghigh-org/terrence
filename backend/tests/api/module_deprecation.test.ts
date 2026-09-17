@@ -6,7 +6,14 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { users, apiTokens, organizations, organizationMemberships, registryModules, registryModuleVersions } from "../../src/db/schema";
+import {
+  users,
+  apiTokens,
+  organizations,
+  organizationMemberships,
+  registryModules,
+  registryModuleVersions,
+} from "../../src/db/schema";
 import { makeRegistryModuleArchive } from "../registry-module-helpers";
 
 describe("Module Deprecation, Revocation & Tests API", () => {
@@ -95,7 +102,7 @@ describe("Module Deprecation, Revocation & Tests API", () => {
       new Request(`http://localhost/api/v2/registry-module-versions/${versionId}/actions/revoke`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(200);
@@ -109,7 +116,7 @@ describe("Module Deprecation, Revocation & Tests API", () => {
       new Request(`http://localhost/api/v2/registry-modules/${moduleId}/versions/1.0.0/actions/test`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(201);

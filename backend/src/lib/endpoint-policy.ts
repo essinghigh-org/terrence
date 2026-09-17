@@ -112,13 +112,20 @@ export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
   {
     id: "revoke-run-log-links",
     description: "Workspace administrator revocation of all run log capabilities.",
-    rateLimit: "global", bodyLimit: "api", auth: "authenticated", audit: "admin", secretResponse: false,
-    match: (request): string | undefined => request.method === "POST" && /^\/api\/v2\/runs\/[^/]+\/actions\/revoke-log-links$/.test(pathnameOf(request))
-      ? "/api/v2/runs/*/actions/revoke-log-links" : undefined,
+    rateLimit: "global",
+    bodyLimit: "api",
+    auth: "authenticated",
+    audit: "admin",
+    secretResponse: false,
+    match: (request): string | undefined =>
+      request.method === "POST" && /^\/api\/v2\/runs\/[^/]+\/actions\/revoke-log-links$/.test(pathnameOf(request))
+        ? "/api/v2/runs/*/actions/revoke-log-links"
+        : undefined,
   },
   {
     id: "sensitive",
-    description: "Credential-bearing or secret-issuing endpoints (OAuth authorization, login, tokens, MFA, invitations).",
+    description:
+      "Credential-bearing or secret-issuing endpoints (OAuth authorization, login, tokens, MFA, invitations).",
     rateLimit: "sensitive",
     bodyLimit: "api",
     auth: "public",
@@ -217,7 +224,8 @@ export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
   },
   {
     id: "state-secret-read",
-    description: "Raw state, outputs and unredacted plan reads. Responses may embed sensitive values (COMP-11 matrix: state, raw-plan).",
+    description:
+      "Raw state, outputs and unredacted plan reads. Responses may embed sensitive values (COMP-11 matrix: state, raw-plan).",
     rateLimit: "global",
     bodyLimit: "api",
     auth: "authenticated",
@@ -226,7 +234,8 @@ export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
     match: (request): string | undefined => {
       if (request.method !== "GET") return undefined;
       const path = pathnameOf(request);
-      if (/^\/api\/v2\/state-versions\/[^/]+\/(download|json-download)$/.test(path)) return "/api/v2/state-versions/*/download";
+      if (/^\/api\/v2\/state-versions\/[^/]+\/(download|json-download)$/.test(path))
+        return "/api/v2/state-versions/*/download";
       if (/^\/api\/v2\/state-version-outputs\/[^/]+$/.test(path)) return "/api/v2/state-version-outputs/*";
       if (/^\/api\/v2\/plans\/[^/]+\/json-output$/.test(path)) return "/api/v2/plans/*/json-output";
       if (/^\/api\/v2\/runs\/[^/]+\/recovery-state$/.test(path)) return "/api/v2/runs/*/recovery-state";
@@ -235,7 +244,8 @@ export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
   },
   {
     id: "state-safe-read",
-    description: "Redacted plan and state-reference reads. Responses are scrubbed by construction (COMP-11 matrix: public-plan, state-link).",
+    description:
+      "Redacted plan and state-reference reads. Responses are scrubbed by construction (COMP-11 matrix: public-plan, state-link).",
     rateLimit: "global",
     bodyLimit: "api",
     auth: "authenticated",
@@ -244,7 +254,8 @@ export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
     match: (request): string | undefined => {
       if (request.method !== "GET") return undefined;
       const path = pathnameOf(request);
-      if (/^\/api\/v2\/plans\/[^/]+\/(json-output-redacted|sanitized-plan)$/.test(path)) return "/api/v2/plans/*/redacted";
+      if (/^\/api\/v2\/plans\/[^/]+\/(json-output-redacted|sanitized-plan)$/.test(path))
+        return "/api/v2/plans/*/redacted";
       if (/^\/api\/v2\/runs\/[^/]+\/input-state-version$/.test(path)) return "/api/v2/runs/*/input-state-version";
       return undefined;
     },
@@ -279,7 +290,8 @@ export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
   },
   {
     id: "admin",
-    description: "Site administration surface. Site-admin credential class only; responses may include exports and key material.",
+    description:
+      "Site administration surface. Site-admin credential class only; responses may include exports and key material.",
     rateLimit: "global",
     bodyLimit: "api",
     auth: "admin",
@@ -290,7 +302,8 @@ export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
   },
   {
     id: "mcp-state",
-    description: "MCP tool transport. State reads through tools enforce the same principal boundaries as the REST surface (COMP-11 matrix).",
+    description:
+      "MCP tool transport. State reads through tools enforce the same principal boundaries as the REST surface (COMP-11 matrix).",
     rateLimit: "global",
     bodyLimit: "api",
     auth: "authenticated",
@@ -305,10 +318,7 @@ export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
 // Derived classifiers — delegate to the registry so the two can never drift.
 // ---------------------------------------------------------------------------
 
-function labelFor(
-  id: EndpointPolicy["id"],
-  request: Readonly<{ method: string; url: string }>,
-): string | undefined {
+function labelFor(id: EndpointPolicy["id"], request: Readonly<{ method: string; url: string }>): string | undefined {
   const entry = ENDPOINT_POLICIES.find((candidate): boolean => candidate.id === id);
   return entry?.match(request);
 }
@@ -357,7 +367,7 @@ export function serverEndpointPath(request: Readonly<{ method: string; url: stri
   return undefined;
 }
 
-/** Whether the request targets an archive upload (keeps the 100 MiB body limit). */export { isUploadPath } from "./body-limit";
+/** Whether the request targets an archive upload (keeps the 100 MiB body limit). */ export { isUploadPath } from "./body-limit";
 
 /** Resolve the rate-limit class for a request (first matching registry entry wins, else global/none). */
 /** @public Intentional surface: registry consumer for future enforcement layer. */

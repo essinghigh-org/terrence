@@ -60,7 +60,11 @@ const RUNTIME_TABLES = [
 ];
 
 function pragmaTables(db: Database): string[] {
-  return (db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[])
+  return (
+    db
+      .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+      .all() as { name: string }[]
+  )
     .map((row) => row.name)
     .filter((name) => name !== "__drizzle_migrations");
 }
@@ -70,7 +74,9 @@ function pragmaColumns(db: Database, table: string): string[] {
 }
 
 /** Apply the whole (single-entry) baseline to a fresh in-memory DB. */
-async function applyBaseline(folder: string): Promise<{ tables: string[]; columns: Map<string, string[]>; journalCount: number }> {
+async function applyBaseline(
+  folder: string,
+): Promise<{ tables: string[]; columns: Map<string, string[]>; journalCount: number }> {
   const raw = new Database(":memory:");
   try {
     const db = drizzle(raw);
@@ -92,7 +98,9 @@ async function applyBaseline(folder: string): Promise<{ tables: string[]; column
  * (or inherit via rename) earlier.
  */
 function validateDropTargets(): string[] {
-  const files = readdirSync(DRIZZLE_DIR).filter((f) => f.endsWith(".sql")).sort();
+  const files = readdirSync(DRIZZLE_DIR)
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
   const existing = new Set<string>();
   const violations: string[] = [];
   for (const file of files) {
@@ -136,7 +144,9 @@ function journalOrderViolations(): string[] {
     const cur = journal.entries[i];
     if (prev === undefined || cur === undefined) continue;
     if (cur.when <= prev.when) {
-      violations.push(`journal entry ${cur.idx} (${cur.tag}) when=${cur.when} is not > entry ${prev.idx} when=${prev.when}`);
+      violations.push(
+        `journal entry ${cur.idx} (${cur.tag}) when=${cur.when} is not > entry ${prev.idx} when=${prev.when}`,
+      );
     }
   }
   return violations;
@@ -188,7 +198,14 @@ test("repairs run_explanations on a database with the baseline already applied",
       migrate(db, { migrationsFolder: folder });
       expect(pragmaTables(raw)).toContain("run_explanations");
       expect(pragmaColumns(raw, "run_explanations")).toEqual([
-        "id", "run_id", "kind", "model", "content", "thinking", "input_hash", "created_at",
+        "id",
+        "run_id",
+        "kind",
+        "model",
+        "content",
+        "thinking",
+        "input_hash",
+        "created_at",
       ]);
       expect(pragmaColumns(raw, "runs")).toContain("scheduled_at");
     } finally {
@@ -254,9 +271,7 @@ test("preserves SQLite defaults containing escaped single quotes", () => {
 });
 
 test("preserves inline foreign-key local and referenced columns", () => {
-  const table = parseCreateTableSql(
-    'CREATE TABLE "child" ("parent_id" INTEGER REFERENCES "parent" ("id"))',
-  );
+  const table = parseCreateTableSql('CREATE TABLE "child" ("parent_id" INTEGER REFERENCES "parent" ("id"))');
   if (table === null) throw new Error("expected child table to parse");
   expect(table.columns[0]?.references).toEqual({
     columns: ["parent_id"],
@@ -286,9 +301,7 @@ test("preserves quoted referenced identifiers in generated foreign-key DDL", () 
 });
 
 test("preserves REFERENCES parent shorthand in generated foreign-key DDL", () => {
-  const table = parseCreateTableSql(
-    'CREATE TABLE "child" ("parent_id" INTEGER REFERENCES "parent")',
-  );
+  const table = parseCreateTableSql('CREATE TABLE "child" ("parent_id" INTEGER REFERENCES "parent")');
   if (table === null) throw new Error("expected child table to parse");
   expect(table.columns[0]?.references?.table).toBe("parent");
   expect(table.columns[0]?.references?.columns).toEqual(["parent_id"]);

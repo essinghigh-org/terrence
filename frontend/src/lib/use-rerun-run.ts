@@ -11,11 +11,13 @@ export type RerunRun = Readonly<{
   performRerun: (mode: "original" | "current") => Promise<void>;
 }>;
 
-export function useRerunRun(args: Readonly<{
-  runId: string;
-  workspaceId: string;
-  workspacePath: string;
-}>): RerunRun {
+export function useRerunRun(
+  args: Readonly<{
+    runId: string;
+    workspaceId: string;
+    workspacePath: string;
+  }>,
+): RerunRun {
   const navigate = useNavigate();
   const [rerunPending, setRerunPending] = useState(false);
   const [rerunError, setRerunError] = useState("");
@@ -34,7 +36,7 @@ export function useRerunRun(args: Readonly<{
         method: "POST",
         body: JSON.stringify({ mode }),
       });
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+      // SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const newRunId = (body as { data?: { id?: string } }).data?.id;
       if (isString(newRunId) && newRunId !== "") {
         void navigate(`${args.workspacePath}/runs/${encodeURIComponent(newRunId)}`);

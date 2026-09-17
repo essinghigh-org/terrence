@@ -16,7 +16,8 @@ const FORWARDED_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
  *  credentials) do not persist indefinitely. */
 export async function purgeExpiredForwardedRequests(): Promise<number> {
   const cutoff = Date.now() - FORWARDED_REQUEST_RETENTION_MS;
-  const deleted = await db.delete(agentForwardedRequests)
+  const deleted = await db
+    .delete(agentForwardedRequests)
     .where(lt(agentForwardedRequests.createdAt, cutoff))
     .returning({ id: agentForwardedRequests.id });
   return deleted.length;
@@ -82,7 +83,8 @@ async function readBodyCapped(
 
 function validateForwardUrl(input: string | DeepReadonly<URL>): URL {
   const url = new URL(input);
-  if (!/^https?:$/.test(url.protocol) || url.username !== "" || url.password !== "") throw new Error("Forwarded requests require an HTTP(S) URL without embedded credentials");
+  if (!/^https?:$/.test(url.protocol) || url.username !== "" || url.password !== "")
+    throw new Error("Forwarded requests require an HTTP(S) URL without embedded credentials");
   return url;
 }
 
@@ -91,7 +93,8 @@ function validateForwardMethod(
   init: Readonly<RequestInit>,
 ): string {
   const method = (init.method ?? "GET").toUpperCase();
-  if (!/^[A-Z]+$/.test(method) || method === "CONNECT" || method === "TRACE") throw new Error("Forwarded request method is not supported");
+  if (!/^[A-Z]+$/.test(method) || method === "CONNECT" || method === "TRACE")
+    throw new Error("Forwarded request method is not supported");
   return method;
 }
 
@@ -100,7 +103,9 @@ function buildForwardHeaders(
   init: Readonly<RequestInit>,
 ): Record<string, string[]> {
   const headers: Record<string, string[]> = {};
-  new Headers(init.headers).forEach((value, name): void => { headers[name] = [value]; });
+  new Headers(init.headers).forEach((value, name): void => {
+    headers[name] = [value];
+  });
   return headers;
 }
 
@@ -147,8 +152,14 @@ export async function forwardFetch(
   const bodyBytes = await readForwardBody(init);
   const id = newResourceId("afwd");
   await db.insert(agentForwardedRequests).values({
-    id, agentPoolId, method, url: url.toString(), headers: requestHeaders,
-    body: bodyBytes === null ? null : bodyBytes.toString("base64"), status: "queued", createdAt: Date.now(),
+    id,
+    agentPoolId,
+    method,
+    url: url.toString(),
+    headers: requestHeaders,
+    body: bodyBytes === null ? null : bodyBytes.toString("base64"),
+    status: "queued",
+    createdAt: Date.now(),
   });
   const deadline = forwardDeadline();
   const response = await pollForwardResponse(id, deadline);
@@ -158,12 +169,15 @@ export async function forwardFetch(
       // caller receives the response in memory, but the durable forwarding
       // row must not retain request bearer material or that response beyond
       // the immediate handoff.
-      await db.update(agentForwardedRequests).set({
-        headers: {},
-        body: null,
-        responseHeaders: null,
-        responseBody: null,
-      }).where(eq(agentForwardedRequests.id, id));
+      await db
+        .update(agentForwardedRequests)
+        .set({
+          headers: {},
+          body: null,
+          responseHeaders: null,
+          responseBody: null,
+        })
+        .where(eq(agentForwardedRequests.id, id));
     }
     return response;
   }
@@ -171,12 +185,15 @@ export async function forwardFetch(
   // queued headers/body here as well as in the normal completion path so a
   // short-lived provider token cannot remain in the database until retention
   // cleanup runs.
-  await db.update(agentForwardedRequests).set({
-    status: "errored",
-    errorMessage: "Forwarded request timed out",
-    completedAt: Date.now(),
-    headers: {},
-    body: null,
-  }).where(and(eq(agentForwardedRequests.id, id), inArray(agentForwardedRequests.status, ["queued", "claimed"])));
+  await db
+    .update(agentForwardedRequests)
+    .set({
+      status: "errored",
+      errorMessage: "Forwarded request timed out",
+      completedAt: Date.now(),
+      headers: {},
+      body: null,
+    })
+    .where(and(eq(agentForwardedRequests.id, id), inArray(agentForwardedRequests.status, ["queued", "claimed"])));
   throw new Error("Forwarded request timed out");
 }

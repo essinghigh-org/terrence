@@ -26,14 +26,16 @@ describe("reserved tag keys", () => {
   const workspaceId = `ws-${prefix}`;
 
   const request = (method: string, path: string, body?: unknown, token = ownerToken): Promise<Response> =>
-    app.handle(new Request(`http://localhost${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://localhost${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   const payload = (key: string, disableOverrides: boolean, id?: string): Record<string, unknown> => ({
     data: {
@@ -68,8 +70,13 @@ describe("reserved tag keys", () => {
   });
 
   it("validates, lists, updates, and deletes organization reserved keys", async () => {
-    expect((await request("POST", `/api/v2/organizations/${orgName}/reserved-tag-keys`, payload("bad/key", false))).status).toBe(422);
-    expect((await request("POST", `/api/v2/organizations/${orgName}/reserved-tag-keys`, payload("x".repeat(129), false))).status).toBe(422);
+    expect(
+      (await request("POST", `/api/v2/organizations/${orgName}/reserved-tag-keys`, payload("bad/key", false))).status,
+    ).toBe(422);
+    expect(
+      (await request("POST", `/api/v2/organizations/${orgName}/reserved-tag-keys`, payload("x".repeat(129), false)))
+        .status,
+    ).toBe(422);
 
     const key = "cost center:prod+blue@v1_2=ok";
     const created = await request("POST", `/api/v2/organizations/${orgName}/reserved-tag-keys`, payload(key, false));
@@ -80,17 +87,37 @@ describe("reserved tag keys", () => {
     expect(createdResource.attributes["created-at"]).toBeString();
     expect(createdResource.links.self).toBe(`/api/v2/reserved-tags/${createdResource.id}`);
 
-    expect((await request("POST", `/api/v2/organizations/${orgName}/reserved-tag-keys`, payload(key, true))).status).toBe(409);
+    expect(
+      (await request("POST", `/api/v2/organizations/${orgName}/reserved-tag-keys`, payload(key, true))).status,
+    ).toBe(409);
 
-    const listed = await request("GET", `/api/v2/organizations/${orgName}/reserved-tag-keys?page[size]=1`, undefined, memberToken);
+    const listed = await request(
+      "GET",
+      `/api/v2/organizations/${orgName}/reserved-tag-keys?page[size]=1`,
+      undefined,
+      memberToken,
+    );
     expect(listed.status).toBe(200);
     const listBody = await listed.json();
     expect(listBody.data.map((item: { id: string }): string => item.id)).toContain(createdResource.id);
     expect(listBody.meta.pagination["total-count"]).toBe(1);
 
-    expect((await request("PATCH", `/api/v2/reserved-tags/${createdResource.id}`, payload("billing.center", true, createdResource.id), memberToken)).status).toBe(404);
+    expect(
+      (
+        await request(
+          "PATCH",
+          `/api/v2/reserved-tags/${createdResource.id}`,
+          payload("billing.center", true, createdResource.id),
+          memberToken,
+        )
+      ).status,
+    ).toBe(404);
 
-    const updated = await request("PATCH", `/api/v2/reserved-tags/${createdResource.id}`, payload("billing.center", true, createdResource.id));
+    const updated = await request(
+      "PATCH",
+      `/api/v2/reserved-tags/${createdResource.id}`,
+      payload("billing.center", true, createdResource.id),
+    );
     expect(updated.status).toBe(200);
     expect((await updated.json()).data.attributes).toMatchObject({
       key: "billing.center",
@@ -98,7 +125,9 @@ describe("reserved tag keys", () => {
     });
 
     expect((await request("DELETE", `/api/v2/reserved-tags/${createdResource.id}`)).status).toBe(204);
-    expect(await db.query.reservedTagKeys.findFirst({ where: eq(reservedTagKeys.id, createdResource.id) })).toBeUndefined();
+    expect(
+      await db.query.reservedTagKeys.findFirst({ where: eq(reservedTagKeys.id, createdResource.id) }),
+    ).toBeUndefined();
   });
 
   it("rejects new workspace overrides across every tag write path", async () => {
@@ -106,34 +135,47 @@ describe("reserved tag keys", () => {
       data: { type: "tag-bindings", attributes: { key: "environment", value: "production" } },
     });
     expect(projectTag.status).toBe(201);
-    expect((await request(
-      "POST",
-      `/api/v2/organizations/${orgName}/reserved-tag-keys`,
-      payload("environment", true),
-    )).status).toBe(201);
+    expect(
+      (await request("POST", `/api/v2/organizations/${orgName}/reserved-tag-keys`, payload("environment", true)))
+        .status,
+    ).toBe(201);
 
     const binding = { type: "tag-bindings", attributes: { key: "environment", value: "staging" } };
-    expect((await request("PATCH", `/api/v2/workspaces/${workspaceId}/tag-bindings`, { data: [binding] })).status).toBe(422);
-    expect((await request("POST", `/api/v2/workspaces/${workspaceId}/relationships/tags`, {
-      data: [{ type: "tags", id: "environment", attributes: { value: "staging" } }],
-    })).status).toBe(422);
-    expect((await request("PATCH", `/api/v2/workspaces/${workspaceId}`, {
-      data: {
-        type: "workspaces",
-        id: workspaceId,
-        relationships: { "tag-bindings": { data: [binding] } },
-      },
-    })).status).toBe(422);
-    expect((await request("POST", `/api/v2/organizations/${orgName}/workspaces`, {
-      data: {
-        type: "workspaces",
-        attributes: { name: `locked-${prefix}` },
-        relationships: {
-          project: { data: { type: "projects", id: projectId } },
-          "tag-bindings": { data: [binding] },
-        },
-      },
-    })).status).toBe(422);
+    expect((await request("PATCH", `/api/v2/workspaces/${workspaceId}/tag-bindings`, { data: [binding] })).status).toBe(
+      422,
+    );
+    expect(
+      (
+        await request("POST", `/api/v2/workspaces/${workspaceId}/relationships/tags`, {
+          data: [{ type: "tags", id: "environment", attributes: { value: "staging" } }],
+        })
+      ).status,
+    ).toBe(422);
+    expect(
+      (
+        await request("PATCH", `/api/v2/workspaces/${workspaceId}`, {
+          data: {
+            type: "workspaces",
+            id: workspaceId,
+            relationships: { "tag-bindings": { data: [binding] } },
+          },
+        })
+      ).status,
+    ).toBe(422);
+    expect(
+      (
+        await request("POST", `/api/v2/organizations/${orgName}/workspaces`, {
+          data: {
+            type: "workspaces",
+            attributes: { name: `locked-${prefix}` },
+            relationships: {
+              project: { data: { type: "projects", id: projectId } },
+              "tag-bindings": { data: [binding] },
+            },
+          },
+        })
+      ).status,
+    ).toBe(422);
 
     const ordinary = await request("PATCH", `/api/v2/workspaces/${workspaceId}/tag-bindings`, {
       data: [{ type: "tag-bindings", attributes: { key: "team", value: "platform" } }],
@@ -142,9 +184,13 @@ describe("reserved tag keys", () => {
 
     const detachedWorkspaceId = `ws-detached-${prefix}`;
     await db.insert(workspaces).values({ id: detachedWorkspaceId, orgId, name: `detached-${prefix}` });
-    expect((await request("PATCH", `/api/v2/workspaces/${detachedWorkspaceId}/tag-bindings`, {
-      data: [binding],
-    })).status).toBe(200);
+    expect(
+      (
+        await request("PATCH", `/api/v2/workspaces/${detachedWorkspaceId}/tag-bindings`, {
+          data: [binding],
+        })
+      ).status,
+    ).toBe(200);
     const move = {
       data: {
         type: "workspaces",
@@ -153,15 +199,19 @@ describe("reserved tag keys", () => {
       },
     };
     expect((await request("PATCH", `/api/v2/workspaces/${detachedWorkspaceId}`, move)).status).toBe(422);
-    expect((await request("PATCH", `/api/v2/workspaces/${detachedWorkspaceId}`, {
-      data: {
-        ...move.data,
-        relationships: {
-          ...move.data.relationships,
-          "tag-bindings": { data: [] },
-        },
-      },
-    })).status).toBe(200);
+    expect(
+      (
+        await request("PATCH", `/api/v2/workspaces/${detachedWorkspaceId}`, {
+          data: {
+            ...move.data,
+            relationships: {
+              ...move.data.relationships,
+              "tag-bindings": { data: [] },
+            },
+          },
+        })
+      ).status,
+    ).toBe(200);
   });
 
   it("keeps existing overrides when locking a key but blocks later changes", async () => {
@@ -178,24 +228,40 @@ describe("reserved tag keys", () => {
     );
     const tagId = (await created.json()).data.id as string;
 
-    expect((await request("PATCH", `/api/v2/workspaces/${workspaceId}/tag-bindings`, {
-      data: [{ type: "tag-bindings", attributes: { key: "region", value: "west" } }],
-    })).status).toBe(200);
+    expect(
+      (
+        await request("PATCH", `/api/v2/workspaces/${workspaceId}/tag-bindings`, {
+          data: [{ type: "tag-bindings", attributes: { key: "region", value: "west" } }],
+        })
+      ).status,
+    ).toBe(200);
     expect((await request("PATCH", `/api/v2/reserved-tags/${tagId}`, payload("region", true, tagId))).status).toBe(200);
 
     const effective = await request("GET", `/api/v2/workspaces/${workspaceId}/effective-tag-bindings`);
-    const region = (await effective.json()).data.find((item: { attributes: { key: string } }): boolean => item.attributes.key === "region");
+    const region = (await effective.json()).data.find(
+      (item: { attributes: { key: string } }): boolean => item.attributes.key === "region",
+    );
     expect(region.attributes.value).toBe("west");
 
-    expect((await request("PATCH", `/api/v2/workspaces/${workspaceId}/tag-bindings`, {
-      data: [{ type: "tag-bindings", attributes: { key: "region", value: "north" } }],
-    })).status).toBe(422);
-    expect((await request("DELETE", `/api/v2/workspaces/${workspaceId}/relationships/tags`, {
-      data: [{ type: "tags", id: "region" }],
-    })).status).toBe(204);
+    expect(
+      (
+        await request("PATCH", `/api/v2/workspaces/${workspaceId}/tag-bindings`, {
+          data: [{ type: "tag-bindings", attributes: { key: "region", value: "north" } }],
+        })
+      ).status,
+    ).toBe(422);
+    expect(
+      (
+        await request("DELETE", `/api/v2/workspaces/${workspaceId}/relationships/tags`, {
+          data: [{ type: "tags", id: "region" }],
+        })
+      ).status,
+    ).toBe(204);
 
     const inherited = await request("GET", `/api/v2/workspaces/${workspaceId}/effective-tag-bindings`);
-    const inheritedRegion = (await inherited.json()).data.find((item: { attributes: { key: string } }): boolean => item.attributes.key === "region");
+    const inheritedRegion = (await inherited.json()).data.find(
+      (item: { attributes: { key: string } }): boolean => item.attributes.key === "region",
+    );
     expect(inheritedRegion.attributes.value).toBe("east");
   });
 });

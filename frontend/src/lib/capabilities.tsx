@@ -34,11 +34,7 @@ export function CapabilitiesProvider({
   capabilities,
   children,
 }: Readonly<{ capabilities: Capabilities; children: ReactNode }>): ReactNode {
-  return (
-    <capabilitiesContext.Provider value={capabilities}>
-      {children}
-    </capabilitiesContext.Provider>
-  );
+  return <capabilitiesContext.Provider value={capabilities}>{children}</capabilitiesContext.Provider>;
 }
 
 /**

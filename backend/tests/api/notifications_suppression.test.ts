@@ -28,9 +28,7 @@ describe("Notification suppression (kanban 7.8 / NOT-012)", () => {
     process.env["TERRENCE_ALLOW_PRIVATE_URLS"] = "true";
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: organizationName }]);
-    await db.insert(organizationMemberships).values([
-      { id: crypto.randomUUID(), userId, orgId, role: "owner" },
-    ]);
+    await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId, role: "owner" }]);
     await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: hashAuthenticationToken(authToken), userId }]);
     await db.insert(workspaces).values([
       { id: workspaceId, name: `ws-${suffix}`, orgId },
@@ -43,7 +41,9 @@ describe("Notification suppression (kanban 7.8 / NOT-012)", () => {
     await db.delete(runs).where(eq(runs.id, `run-spec-${suffix}`));
     await db.delete(runs).where(eq(runs.id, `run-remote-${suffix}`));
     await db.delete(notificationConfigurations).where(eq(notificationConfigurations.workspaceId, workspaceId));
-    await db.delete(notificationConfigurations).where(eq(notificationConfigurations.workspaceId, `${workspaceId}-local`));
+    await db
+      .delete(notificationConfigurations)
+      .where(eq(notificationConfigurations.workspaceId, `${workspaceId}-local`));
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     await db.delete(workspaces).where(eq(workspaces.id, `${workspaceId}-local`));
     await db.delete(apiTokens).where(eq(apiTokens.token, authToken));

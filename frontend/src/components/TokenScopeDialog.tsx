@@ -16,17 +16,7 @@ import {
 import { toast } from "../components/ui/toast";
 import { isBoolean, isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
-import {
-  Boxes,
-  Building2,
-  Folder,
-  FolderPlus,
-  Layers,
-  Plus,
-  Search,
-  Shield,
-  Tag,
-} from "lucide-react";
+import { Boxes, Building2, Folder, FolderPlus, Layers, Plus, Search, Shield, Tag } from "lucide-react";
 
 /**
  * Permission grants offered in the fine-grained scope picker. Each maps to a
@@ -160,9 +150,7 @@ const PERMISSION_GROUPS: readonly {
   {
     id: "audit-logs",
     label: "Audit logs",
-    grants: [
-      { key: "audit-logs:read", label: "Read organization audit logs" },
-    ],
+    grants: [{ key: "audit-logs:read", label: "Read organization audit logs" }],
   },
 ];
 
@@ -172,15 +160,30 @@ const PERMISSION_GROUPS: readonly {
  * that grant and update its summary/tests.
  */
 const READ_ONLY_PRESET_KEYS = [
-  "workspaces:read", "runs:read", "run-tasks:read", "variables:read", "state:read",
-  "projects:read", "varsets:read", "settings:read", "policies:read", "vcs:read",
-  "agent-pools:read", "registry:read", "teams:read", "members:read", "audit-logs:read",
+  "workspaces:read",
+  "runs:read",
+  "run-tasks:read",
+  "variables:read",
+  "state:read",
+  "projects:read",
+  "varsets:read",
+  "settings:read",
+  "policies:read",
+  "vcs:read",
+  "agent-pools:read",
+  "registry:read",
+  "teams:read",
+  "members:read",
+  "audit-logs:read",
 ] as const;
-const PLAN_PRESET_KEYS = [
-  "workspaces:read", "runs:read", "runs:plan", "variables:read", "state:read",
-] as const;
+const PLAN_PRESET_KEYS = ["workspaces:read", "runs:read", "runs:plan", "variables:read", "state:read"] as const;
 const APPLY_PRESET_KEYS = [
-  "workspaces:read", "runs:read", "runs:plan", "runs:apply", "variables:read", "state:write",
+  "workspaces:read",
+  "runs:read",
+  "runs:plan",
+  "runs:apply",
+  "variables:read",
+  "state:write",
 ] as const;
 
 type TokenPreset = Readonly<{
@@ -240,12 +243,25 @@ export function summarizeTokenScopes(value: unknown, expiresAt?: unknown): strin
   const expiryLabel = summarizeTokenExpiry(expiresAt);
   if (!isRecord(value)) return `Legacy token · full access to all organizations and resources · ${expiryLabel}`;
   const orgLabel = countLabel(arrayCount(value["orgs"]), "organization", "organizations", "no organizations");
-  const projectLabel = countLabel(arrayCount(value["projects"]), "selected project", "selected projects", "all projects");
-  const workspaceLabel = countLabel(arrayCount(value["workspaces"]), "selected workspace", "selected workspaces", "all workspaces");
+  const projectLabel = countLabel(
+    arrayCount(value["projects"]),
+    "selected project",
+    "selected projects",
+    "all projects",
+  );
+  const workspaceLabel = countLabel(
+    arrayCount(value["workspaces"]),
+    "selected workspace",
+    "selected workspaces",
+    "all workspaces",
+  );
   const grants = grantedPermissionKeys(value["permissions"]);
   const grantLabel = grants.length === 0 ? "none" : grants.join(", ");
   const tags = value["tags"];
-  const tagLabel = isRecord(tags) && Array.isArray(tags["rules"]) && tags["rules"].length > 0 ? "tag filters included" : "no tag filters";
+  const tagLabel =
+    isRecord(tags) && Array.isArray(tags["rules"]) && tags["rules"].length > 0
+      ? "tag filters included"
+      : "no tag filters";
   return `${orgLabel} · ${projectLabel} · ${workspaceLabel} · actions: ${grantLabel} · ${tagLabel} · ${expiryLabel}`;
 }
 
@@ -257,7 +273,12 @@ type TagRuleNode = TagFilterNode | TagGroupNode;
 
 /** Initial builder state: one empty filter row. */
 function emptyGroup(): TagGroupNode {
-  return { kind: "group", id: crypto.randomUUID(), combinator: "OR", rules: [{ kind: "filter", id: crypto.randomUUID(), key: "", value: "" }] };
+  return {
+    kind: "group",
+    id: crypto.randomUUID(),
+    combinator: "OR",
+    rules: [{ kind: "filter", id: crypto.randomUUID(), key: "", value: "" }],
+  };
 }
 
 /**
@@ -279,9 +300,7 @@ function serializeTags(root: TagGroupNode): Readonly<{ combinator: "AND" | "OR";
       if (key === "") return null;
       return { key, value: node.value.trim() };
     }
-    const rules = node.rules
-      .map(convert)
-      .filter((rule): rule is Exclude<SerializedTagRule, null> => rule !== null);
+    const rules = node.rules.map(convert).filter((rule): rule is Exclude<SerializedTagRule, null> => rule !== null);
     if (rules.length === 0) return null;
     return { combinator: node.combinator, rules };
   };
@@ -297,17 +316,13 @@ function tagLabel(node: TagRuleNode): string | null {
     if (key === "") return null;
     return `${key}=${node.value.trim()}`;
   }
-  const inner = node.rules
-    .map(tagLabel)
-    .filter((part): part is string => part !== null);
+  const inner = node.rules.map(tagLabel).filter((part): part is string => part !== null);
   if (inner.length === 0) return null;
   return `(${inner.join(` ${node.combinator} `)})`;
 }
 
 function rootLabel(root: TagGroupNode): string | null {
-  const parts = root.rules
-    .map(tagLabel)
-    .filter((part): part is string => part !== null);
+  const parts = root.rules.map(tagLabel).filter((part): part is string => part !== null);
   if (parts.length === 0) return null;
   return parts.join(` ${root.combinator} `);
 }
@@ -322,7 +337,7 @@ function resourceOptions(
   nameKey = "name",
 ): { id: string; name: string }[] {
   return data.map((item): { id: string; name: string } => {
-    const attributes = (item.attributes ?? {});
+    const attributes = item.attributes ?? {};
     const rawName = attributes[nameKey];
     return { id: item.id, name: isString(rawName) ? rawName : item.id };
   });
@@ -406,8 +421,12 @@ function ResourceScopePicker({
           <Input
             placeholder={filterPlaceholder}
             value={search}
-            onChange={(e): void => { onSearchChange(e.target.value); }}
-            onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { onSearchChange(e.currentTarget.value); }}
+            onChange={(e): void => {
+              onSearchChange(e.target.value);
+            }}
+            onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => {
+              onSearchChange(e.currentTarget.value);
+            }}
             className="h-7 pl-7 text-xs"
           />
         </div>
@@ -419,23 +438,25 @@ function ResourceScopePicker({
         <p className="py-3 text-center text-xs text-muted-foreground">{noMatchLabel}</p>
       ) : (
         <div className="max-h-36 space-y-1 overflow-y-auto rounded border border-border/50 bg-background/50 p-1.5">
-          {filteredItems.map((item): React.JSX.Element => (
-            <label
-              key={item.id}
-              className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted select-none"
-            >
-              <Checkbox
-                checked={selected.has(item.id)}
-                onCheckedChange={(): void => { onToggle(item.id); }}
-              />
-              <span className="truncate">{item.name}</span>
-            </label>
-          ))}
+          {filteredItems.map(
+            (item): React.JSX.Element => (
+              <label
+                key={item.id}
+                className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted select-none"
+              >
+                <Checkbox
+                  checked={selected.has(item.id)}
+                  onCheckedChange={(): void => {
+                    onToggle(item.id);
+                  }}
+                />
+                <span className="truncate">{item.name}</span>
+              </label>
+            ),
+          )}
         </div>
       )}
-      <p className="text-2xs text-muted-foreground">
-        {selected.size === 0 ? noneSelectedHint : scopedHint}
-      </p>
+      <p className="text-2xs text-muted-foreground">{selected.size === 0 ? noneSelectedHint : scopedHint}</p>
     </div>
   );
 }
@@ -469,49 +490,72 @@ export function TokenScopeDialog({
   useEffect((): void => {
     if (!open) return;
     setError("");
-    void fetchApi<{ data?: { id: string; attributes?: JsonObject }[] }>("/organizations?page[size]=100").then((response): void => {
-      const data = response.data ?? [];
-      const parsed = data
-        .map((item): OrgOption => {
-          const externalId = item.attributes?.["external-id"];
-          const displayName = item.attributes?.["name"];
-          return {
-            id: isString(externalId) ? externalId : item.id,
-            name: isString(displayName) ? displayName : item.id,
-          };
-        })
-        .sort((a, b): number => a.name.localeCompare(b.name));
-      setOrgs(parsed);
-      if (parsed.length > 0) {
-        setOrgId((current): string => (current === "" ? (parsed[0]?.id ?? "") : current));
-      }
-    }).catch((): void => { setError("Could not load organizations"); });
+    void fetchApi<{ data?: { id: string; attributes?: JsonObject }[] }>("/organizations?page[size]=100")
+      .then((response): void => {
+        const data = response.data ?? [];
+        const parsed = data
+          .map((item): OrgOption => {
+            const externalId = item.attributes?.["external-id"];
+            const displayName = item.attributes?.["name"];
+            return {
+              id: isString(externalId) ? externalId : item.id,
+              name: isString(displayName) ? displayName : item.id,
+            };
+          })
+          .sort((a, b): number => a.name.localeCompare(b.name));
+        setOrgs(parsed);
+        if (parsed.length > 0) {
+          setOrgId((current): string => (current === "" ? (parsed[0]?.id ?? "") : current));
+        }
+      })
+      .catch((): void => {
+        setError("Could not load organizations");
+      });
   }, [open]);
 
   // Load projects + workspaces for the selected org.
   useEffect((): (() => void) | undefined => {
-    if (!open || orgId === "") { setProjects([]); setWorkspaces([]); return; }
+    if (!open || orgId === "") {
+      setProjects([]);
+      setWorkspaces([]);
+      return;
+    }
     const orgName = orgs.find((o): boolean => o.id === orgId)?.name ?? orgId;
     let cancelled = false;
     setProjects([]);
     setWorkspaces([]);
-    void fetchApi<{ data?: { id: string; attributes?: JsonObject }[] }>(`/organizations/${encodeURIComponent(orgName)}/projects?page[size]=100`).then((response): void => {
-      if (cancelled) return;
-      const data = response.data ?? [];
-      setProjects(resourceOptions(data));
-    }).catch((): void => { /* org may not expose projects */ });
-    void fetchApi<{ data?: { id: string; attributes?: JsonObject }[] }>(`/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`).then((response): void => {
-      if (cancelled) return;
-      const data = response.data ?? [];
-      setWorkspaces(resourceOptions(data));
-    }).catch((): void => { /* workspaces may not be listable */ });
-    return (): void => { cancelled = true; };
+    void fetchApi<{ data?: { id: string; attributes?: JsonObject }[] }>(
+      `/organizations/${encodeURIComponent(orgName)}/projects?page[size]=100`,
+    )
+      .then((response): void => {
+        if (cancelled) return;
+        const data = response.data ?? [];
+        setProjects(resourceOptions(data));
+      })
+      .catch((): void => {
+        /* org may not expose projects */
+      });
+    void fetchApi<{ data?: { id: string; attributes?: JsonObject }[] }>(
+      `/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`,
+    )
+      .then((response): void => {
+        if (cancelled) return;
+        const data = response.data ?? [];
+        setWorkspaces(resourceOptions(data));
+      })
+      .catch((): void => {
+        /* workspaces may not be listable */
+      });
+    return (): void => {
+      cancelled = true;
+    };
   }, [open, orgId, orgs]);
 
   const toggleProject = (id: string): void => {
     setSelectedProjects((prev): Set<string> => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -519,7 +563,8 @@ export function TokenScopeDialog({
   const toggleWorkspace = (id: string): void => {
     setSelectedWorkspaces((prev): Set<string> => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -617,17 +662,18 @@ export function TokenScopeDialog({
   };
 
   const setFilterValue = (path: readonly number[], key: string, value: string): void => {
-    updateRule(path, (rule): TagRuleNode =>
-      rule.kind === "filter" ? { ...rule, key, value } : rule);
+    updateRule(path, (rule): TagRuleNode => (rule.kind === "filter" ? { ...rule, key, value } : rule));
   };
 
   const setCombinator = (path: readonly number[], combinator: "AND" | "OR"): void => {
-    updateRule(path, (rule): TagRuleNode =>
-      rule.kind === "group" ? { ...rule, combinator } : rule);
+    updateRule(path, (rule): TagRuleNode => (rule.kind === "group" ? { ...rule, combinator } : rule));
   };
 
   const wrapRule = (path: readonly number[]): void => {
-    updateRule(path, (rule): TagRuleNode => ({ kind: "group", id: crypto.randomUUID(), combinator: "OR", rules: [rule] }));
+    updateRule(
+      path,
+      (rule): TagRuleNode => ({ kind: "group", id: crypto.randomUUID(), combinator: "OR", rules: [rule] }),
+    );
   };
 
   const addFilter = (path: readonly number[]): void => {
@@ -673,10 +719,10 @@ export function TokenScopeDialog({
             }
           : undefined),
       };
-      const created = await fetchApi("/tokens", {
+      const created = (await fetchApi("/tokens", {
         method: "POST",
         body: JSON.stringify({ data: { attributes } }),
-      }) as { data: { id: string; type: string; attributes: JsonObject } };
+      })) as { data: { id: string; type: string; attributes: JsonObject } };
       onCreated(created.data);
       onOpenChange(false);
       reset();
@@ -720,10 +766,7 @@ export function TokenScopeDialog({
     }).filter((g): g is (typeof PERMISSION_GROUPS)[number] => g !== null);
   }, [permissionSearch]);
 
-  const totalGrantedCount = useMemo(
-    (): number => Object.values(granted).filter(Boolean).length,
-    [granted],
-  );
+  const totalGrantedCount = useMemo((): number => Object.values(granted).filter(Boolean).length, [granted]);
 
   const currentScopeSummary = useMemo((): string => {
     if (!fineGrained) return summarizeTokenScopes(null);
@@ -749,7 +792,9 @@ export function TokenScopeDialog({
               spellCheck={false}
               placeholder="Tag key (e.g. env)"
               value={node.key}
-              onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setFilterValue(path, e.currentTarget.value, node.value); }}
+              onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => {
+                setFilterValue(path, e.currentTarget.value, node.value);
+              }}
               className="h-8 font-mono text-xs"
             />
           </div>
@@ -764,7 +809,9 @@ export function TokenScopeDialog({
               spellCheck={false}
               placeholder="Tag value (e.g. prod)"
               value={node.value}
-              onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setFilterValue(path, node.key, e.currentTarget.value); }}
+              onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => {
+                setFilterValue(path, node.key, e.currentTarget.value);
+              }}
               className="h-8 font-mono text-xs"
             />
           </div>
@@ -773,7 +820,9 @@ export function TokenScopeDialog({
               type="button"
               variant="outline"
               size="sm"
-              onClick={(): void => { wrapRule(path); }}
+              onClick={(): void => {
+                wrapRule(path);
+              }}
               title="Wrap this condition into a group"
               className="h-8 text-xs font-medium"
             >
@@ -784,7 +833,9 @@ export function TokenScopeDialog({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={(): void => { removeRule(path); }}
+              onClick={(): void => {
+                removeRule(path);
+              }}
               aria-label="Remove condition"
               className="h-8 px-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
               title="Remove condition"
@@ -800,15 +851,17 @@ export function TokenScopeDialog({
     return (
       <div
         className={`space-y-2.5 rounded-lg border ${
-          isRoot
-            ? "border-border bg-muted/20 p-3"
-            : "border-primary/30 border-l-4 border-l-primary bg-primary/5 p-2.5"
+          isRoot ? "border-border bg-muted/20 p-3" : "border-primary/30 border-l-4 border-l-primary bg-primary/5 p-2.5"
         }`}
         data-testid="tag-group"
       >
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2">
           <div className="flex items-center gap-2">
-            {!isRoot && <span aria-hidden="true" className="text-sm font-semibold text-primary">(</span>}
+            {!isRoot && (
+              <span aria-hidden="true" className="text-sm font-semibold text-primary">
+                (
+              </span>
+            )}
             <Select
               aria-label="Combine with"
               className="h-7 font-mono font-semibold w-auto text-xs"
@@ -830,7 +883,9 @@ export function TokenScopeDialog({
               type="button"
               variant="outline"
               size="sm"
-              onClick={(): void => { addFilter(path); }}
+              onClick={(): void => {
+                addFilter(path);
+              }}
               className="h-7 text-xs font-medium"
             >
               <Plus className="mr-1 size-3" />
@@ -840,7 +895,9 @@ export function TokenScopeDialog({
               type="button"
               variant="outline"
               size="sm"
-              onClick={(): void => { addGroup(path); }}
+              onClick={(): void => {
+                addGroup(path);
+              }}
               className="h-7 text-xs font-medium"
             >
               <FolderPlus className="mr-1 size-3" />
@@ -851,7 +908,9 @@ export function TokenScopeDialog({
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={(): void => { removeRule(path); }}
+                onClick={(): void => {
+                  removeRule(path);
+                }}
                 aria-label="Remove group"
                 className="h-7 px-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                 title="Remove group"
@@ -863,19 +922,29 @@ export function TokenScopeDialog({
         </div>
 
         <div className="space-y-2">
-          {node.rules.map((child, index): React.JSX.Element => (
-            <div key={child.id}>
-              {renderRuleRow(child, [...path, index])}
-            </div>
-          ))}
+          {node.rules.map(
+            (child, index): React.JSX.Element => (
+              <div key={child.id}>{renderRuleRow(child, [...path, index])}</div>
+            ),
+          )}
         </div>
-        {!isRoot && <span aria-hidden="true" className="text-sm font-semibold text-primary">)</span>}
+        {!isRoot && (
+          <span aria-hidden="true" className="text-sm font-semibold text-primary">
+            )
+          </span>
+        )}
       </div>
     );
   };
 
   return (
-    <Dialog open={open} onOpenChange={(next: boolean): void => { if (!next) reset(); onOpenChange(next); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(next: boolean): void => {
+        if (!next) reset();
+        onOpenChange(next);
+      }}
+    >
       <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -883,8 +952,8 @@ export function TokenScopeDialog({
             Create API token
           </DialogTitle>
           <DialogDescription>
-            Fine-grained tokens restrict access to specific organizations, projects,
-            workspaces, and tag rules, with customizable per-action permission grants.
+            Fine-grained tokens restrict access to specific organizations, projects, workspaces, and tag rules, with
+            customizable per-action permission grants.
           </DialogDescription>
         </DialogHeader>
 
@@ -899,7 +968,9 @@ export function TokenScopeDialog({
               name="token-description"
               autoComplete="off"
               value={description}
-              onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(e.currentTarget.value); }}
+              onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => {
+                setDescription(e.currentTarget.value);
+              }}
               placeholder="e.g. CI/CD deploy token (GitHub Actions)"
             />
           </div>
@@ -908,30 +979,39 @@ export function TokenScopeDialog({
           <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-card p-3 shadow-xs hover:border-primary/50 transition-colors">
             <Checkbox
               checked={fineGrained}
-              onCheckedChange={(v: boolean): void => { setFineGrained(v); }}
+              onCheckedChange={(v: boolean): void => {
+                setFineGrained(v);
+              }}
               className="mt-0.5"
             />
             <div>
               <span className="font-semibold text-foreground text-sm">Fine-grained</span>
               <span className="block text-xs font-normal text-muted-foreground mt-0.5">
-                Restrict this token to specific resources, tag rules, and action permissions. Legacy tokens have unrestricted access to all resources.
+                Restrict this token to specific resources, tag rules, and action permissions. Legacy tokens have
+                unrestricted access to all resources.
               </span>
             </div>
           </label>
 
           {!fineGrained && (
             <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning-text">
-              This legacy token has full access to every organization and resource available to your account. Choose a fine-grained token for a narrower task.
+              This legacy token has full access to every organization and resource available to your account. Choose a
+              fine-grained token for a narrower task.
             </div>
           )}
 
           {fineGrained && (
             <div className="space-y-5 rounded-lg border border-border/80 bg-background/50 p-4">
-              <div className="space-y-3 rounded-md border border-primary/30 bg-primary/5 p-3" data-testid="token-scope-summary" aria-live="polite">
+              <div
+                className="space-y-3 rounded-md border border-primary/30 bg-primary/5 p-3"
+                data-testid="token-scope-summary"
+                aria-live="polite"
+              >
                 <div>
                   <p className="text-xs font-semibold text-foreground">Access summary</p>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    This summary is generated from the scope that will be stored with the token. A new permission will not be added to a preset automatically.
+                    This summary is generated from the scope that will be stored with the token. A new permission will
+                    not be added to a preset automatically.
                   </p>
                 </div>
                 <p className="break-words font-mono text-xs leading-relaxed text-foreground">{currentScopeSummary}</p>
@@ -940,21 +1020,33 @@ export function TokenScopeDialog({
               <div className="space-y-2 rounded-md border border-border bg-card p-3">
                 <div>
                   <p className="text-xs font-semibold text-foreground">Start from a task</p>
-                  <p className="mt-0.5 text-2xs text-muted-foreground">Presets are explicit permission lists. Review the summary before creating the token.</p>
+                  <p className="mt-0.5 text-2xs text-muted-foreground">
+                    Presets are explicit permission lists. Review the summary before creating the token.
+                  </p>
                 </div>
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-                  {TOKEN_PRESETS.map((preset): React.JSX.Element => (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      aria-label={preset.id === "read-only" ? "Select read-only permissions" : `Select ${preset.id} automation permissions`}
-                      onClick={(): void => { grantPreset(preset); }}
-                      className="rounded-md border border-border bg-background px-2.5 py-2 text-left transition-colors hover:border-primary/50 hover:bg-primary/5"
-                    >
-                      <span className="block text-xs font-semibold text-foreground">{preset.label}</span>
-                      <span className="mt-0.5 block text-2xs leading-4 text-muted-foreground">{preset.description}</span>
-                    </button>
-                  ))}
+                  {TOKEN_PRESETS.map(
+                    (preset): React.JSX.Element => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        aria-label={
+                          preset.id === "read-only"
+                            ? "Select read-only permissions"
+                            : `Select ${preset.id} automation permissions`
+                        }
+                        onClick={(): void => {
+                          grantPreset(preset);
+                        }}
+                        className="rounded-md border border-border bg-background px-2.5 py-2 text-left transition-colors hover:border-primary/50 hover:bg-primary/5"
+                      >
+                        <span className="block text-xs font-semibold text-foreground">{preset.label}</span>
+                        <span className="mt-0.5 block text-2xs leading-4 text-muted-foreground">
+                          {preset.description}
+                        </span>
+                      </button>
+                    ),
+                  )}
                 </div>
               </div>
 
@@ -967,7 +1059,6 @@ export function TokenScopeDialog({
                 <Select
                   id="token-org"
                   name="token-organization"
-
                   value={orgId}
                   onChange={(e): void => {
                     setOrgId(e.target.value);
@@ -975,9 +1066,13 @@ export function TokenScopeDialog({
                     setSelectedWorkspaces(new Set());
                   }}
                 >
-                  {orgs.map((org): React.JSX.Element => (
-                    <option key={org.id} value={org.id}>{org.name}</option>
-                  ))}
+                  {orgs.map(
+                    (org): React.JSX.Element => (
+                      <option key={org.id} value={org.id}>
+                        {org.name}
+                      </option>
+                    ),
+                  )}
                 </Select>
               </div>
 
@@ -990,10 +1085,16 @@ export function TokenScopeDialog({
                   filteredItems={filteredProjects}
                   selected={selectedProjects}
                   search={projectSearch}
-                  onSearchChange={(value: string): void => { setProjectSearch(value); }}
+                  onSearchChange={(value: string): void => {
+                    setProjectSearch(value);
+                  }}
                   onToggle={toggleProject}
-                  onSelectAll={(): void => { setSelectedProjects(new Set(projects.map((p): string => p.id))); }}
-                  onClear={(): void => { setSelectedProjects(new Set()); }}
+                  onSelectAll={(): void => {
+                    setSelectedProjects(new Set(projects.map((p): string => p.id)));
+                  }}
+                  onClear={(): void => {
+                    setSelectedProjects(new Set());
+                  }}
                   selectAllAriaLabel="Select all projects"
                   clearAriaLabel="Clear selected projects"
                   filterPlaceholder="Filter projects…"
@@ -1010,10 +1111,16 @@ export function TokenScopeDialog({
                   filteredItems={filteredWorkspaces}
                   selected={selectedWorkspaces}
                   search={workspaceSearch}
-                  onSearchChange={(value: string): void => { setWorkspaceSearch(value); }}
+                  onSearchChange={(value: string): void => {
+                    setWorkspaceSearch(value);
+                  }}
                   onToggle={toggleWorkspace}
-                  onSelectAll={(): void => { setSelectedWorkspaces(new Set(workspaces.map((w): string => w.id))); }}
-                  onClear={(): void => { setSelectedWorkspaces(new Set()); }}
+                  onSelectAll={(): void => {
+                    setSelectedWorkspaces(new Set(workspaces.map((w): string => w.id)));
+                  }}
+                  onClear={(): void => {
+                    setSelectedWorkspaces(new Set());
+                  }}
                   selectAllAriaLabel="Select all workspaces"
                   clearAriaLabel="Clear selected workspaces"
                   filterPlaceholder="Filter workspaces…"
@@ -1044,7 +1151,8 @@ export function TokenScopeDialog({
                 )}
 
                 <p className="text-2xs text-muted-foreground">
-                  Workspaces matching this rule are included even if not selected above. Use AND to require all conditions, OR to match any, and &quot;group&quot; to nest conditions.
+                  Workspaces matching this rule are included even if not selected above. Use AND to require all
+                  conditions, OR to match any, and &quot;group&quot; to nest conditions.
                 </p>
               </div>
 
@@ -1087,8 +1195,12 @@ export function TokenScopeDialog({
                   <Input
                     placeholder="Search permissions by action or resource…"
                     value={permissionSearch}
-                    onChange={(e): void => { setPermissionSearch(e.target.value); }}
-                    onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setPermissionSearch(e.currentTarget.value); }}
+                    onChange={(e): void => {
+                      setPermissionSearch(e.target.value);
+                    }}
+                    onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => {
+                      setPermissionSearch(e.currentTarget.value);
+                    }}
                     className="h-8 pl-8 text-xs"
                   />
                 </div>
@@ -1106,7 +1218,9 @@ export function TokenScopeDialog({
                             </Badge>
                             <button
                               type="button"
-                              onClick={(): void => { toggleGroupGrants(group.grants); }}
+                              onClick={(): void => {
+                                toggleGroupGrants(group.grants);
+                              }}
                               className="text-2xs text-primary hover:underline ml-1"
                             >
                               {activeInGroup === group.grants.length ? "none" : "all"}
@@ -1114,19 +1228,23 @@ export function TokenScopeDialog({
                           </div>
                         </div>
                         <div className="space-y-1">
-                          {group.grants.map((grant): React.JSX.Element => (
-                            <label
-                              key={grant.key}
-                              className="flex cursor-pointer items-start gap-2 rounded px-1 py-0.5 text-xs select-none hover:bg-muted"
-                            >
-                              <Checkbox
-                                checked={granted[grant.key] === true}
-                                onCheckedChange={(): void => { toggleGrant(grant.key); }}
-                                className="mt-0.5"
-                              />
-                              <span className="flex-1 leading-4 text-foreground/90">{grant.label}</span>
-                            </label>
-                          ))}
+                          {group.grants.map(
+                            (grant): React.JSX.Element => (
+                              <label
+                                key={grant.key}
+                                className="flex cursor-pointer items-start gap-2 rounded px-1 py-0.5 text-xs select-none hover:bg-muted"
+                              >
+                                <Checkbox
+                                  checked={granted[grant.key] === true}
+                                  onCheckedChange={(): void => {
+                                    toggleGrant(grant.key);
+                                  }}
+                                  className="mt-0.5"
+                                />
+                                <span className="flex-1 leading-4 text-foreground/90">{grant.label}</span>
+                              </label>
+                            ),
+                          )}
                         </div>
                       </div>
                     );
@@ -1136,7 +1254,11 @@ export function TokenScopeDialog({
             </div>
           )}
 
-          {error !== "" && <p role="alert" className="text-sm text-destructive">{error}</p>}
+          {error !== "" && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
         </div>
 
         <DialogFooter className="mt-4">
@@ -1144,7 +1266,10 @@ export function TokenScopeDialog({
             type="button"
             variant="outline"
             disabled={saving}
-            onClick={(): void => { onOpenChange(false); reset(); }}
+            onClick={(): void => {
+              onOpenChange(false);
+              reset();
+            }}
           >
             Cancel
           </Button>

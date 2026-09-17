@@ -45,7 +45,8 @@ async function writeUploadStream(
       failure ??= error;
     }
   }
-  if (failure !== undefined) throw failure instanceof Error ? failure : new Error("upload stream failed", { cause: failure });
+  if (failure !== undefined)
+    throw failure instanceof Error ? failure : new Error("upload stream failed", { cause: failure });
   if (total === 0) throw new Error("empty");
   return total;
 }
@@ -68,7 +69,7 @@ export async function persistUploadBody(
       if (direct.byteLength > limit) throw new Error("too-large");
       if (direct.byteLength === 0) throw new Error("empty");
       await writeFile(temporary, direct, { mode: 0o600, flag: "wx" });
-      if (canPublish !== undefined && !await canPublish()) throw new Error("stale-agent-lease");
+      if (canPublish !== undefined && !(await canPublish())) throw new Error("stale-agent-lease");
       await rename(temporary, path);
       return direct.byteLength;
     }
@@ -76,11 +77,13 @@ export async function persistUploadBody(
     const reader = stream?.getReader();
     if (reader === undefined) throw new Error("empty");
     const size = await writeUploadStream(reader, temporary, limit);
-    if (canPublish !== undefined && !await canPublish()) throw new Error("stale-agent-lease");
+    if (canPublish !== undefined && !(await canPublish())) throw new Error("stale-agent-lease");
     await rename(temporary, path);
     return size;
   } catch (error: unknown) {
-    await rm(temporary, { force: true }).catch((): void => { /* best effort */ });
+    await rm(temporary, { force: true }).catch((): void => {
+      /* best effort */
+    });
     throw error;
   }
 }

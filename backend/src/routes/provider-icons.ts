@@ -32,9 +32,10 @@ function providerIconFallback(providerName: string, set: SetContext): Response |
   if (fallback === null) return providerIconNotFound(set);
   const headers = new Headers({
     "Cache-Control": "private, no-cache",
-    "Content-Security-Policy": "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'none'; style-src 'none'; sandbox",
+    "Content-Security-Policy":
+      "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'none'; style-src 'none'; sandbox",
     "Content-Type": "image/svg+xml; charset=utf-8",
-    "ETag": fallback.etag,
+    ETag: fallback.etag,
   });
   set.status = 200;
   set.headers["Cache-Control"] = "private, no-cache";
@@ -44,11 +45,7 @@ function providerIconFallback(providerName: string, set: SetContext): Response |
   return new Response(fallback.body, { headers });
 }
 
-async function serveProviderIconImage(
-  providerName: string,
-  request: Request,
-  set: SetContext,
-): Promise<unknown> {
+async function serveProviderIconImage(providerName: string, request: Request, set: SetContext): Promise<unknown> {
   const source = parseProviderSource(providerName);
   if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return providerIconNotFound(set);
 
@@ -71,10 +68,13 @@ async function serveProviderIconImage(
 
 export const providerIconRoutes = new Elysia()
   .use(authPlugin)
-  .get("/api/v2/provider-icons/:hostname/:namespace/:name", async ({ params, request, set }: ImageCtx): Promise<unknown> => {
-    const providerName = `${params["hostname"] ?? ""}/${params["namespace"] ?? ""}/${params["name"] ?? ""}`;
-    return serveProviderIconImage(providerName, request, set);
-  })
+  .get(
+    "/api/v2/provider-icons/:hostname/:namespace/:name",
+    async ({ params, request, set }: ImageCtx): Promise<unknown> => {
+      const providerName = `${params["hostname"] ?? ""}/${params["namespace"] ?? ""}/${params["name"] ?? ""}`;
+      return serveProviderIconImage(providerName, request, set);
+    },
+  )
   .get("/api/v2/provider-icons", async ({ query, request, set }: Ctx): Promise<unknown> => {
     const url = new URL(request.url);
     // Support both ?provider-name= and ?provider_name=, repeated or comma-separated.
@@ -86,8 +86,8 @@ export const providerIconRoutes = new Elysia()
     ];
     // Fallback when the runtime collapsed the query into `query` only (single value).
     if (raw.length === 0 && query !== undefined) {
-      const single = (query as Record<string, string>)["provider-name"]
-        ?? (query as Record<string, string>)["provider_name"];
+      const single =
+        (query as Record<string, string>)["provider-name"] ?? (query as Record<string, string>)["provider_name"];
       if (typeof single === "string" && single !== "") raw.push(single);
     }
     const names = raw

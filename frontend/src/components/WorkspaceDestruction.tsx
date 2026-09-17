@@ -71,13 +71,19 @@ function DestroyPlanSection({
           />
           <div className="space-y-1">
             <Label htmlFor="allow-destroy-plans">Allow destroy plans</Label>
-            <p className="text-sm text-muted-foreground">
-              When disabled, new destroy plans cannot be queued.
-            </p>
+            <p className="text-sm text-muted-foreground">When disabled, new destroy plans cannot be queued.</p>
           </div>
         </div>
-        {savingDestroySetting && <p role="status" className="text-sm text-muted-foreground">Saving setting…</p>}
-        {settingError !== "" && <p role="alert" className="text-sm text-destructive">{settingError}</p>}
+        {savingDestroySetting && (
+          <p role="status" className="text-sm text-muted-foreground">
+            Saving setting…
+          </p>
+        )}
+        {settingError !== "" && (
+          <p role="alert" className="text-sm text-destructive">
+            {settingError}
+          </p>
+        )}
         {!canUpdate && (
           <p role="status" className="text-sm text-muted-foreground">
             You do not have permission to change this setting.
@@ -92,7 +98,11 @@ function DestroyPlanSection({
           {queueingDestroy && <Spinner data-icon="inline-start" />}
           {queueingDestroy ? "Queueing destroy plan…" : "Queue destroy plan"}
         </Button>
-        {queueError !== "" && <p role="alert" className="text-sm text-destructive">{queueError}</p>}
+        {queueError !== "" && (
+          <p role="alert" className="text-sm text-destructive">
+            {queueError}
+          </p>
+        )}
         {!canQueueDestroy && (
           <p role="status" className="text-sm text-muted-foreground">
             You do not have permission to queue a destroy plan.
@@ -136,19 +146,20 @@ function DeleteWorkspaceSection({
           This action cannot be undone. Destroy the infrastructure first if you also want it gone.
         </p>
         <Dialog open={open} onOpenChange={onOpenChange}>
-          <DialogTrigger render={
-            <Button variant="destructive" disabled={!canDelete}>
-              <Trash2 data-icon="inline-start" />
-              Delete workspace
-            </Button>
-          } />
+          <DialogTrigger
+            render={
+              <Button variant="destructive" disabled={!canDelete}>
+                <Trash2 data-icon="inline-start" />
+                Delete workspace
+              </Button>
+            }
+          />
           <DialogContent>
             <form onSubmit={onSubmit}>
               <DialogHeader>
                 <DialogTitle>Delete {workspaceName}?</DialogTitle>
                 <DialogDescription>
-                  Type <strong className="text-foreground">{workspaceName}</strong> to confirm
-                  permanent deletion.
+                  Type <strong className="text-foreground">{workspaceName}</strong> to confirm permanent deletion.
                 </DialogDescription>
               </DialogHeader>
               <div className="my-5 space-y-2">
@@ -179,7 +190,9 @@ function DeleteWorkspaceSection({
                   type="button"
                   variant="outline"
                   disabled={deleting}
-                  onClick={(): void => { onOpenChange(false); }}
+                  onClick={(): void => {
+                    onOpenChange(false);
+                  }}
                 >
                   Cancel
                 </Button>
@@ -214,9 +227,7 @@ export function WorkspaceDestruction({
   const [confirmation, setConfirmation] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
-  const [allowDestroyPlan, setAllowDestroyPlan] = useState(
-    workspace.attributes["allow-destroy-plan"] !== false,
-  );
+  const [allowDestroyPlan, setAllowDestroyPlan] = useState(workspace.attributes["allow-destroy-plan"] !== false);
   const [savingDestroySetting, setSavingDestroySetting] = useState(false);
   const [settingError, setSettingError] = useState("");
   const [queueingDestroy, setQueueingDestroy] = useState(false);
@@ -254,8 +265,8 @@ export function WorkspaceDestruction({
     setQueueingDestroy(true);
     setQueueError("");
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi("/runs", {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi("/runs", {
         method: "POST",
         body: JSON.stringify({
           data: {
@@ -270,7 +281,7 @@ export function WorkspaceDestruction({
             },
           },
         }),
-      }) as { data?: { id?: unknown } };
+      })) as { data?: { id?: unknown } };
       const runId = response.data?.id;
       if (!isString(runId) || runId === "") {
         throw new Error("Destroy plan response did not include a run ID");
@@ -322,8 +333,12 @@ export function WorkspaceDestruction({
         settingError={settingError}
         queueingDestroy={queueingDestroy}
         queueError={queueError}
-        onToggleAllow={(checked: boolean): void => { void updateAllowDestroyPlan(checked); }}
-        onQueueDestroy={(): void => { void queueDestroyPlan(); }}
+        onToggleAllow={(checked: boolean): void => {
+          void updateAllowDestroyPlan(checked);
+        }}
+        onQueueDestroy={(): void => {
+          void queueDestroyPlan();
+        }}
       />
 
       <DeleteWorkspaceSection
@@ -332,7 +347,9 @@ export function WorkspaceDestruction({
         open={open}
         onOpenChange={setDialogOpen}
         confirmation={confirmation}
-        onConfirmationChange={(value: string): void => { setConfirmation(value); }}
+        onConfirmationChange={(value: string): void => {
+          setConfirmation(value);
+        }}
         deleting={deleting}
         error={error}
         onSubmit={deleteWorkspace}

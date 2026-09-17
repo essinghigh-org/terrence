@@ -54,7 +54,8 @@ const assessmentPlan = {
 };
 
 test("schedules eligible assessments separately from runs and records drift, checks, and notifications", async () => {
-  const result = await runScript(`
+  const result = await runScript(
+    `
     const { db } = await import("./src/db/index.ts");
     const {
       assessmentCheckResults,
@@ -166,9 +167,11 @@ test("schedules eligible assessments separately from runs and records drift, che
       notificationScope: payloads[0]?.trigger_scope,
       notificationResultId: payloads[0]?.details?.new_assessment_result?.id,
     }));
-  `, {
-    SIMULATED_ASSESSMENT_JSON: JSON.stringify(assessmentPlan),
-  });
+  `,
+    {
+      SIMULATED_ASSESSMENT_JSON: JSON.stringify(assessmentPlan),
+    },
+  );
 
   expect(result["firstWorkspaces"]).toEqual(["enabled", "forced"]);
   expect(result["firstStatuses"]).toEqual(["completed", "completed"]);
@@ -193,7 +196,8 @@ test("schedules eligible assessments separately from runs and records drift, che
 });
 
 test("evaluates and stores plan checks before apply without turning advisory checks into blockers", async () => {
-  const result = await runScript(`
+  const result = await runScript(
+    `
     const { db } = await import("./src/db/index.ts");
     const { assessmentCheckResults, organizations, runs, workspaces } = await import("./src/db/schema.ts");
     const { executeRun } = await import("./src/worker.ts");
@@ -217,9 +221,11 @@ test("evaluates and stores plan checks before apply without turning advisory che
         message: check.message,
       })),
     }));
-  `, {
-    SIMULATED_PLAN_JSON: JSON.stringify(assessmentPlan),
-  });
+  `,
+    {
+      SIMULATED_PLAN_JSON: JSON.stringify(assessmentPlan),
+    },
+  );
 
   expect(result["runStatus"]).toBe("applied");
   expect(result["checks"]).toEqual([
@@ -316,7 +322,9 @@ test("serves assessment summaries, check results, and admin-only artifacts", asy
 
   expect(result["summaryStatus"]).toBe(200);
   expect((result["summary"] as Record<string, unknown>)["id"]).toBe("asmtres-api");
-  expect(((result["summary"] as Record<string, unknown>)["attributes"] as Record<string, unknown>)["checks-failed"]).toBe(1);
+  expect(
+    ((result["summary"] as Record<string, unknown>)["attributes"] as Record<string, unknown>)["checks-failed"],
+  ).toBe(1);
   expect((result["checks"] as Record<string, unknown>[])[0]?.["id"]).toBe("checkrs-api");
   expect(result["json"]).toEqual({ format_version: "1.2" });
   expect(result["jsonContentType"]).toContain("application/json");

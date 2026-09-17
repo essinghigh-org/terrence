@@ -3,14 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens,
-  organizationMemberships,
-  organizations,
-  runs,
-  users,
-  workspaces,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, runs, users, workspaces } from "../../src/db/schema";
 
 describe("run include workspace sideload (audit finding 8)", () => {
   const suffix = crypto.randomUUID();
@@ -22,9 +15,11 @@ describe("run include workspace sideload (audit finding 8)", () => {
   const token = `token-${suffix}`;
 
   const request = (path: string) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      headers: { Authorization: "Bearer " + token },
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        headers: { Authorization: "Bearer " + token },
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: `sideload-${suffix}`, passwordHash: "unused" });
@@ -59,7 +54,7 @@ describe("run include workspace sideload (audit finding 8)", () => {
   it("carries structured-run-output-enabled matching the full workspace resource", async () => {
     const res = await request(`/api/v2/runs/${runId}?include=workspace`);
     expect(res.status).toBe(200);
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       included: { id: string; type: string; attributes: Record<string, unknown> }[];
     };
     expect(Array.isArray(body.included)).toBe(true);

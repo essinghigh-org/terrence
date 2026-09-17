@@ -1,11 +1,18 @@
 import { oidcSigningAlgorithms, validateSettings } from "../../lib/settings-contract";
 // Shared admin helpers (split from routes/admin.ts).
 import { db, isPostgres } from "../../db";
-import type { users, organizations, workspaces, runs} from "../../db/schema";
+import type { users, organizations, workspaces, runs } from "../../db/schema";
 import { registryPartnerships, samlSettings, adminSettings } from "../../db/schema";
 import { eq } from "drizzle-orm";
 import { AvatarService } from "../../lib/avatars";
-import { type Settings, encryptSettingsValues, getSettings, getSettingsFresh, invalidateSettingsCache, normalizePlanExplainerBaseUrl } from "../../lib/settings";
+import {
+  type Settings,
+  encryptSettingsValues,
+  getSettings,
+  getSettingsFresh,
+  invalidateSettingsCache,
+  normalizePlanExplainerBaseUrl,
+} from "../../lib/settings";
 import { type DeepReadonly, apiURL } from "../../lib/utils";
 import { withDbLock } from "../../lib/db-lock";
 import type { SetObj } from "./types";
@@ -48,8 +55,8 @@ export async function operationsSettingsResource(): Promise<Record<string, unkno
   delete approvalSafe["secret"];
   const explainerSafe: Record<string, unknown> = {
     ...explainer,
-    "base-url": normalizePlanExplainerBaseUrl(explainer["base-url"])
-      ?? normalizePlanExplainerBaseUrl(explainer["endpoint-url"]),
+    "base-url":
+      normalizePlanExplainerBaseUrl(explainer["base-url"]) ?? normalizePlanExplainerBaseUrl(explainer["endpoint-url"]),
     "api-key-set": typeof explainer["api-key"] === "string" && explainer["api-key"] !== "",
   };
   delete explainerSafe["endpoint-url"];
@@ -123,7 +130,9 @@ const settingsQueues = new Map<string, Promise<void>>();
 async function withQueuedSettingsLock<T>(name: string, operation: () => Promise<T>): Promise<T> {
   const previous = settingsQueues.get(name) ?? Promise.resolve();
   let release!: () => void;
-  const current = new Promise<void>((resolve): void => { release = resolve; });
+  const current = new Promise<void>((resolve): void => {
+    release = resolve;
+  });
   settingsQueues.set(name, current);
   await previous;
   try {
@@ -137,16 +146,15 @@ async function withQueuedSettingsLock<T>(name: string, operation: () => Promise<
 /** Run a settings update while holding the lock for its settings group. */
 export async function withSettingsLock<T>(group: string, operation: () => Promise<T>): Promise<T> {
   const name = `settings:${group}`;
-  return withQueuedSettingsLock(name, async (): Promise<T> => isPostgres
-    ? withDbLock(name, operation)
-    : operation());
+  return withQueuedSettingsLock(name, async (): Promise<T> => (isPostgres ? withDbLock(name, operation) : operation()));
 }
 
 /** Serialize authentication configuration checks across all auth providers. */
 export async function withAuthSettingsLock<T>(operation: () => Promise<T>): Promise<T> {
-  return withQueuedSettingsLock("auth-settings", async (): Promise<T> => isPostgres
-    ? withDbLock("auth-settings", operation)
-    : operation());
+  return withQueuedSettingsLock(
+    "auth-settings",
+    async (): Promise<T> => (isPostgres ? withDbLock("auth-settings", operation) : operation()),
+  );
 }
 
 export async function updateSettings(group: string, attrs: Settings): Promise<Settings> {
@@ -160,7 +168,10 @@ export async function updateSettings(group: string, attrs: Settings): Promise<Se
     }
     validateSettings(group, values, true);
     const storedValues = await encryptSettingsValues(group, values);
-    await db.insert(adminSettings).values({ id: group, values: storedValues, updatedAt: Date.now() }).onConflictDoUpdate({ target: adminSettings.id, set: { values: storedValues, updatedAt: Date.now() } });
+    await db
+      .insert(adminSettings)
+      .values({ id: group, values: storedValues, updatedAt: Date.now() })
+      .onConflictDoUpdate({ target: adminSettings.id, set: { values: storedValues, updatedAt: Date.now() } });
     invalidateSettingsCache();
     return values;
   });
@@ -194,11 +205,13 @@ export async function authLockoutResponse(
   if (localAuth || methods.saml || methods.oidc || methods.ldap) return null;
   (set as { status: number }).status = 422;
   return {
-    errors: [{
-      status: "422",
-      title: "Unprocessable Entity",
-      detail: "At least one authentication method must remain enabled",
-    }],
+    errors: [
+      {
+        status: "422",
+        title: "Unprocessable Entity",
+        detail: "At least one authentication method must remain enabled",
+      },
+    ],
   };
 }
 export function samlSettingsResource(
@@ -260,7 +273,9 @@ type SamlFieldValues = Readonly<{
   enabled: boolean;
 }>;
 
-function checkSamlTypes(attributes: Readonly<Record<string, unknown>>): Readonly<{ ok: true }> | Readonly<{ error: string }> {
+function checkSamlTypes(
+  attributes: Readonly<Record<string, unknown>>,
+): Readonly<{ ok: true }> | Readonly<{ error: string }> {
   for (const key of ["enabled", "debug"] as const) {
     if (attributes[key] !== undefined && typeof attributes[key] !== "boolean") {
       return { error: `${key} must be a boolean` };
@@ -288,20 +303,25 @@ function checkSamlTypes(attributes: Readonly<Record<string, unknown>>): Readonly
   return { ok: true };
 }
 
-function resolveSamlFields(
-  attributes: Readonly<Record<string, unknown>>,
-  current: SamlSettings,
-): SamlFieldValues {
-  const nullableString = (key: "idp-cert" | "idp-entity-id" | "slo-endpoint-url" | "sso-endpoint-url", fallback: string | null): string | null =>
+function resolveSamlFields(attributes: Readonly<Record<string, unknown>>, current: SamlSettings): SamlFieldValues {
+  const nullableString = (
+    key: "idp-cert" | "idp-entity-id" | "slo-endpoint-url" | "sso-endpoint-url",
+    fallback: string | null,
+  ): string | null =>
     attributes[key] === undefined ? fallback : typeof attributes[key] === "string" ? attributes[key].trim() : null;
   // idp-cert must round-trip byte-for-byte (the provider compares it exactly,
   // including trailing newlines); trim would cause an inconsistent result.
   const rawCertString = (fallback: string | null): string | null =>
-    attributes["idp-cert"] === undefined ? fallback : typeof attributes["idp-cert"] === "string" ? attributes["idp-cert"] : null;
+    attributes["idp-cert"] === undefined
+      ? fallback
+      : typeof attributes["idp-cert"] === "string"
+        ? attributes["idp-cert"]
+        : null;
   const requiredString = (
     key: "attr-username" | "attr-email" | "attr-groups" | "attr-site-admin" | "site-admin-role",
     fallback: string,
-  ): string => attributes[key] === undefined ? fallback : typeof attributes[key] === "string" ? attributes[key].trim() : "";
+  ): string =>
+    attributes[key] === undefined ? fallback : typeof attributes[key] === "string" ? attributes[key].trim() : "";
   const idpCert = rawCertString(current.idpCert);
   const sloEndpointUrl = nullableString("slo-endpoint-url", current.sloEndpointUrl);
   const ssoEndpointUrl = nullableString("sso-endpoint-url", current.ssoEndpointUrl);
@@ -324,21 +344,43 @@ function resolveSamlFields(
 
 function checkSamlFormats(fields: SamlFieldValues): Readonly<{ ok: true }> | Readonly<{ error: string }> {
   const { idpCert, sloEndpointUrl, ssoEndpointUrl } = fields;
-  if (idpCert !== null && idpCert !== "" && (
-    !idpCert.includes("-----BEGIN CERTIFICATE-----")
-    || !idpCert.includes("-----END CERTIFICATE-----")
-  )) return { error: "idp-cert must be a PEM encoded X.509 certificate" };
-  if (sloEndpointUrl !== null && sloEndpointUrl !== "" && !validHttpsUrl(sloEndpointUrl)) return { error: "slo-endpoint-url must be an HTTPS URL" };
-  if (ssoEndpointUrl !== null && ssoEndpointUrl !== "" && !validHttpsUrl(ssoEndpointUrl)) return { error: "sso-endpoint-url must be an HTTPS URL" };
+  if (
+    idpCert !== null &&
+    idpCert !== "" &&
+    (!idpCert.includes("-----BEGIN CERTIFICATE-----") || !idpCert.includes("-----END CERTIFICATE-----"))
+  )
+    return { error: "idp-cert must be a PEM encoded X.509 certificate" };
+  if (sloEndpointUrl !== null && sloEndpointUrl !== "" && !validHttpsUrl(sloEndpointUrl))
+    return { error: "slo-endpoint-url must be an HTTPS URL" };
+  if (ssoEndpointUrl !== null && ssoEndpointUrl !== "" && !validHttpsUrl(ssoEndpointUrl))
+    return { error: "sso-endpoint-url must be an HTTPS URL" };
   return { ok: true };
 }
 
 function checkSamlRequirements(fields: SamlFieldValues): Readonly<{ ok: true }> | Readonly<{ error: string }> {
-  const { idpCert, idpEntityId, ssoEndpointUrl, attrUsername, attrEmail, attrGroups, attrSiteAdmin, siteAdminRole, enabled } = fields;
+  const {
+    idpCert,
+    idpEntityId,
+    ssoEndpointUrl,
+    attrUsername,
+    attrEmail,
+    attrGroups,
+    attrSiteAdmin,
+    siteAdminRole,
+    enabled,
+  } = fields;
   if (attrUsername === "" || attrEmail === "" || attrGroups === "" || attrSiteAdmin === "" || siteAdminRole === "") {
     return { error: "attr-username, attr-email, attr-groups, attr-site-admin, and site-admin-role must not be empty" };
   }
-  if (enabled && (idpCert === null || idpCert === "" || idpEntityId === null || idpEntityId === "" || ssoEndpointUrl === null || ssoEndpointUrl === "")) {
+  if (
+    enabled &&
+    (idpCert === null ||
+      idpCert === "" ||
+      idpEntityId === null ||
+      idpEntityId === "" ||
+      ssoEndpointUrl === null ||
+      ssoEndpointUrl === "")
+  ) {
     return { error: "idp-cert, idp-entity-id, and sso-endpoint-url are required when SAML is enabled" };
   }
   return { ok: true };
@@ -361,9 +403,10 @@ export function samlInput(
       id: SAML_SETTINGS_ID,
       enabled: fields.enabled,
       debug: typeof attributes["debug"] === "boolean" ? attributes["debug"] : current.debug,
-      oldIdpCert: fields.idpCert !== null && fields.idpCert !== current.idpCert && current.idpCert !== null
-        ? current.idpCert
-        : current.oldIdpCert,
+      oldIdpCert:
+        fields.idpCert !== null && fields.idpCert !== current.idpCert && current.idpCert !== null
+          ? current.idpCert
+          : current.oldIdpCert,
       idpCert: fields.idpCert,
       idpEntityId: fields.idpEntityId,
       sloEndpointUrl: fields.sloEndpointUrl,
@@ -381,20 +424,27 @@ export function samlInput(
 export function gravatarUrl(email: string | null | undefined): string | null {
   const addr = (email ?? "").trim().toLowerCase();
   // Use a simple hash via built-in SHA-256 if available, otherwise fall back to a deterministic placeholder
-  const hash = addr === "" ? "00000000000000000000000000000000" : Array.from(
-    new Uint8Array(
-      // Synchronous fallback: encode manually
-      // We use a btoa-based digest approximation; for correctness we compute MD5-style hex of email
-      // Since we cannot do crypto.subtle synchronously here, use a djb2 hex stretch
-      ((): ArrayBuffer => {
-        let h = 5381;
-        for (let i = 0; i < addr.length; i++) h = ((h * 33) ^ addr.charCodeAt(i)) >>> 0;
-        const buf = new Uint8Array(16);
-        for (let i = 0; i < 16; i++) { buf[i] = (h >> (i % 4 * 8)) & 0xff; }
-        return buf.buffer;
-      })()
-    )
-  ).map((b: number): string => b.toString(16).padStart(2, "0")).join("");
+  const hash =
+    addr === ""
+      ? "00000000000000000000000000000000"
+      : Array.from(
+          new Uint8Array(
+            // Synchronous fallback: encode manually
+            // We use a btoa-based digest approximation; for correctness we compute MD5-style hex of email
+            // Since we cannot do crypto.subtle synchronously here, use a djb2 hex stretch
+            ((): ArrayBuffer => {
+              let h = 5381;
+              for (let i = 0; i < addr.length; i++) h = ((h * 33) ^ addr.charCodeAt(i)) >>> 0;
+              const buf = new Uint8Array(16);
+              for (let i = 0; i < 16; i++) {
+                buf[i] = (h >> ((i % 4) * 8)) & 0xff;
+              }
+              return buf.buffer;
+            })(),
+          ),
+        )
+          .map((b: number): string => b.toString(16).padStart(2, "0"))
+          .join("");
   const raw = `https://www.gravatar.com/avatar/${hash}?s=80&d=identicon`;
   return AvatarService.resolveUrl("user-gravatar", raw);
 }
@@ -405,7 +455,9 @@ export function adminUserResource(u: UserItem): Record<string, unknown> {
     attributes: {
       username: u.username,
       email: u.email,
-      "email-verified": (u as Record<string, unknown>)["emailVerifiedAt"] !== null && (u as Record<string, unknown>)["emailVerifiedAt"] !== undefined,
+      "email-verified":
+        (u as Record<string, unknown>)["emailVerifiedAt"] !== null &&
+        (u as Record<string, unknown>)["emailVerifiedAt"] !== undefined,
       "is-site-admin": u.isSiteAdmin === true,
       "is-admin": u.isSiteAdmin === true,
       "is-site-auditor": (u as Record<string, unknown>)["isSiteAuditor"] === true,
@@ -444,7 +496,8 @@ export async function clearSpecificRegistrySharing(orgId: string, kind: "modules
   for (const row of rows) {
     const otherEnabled = kind === "modules" ? row.providers : row.modules;
     if (otherEnabled) {
-      await db.update(registryPartnerships)
+      await db
+        .update(registryPartnerships)
         .set(kind === "modules" ? { modules: false } : { providers: false })
         .where(eq(registryPartnerships.id, row.id));
     } else {

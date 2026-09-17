@@ -17,10 +17,10 @@ afterEach((): void => {
 });
 
 test("falls back to local sign-in when the ping request fails", async (): Promise<void> => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (): Promise<Response> => {
     throw new Error("ping unavailable");
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/login"]}>
@@ -43,12 +43,15 @@ test("falls back to local sign-in when the ping request fails", async (): Promis
 });
 
 test("renders SAML and OIDC single sign-on buttons when the providers are enabled", async (): Promise<void> => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (): Promise<Response> => json({
-    "signup-enabled": false,
-    "local-auth-enabled": true,
-    sso: { saml: true, oidc: true, ldap: false },
-  }))) as unknown as typeof fetch;
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        "signup-enabled": false,
+        "local-auth-enabled": true,
+        sso: { saml: true, oidc: true, ldap: false },
+      }),
+  ) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/login"]}>
@@ -67,12 +70,15 @@ test("renders SAML and OIDC single sign-on buttons when the providers are enable
 });
 
 test("shows the credential form for LDAP when local authentication is disabled", async (): Promise<void> => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (): Promise<Response> => json({
-    "signup-enabled": false,
-    "local-auth-enabled": false,
-    sso: { saml: true, oidc: false, ldap: true },
-  }))) as unknown as typeof fetch;
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        "signup-enabled": false,
+        "local-auth-enabled": false,
+        sso: { saml: true, oidc: false, ldap: true },
+      }),
+  ) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/login"]}>
@@ -92,12 +98,15 @@ test("shows the credential form for LDAP when local authentication is disabled",
 });
 
 test("warns when local authentication and LDAP are disabled", async (): Promise<void> => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (): Promise<Response> => json({
-    "signup-enabled": false,
-    "local-auth-enabled": false,
-    sso: { saml: true, oidc: false, ldap: false },
-  }))) as unknown as typeof fetch;
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        "signup-enabled": false,
+        "local-auth-enabled": false,
+        sso: { saml: true, oidc: false, ldap: false },
+      }),
+  ) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/login"]}>
@@ -117,12 +126,15 @@ test("warns when local authentication and LDAP are disabled", async (): Promise<
 });
 
 test("reports when every authentication method is disabled", async (): Promise<void> => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (): Promise<Response> => json({
-    "signup-enabled": false,
-    "local-auth-enabled": false,
-    sso: { saml: false, oidc: false, ldap: false },
-  }))) as unknown as typeof fetch;
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        "signup-enabled": false,
+        "local-auth-enabled": false,
+        sso: { saml: false, oidc: false, ldap: false },
+      }),
+  ) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/login"]}>
@@ -144,12 +156,15 @@ test("reports when every authentication method is disabled", async (): Promise<v
 });
 
 test("renders the password form when no SSO provider is enabled", async (): Promise<void> => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (): Promise<Response> => json({
-    "signup-enabled": true,
-    "local-auth-enabled": true,
-    sso: { saml: false, oidc: false, ldap: false },
-  }))) as unknown as typeof fetch;
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        "signup-enabled": true,
+        "local-auth-enabled": true,
+        sso: { saml: false, oidc: false, ldap: false },
+      }),
+  ) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/login"]}>
@@ -160,7 +175,9 @@ test("renders the password form when no SSO provider is enabled", async (): Prom
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByLabelText(/Username/i)).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByLabelText(/Username/i)).toBeTruthy();
+  });
   expect(view.queryByRole("button", { name: "Sign in with SAML SSO" })).toBeNull();
   expect(view.queryByRole("button", { name: /single sign-on/ })).toBeNull();
 });

@@ -63,12 +63,16 @@ variable "service" {
   });
 
   it("parses Terraform JSON configuration variables", () => {
-    expect(parseTerraformVariablesJson(JSON.stringify({
-      variable: {
-        enabled: { type: "bool", default: true, description: "Feature flag" },
-        token: { type: "string", sensitive: true },
-      },
-    }))).toEqual([
+    expect(
+      parseTerraformVariablesJson(
+        JSON.stringify({
+          variable: {
+            enabled: { type: "bool", default: true, description: "Feature flag" },
+            token: { type: "string", sensitive: true },
+          },
+        }),
+      ),
+    ).toEqual([
       {
         name: "enabled",
         type: "bool",
@@ -89,7 +93,6 @@ variable "service" {
     ]);
   });
 });
-
 
 test("ignores fake declarations and nested metadata in comments, strings and heredocs", () => {
   const source = `
@@ -114,9 +117,15 @@ variable "real" {
   description = "日本語"
 }
 `;
-  expect(parseTerraformVariables(source)).toEqual([expect.objectContaining({
-    name: "real", sensitive: false, nullable: true, description: "日本語", hasDefault: true,
-  })]);
+  expect(parseTerraformVariables(source)).toEqual([
+    expect.objectContaining({
+      name: "real",
+      sensitive: false,
+      nullable: true,
+      description: "日本語",
+      hasDefault: true,
+    }),
+  ]);
 });
 
 test("skipped blocks are reported instead of silently dropped (issue #706)", () => {
@@ -153,11 +162,14 @@ test("bounded scanner handles deterministic arbitrary truncation and reports typ
   for (let end = 0; end <= source.length; end += 1) {
     expect(() => parseTerraformVariablesWithDiagnostics(source.slice(0, end))).not.toThrow();
   }
-  expect(() => parseTerraformVariables("x".repeat(TERRAFORM_VARIABLE_PARSER_LIMITS.maxSourceCharacters + 1)))
-    .toThrow(TerraformVariableParseError);
-  const tooMany = Array.from({ length: TERRAFORM_VARIABLE_PARSER_LIMITS.maxVariables + 1 }, (_, index) => `variable "x${index}" {}`).join("\n");
-  expect(() => parseTerraformVariables(tooMany))
-    .toThrow(TerraformVariableParseError);
+  expect(() => parseTerraformVariables("x".repeat(TERRAFORM_VARIABLE_PARSER_LIMITS.maxSourceCharacters + 1))).toThrow(
+    TerraformVariableParseError,
+  );
+  const tooMany = Array.from(
+    { length: TERRAFORM_VARIABLE_PARSER_LIMITS.maxVariables + 1 },
+    (_, index) => `variable "x${index}" {}`,
+  ).join("\n");
+  expect(() => parseTerraformVariables(tooMany)).toThrow(TerraformVariableParseError);
   try {
     parseTerraformVariables("x".repeat(TERRAFORM_VARIABLE_PARSER_LIMITS.maxSourceCharacters + 1));
   } catch (error: unknown) {
@@ -201,7 +213,9 @@ test("scanner agrees with terraform-config-inspect on the hostile corpus (issue 
   }
   const dir = await mkdtemp(join(tmpdir(), "terrence-hcl-corpus-"));
   try {
-    await writeFile(join(dir, "main.tf"), `# variable "ghost_line" {}
+    await writeFile(
+      join(dir, "main.tf"),
+      `# variable "ghost_line" {}
 /* variable "ghost_block" {
      multiline
    } */
@@ -248,15 +262,22 @@ variable "real_sensitive" {
   type      = string
   sensitive = true
 }
-`);
-    await writeFile(join(dir, "extra.tf"), `variable "extra" {
+`,
+    );
+    await writeFile(
+      join(dir, "extra.tf"),
+      `variable "extra" {
   type    = bool
   default = true
 }
-`);
-    await writeFile(join(dir, "data.tf.json"), JSON.stringify({
-      variable: { jsoned: { type: "string", description: "from json", sensitive: true } },
-    }));
+`,
+    );
+    await writeFile(
+      join(dir, "data.tf.json"),
+      JSON.stringify({
+        variable: { jsoned: { type: "string", description: "from json", sensitive: true } },
+      }),
+    );
 
     const scanned = await scanTerraformModuleVariablesWithDiagnostics(dir);
     expect(scanned.skipped).toEqual([]);
@@ -264,7 +285,8 @@ variable "real_sensitive" {
     const child = Bun.spawn([binary, "--json", dir], { stdout: "pipe", stderr: "pipe" });
     const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
     expect(exitCode).toBe(0);
-    const inspected = (JSON.parse(stdout) as { variables: Record<string, { required?: boolean; sensitive?: boolean }> }).variables;
+    const inspected = (JSON.parse(stdout) as { variables: Record<string, { required?: boolean; sensitive?: boolean }> })
+      .variables;
 
     const scannedByName = new Map(scanned.variables.map((variable) => [variable.name, variable]));
     expect([...scannedByName.keys()].sort()).toEqual(Object.keys(inspected).sort());

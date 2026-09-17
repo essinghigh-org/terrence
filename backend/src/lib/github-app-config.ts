@@ -66,9 +66,7 @@ type MutableConfiguration = Omit<GitHubAppConfiguration, "privateKey" | "webhook
 type JsonRecord = Readonly<Record<string, unknown>>;
 
 function asRecord(value: unknown): JsonRecord | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonRecord
-    : null;
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : null;
 }
 
 function nonEmptyString(value: unknown): string | null {
@@ -86,8 +84,14 @@ function safeHttpUrl(value: unknown, fallback: string): string | null {
   const raw = typeof value === "string" && value.trim() !== "" ? value.trim() : fallback;
   try {
     const parsed = new URL(raw);
-    if ((parsed.protocol !== "https:" && parsed.protocol !== "http:")
-      || parsed.username !== "" || parsed.password !== "" || parsed.search !== "" || parsed.hash !== "") return null;
+    if (
+      (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.search !== "" ||
+      parsed.hash !== ""
+    )
+      return null;
     return parsed.toString().replace(/\/$/u, "");
   } catch {
     return null;
@@ -184,7 +188,9 @@ function malformedRecord(updatedAt: number): GitHubAppRecord {
 
 function parseRequiredOwners(pendingValue: JsonRecord): string[] {
   if (!Array.isArray(pendingValue["requiredOwners"])) return [];
-  return pendingValue["requiredOwners"].filter((owner): owner is string => typeof owner === "string" && owner.trim() !== "");
+  return pendingValue["requiredOwners"].filter(
+    (owner): owner is string => typeof owner === "string" && owner.trim() !== "",
+  );
 }
 
 function parsePendingInstallations(pendingValue: JsonRecord): GitHubAppInstallationSummary[] {
@@ -200,7 +206,11 @@ function parsePendingInstallations(pendingValue: JsonRecord): GitHubAppInstallat
   });
 }
 
-async function readPendingConfiguration(values: JsonRecord, source: GitHubAppSource | null, updatedAt: number): Promise<GitHubAppPendingConfiguration | null> {
+async function readPendingConfiguration(
+  values: JsonRecord,
+  source: GitHubAppSource | null,
+  updatedAt: number,
+): Promise<GitHubAppPendingConfiguration | null> {
   const pendingValue = asRecord(values["pending"]);
   if (pendingValue === null) return null;
   const pendingSource = parseStoredSource(pendingValue["source"]) ?? source;
@@ -228,9 +238,10 @@ async function loadRecord(): Promise<GitHubAppRecord | null> {
   const status = parseStoredStatus(values["status"]);
   const bootstrapConsumed = values["bootstrapConsumed"] === true || values["bootstrap-consumed"] === true;
   const configurationValues = asRecord(values["configuration"]);
-  const configuration = status !== "disconnected" && source !== null && configurationValues !== null
-    ? await readConfiguration(configurationValues, source)
-    : null;
+  const configuration =
+    status !== "disconnected" && source !== null && configurationValues !== null
+      ? await readConfiguration(configurationValues, source)
+      : null;
   const resolvedStatus: GitHubAppStatus = status === "active" && configuration === null ? "invalid" : status;
   const pending = await readPendingConfiguration(values, source, row.updatedAt);
   const reason = nonEmptyString(values["invalidReason"]);
@@ -240,13 +251,15 @@ async function loadRecord(): Promise<GitHubAppRecord | null> {
     bootstrapConsumed,
     configuration,
     pending,
-    invalidReason: reason ?? (resolvedStatus === "invalid" ? "The stored GitHub App credentials could not be decrypted" : null),
+    invalidReason:
+      reason ?? (resolvedStatus === "invalid" ? "The stored GitHub App credentials could not be decrypted" : null),
     updatedAt: row.updatedAt,
   };
 }
 
 async function saveValues(values: JsonRecord): Promise<void> {
-  await db.insert(adminSettings)
+  await db
+    .insert(adminSettings)
     .values({ id: GITHUB_APP_SETTINGS_ID, values, updatedAt: Date.now() })
     .onConflictDoUpdate({ target: adminSettings.id, set: { values, updatedAt: Date.now() } });
 }
@@ -255,8 +268,10 @@ async function encodeConfiguration(configuration: GitHubAppConfiguration): Promi
   return {
     ...configuration,
     privateKey: await encryptSecret(configuration.privateKey, { force: true }),
-    webhookSecret: configuration.webhookSecret === null ? null : await encryptSecret(configuration.webhookSecret, { force: true }),
-    clientSecret: configuration.clientSecret === null ? null : await encryptSecret(configuration.clientSecret, { force: true }),
+    webhookSecret:
+      configuration.webhookSecret === null ? null : await encryptSecret(configuration.webhookSecret, { force: true }),
+    clientSecret:
+      configuration.clientSecret === null ? null : await encryptSecret(configuration.clientSecret, { force: true }),
   };
 }
 
@@ -288,17 +303,20 @@ export async function getGitHubAppRuntimeConfiguration(): Promise<GitHubAppConfi
  * must stop the old environment fallback from matching deliveries. */
 export async function getGitHubAppApiUrl(): Promise<string | null> {
   const record = await loadRecord();
-  if (record !== null) return record.status === "active" ? record.configuration?.apiUrl ?? null : null;
+  if (record !== null) return record.status === "active" ? (record.configuration?.apiUrl ?? null) : null;
   return safeHttpUrl(integrationSetting("GITHUB_APP_API_URL"), "https://api.github.com");
 }
 
 export async function getGitHubWebhookSecret(): Promise<string | null> {
   const record = await loadRecord();
-  if (record !== null) return record.status === "active" ? record.configuration?.webhookSecret ?? null : null;
+  if (record !== null) return record.status === "active" ? (record.configuration?.webhookSecret ?? null) : null;
   return nonEmptyString(process.env["GITHUB_WEBHOOK_SECRET"]);
 }
 
-export function legacyEnvironmentConfiguration(requireWebhookSecret: boolean, requireSlug = true): GitHubAppConfiguration | null {
+export function legacyEnvironmentConfiguration(
+  requireWebhookSecret: boolean,
+  requireSlug = true,
+): GitHubAppConfiguration | null {
   const appIdText = nonEmptyString(process.env["GITHUB_APP_ID"]);
   const appId = positiveInteger(appIdText);
   const slug = appSlug(process.env["GITHUB_APP_SLUG"]);
@@ -306,7 +324,15 @@ export function legacyEnvironmentConfiguration(requireWebhookSecret: boolean, re
   const webhookSecret = nonEmptyString(process.env["GITHUB_WEBHOOK_SECRET"]);
   const apiUrl = safeHttpUrl(integrationSetting("GITHUB_APP_API_URL"), "https://api.github.com");
   const httpUrl = safeHttpUrl(integrationSetting("GITHUB_APP_HTTP_URL"), "https://github.com");
-  if (appId === null || appIdText === null || (requireSlug && slug === null) || privateKey === null || apiUrl === null || httpUrl === null) return null;
+  if (
+    appId === null ||
+    appIdText === null ||
+    (requireSlug && slug === null) ||
+    privateKey === null ||
+    apiUrl === null ||
+    httpUrl === null
+  )
+    return null;
   if (requireWebhookSecret && webhookSecret === null) return null;
   return {
     appId,
@@ -324,7 +350,10 @@ export function legacyEnvironmentConfiguration(requireWebhookSecret: boolean, re
   };
 }
 
-export async function persistGitHubAppConfiguration(configuration: GitHubAppConfiguration, bootstrapConsumed = true): Promise<void> {
+export async function persistGitHubAppConfiguration(
+  configuration: GitHubAppConfiguration,
+  bootstrapConsumed = true,
+): Promise<void> {
   const stored = await encodeConfiguration(configuration);
   await saveValues({
     version: GITHUB_APP_SETTINGS_VERSION,
@@ -357,7 +386,9 @@ export async function persistPendingGitHubAppConfiguration(
     status: existing?.status === "active" ? "active" : "disconnected",
     source: existing?.source ?? configuration.source,
     bootstrapConsumed: existing?.bootstrapConsumed ?? true,
-    ...(existing?.configuration === null || existing?.configuration === undefined ? {} : { configuration: await encodeConfiguration(existing.configuration).then(storedConfiguration) }),
+    ...(existing?.configuration === null || existing?.configuration === undefined
+      ? {}
+      : { configuration: await encodeConfiguration(existing.configuration).then(storedConfiguration) }),
     pending,
     updatedAt: Date.now(),
   });
@@ -392,7 +423,8 @@ export async function markGitHubAppInvalid(reason: string): Promise<void> {
     invalidReason: reason.slice(0, 500),
     updatedAt: Date.now(),
   };
-  if (existing.configuration !== null) values["configuration"] = await encodeConfiguration(existing.configuration).then(storedConfiguration);
+  if (existing.configuration !== null)
+    values["configuration"] = await encodeConfiguration(existing.configuration).then(storedConfiguration);
   if (existing.pending !== null) {
     const encoded = await encodeConfiguration(existing.pending.configuration);
     values["pending"] = {
@@ -409,17 +441,25 @@ export async function markGitHubAppInvalid(reason: string): Promise<void> {
 
 function signAppToken(configuration: GitHubAppConfiguration): string | null {
   try {
-    return jwt.sign({
-      iat: Math.floor(Date.now() / 1000) - 60,
-      exp: Math.floor(Date.now() / 1000) + (9 * 60),
-      iss: configuration.appIdText,
-    }, configuration.privateKey, { algorithm: "RS256" });
+    return jwt.sign(
+      {
+        iat: Math.floor(Date.now() / 1000) - 60,
+        exp: Math.floor(Date.now() / 1000) + 9 * 60,
+        iss: configuration.appIdText,
+      },
+      configuration.privateKey,
+      { algorithm: "RS256" },
+    );
   } catch {
     return null;
   }
 }
 
-async function fetchAppIdentity(configuration: GitHubAppConfiguration, token: string, signal: Readonly<AbortSignal>): Promise<{ response: Response; body: unknown }> {
+async function fetchAppIdentity(
+  configuration: GitHubAppConfiguration,
+  token: string,
+  signal: Readonly<AbortSignal>,
+): Promise<{ response: Response; body: unknown }> {
   const response = await fetch(`${configuration.apiUrl.replace(/\/$/u, "")}/app`, {
     headers: {
       Accept: "application/vnd.github+json",
@@ -438,41 +478,80 @@ function appIdentityMatches(
   returnedSlug: string | null,
   configuration: GitHubAppConfiguration,
 ): boolean {
-  return returnedId === configuration.appId
-    && (returnedSlug === null || returnedSlug === configuration.slug);
+  return returnedId === configuration.appId && (returnedSlug === null || returnedSlug === configuration.slug);
 }
 
 function checkedAppIdentity(
   response: Readonly<Pick<Response, "ok" | "status">>,
   body: unknown,
   configuration: GitHubAppConfiguration,
-): Readonly<{ ok: boolean; status: number | null; detail: string; credentialError: boolean; appId?: number; slug?: string; name?: string | null; owner?: string | null; ownerType?: string }> {
-  if (!response.ok) return {
-    ok: false,
-    status: response.status,
-    detail: `GitHub returned HTTP ${response.status}`,
-    credentialError: response.status >= 400 && response.status < 500,
-  };
+): Readonly<{
+  ok: boolean;
+  status: number | null;
+  detail: string;
+  credentialError: boolean;
+  appId?: number;
+  slug?: string;
+  name?: string | null;
+  owner?: string | null;
+  ownerType?: string;
+}> {
+  if (!response.ok)
+    return {
+      ok: false,
+      status: response.status,
+      detail: `GitHub returned HTTP ${response.status}`,
+      credentialError: response.status >= 400 && response.status < 500,
+    };
   const record = asRecord(body);
   const returnedId = positiveInteger(record?.["id"]);
   const returnedSlug = nonEmptyString(record?.["slug"]);
   const returnedName = nonEmptyString(record?.["name"]);
   if (!appIdentityMatches(returnedId, returnedSlug, configuration)) {
-    return { ok: false, status: 502, detail: "GitHub returned an App that does not match the configured credentials", credentialError: true };
+    return {
+      ok: false,
+      status: 502,
+      detail: "GitHub returned an App that does not match the configured credentials",
+      credentialError: true,
+    };
   }
   const ownerValue = asRecord(record?.["owner"]);
   const owner = nonEmptyString(ownerValue?.["login"] ?? ownerValue?.["name"]);
   const ownerType = nonEmptyString(ownerValue?.["type"]) ?? "unknown";
-  return { ok: true, status: response.status, detail: "GitHub App credentials are valid", appId: returnedId ?? configuration.appId, slug: returnedSlug ?? configuration.slug, name: returnedName, owner, ownerType, credentialError: false };
+  return {
+    ok: true,
+    status: response.status,
+    detail: "GitHub App credentials are valid",
+    appId: returnedId ?? configuration.appId,
+    slug: returnedSlug ?? configuration.slug,
+    name: returnedName,
+    owner,
+    ownerType,
+    credentialError: false,
+  };
 }
 
-export async function validateGitHubAppConfiguration(configuration: GitHubAppConfiguration): Promise<Readonly<{ ok: boolean; status: number | null; detail: string; credentialError: boolean; appId?: number; slug?: string; name?: string | null; owner?: string | null; ownerType?: string }>> {
+export async function validateGitHubAppConfiguration(configuration: GitHubAppConfiguration): Promise<
+  Readonly<{
+    ok: boolean;
+    status: number | null;
+    detail: string;
+    credentialError: boolean;
+    appId?: number;
+    slug?: string;
+    name?: string | null;
+    owner?: string | null;
+    ownerType?: string;
+  }>
+> {
   const token = signAppToken(configuration);
   if (token === null) {
     return { ok: false, status: null, detail: "The GitHub App private key is invalid", credentialError: true };
   }
   const controller = new AbortController();
-  const timer = setTimeout((): void => { controller.abort(); }, 10_000);
+  const timer = setTimeout((): void => {
+    controller.abort();
+  }, 10_000);
   try {
     const { response, body } = await fetchAppIdentity(configuration, token, controller.signal);
     return checkedAppIdentity(response, body, configuration);
@@ -512,14 +591,17 @@ export async function recoverLegacyGitHubAppConfiguration(): Promise<Readonly<{ 
   if (configuration === null) return { imported: false, reason: "legacy-environment-incomplete" };
   const validation = await validateGitHubAppConfiguration(configuration);
   if (!validation.ok) return { imported: false, reason: validation.detail };
-  await persistGitHubAppConfiguration({
-    ...configuration,
-    appId: validation.appId ?? configuration.appId,
-    appIdText: String(validation.appId ?? configuration.appId),
-    slug: validation.slug ?? configuration.slug,
-    name: validation.name ?? configuration.name,
-    owner: validation.owner ?? configuration.owner,
-    source: "legacy_environment_import",
-  }, true);
+  await persistGitHubAppConfiguration(
+    {
+      ...configuration,
+      appId: validation.appId ?? configuration.appId,
+      appIdText: String(validation.appId ?? configuration.appId),
+      slug: validation.slug ?? configuration.slug,
+      name: validation.name ?? configuration.name,
+      owner: validation.owner ?? configuration.owner,
+      source: "legacy_environment_import",
+    },
+    true,
+  );
   return { imported: true };
 }

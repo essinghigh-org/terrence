@@ -22,14 +22,15 @@ describe("recovery workbench (FEAT-18)", () => {
   const captureDir = join(storageDir, "recovery", runId);
   const headers = jsonHeaders(seed.token);
 
-  const stateForSerial = (serial: number): string => JSON.stringify({
-    version: 4,
-    terraform_version: "1.9.3",
-    serial,
-    lineage: "recovery-workbench-lineage",
-    outputs: { recovered: { value: serial, type: "number", sensitive: false } },
-    resources: [],
-  });
+  const stateForSerial = (serial: number): string =>
+    JSON.stringify({
+      version: 4,
+      terraform_version: "1.9.3",
+      serial,
+      lineage: "recovery-workbench-lineage",
+      outputs: { recovered: { value: serial, type: "number", sensitive: false } },
+      resources: [],
+    });
 
   async function writeCapture(serial: number): Promise<void> {
     await mkdir(captureDir, { recursive: true });
@@ -43,13 +44,24 @@ describe("recovery workbench (FEAT-18)", () => {
     await persistSeed(seed);
     await db.insert(workspaces).values({ id: workspaceId, name: "recovery-workbench", orgId: seed.orgId });
     await db.insert(runs).values({ id: runId, workspaceId, status: "errored", createdAt: Date.now() });
-    expect((await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, { method: "POST", headers })).status).toBe(200);
+    expect((await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, { method: "POST", headers })).status).toBe(
+      200,
+    );
     const baseline = stateForSerial(1);
-    await expectSuccessResponse(await request(`/api/v2/workspaces/${workspaceId}/state-versions`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ data: { type: "state-versions", attributes: { serial: 1, state: baseline, md5: createHash("md5").update(baseline).digest("hex") } } }),
-    }), 201, "state-versions");
+    await expectSuccessResponse(
+      await request(`/api/v2/workspaces/${workspaceId}/state-versions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          data: {
+            type: "state-versions",
+            attributes: { serial: 1, state: baseline, md5: createHash("md5").update(baseline).digest("hex") },
+          },
+        }),
+      }),
+      201,
+      "state-versions",
+    );
   });
 
   afterAll(async () => {
@@ -64,11 +76,13 @@ describe("recovery workbench (FEAT-18)", () => {
     await writeCapture(2);
     const response = await request(`/api/v2/runs/${runId}/recovery`, { headers });
     expect(response.status).toBe(200);
-    const body = await response.json() as { data: { attributes: Record<string, unknown> } };
+    const body = (await response.json()) as { data: { attributes: Record<string, unknown> } };
     expect(body.data.attributes["candidate-state"]).toMatchObject({ serial: 2, lineage: "recovery-workbench-lineage" });
     expect(body.data.attributes["last-committed-state"]).toMatchObject({ serial: 1 });
     expect(body.data.attributes["secret-warning"]).toBeTypeOf("string");
-    expect((body.data.attributes["checks"] as unknown[]).map((check) => (check as Record<string, unknown>)["id"])).toContain("owner-terminated");
+    expect(
+      (body.data.attributes["checks"] as unknown[]).map((check) => (check as Record<string, unknown>)["id"]),
+    ).toContain("owner-terminated");
     expect(JSON.stringify(body)).not.toContain(stateForSerial(2));
   });
 
@@ -93,7 +107,11 @@ describe("recovery workbench (FEAT-18)", () => {
 
   it("retains the capture and makes repeated promotion idempotent", async () => {
     await writeCapture(2);
-    const first = await expectSuccessResponse(await request(`/api/v2/runs/${runId}/actions/recover-state`, { method: "POST", headers }), 201, "state-versions");
+    const first = await expectSuccessResponse(
+      await request(`/api/v2/runs/${runId}/actions/recover-state`, { method: "POST", headers }),
+      201,
+      "state-versions",
+    );
     const downloaded = await request(`/api/v2/runs/${runId}/recovery-state`, { headers });
     expect(downloaded.status).toBe(200);
     expect(await downloaded.text()).toBe(stateForSerial(2));

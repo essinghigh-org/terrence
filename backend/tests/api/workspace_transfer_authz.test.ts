@@ -35,14 +35,16 @@ describe("workspace transfer authorization", () => {
   const memberToken = `wt-tok-member-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, token?: string): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        ...(token !== undefined ? { Authorization: `Bearer ${token}` } : {}),
-        ...(body !== undefined ? { "Content-Type": "application/vnd.api+json" } : {}),
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          ...(token !== undefined ? { Authorization: `Bearer ${token}` } : {}),
+          ...(body !== undefined ? { "Content-Type": "application/vnd.api+json" } : {}),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      }),
+    );
 
   const createTransferBody = (sourceWorkspaceId: string, destinationOrgId: string): unknown => ({
     data: {
@@ -110,9 +112,19 @@ describe("workspace transfer authorization", () => {
   });
 
   it("422s when the source workspace or destination org is missing", async () => {
-    const noWs = await request("/api/v2/workspace-transfers", "POST", createTransferBody("does-not-exist", dstOrgId), ownerToken);
+    const noWs = await request(
+      "/api/v2/workspace-transfers",
+      "POST",
+      createTransferBody("does-not-exist", dstOrgId),
+      ownerToken,
+    );
     expect(noWs.status).toBe(404);
-    const noOrg = await request("/api/v2/workspace-transfers", "POST", createTransferBody(wsId, "org-never"), ownerToken);
+    const noOrg = await request(
+      "/api/v2/workspace-transfers",
+      "POST",
+      createTransferBody(wsId, "org-never"),
+      ownerToken,
+    );
     expect(noOrg.status).toBe(404);
   });
 
@@ -131,7 +143,7 @@ describe("workspace transfer authorization", () => {
   it("allows creation for a source-workspace admin who owns the destination org", async () => {
     const res = await request("/api/v2/workspace-transfers", "POST", createTransferBody(wsId, dstOrgId), ownerToken);
     expect(res.status).toBe(201);
-    const body = await res.json() as { data: { id: string } };
+    const body = (await res.json()) as { data: { id: string } };
     expect(body.data.id.startsWith("wt-")).toBeTrue();
     createdTransferIds.push(body.data.id);
   });
@@ -139,7 +151,7 @@ describe("workspace transfer authorization", () => {
   it("allows creation for a site admin", async () => {
     const res = await request("/api/v2/workspace-transfers", "POST", createTransferBody(wsId, dstOrgId), adminToken);
     expect(res.status).toBe(201);
-    const adminBody = await res.json() as { data: { id: string } };
+    const adminBody = (await res.json()) as { data: { id: string } };
     createdTransferIds.push(adminBody.data.id);
   });
 
@@ -160,56 +172,86 @@ describe("workspace transfer authorization", () => {
   });
 
   it("hides transfers in list and detail views from unrelated users", async () => {
-    const createRes = await request("/api/v2/workspace-transfers", "POST", createTransferBody(wsId, dstOrgId), ownerToken);
+    const createRes = await request(
+      "/api/v2/workspace-transfers",
+      "POST",
+      createTransferBody(wsId, dstOrgId),
+      ownerToken,
+    );
     expect(createRes.status).toBe(201);
-    const created = (await createRes.json() as { data: { id: string } }).data.id;
+    const created = ((await createRes.json()) as { data: { id: string } }).data.id;
     createdTransferIds.push(created);
 
     // Outsider: hidden everywhere.
     const outsiderList = await request("/api/v2/workspace-transfers", "GET", undefined, outsiderToken);
-    const outsiderBody = await outsiderList.json() as { data: { id: string }[] };
+    const outsiderBody = (await outsiderList.json()) as { data: { id: string }[] };
     expect(outsiderBody.data.some((t): boolean => t.id === created)).toBeFalse();
     const outsiderGet = await request(`/api/v2/workspace-transfers/${created}`, "GET", undefined, outsiderToken);
     expect(outsiderGet.status).toBe(404);
 
     // Destination-org owner: visible.
     const ownerList = await request("/api/v2/workspace-transfers", "GET", undefined, ownerToken);
-    const ownerBody = await ownerList.json() as { data: { id: string }[] };
+    const ownerBody = (await ownerList.json()) as { data: { id: string }[] };
     expect(ownerBody.data.some((t): boolean => t.id === created)).toBeTrue();
     const ownerGet = await request(`/api/v2/workspace-transfers/${created}`, "GET", undefined, ownerToken);
     expect(ownerGet.status).toBe(200);
   });
 
   it("lets only authorized users cancel or resume a transfer", async () => {
-    const createRes = await request("/api/v2/workspace-transfers", "POST", createTransferBody(wsId, dstOrgId), ownerToken);
+    const createRes = await request(
+      "/api/v2/workspace-transfers",
+      "POST",
+      createTransferBody(wsId, dstOrgId),
+      ownerToken,
+    );
     expect(createRes.status).toBe(201);
-    const created = (await createRes.json() as { data: { id: string } }).data.id;
+    const created = ((await createRes.json()) as { data: { id: string } }).data.id;
     createdTransferIds.push(created);
 
     const paused = await request("/api/v2/workspace-transfers", "POST", createTransferBody(wsId, dstOrgId), ownerToken);
     expect(paused.status).toBe(201);
-    const pausedId = (await paused.json() as { data: { id: string } }).data.id;
+    const pausedId = ((await paused.json()) as { data: { id: string } }).data.id;
     createdTransferIds.push(pausedId);
 
-    const outsiderCancel = await request(`/api/v2/workspace-transfers/${created}/actions/cancel`, "POST", {}, outsiderToken);
+    const outsiderCancel = await request(
+      `/api/v2/workspace-transfers/${created}/actions/cancel`,
+      "POST",
+      {},
+      outsiderToken,
+    );
     expect(outsiderCancel.status).toBe(404);
-    const outsiderResume = await request(`/api/v2/workspace-transfers/${pausedId}/actions/resume`, "POST", {}, outsiderToken);
+    const outsiderResume = await request(
+      `/api/v2/workspace-transfers/${pausedId}/actions/resume`,
+      "POST",
+      {},
+      outsiderToken,
+    );
     expect(outsiderResume.status).toBe(404);
 
     // Issue #614: a non-owner member of both orgs can SEE the transfer but
     // must not cancel or resume it — lifecycle needs the creation bar.
     const memberGet = await request(`/api/v2/workspace-transfers/${created}`, "GET", undefined, memberToken);
     expect(memberGet.status).toBe(200);
-    const memberCancel = await request(`/api/v2/workspace-transfers/${created}/actions/cancel`, "POST", {}, memberToken);
+    const memberCancel = await request(
+      `/api/v2/workspace-transfers/${created}/actions/cancel`,
+      "POST",
+      {},
+      memberToken,
+    );
     expect(memberCancel.status).toBe(404);
-    const memberResume = await request(`/api/v2/workspace-transfers/${pausedId}/actions/resume`, "POST", {}, memberToken);
+    const memberResume = await request(
+      `/api/v2/workspace-transfers/${pausedId}/actions/resume`,
+      "POST",
+      {},
+      memberToken,
+    );
     expect(memberResume.status).toBe(404);
 
     const resume = await request(`/api/v2/workspace-transfers/${pausedId}/actions/resume`, "POST", {}, ownerToken);
     expect(resume.status).toBe(200);
     const cancel = await request(`/api/v2/workspace-transfers/${created}/actions/cancel`, "POST", {}, ownerToken);
     expect(cancel.status).toBe(200);
-    const canceled = (await cancel.json() as { data: { attributes: { status: string } } }).data;
+    const canceled = ((await cancel.json()) as { data: { attributes: { status: string } } }).data;
     expect(canceled.attributes.status).toBe("canceled");
   });
 });

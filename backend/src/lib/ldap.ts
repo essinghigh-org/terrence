@@ -67,13 +67,15 @@ function attributeValue(entry: LdapEntry, name: string): string | null {
   return null;
 }
 
-function normalizedLdapLoginInput(settings: LdapSettings, username: string, password: string): LdapLoginInput | undefined {
+function normalizedLdapLoginInput(
+  settings: LdapSettings,
+  username: string,
+  password: string,
+): LdapLoginInput | undefined {
   const host = trimmedOrNull(settings.host);
   const baseDn = trimmedOrNull(settings.baseDn);
   const bindDn = trimmedOrNull(settings.bindDn);
-  const bindPassword = bindDn === null
-    ? null
-    : originalOrNull(settings.bindPassword);
+  const bindPassword = bindDn === null ? null : originalOrNull(settings.bindPassword);
   if (!settings.enabled || host === null || baseDn === null) return undefined;
   if (username === "" || password === "") return undefined;
   if (bindDn !== null && (bindPassword === null || bindPassword === "")) return undefined;
@@ -114,7 +116,9 @@ async function findUniqueLdapEntry(
   const byAttr = result.searchEntries.filter(
     // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ldapts rows are mutable
     (candidate: Entry): boolean =>
-      attributeValue(candidate as LdapEntry, settings.attrUsername)?.trim().toLowerCase() === wanted,
+      attributeValue(candidate as LdapEntry, settings.attrUsername)
+        ?.trim()
+        .toLowerCase() === wanted,
   );
   // Require a unique match: binding an arbitrary entry would authenticate a
   // different identity than the one presented. Extra entries mean the filter
@@ -236,13 +240,19 @@ export async function authenticateLdapWithCircuitBreaker(
       else if (value.user !== null) ldapFailureCache.delete(hostKey);
       return value;
     })
-    .finally((): void => { ldapProbes.delete(probeKey); });
+    .finally((): void => {
+      ldapProbes.delete(probeKey);
+    });
   ldapProbes.set(probeKey, result);
   if (!ldapHostProbes.has(hostKey)) {
     ldapHostProbes.set(hostKey, result);
     void result.then(
-      (): void => { if (ldapHostProbes.get(hostKey) === result) ldapHostProbes.delete(hostKey); },
-      (): void => { if (ldapHostProbes.get(hostKey) === result) ldapHostProbes.delete(hostKey); },
+      (): void => {
+        if (ldapHostProbes.get(hostKey) === result) ldapHostProbes.delete(hostKey);
+      },
+      (): void => {
+        if (ldapHostProbes.get(hostKey) === result) ldapHostProbes.delete(hostKey);
+      },
     );
   }
   return result;

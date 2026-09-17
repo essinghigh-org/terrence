@@ -34,7 +34,9 @@ describe("performance fixtures", () => {
     expect(budgetViolations(measurement({ payloadBytes: 1_000_001 }))).toContain("payloadBytes 1000001 > 1000000");
     expect(budgetViolations(measurement({ queryCount: 251 }))).toContain("queryCount 251 > 250");
     expect(budgetViolations(measurement({ renderedItems: 51 }))).toContain("renderedItems 51 > 50");
-    expect((): void => { assertPerformanceBudget(measurement({ requests: 2 })); }).toThrow(/workspace-list\/small/);
+    expect((): void => {
+      assertPerformanceBudget(measurement({ requests: 2 }));
+    }).toThrow(/workspace-list\/small/);
   });
 
   test("keeps timing checks opt-in for noisy runners", () => {

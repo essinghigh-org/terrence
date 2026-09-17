@@ -16,13 +16,16 @@ test("fails closed on the direct agent-pools route without management permission
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/organizations/acme") {
-      return new Response(JSON.stringify({
-        data: { attributes: { permissions: { "can-manage-agent-pools": false } } },
-      }), { headers: { "Content-Type": "application/vnd.api+json" } });
+      return new Response(
+        JSON.stringify({
+          data: { attributes: { permissions: { "can-manage-agent-pools": false } } },
+        }),
+        { headers: { "Content-Type": "application/vnd.api+json" } },
+      );
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings/agents"]}>
@@ -35,8 +38,10 @@ test("fails closed on the direct agent-pools route without management permission
   await view.findByText("Agent pool access is unavailable.");
   expect(view.getByText("You do not have permission to manage agent pools for this organization.")).toBeTruthy();
   expect(view.queryByRole("button", { name: "Create Agent Pool" })).toBeNull();
-  expect(fetchMock.mock.calls.every(([input]): boolean => {
-    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
-    return !url.endsWith("/agent-pools");
-  })).toBeTrue();
+  expect(
+    fetchMock.mock.calls.every(([input]): boolean => {
+      const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
+      return !url.endsWith("/agent-pools");
+    }),
+  ).toBeTrue();
 });

@@ -32,9 +32,11 @@ describe("actions api authorization", () => {
   const invocationId = `actinv-${suffix}`;
 
   const request = (path: string, token?: string): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      headers: token !== undefined ? { Authorization: `Bearer ${token}` } : {},
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        headers: token !== undefined ? { Authorization: `Bearer ${token}` } : {},
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([
@@ -119,12 +121,12 @@ describe("actions api authorization", () => {
     // in other orgs, but the response must not include them either way.
     const res = await request("/api/v2/actions", userToken);
     expect(res.status).toBe(200);
-    const body = await res.json() as { data: { id: string }[] };
+    const body = (await res.json()) as { data: { id: string }[] };
     expect(body.data.some((row): boolean => row.id === actionId)).toBeTrue();
 
     // A user from another organization must not see this org's action.
     const res2 = await request("/api/v2/actions", outsiderToken);
-    const body2 = await res2.json() as { data: { id: string }[] };
+    const body2 = (await res2.json()) as { data: { id: string }[] };
     expect(body2.data.some((row): boolean => row.id === actionId)).toBeFalse();
   });
 

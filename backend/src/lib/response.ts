@@ -3,11 +3,24 @@ import { createHash } from "node:crypto";
 import { db } from "../db";
 import { AvatarService } from "./avatars";
 import type {
-  workspaces, stateVersions, apiTokens, variableSets, workspaceVariables,
-  projects, runs, taskStages
+  workspaces,
+  stateVersions,
+  apiTokens,
+  variableSets,
+  workspaceVariables,
+  projects,
+  runs,
+  taskStages,
 } from "../db/schema";
-import { organizations, workspaceTags, variableSetWorkspaces,
-  variableSetProjects, variableSetVariables, stackVariableSets, organizationDataRetentionPolicies, dataRetentionPolicies
+import {
+  organizations,
+  workspaceTags,
+  variableSetWorkspaces,
+  variableSetProjects,
+  variableSetVariables,
+  stackVariableSets,
+  organizationDataRetentionPolicies,
+  dataRetentionPolicies,
 } from "../db/schema";
 import { eq, asc } from "drizzle-orm";
 import { issueRunLogCapability, signedApiURL, type RunLogCapability } from "./capabilities";
@@ -25,8 +38,16 @@ import { cachedOrganizationName, cacheOrganizationName } from "./metadata-cache"
 import { vcsRepoResource } from "./vcs-repo";
 import { moduleTestTokenTtlBounds } from "./workload-identity";
 
-
-type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; emailVerifiedAt?: number | null; isSiteAdmin?: boolean | null; mustChangePassword?: boolean; theme?: string | null; ssoProvider?: string | null }>;
+type UserParam = DeepReadonly<{
+  id: string;
+  username: string;
+  email?: string | null;
+  emailVerifiedAt?: number | null;
+  isSiteAdmin?: boolean | null;
+  mustChangePassword?: boolean;
+  theme?: string | null;
+  ssoProvider?: string | null;
+}>;
 type AuthenticatedResourceParam = DeepReadonly<{ id: string; type: string }>;
 
 // JSON:API convention (matching the reference format/Atlas): organizations are identified by their NAME,
@@ -48,11 +69,12 @@ export async function organizationName(orgId: string): Promise<string | null> {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export function userResource(
   user: UserParam,
-  authenticatedResource: AuthenticatedResourceParam = { id: user.id, type: "users" }
+  authenticatedResource: AuthenticatedResourceParam = { id: user.id, type: "users" },
 ) {
-  const rawAvatarUrl = typeof user.email === "string" && user.email !== ""
-    ? `https://www.gravatar.com/avatar/${createHash('md5').update(user.email.toLowerCase().trim()).digest('hex')}?d=mp&s=80`
-    : `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
+  const rawAvatarUrl =
+    typeof user.email === "string" && user.email !== ""
+      ? `https://www.gravatar.com/avatar/${createHash("md5").update(user.email.toLowerCase().trim()).digest("hex")}?d=mp&s=80`
+      : `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
   // Same-origin avatar service: the browser never contacts Gravatar directly.
   const avatarUrl = AvatarService.resolveUrl("user-gravatar", rawAvatarUrl);
 
@@ -64,11 +86,12 @@ export function userResource(
       email: user.email ?? null,
       "email-verified": user.emailVerifiedAt !== null && user.emailVerifiedAt !== undefined,
       "is-service-account": authenticatedResource.type !== "users",
-      "auth-method": user.ssoProvider === "ldap"
-        ? "ldap"
-        : typeof user.ssoProvider === "string" && user.ssoProvider !== ""
-          ? "sso"
-          : "password",
+      "auth-method":
+        user.ssoProvider === "ldap"
+          ? "ldap"
+          : typeof user.ssoProvider === "string" && user.ssoProvider !== ""
+            ? "sso"
+            : "password",
       "avatar-url": avatarUrl,
       "v2-only": false,
       "is-site-admin": user.isSiteAdmin === true,
@@ -98,7 +121,7 @@ type OrgMemParam = DeepReadonly<{ id: string; userId: string; orgId: string; rol
 export async function orgMembershipResource(
   mem: OrgMemParam,
   userObj?: UserParam | null,
-  teamIds: readonly string[] = []
+  teamIds: readonly string[] = [],
 ): Promise<Record<string, unknown>> {
   return {
     id: mem.id,
@@ -125,10 +148,12 @@ export async function orgMembershipResource(
   };
 }
 
-type ApiTokenWithRaw = DeepReadonly<Omit<typeof apiTokens.$inferSelect, "refreshFamilyId"> & Partial<Record<"_rawToken", string>>>;
+type ApiTokenWithRaw = DeepReadonly<
+  Omit<typeof apiTokens.$inferSelect, "refreshFamilyId"> & Partial<Record<"_rawToken", string>>
+>;
 
 export function tokenResource(token: ApiTokenWithRaw, includeSecret = false): Record<string, unknown> {
-  const iso = (value: number | null): string | null => value === null ? null : new Date(value).toISOString();
+  const iso = (value: number | null): string | null => (value === null ? null : new Date(value).toISOString());
   const rawToken = (token as Record<string, unknown>)["_rawToken"];
   let scopes: unknown = null;
   if (typeof token.scopes === "string" && token.scopes !== "") {
@@ -164,7 +189,9 @@ export function tokenResource(token: ApiTokenWithRaw, includeSecret = false): Re
 type OrganizationParam = DeepReadonly<typeof organizations.$inferSelect>;
 
 export async function organizationResource(org: OrganizationParam): Promise<Record<string, unknown>> {
-  const retention = await db.query.organizationDataRetentionPolicies.findFirst({ where: eq(organizationDataRetentionPolicies.organizationId, org.id) });
+  const retention = await db.query.organizationDataRetentionPolicies.findFirst({
+    where: eq(organizationDataRetentionPolicies.organizationId, org.id),
+  });
   const name = encodeURIComponent(org.name);
   return {
     id: org.name,
@@ -177,7 +204,8 @@ export async function organizationResource(org: OrganizationParam): Promise<Reco
       "session-remember": org.sessionRemember,
       "collaborator-auth-policy": org.collaboratorAuthPolicy,
       "cost-estimation-enabled": org.costEstimationEnabled === true,
-      "send-passing-statuses-for-untriggered-speculative-plans": org.sendPassingStatusesForUntriggeredSpeculativePlans === true,
+      "send-passing-statuses-for-untriggered-speculative-plans":
+        org.sendPassingStatusesForUntriggeredSpeculativePlans === true,
       "aggregated-commit-status-enabled": org.aggregatedCommitStatusEnabled !== false,
       "speculative-plan-management-enabled": true,
       "allow-force-delete-workspaces": org.allowForceDeleteWorkspaces === true,
@@ -194,14 +222,25 @@ export async function organizationResource(org: OrganizationParam): Promise<Reco
     },
     relationships: {
       "data-retention-policy": {
-        data: retention === undefined ? null : { id: retention.id, type: retention.deleteOlderThanNDays === null ? "data-retention-policy-dont-deletes" : "data-retention-policy-delete-olders" },
+        data:
+          retention === undefined
+            ? null
+            : {
+                id: retention.id,
+                type:
+                  retention.deleteOlderThanNDays === null
+                    ? "data-retention-policy-dont-deletes"
+                    : "data-retention-policy-delete-olders",
+              },
         links: { related: `/api/v2/organizations/${name}/relationships/data-retention-policy` },
       },
       "oauth-tokens": { links: { related: `/api/v2/organizations/${name}/oauth-tokens` } },
       "authentication-token": { links: { related: `/api/v2/organizations/${name}/authentication-token` } },
       "entitlement-set": { links: { related: `/api/v2/organizations/${name}/entitlement-set` } },
       subscription: { links: { related: `/api/v2/organizations/${name}/subscription` } },
-      "default-agent-pool": { data: org.defaultAgentPoolId === null ? null : { id: org.defaultAgentPoolId, type: "agent-pools" } },
+      "default-agent-pool": {
+        data: org.defaultAgentPoolId === null ? null : { id: org.defaultAgentPoolId, type: "agent-pools" },
+      },
     },
     links: { self: `/api/v2/organizations/${name}` },
   };
@@ -234,7 +273,6 @@ type WorkspaceResourceOptions = Readonly<{
   readonly currentRun?: Readonly<{ id: string }> | null;
 }>;
 
-
 function buildWorkspacePermissions(permissions: WorkspaceResourcePermissions): Record<string, unknown> {
   return {
     "can-destroy": permissions.canPlan,
@@ -254,7 +292,6 @@ function buildWorkspacePermissions(permissions: WorkspaceResourcePermissions): R
     "can-force-delete": permissions.canAdmin,
   };
 }
-
 
 function buildWorkspaceCoreAttributes(workspace: WorkspaceParam): Record<string, unknown> {
   return {
@@ -289,7 +326,12 @@ function buildWorkspaceFlagAttributes(workspace: WorkspaceParam): Record<string,
   };
 }
 
-function buildWorkspaceAttributes(workspace: WorkspaceParam, permissions: WorkspaceResourcePermissions, tags: readonly DeepReadonly<typeof workspaceTags.$inferSelect>[], iacBinary: string): Record<string, unknown> {
+function buildWorkspaceAttributes(
+  workspace: WorkspaceParam,
+  permissions: WorkspaceResourcePermissions,
+  tags: readonly DeepReadonly<typeof workspaceTags.$inferSelect>[],
+  iacBinary: string,
+): Record<string, unknown> {
   return {
     actions: { "is-destroyable": permissions.canPlan },
     ...buildWorkspaceCoreAttributes(workspace),
@@ -303,9 +345,10 @@ function buildWorkspaceAttributes(workspace: WorkspaceParam, permissions: Worksp
     "iac-binary": iacBinary,
     locked: workspace.locked === true,
     "locked-reason": workspace.lockedReason ?? (workspace.locked === true ? "Locked manually" : null),
-    "locked-at": workspace.lockedAt !== null && workspace.lockedAt !== undefined
-      ? new Date(workspace.lockedAt).toISOString()
-      : null,
+    "locked-at":
+      workspace.lockedAt !== null && workspace.lockedAt !== undefined
+        ? new Date(workspace.lockedAt).toISOString()
+        : null,
     "locked-by-type": workspace.lockOwnerType ?? null,
     "locked-by-id": workspace.lockOwnerId ?? null,
     permissions: buildWorkspacePermissions(permissions),
@@ -315,7 +358,11 @@ function buildWorkspaceAttributes(workspace: WorkspaceParam, permissions: Worksp
   };
 }
 
-function buildWorkspaceRelationships(workspace: WorkspaceParam, orgName: string | null | undefined, options?: WorkspaceResourceOptions): Record<string, unknown> {
+function buildWorkspaceRelationships(
+  workspace: WorkspaceParam,
+  orgName: string | null | undefined,
+  options?: WorkspaceResourceOptions,
+): Record<string, unknown> {
   const base: Record<string, unknown> = {
     organization: {
       data: { id: orgName ?? workspace.orgId, type: "organizations" },
@@ -349,15 +396,17 @@ function buildWorkspaceRelationships(workspace: WorkspaceParam, orgName: string 
   return base;
 }
 
-async function fetchWorkspaceTagsAndOrg(workspace: WorkspaceParam, options?: WorkspaceResourceOptions): Promise<[readonly DeepReadonly<typeof workspaceTags.$inferSelect>[], string | null | undefined]> {
+async function fetchWorkspaceTagsAndOrg(
+  workspace: WorkspaceParam,
+  options?: WorkspaceResourceOptions,
+): Promise<[readonly DeepReadonly<typeof workspaceTags.$inferSelect>[], string | null | undefined]> {
   const [tags, orgName] = await Promise.all([
-    options?.tags
-      ?? db.query.workspaceTags.findMany({
+    options?.tags ??
+      db.query.workspaceTags.findMany({
         where: eq(workspaceTags.workspaceId, workspace.id),
         orderBy: [asc(workspaceTags.key)],
       }),
-    options?.orgName
-      ?? organizationName(workspace.orgId),
+    options?.orgName ?? organizationName(workspace.orgId),
   ]);
   return [tags, orgName];
 }
@@ -369,10 +418,21 @@ export async function workspaceResource(
   options?: WorkspaceResourceOptions,
 ): Promise<Record<string, unknown>> {
   const [tags, orgName] = await fetchWorkspaceTagsAndOrg(workspace, options);
-  const retention = await db.query.dataRetentionPolicies.findFirst({ where: eq(dataRetentionPolicies.workspaceId, workspace.id) });
+  const retention = await db.query.dataRetentionPolicies.findFirst({
+    where: eq(dataRetentionPolicies.workspaceId, workspace.id),
+  });
   const relationships = buildWorkspaceRelationships(workspace, orgName, options);
   relationships["data-retention-policy"] = {
-    data: retention === undefined ? null : { id: retention.id, type: retention.deleteOlderThanNDays === null ? "data-retention-policy-dont-deletes" : "data-retention-policy-delete-olders" },
+    data:
+      retention === undefined
+        ? null
+        : {
+            id: retention.id,
+            type:
+              retention.deleteOlderThanNDays === null
+                ? "data-retention-policy-dont-deletes"
+                : "data-retention-policy-delete-olders",
+          },
     links: { related: `/api/v2/workspaces/${workspace.id}/relationships/data-retention-policy` },
   };
   const iacBinary = workspace.iacBinary ?? defaultIacBinary ?? "terraform";
@@ -394,9 +454,7 @@ export async function projectResource(
   permissions: Record<string, boolean> = { "can-update": true, "can-destroy": true, "can-create-workspace": true },
   orgName?: string | null,
 ): Promise<Record<string, unknown>> {
-  const relationshipOrgName = orgName !== undefined
-    ? (orgName ?? null)
-    : await organizationName(project.orgId);
+  const relationshipOrgName = orgName !== undefined ? (orgName ?? null) : await organizationName(project.orgId);
   return {
     id: project.id,
     type: "projects",
@@ -416,9 +474,7 @@ export async function projectResource(
         data: { id: relationshipOrgName ?? project.orgId, type: "organizations" },
       },
       "default-agent-pool": {
-        data: project.defaultAgentPoolId === null
-          ? null
-          : { id: project.defaultAgentPoolId, type: "agent-pools" },
+        data: project.defaultAgentPoolId === null ? null : { id: project.defaultAgentPoolId, type: "agent-pools" },
       },
       "tag-bindings": {
         links: { related: `/api/v2/projects/${project.id}/tag-bindings` },
@@ -523,26 +579,24 @@ export async function variableSetResource(
   // Each collection is loaded independently: callers may preload some or all
   // of them (list handlers batch per page); anything omitted is fetched here.
   const [workspaceLinks, projectLinks, stackLinks, variables] = await Promise.all([
-    options?.workspaceLinks
-      ?? db.query.variableSetWorkspaces.findMany({
+    options?.workspaceLinks ??
+      db.query.variableSetWorkspaces.findMany({
         where: eq(variableSetWorkspaces.variableSetId, variableSet.id),
       }),
-    options?.projectLinks
-      ?? db.query.variableSetProjects.findMany({
+    options?.projectLinks ??
+      db.query.variableSetProjects.findMany({
         where: eq(variableSetProjects.variableSetId, variableSet.id),
       }),
-    options?.stackLinks
-      ?? db.query.stackVariableSets.findMany({
+    options?.stackLinks ??
+      db.query.stackVariableSets.findMany({
         where: eq(stackVariableSets.variableSetId, variableSet.id),
       }),
-    options?.variables
-      ?? db.query.variableSetVariables.findMany({
+    options?.variables ??
+      db.query.variableSetVariables.findMany({
         where: eq(variableSetVariables.variableSetId, variableSet.id),
       }),
   ]);
-  const orgName = options?.orgName !== undefined
-    ? options.orgName
-    : await organizationName(variableSet.orgId);
+  const orgName = options?.orgName !== undefined ? options.orgName : await organizationName(variableSet.orgId);
   return {
     id: variableSet.id,
     type: "varsets",
@@ -559,20 +613,41 @@ export async function variableSetResource(
     },
     relationships: {
       organization: { data: { id: orgName ?? variableSet.orgId, type: "organizations" } },
-      parent: variableSet.parentProjectId === null
-        ? { data: { id: orgName ?? variableSet.orgId, type: "organizations" } }
-        : { data: { id: variableSet.parentProjectId, type: "projects" } },
+      parent:
+        variableSet.parentProjectId === null
+          ? { data: { id: orgName ?? variableSet.orgId, type: "organizations" } }
+          : { data: { id: variableSet.parentProjectId, type: "projects" } },
       workspaces: {
-        data: workspaceLinks.map((link: DeepReadonly<typeof variableSetWorkspaces.$inferSelect>): { id: string; type: string } => ({ id: link.workspaceId, type: "workspaces" })),
+        data: workspaceLinks.map(
+          (link: DeepReadonly<typeof variableSetWorkspaces.$inferSelect>): { id: string; type: string } => ({
+            id: link.workspaceId,
+            type: "workspaces",
+          }),
+        ),
       },
       projects: {
-        data: projectLinks.map((link: DeepReadonly<typeof variableSetProjects.$inferSelect>): { id: string; type: string } => ({ id: link.projectId, type: "projects" })),
+        data: projectLinks.map(
+          (link: DeepReadonly<typeof variableSetProjects.$inferSelect>): { id: string; type: string } => ({
+            id: link.projectId,
+            type: "projects",
+          }),
+        ),
       },
       stacks: {
-        data: stackLinks.map((link: DeepReadonly<typeof stackVariableSets.$inferSelect>): { id: string; type: string } => ({ id: link.stackId, type: "stacks" })),
+        data: stackLinks.map(
+          (link: DeepReadonly<typeof stackVariableSets.$inferSelect>): { id: string; type: string } => ({
+            id: link.stackId,
+            type: "stacks",
+          }),
+        ),
       },
       vars: {
-        data: variables.map((variable: DeepReadonly<typeof variableSetVariables.$inferSelect>): { id: string; type: string } => ({ id: variable.id, type: "vars" })),
+        data: variables.map(
+          (variable: DeepReadonly<typeof variableSetVariables.$inferSelect>): { id: string; type: string } => ({
+            id: variable.id,
+            type: "vars",
+          }),
+        ),
       },
     },
     links: { self: `/api/v2/varsets/${variableSet.id}` },
@@ -620,9 +695,21 @@ type RunOrigin = Readonly<{
 // phase, regardless of success. The same set gates both change detection and
 // the plan-resource status mapping below.
 const PLAN_REACHED_TERMINAL_STATUSES = [
-  "planned", "cost_estimating", "cost_estimated", "policy_checking", "policy_override",
-  "policy_checked", "policy_soft_failed", "post_plan_running", "post_plan_completed",
-  "planned_and_finished", "planned_and_saved", "confirmed", "apply_queued", "applying", "applied",
+  "planned",
+  "cost_estimating",
+  "cost_estimated",
+  "policy_checking",
+  "policy_override",
+  "policy_checked",
+  "policy_soft_failed",
+  "post_plan_running",
+  "post_plan_completed",
+  "planned_and_finished",
+  "planned_and_saved",
+  "confirmed",
+  "apply_queued",
+  "applying",
+  "applied",
 ];
 
 function runHasChanges(run: RunParam): boolean {
@@ -638,15 +725,33 @@ function runHasChanges(run: RunParam): boolean {
   return PLAN_REACHED_TERMINAL_STATUSES.includes(run.status);
 }
 
-
-function getRunStatusFlags(run: RunParam): { isPlanned: boolean; isConfirmable: boolean; isRunning: boolean; hasChanges: boolean } {
+function getRunStatusFlags(run: RunParam): {
+  isPlanned: boolean;
+  isConfirmable: boolean;
+  isRunning: boolean;
+  hasChanges: boolean;
+} {
   const isPlanned = ["planned", "planned_and_saved", "policy_soft_failed"].includes(run.status);
   const isConfirmable = ["planned", "planned_and_saved"].includes(run.status);
   const isRunning = [
-    "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
-    "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated",
-    "policy_checking", "policy_override", "policy_checked", "post_plan_running",
-    "post_plan_completed", "confirmed", "apply_queued", "applying",
+    "pending",
+    "fetching",
+    "fetching_completed",
+    "pre_plan_running",
+    "pre_plan_completed",
+    "queuing",
+    "plan_queued",
+    "planning",
+    "cost_estimating",
+    "cost_estimated",
+    "policy_checking",
+    "policy_override",
+    "policy_checked",
+    "post_plan_running",
+    "post_plan_completed",
+    "confirmed",
+    "apply_queued",
+    "applying",
   ].includes(run.status);
   const hasChanges = runHasChanges(run);
   return { isPlanned, isConfirmable, isRunning, hasChanges };
@@ -664,7 +769,14 @@ function resolveRunOperation(run: RunParam): string {
 
 function resolveNormalizedSource(origin?: RunOrigin): string {
   const src = origin?.source;
-  if (src === "tfe-ui" || src === "tfe-api" || src === "tfe-configuration-version" || src === "github" || src === "gitlab" || src === "bitbucket") {
+  if (
+    src === "tfe-ui" ||
+    src === "tfe-api" ||
+    src === "tfe-configuration-version" ||
+    src === "github" ||
+    src === "gitlab" ||
+    src === "bitbucket"
+  ) {
     return src;
   }
   if (src === undefined || src === null || src === "") return "tfe-api";
@@ -672,7 +784,11 @@ function resolveNormalizedSource(origin?: RunOrigin): string {
   return "tfe-configuration-version";
 }
 
-function buildRunActionAttributes(flags: DeepReadonly<{ isPlanned: boolean; isConfirmable: boolean; isRunning: boolean }>, canApply: boolean, canAdmin: boolean): Record<string, unknown> {
+function buildRunActionAttributes(
+  flags: DeepReadonly<{ isPlanned: boolean; isConfirmable: boolean; isRunning: boolean }>,
+  canApply: boolean,
+  canAdmin: boolean,
+): Record<string, unknown> {
   return {
     "is-cancelable": canApply && flags.isRunning,
     "is-confirmable": canApply && flags.isConfirmable,
@@ -681,7 +797,12 @@ function buildRunActionAttributes(flags: DeepReadonly<{ isPlanned: boolean; isCo
   };
 }
 
-function buildRunCoreAttributes(run: RunParam, operation: string, normalizedSource: string, hasChanges: boolean): Record<string, unknown> {
+function buildRunCoreAttributes(
+  run: RunParam,
+  operation: string,
+  normalizedSource: string,
+  hasChanges: boolean,
+): Record<string, unknown> {
   const statusTimestamps = parsePersistedStatusMetadata(run.statusTimestamps, run.statusMetadataSchemaVersion, run.id);
   return {
     "allow-empty-apply": run.allowEmptyApply,
@@ -722,7 +843,13 @@ function buildRunTimeAttributes(run: RunParam): Record<string, unknown> {
   };
 }
 
-function buildRunBaselineAttributes(baseline?: Readonly<{ "median-duration-seconds"?: number | null; "duration-seconds"?: number | null; "is-slow"?: boolean }> | null): Record<string, unknown> {
+function buildRunBaselineAttributes(
+  baseline?: Readonly<{
+    "median-duration-seconds"?: number | null;
+    "duration-seconds"?: number | null;
+    "is-slow"?: boolean;
+  }> | null,
+): Record<string, unknown> {
   if (baseline === undefined || baseline === null) return { "duration-baseline": undefined };
   return {
     "duration-baseline": {
@@ -747,7 +874,7 @@ function buildRunTriggerAttributes(origin?: RunOrigin): Record<string, unknown> 
   const originRecord = origin as Record<string, unknown> | undefined;
   return {
     "trigger-reason": originRecord?.["triggerReason"] ?? "manual",
-    "branch": originRecord?.["branch"] ?? null,
+    branch: originRecord?.["branch"] ?? null,
     "commit-sha": originRecord?.["commitSha"] ?? null,
     "commit-url": originRecord?.["commitUrl"] ?? null,
     "triggered-by": originRecord?.["triggeredBy"] ?? null,
@@ -756,12 +883,16 @@ function buildRunTriggerAttributes(origin?: RunOrigin): Record<string, unknown> 
 }
 
 function getRunVariablesForResponse(run: RunParam): unknown[] {
-  const inputs = parsePersistedRunInputs({
-    targetAddrs: run.targetAddrs,
-    replaceAddrs: run.replaceAddrs,
-    invokeActionAddrs: run.invokeActionAddrs,
-    variables: run.variables,
-  }, run.inputSchemaVersion, run.id);
+  const inputs = parsePersistedRunInputs(
+    {
+      targetAddrs: run.targetAddrs,
+      replaceAddrs: run.replaceAddrs,
+      invokeActionAddrs: run.invokeActionAddrs,
+      variables: run.variables,
+    },
+    run.inputSchemaVersion,
+    run.id,
+  );
   if (!Array.isArray(inputs.variables)) return [];
   return (inputs.variables as Record<string, unknown>[]).map((v) => ({
     key: v["key"],
@@ -781,7 +912,13 @@ function buildRunResourceAttributes(run: RunParam): Record<string, unknown> {
   };
 }
 
-function buildRunPermissionAttributes(flags: DeepReadonly<{ isPlanned: boolean; isConfirmable: boolean; isRunning: boolean }>, canApply: boolean, canAdmin: boolean, canOverridePolicy: boolean, status: string): Record<string, unknown> {
+function buildRunPermissionAttributes(
+  flags: DeepReadonly<{ isPlanned: boolean; isConfirmable: boolean; isRunning: boolean }>,
+  canApply: boolean,
+  canAdmin: boolean,
+  canOverridePolicy: boolean,
+  status: string,
+): Record<string, unknown> {
   return {
     "can-apply": canApply && flags.isConfirmable,
     "can-cancel": canApply && flags.isRunning,
@@ -793,7 +930,21 @@ function buildRunPermissionAttributes(flags: DeepReadonly<{ isPlanned: boolean; 
   };
 }
 
-function buildRunAttributes(run: RunParam, flags: DeepReadonly<{ isPlanned: boolean; isConfirmable: boolean; isRunning: boolean; hasChanges: boolean }>, operation: string, normalizedSource: string, origin?: RunOrigin, baseline?: Readonly<{ "median-duration-seconds"?: number | null; "duration-seconds"?: number | null; "is-slow"?: boolean }> | null, canApply = false, canAdmin = false, canOverridePolicy = false): Record<string, unknown> {
+function buildRunAttributes(
+  run: RunParam,
+  flags: DeepReadonly<{ isPlanned: boolean; isConfirmable: boolean; isRunning: boolean; hasChanges: boolean }>,
+  operation: string,
+  normalizedSource: string,
+  origin?: RunOrigin,
+  baseline?: Readonly<{
+    "median-duration-seconds"?: number | null;
+    "duration-seconds"?: number | null;
+    "is-slow"?: boolean;
+  }> | null,
+  canApply = false,
+  canAdmin = false,
+  canOverridePolicy = false,
+): Record<string, unknown> {
   return {
     actions: buildRunActionAttributes(flags, canApply, canAdmin),
     ...buildRunCoreAttributes(run, operation, normalizedSource, flags.hasChanges),
@@ -829,12 +980,12 @@ function buildRunRelationships(run: RunParam, linkage?: RunRelationshipLinkage):
       links: { related: `/api/v2/workspaces/${run.workspaceId}` },
     },
     "configuration-version": {
-      data: run.configurationVersionId !== null
-        ? { id: run.configurationVersionId, type: "configuration-versions" }
-        : null,
-      links: run.configurationVersionId !== null
-        ? { related: `/api/v2/configuration-versions/${run.configurationVersionId}` }
-        : undefined,
+      data:
+        run.configurationVersionId !== null ? { id: run.configurationVersionId, type: "configuration-versions" } : null,
+      links:
+        run.configurationVersionId !== null
+          ? { related: `/api/v2/configuration-versions/${run.configurationVersionId}` }
+          : undefined,
     },
     plan: {
       data: { id: `plan-${run.id}`, type: "plans" },
@@ -907,7 +1058,17 @@ export function runResource(
   return {
     id: run.id,
     type: "runs",
-    attributes: buildRunAttributes(run, flags, operation, normalizedSource, origin, baseline, canApply, canAdmin, canOverridePolicy),
+    attributes: buildRunAttributes(
+      run,
+      flags,
+      operation,
+      normalizedSource,
+      origin,
+      baseline,
+      canApply,
+      canAdmin,
+      canOverridePolicy,
+    ),
     relationships: buildRunRelationships(run, linkage),
     links: { self: `/api/v2/runs/${run.id}` },
   };
@@ -915,9 +1076,7 @@ export function runResource(
 
 /** Audit finding 6: task-stage resource matching go-tfe's TaskStage shape so
  * the CLI can poll stage status via TaskStages.Read. */
-export function taskStageResource(
-  stage: DeepReadonly<typeof taskStages.$inferSelect>,
-): Record<string, unknown> {
+export function taskStageResource(stage: DeepReadonly<typeof taskStages.$inferSelect>): Record<string, unknown> {
   return {
     id: stage.id,
     type: "task-stages",
@@ -935,7 +1094,6 @@ export function taskStageResource(
 }
 
 type RequestParam = Readonly<{ readonly url: string }>;
-
 
 function resolvePlanStatus(run: Readonly<{ status: string }>, planStarted: boolean, planFinished: boolean): string {
   if (run.status === "planning") return "running";
@@ -965,12 +1123,15 @@ function resolveApplyStatus(run: RunParam, applyStarted: boolean): string {
  * Plan status for a run, shared by the HTTP plan resource and MCP run
  * includes so both surfaces report identical values.
  */
-export function planStatusForRun(run: Readonly<{ status: string; statusTimestamps: Readonly<Record<string, unknown>> | null }>): string {
+export function planStatusForRun(
+  run: Readonly<{ status: string; statusTimestamps: Readonly<Record<string, unknown>> | null }>,
+): string {
   const timestamps = run.statusTimestamps ?? {};
   const planStarted = typeof timestamps["planning-at"] === "string";
-  const planFinished = typeof timestamps["planned-at"] === "string"
-    || typeof timestamps["planned-and-finished-at"] === "string"
-    || typeof timestamps["planned-and-saved-at"] === "string";
+  const planFinished =
+    typeof timestamps["planned-at"] === "string" ||
+    typeof timestamps["planned-and-finished-at"] === "string" ||
+    typeof timestamps["planned-and-saved-at"] === "string";
   return resolvePlanStatus(run, planStarted, planFinished);
 }
 
@@ -1011,8 +1172,9 @@ export function applyResource(
   authorized?: AuthorizedRunCapability<RunLogCapability>,
 ): Record<string, unknown> {
   const timestamps = parsePersistedStatusMetadata(run.statusTimestamps, run.statusMetadataSchemaVersion, run.id) ?? {};
-  const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
-    .some((key: string): boolean => typeof timestamps[key] === "string");
+  const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"].some(
+    (key: string): boolean => typeof timestamps[key] === "string",
+  );
   const status = resolveApplyStatus(run, applyStarted);
   return {
     id: `apply-${run.id}`,
@@ -1044,20 +1206,22 @@ export function stateOutputResources(state: StateParam): Record<string, unknown>
 
   return Object.entries(outputs).map(([name, raw]: readonly [string, unknown]): Record<string, unknown> => {
     const id = `wsout-${createHash("sha256").update(`${state.id}\0${name}`).digest("hex")}`;
-    const output = raw !== null && raw !== undefined && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : { value: raw };
+    const output =
+      raw !== null && raw !== undefined && typeof raw === "object" && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>)
+        : { value: raw };
     const value = output["value"];
     const rawType = output["type"];
-    const detailedType = rawType ?? (
-      Array.isArray(value) ? ["tuple", value.map((item: unknown): string => typeof item)] :
-      value === null ? "null" :
-      typeof value === "object" ? "object" :
-      typeof value
-    );
-    const type = typeof detailedType === "string"
-      ? detailedType
-      : (Array.isArray(value) ? "array" : "object");
+    const detailedType =
+      rawType ??
+      (Array.isArray(value)
+        ? ["tuple", value.map((item: unknown): string => typeof item)]
+        : value === null
+          ? "null"
+          : typeof value === "object"
+            ? "object"
+            : typeof value);
+    const type = typeof detailedType === "string" ? detailedType : Array.isArray(value) ? "array" : "object";
 
     return {
       id,
@@ -1102,13 +1266,20 @@ export function workspaceOutputResources(state: StateParam): Record<string, unkn
 }
 
 function isStateResourceRecord(resource: unknown): resource is Record<string, unknown> {
-  return resource !== null && resource !== undefined && typeof resource === "object" &&
+  return (
+    resource !== null &&
+    resource !== undefined &&
+    typeof resource === "object" &&
     typeof (resource as Record<string, unknown>)["type"] === "string" &&
-    typeof (resource as Record<string, unknown>)["name"] === "string";
+    typeof (resource as Record<string, unknown>)["name"] === "string"
+  );
 }
 
 type StateResource = Readonly<{ name: string; type: string; count: number; module: string; provider: string | null }>;
-type StateAggregates = DeepReadonly<{ modules: Record<string, Record<string, number>>; providers: Record<string, Record<string, number>> }>;
+type StateAggregates = DeepReadonly<{
+  modules: Record<string, Record<string, number>>;
+  providers: Record<string, Record<string, number>>;
+}>;
 
 function normalizeStateResource(resource: Readonly<Record<string, unknown>>): StateResource {
   const rType = resource["type"] as string;
@@ -1127,10 +1298,10 @@ function normalizeStateResource(resource: Readonly<Record<string, unknown>>): St
 }
 
 function extractStateResources(parsed: unknown): StateResource[] {
-  const rawResources = Array.isArray((parsed as Record<string, unknown> | null)?.["resources"]) ? (parsed as Record<string, unknown>)["resources"] as unknown[] : [];
-  return (rawResources)
-    .filter(isStateResourceRecord)
-    .map(normalizeStateResource);
+  const rawResources = Array.isArray((parsed as Record<string, unknown> | null)?.["resources"])
+    ? ((parsed as Record<string, unknown>)["resources"] as unknown[])
+    : [];
+  return rawResources.filter(isStateResourceRecord).map(normalizeStateResource);
 }
 
 function buildStateAggregates(resources: readonly StateResource[]): StateAggregates {
@@ -1150,8 +1321,14 @@ function buildStateAggregates(resources: readonly StateResource[]): StateAggrega
   return { modules, providers };
 }
 
-function getStateAvailability(state: StateParam, payload: string): { rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean } {
-  const backingDataAvailable = state.status !== "backing_data_soft_deleted" && state.status !== "backing_data_permanently_deleted" && state.status !== "discarded";
+function getStateAvailability(
+  state: StateParam,
+  payload: string,
+): { rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean } {
+  const backingDataAvailable =
+    state.status !== "backing_data_soft_deleted" &&
+    state.status !== "backing_data_permanently_deleted" &&
+    state.status !== "discarded";
   const rawStateAvailable = backingDataAvailable && payload !== "";
   const jsonStateAvailable = backingDataAvailable && typeof state.jsonState === "string" && state.jsonState !== "";
   const pending = state.status === "pending";
@@ -1171,13 +1348,24 @@ function buildStateCoreAttributes(
     ...(includeState ? { state: payload } : {}),
     serial: state.serial,
     md5: rawStateAvailable ? createHash("md5").update(payload).digest("hex") : null,
-    lineage: typeof (parsed as Record<string, unknown> | null)?.["lineage"] === "string" ? (parsed as Record<string, unknown>)["lineage"] : null,
-    "terraform-version": typeof (parsed as Record<string, unknown> | null)?.["terraform_version"] === "string" ? (parsed as Record<string, unknown>)["terraform_version"] : null,
+    lineage:
+      typeof (parsed as Record<string, unknown> | null)?.["lineage"] === "string"
+        ? (parsed as Record<string, unknown>)["lineage"]
+        : null,
+    "terraform-version":
+      typeof (parsed as Record<string, unknown> | null)?.["terraform_version"] === "string"
+        ? (parsed as Record<string, unknown>)["terraform_version"]
+        : null,
     "resources-processed": parsed !== null,
     resources,
     modules: aggregates.modules,
     providers: aggregates.providers,
-    "state-version": parsed !== null && typeof (parsed as Record<string, unknown>)["version"] === "number" && Number.isInteger((parsed as Record<string, unknown>)["version"]) ? (parsed as Record<string, unknown>)["version"] : null,
+    "state-version":
+      parsed !== null &&
+      typeof (parsed as Record<string, unknown>)["version"] === "number" &&
+      Number.isInteger((parsed as Record<string, unknown>)["version"])
+        ? (parsed as Record<string, unknown>)["version"]
+        : null,
     status: state.status ?? "finalized",
     intermediate: state.intermediate,
     size: rawStateAvailable ? Buffer.byteLength(payload) : null,
@@ -1215,21 +1403,44 @@ function buildStateUrlAttributes(
   const canRead = stateCapabilityAllows(authorization, state.workspaceId, "read");
   const canWrite = stateCapabilityAllows(authorization, state.workspaceId, "write");
   return {
-    "hosted-state-download-url": canRead && flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/download`) : null,
-    "hosted-state-upload-url": canWrite && flags.pending && !flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/upload`, "PUT") : null,
-    "hosted-json-state-download-url": canRead && flags.jsonStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-download`) : null,
-    "hosted-json-state-upload-url": canWrite && flags.pending && !flags.jsonStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-upload`, "PUT") : null,
+    "hosted-state-download-url":
+      canRead && flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/download`) : null,
+    "hosted-state-upload-url":
+      canWrite && flags.pending && !flags.rawStateAvailable
+        ? signedApiURL(request, `/api/v2/state-versions/${state.id}/upload`, "PUT")
+        : null,
+    "hosted-json-state-download-url":
+      canRead && flags.jsonStateAvailable
+        ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-download`)
+        : null,
+    "hosted-json-state-upload-url":
+      canWrite && flags.pending && !flags.jsonStateAvailable
+        ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-upload`, "PUT")
+        : null,
   };
 }
 
-function buildStateRunAttributes(run?: Readonly<{ status: string; message: string | null }> | null): Record<string, unknown> {
+function buildStateRunAttributes(
+  run?: Readonly<{ status: string; message: string | null }> | null,
+): Record<string, unknown> {
   return {
     "run-status": run !== null && run !== undefined ? run.status : null,
     "run-message": run !== null && run !== undefined ? run.message : null,
   };
 }
 
-function buildStateVersionAttributes(state: StateParam, parsed: Readonly<Record<string, unknown> | null>, resources: readonly StateResource[], aggregates: StateAggregates, payload: string, flags: DeepReadonly<{ rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }>, request: Readonly<{ url: string }>, includeState: boolean, run?: Readonly<{ status: string; message: string | null }> | null, authorization?: AuthorizedStateAccess): Record<string, unknown> {
+function buildStateVersionAttributes(
+  state: StateParam,
+  parsed: Readonly<Record<string, unknown> | null>,
+  resources: readonly StateResource[],
+  aggregates: StateAggregates,
+  payload: string,
+  flags: DeepReadonly<{ rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }>,
+  request: Readonly<{ url: string }>,
+  includeState: boolean,
+  run?: Readonly<{ status: string; message: string | null }> | null,
+  authorization?: AuthorizedStateAccess,
+): Record<string, unknown> {
   return {
     ...buildStateCoreAttributes(state, parsed, resources, aggregates, payload, flags.rawStateAvailable, includeState),
     ...buildStateUrlAttributes(state, flags, request, authorization),
@@ -1244,7 +1455,9 @@ function buildStateVersionRelationships(state: StateParam): Record<string, unkno
     run: state.runId !== null ? { data: { id: state.runId, type: "runs" } } : { data: null },
     "created-by": state.createdBy !== null ? { data: { id: state.createdBy, type: "users" } } : { data: null },
     outputs: {
-      data: outputResources.map((output): OutputResourceRef => ({ id: output["id"] as string, type: output["type"] as string })),
+      data: outputResources.map(
+        (output): OutputResourceRef => ({ id: output["id"] as string, type: output["type"] as string }),
+      ),
     },
   };
 }
@@ -1267,12 +1480,28 @@ export function stateVersionResource(
     id: state.id,
     type: "state-versions",
     attributes: {
-      ...buildStateVersionAttributes(state, parsed, resources, aggregates, payload, flags, request, includeState, run, authorization),
-      ...(encrypted ? {
-        "state-representation": "opentofu-encrypted",
-        "structured-state-unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR,
-        "resources-processed": false, resources: null, modules: null, providers: null,
-      } : {}),
+      ...buildStateVersionAttributes(
+        state,
+        parsed,
+        resources,
+        aggregates,
+        payload,
+        flags,
+        request,
+        includeState,
+        run,
+        authorization,
+      ),
+      ...(encrypted
+        ? {
+            "state-representation": "opentofu-encrypted",
+            "structured-state-unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR,
+            "resources-processed": false,
+            resources: null,
+            modules: null,
+            providers: null,
+          }
+        : {}),
     },
     relationships: {
       ...buildStateVersionRelationships(state),
@@ -1283,10 +1512,13 @@ export function stateVersionResource(
 }
 
 /** History must never load, decrypt or parse state blobs. Details remain lazy. */
-function summaryIdentityAttributes(summary: Readonly<StateSummary> | null, rawStateAvailable: boolean): Record<string, unknown> {
+function summaryIdentityAttributes(
+  summary: Readonly<StateSummary> | null,
+  rawStateAvailable: boolean,
+): Record<string, unknown> {
   return {
-    md5: rawStateAvailable ? summary?.md5 ?? null : null,
-    size: rawStateAvailable ? summary?.size ?? null : null,
+    md5: rawStateAvailable ? (summary?.md5 ?? null) : null,
+    size: rawStateAvailable ? (summary?.size ?? null) : null,
   };
 }
 
@@ -1299,13 +1531,19 @@ function summaryVersionAttributes(summary: Readonly<StateSummary> | null): Recor
 }
 
 function opaqueRepresentationAttributes(summary: Readonly<StateSummary> | null): Record<string, unknown> {
-  return summary?.status === "opaque" ? {
-    "state-representation": "opentofu-encrypted",
-    "structured-state-unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR,
-  } : {};
+  return summary?.status === "opaque"
+    ? {
+        "state-representation": "opentofu-encrypted",
+        "structured-state-unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR,
+      }
+    : {};
 }
 
-function summaryStatusAttributes(summary: Readonly<StateSummary> | null, ready: boolean, stateSummaryMissing: boolean): Record<string, unknown> {
+function summaryStatusAttributes(
+  summary: Readonly<StateSummary> | null,
+  ready: boolean,
+  stateSummaryMissing: boolean,
+): Record<string, unknown> {
   return {
     "resources-processed": ready,
     "summary-status": summary?.status ?? (stateSummaryMissing ? "unindexed" : "outdated"),
@@ -1361,29 +1599,45 @@ function stateVersionRelationships(
 }
 
 export function stateVersionSummaryResource(
-  state: Readonly<Omit<StateParam, "statePayload" | "jsonState" | "jsonStateOutputs"> & { hasRawState: boolean; hasJsonState: boolean }>,
+  state: Readonly<
+    Omit<StateParam, "statePayload" | "jsonState" | "jsonStateOutputs"> & {
+      hasRawState: boolean;
+      hasJsonState: boolean;
+    }
+  >,
   request: Readonly<{ url: string }>,
   run?: Readonly<{ status: string; message: string | null }> | null,
   authorization?: AuthorizedStateAccess,
 ): Record<string, unknown> {
   const summary = readStateSummary(state.stateSummary, state.uploadSha256);
-  const available = !["backing_data_soft_deleted", "backing_data_permanently_deleted", "discarded"].includes(state.status ?? "");
+  const available = !["backing_data_soft_deleted", "backing_data_permanently_deleted", "discarded"].includes(
+    state.status ?? "",
+  );
   const rawStateAvailable = available && state.hasRawState;
   const ready = summary?.status === "ready";
   const counted = ready && summary?.status === "ready" ? summary : null;
   return {
-    id: state.id, type: "state-versions",
+    id: state.id,
+    type: "state-versions",
     attributes: {
-      serial: state.serial, status: state.status ?? "finalized", intermediate: state.intermediate,
+      serial: state.serial,
+      status: state.status ?? "finalized",
+      intermediate: state.intermediate,
       "created-at": new Date(state.createdAt).toISOString(),
-      "vcs-commit-sha": state.vcsCommitSha, "vcs-commit-url": state.vcsCommitUrl,
+      "vcs-commit-sha": state.vcsCommitSha,
+      "vcs-commit-url": state.vcsCommitUrl,
       ...summaryCoreAttributes(summary, rawStateAvailable, ready, state.stateSummary === null),
       ...summaryCountAttributes(summary, ready),
-      ...buildStateUrlAttributes(state, {
-        rawStateAvailable,
-        jsonStateAvailable: available && state.hasJsonState && summary?.status !== "opaque",
-        pending: state.status === "pending",
-      }, request, authorization),
+      ...buildStateUrlAttributes(
+        state,
+        {
+          rawStateAvailable,
+          jsonStateAvailable: available && state.hasJsonState && summary?.status !== "opaque",
+          pending: state.status === "pending",
+        },
+        request,
+        authorization,
+      ),
       ...buildStateRunAttributes(run),
     },
     relationships: stateVersionRelationships(state, counted?.outputCount ?? null),

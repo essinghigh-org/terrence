@@ -35,8 +35,12 @@ describe("Configurable password policy (kanban 5.5)", () => {
     });
 
     it("rejects a password missing each required class with a specific message", () => {
-      expect(checkPasswordPolicy(strict, "ABCDEF1!XYZ").errors).toContain("Password must contain at least one lowercase letter");
-      expect(checkPasswordPolicy(strict, "abcdef1!xyz").errors).toContain("Password must contain at least one uppercase letter");
+      expect(checkPasswordPolicy(strict, "ABCDEF1!XYZ").errors).toContain(
+        "Password must contain at least one lowercase letter",
+      );
+      expect(checkPasswordPolicy(strict, "abcdef1!xyz").errors).toContain(
+        "Password must contain at least one uppercase letter",
+      );
       expect(checkPasswordPolicy(strict, "Abcdef!xyz").errors).toContain("Password must contain at least one digit");
       expect(checkPasswordPolicy(strict, "Abcdef1xyz").errors).toContain("Password must contain at least one symbol");
     });
@@ -52,7 +56,9 @@ describe("Configurable password policy (kanban 5.5)", () => {
     it("rejects passwords exceeding 72 UTF-8 bytes", () => {
       const longAscii = "a".repeat(73);
       expect(checkPasswordPolicy(defaultPasswordPolicy, longAscii).ok).toBeFalse();
-      expect(checkPasswordPolicy(defaultPasswordPolicy, longAscii).errors).toContain("Password must be at most 72 bytes when encoded as UTF-8");
+      expect(checkPasswordPolicy(defaultPasswordPolicy, longAscii).errors).toContain(
+        "Password must be at most 72 bytes when encoded as UTF-8",
+      );
     });
 
     it("accepts a password of exactly 72 bytes", () => {

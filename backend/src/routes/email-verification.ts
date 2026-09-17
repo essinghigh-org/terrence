@@ -25,14 +25,22 @@ const REQUEST_COOLDOWN_MS = 60 * 1000;
 
 function error(set: SetObj, status: number, detail: string): Record<string, unknown> {
   (set as { status: number }).status = status;
-  const title = status === 400 ? "Bad Request"
-    : status === 403 ? "Forbidden"
-      : status === 404 ? "Not Found"
-        : status === 409 ? "Conflict"
-          : status === 429 ? "Too Many Requests"
-            : status === 502 ? "Bad Gateway"
-              : status === 503 ? "Service Unavailable"
-                : "Unprocessable Entity";
+  const title =
+    status === 400
+      ? "Bad Request"
+      : status === 403
+        ? "Forbidden"
+        : status === 404
+          ? "Not Found"
+          : status === 409
+            ? "Conflict"
+            : status === 429
+              ? "Too Many Requests"
+              : status === 502
+                ? "Bad Gateway"
+                : status === 503
+                  ? "Service Unavailable"
+                  : "Unprocessable Entity";
   return { errors: [{ status: String(status), title, detail }] };
 }
 
@@ -41,23 +49,34 @@ function tokenFromContext(ctx: Pick<Ctx, "params" | "query" | "body">): string {
   if (typeof fromParams === "string" && fromParams !== "") return fromParams;
   const fromQuery = ctx.query?.["token"];
   if (typeof fromQuery === "string" && fromQuery !== "") return fromQuery;
-  const body = ctx.body !== null && typeof ctx.body === "object" ? ctx.body as Record<string, unknown> : {};
-  const data = body["data"] !== null && typeof body["data"] === "object" ? body["data"] as Record<string, unknown> : {};
-  const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  const body = ctx.body !== null && typeof ctx.body === "object" ? (ctx.body as Record<string, unknown>) : {};
+  const data =
+    body["data"] !== null && typeof body["data"] === "object" ? (body["data"] as Record<string, unknown>) : {};
+  const attrs =
+    data["attributes"] !== null && typeof data["attributes"] === "object"
+      ? (data["attributes"] as Record<string, unknown>)
+      : {};
   return typeof attrs["token"] === "string" ? attrs["token"] : "";
 }
 
 function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character): string => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  })[character] ?? character);
+  return value.replace(
+    /[&<>"']/g,
+    (character): string =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[character] ?? character,
+  );
 }
 
-function smtpMessage(to: string, verificationUrl: string): Readonly<{ to: readonly string[]; subject: string; text: string; html: string }> {
+function smtpMessage(
+  to: string,
+  verificationUrl: string,
+): Readonly<{ to: readonly string[]; subject: string; text: string; html: string }> {
   const safeUrl = escapeHtml(verificationUrl);
   return {
     to: [to],
@@ -72,24 +91,32 @@ async function checkVerificationEligibility(
   set: SetObj,
 ): Promise<{ email: string } | { early: unknown } | { error: unknown }> {
   if (user === null || user === undefined) return { error: error(set, 404, "Not Found") };
-  if (user.deletedAt !== null || user.isSuspended === true) return { error: error(set, 403, "Suspended accounts cannot verify email") };
+  if (user.deletedAt !== null || user.isSuspended === true)
+    return { error: error(set, 403, "Suspended accounts cannot verify email") };
   const email = normalizeEmail(user.email);
   if (email === null) return { error: error(set, 422, "A valid email address is required") };
   if (user.emailVerifiedAt !== null) {
     return { early: { data: { type: "email-verification", attributes: { verified: true } } } };
   }
   const recent = await db.query.emailVerificationTokens.findFirst({
-    where: and(eq(emailVerificationTokens.userId, user.id), gt(emailVerificationTokens.createdAt, Date.now() - REQUEST_COOLDOWN_MS), isNull(emailVerificationTokens.usedAt)),
+    where: and(
+      eq(emailVerificationTokens.userId, user.id),
+      gt(emailVerificationTokens.createdAt, Date.now() - REQUEST_COOLDOWN_MS),
+      isNull(emailVerificationTokens.usedAt),
+    ),
   });
   if (recent !== undefined) return { error: error(set, 429, "A verification email was sent recently") };
   return { email };
 }
 
-async function resolveVerificationSmtp(set: SetObj): Promise<{ config: Parameters<typeof sendEmail>[0] } | { error: unknown }> {
+async function resolveVerificationSmtp(
+  set: SetObj,
+): Promise<{ config: Parameters<typeof sendEmail>[0] } | { error: unknown }> {
   const smtp = await getSettings("smtp");
   const host = typeof smtp["host"] === "string" ? smtp["host"].trim() : "";
   const senderEmail = typeof smtp["sender-email"] === "string" ? smtp["sender-email"].trim() : "";
-  if (smtp["enabled"] !== true || host === "" || senderEmail === "") return { error: error(set, 503, "Email delivery is not configured") };
+  if (smtp["enabled"] !== true || host === "" || senderEmail === "")
+    return { error: error(set, 503, "Email delivery is not configured") };
   return {
     config: {
       host,
@@ -151,33 +178,54 @@ export const emailVerificationRoutes = new Elysia({ name: "email-verification" }
     const delivered = await deliverVerificationEmail(smtp.config, eligible.email, verificationUrl, tokenHash, set);
     if ("error" in delivered) return delivered.error;
     await auditLog("request", "email-verification", user?.id ?? "", user?.id ?? "", null, { email: eligible.email });
-    return { data: { type: "email-verification", attributes: { verified: false, "expires-at": new Date(now + TOKEN_TTL_MS).toISOString() } } };
+    return {
+      data: {
+        type: "email-verification",
+        attributes: { verified: false, "expires-at": new Date(now + TOKEN_TTL_MS).toISOString() },
+      },
+    };
   })
   .get("/api/v2/account/email/verify", async (ctx: Ctx): Promise<Response> => {
     // This route is the href inside the verification email, so every outcome
     // lands in the browser, not in an API client. Always answer with a
     // redirect into the SPA (which carries the result via query flags) instead
     // of a JSON error document; the SPA turns the flag into visible feedback.
-    const redirect = (query: string): Response => new Response(null, {
-      status: 302,
-      headers: { Location: `/app/account${query}`, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
-    });
+    const redirect = (query: string): Response =>
+      new Response(null, {
+        status: 302,
+        headers: { Location: `/app/account${query}`, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
+      });
     const rawToken = tokenFromContext(ctx);
     if (rawToken.trim() === "") return redirect("?email-verification=missing");
     const [tokenHash, legacyTokenHash] = tokenHashCandidates(rawToken);
-    const tokenRows = await db.query.emailVerificationTokens.findMany({ where: inArray(emailVerificationTokens.tokenHash, [tokenHash, legacyTokenHash]), limit: 2 });
+    const tokenRows = await db.query.emailVerificationTokens.findMany({
+      where: inArray(emailVerificationTokens.tokenHash, [tokenHash, legacyTokenHash]),
+      limit: 2,
+    });
     const row = tokenRows.find((candidate) => candidate.tokenHash === tokenHash) ?? tokenRows[0];
-    if (row === undefined || row.usedAt !== null || row.expiresAt <= Date.now()) return redirect("?email-verification=expired");
+    if (row === undefined || row.usedAt !== null || row.expiresAt <= Date.now())
+      return redirect("?email-verification=expired");
     if (row.tokenHash === legacyTokenHash) {
       await db.update(emailVerificationTokens).set({ tokenHash }).where(eq(emailVerificationTokens.id, row.id));
     }
     const target = await db.query.users.findFirst({ where: eq(users.id, row.userId) });
-    if (target === undefined || target.email === null || normalizeEmail(target.email) !== row.email) return redirect("?email-verification=changed");
+    if (target === undefined || target.email === null || normalizeEmail(target.email) !== row.email)
+      return redirect("?email-verification=changed");
     if (target.deletedAt !== null || target.isSuspended === true) return redirect("?email-verification=suspended");
     const now = Date.now();
     const claimed = await db.transaction(async (tx: unknown): Promise<boolean> => {
       const t = tx as typeof db;
-      const claimedRows = await t.update(emailVerificationTokens).set({ usedAt: now }).where(and(eq(emailVerificationTokens.id, row.id), isNull(emailVerificationTokens.usedAt), gt(emailVerificationTokens.expiresAt, now))).returning({ id: emailVerificationTokens.id });
+      const claimedRows = await t
+        .update(emailVerificationTokens)
+        .set({ usedAt: now })
+        .where(
+          and(
+            eq(emailVerificationTokens.id, row.id),
+            isNull(emailVerificationTokens.usedAt),
+            gt(emailVerificationTokens.expiresAt, now),
+          ),
+        )
+        .returning({ id: emailVerificationTokens.id });
       if (claimedRows.length === 0) return false;
       await t.update(users).set({ emailVerifiedAt: now }).where(eq(users.id, row.userId));
       return true;

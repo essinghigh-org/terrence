@@ -5,13 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /** The named local profiles supported by the operational test runner. */
-export const operationalTestProfileNames = [
-  "unit-api",
-  "sqlite-cli",
-  "postgres-cli",
-  "sandbox",
-  "browser",
-] as const;
+export const operationalTestProfileNames = ["unit-api", "sqlite-cli", "postgres-cli", "sandbox", "browser"] as const;
 
 export type OperationalTestProfileName = (typeof operationalTestProfileNames)[number];
 export type OperationalTestExecutionMode = "simulated" | "real-cli" | "browser";
@@ -56,7 +50,14 @@ export const operationalTestProfiles: Readonly<Record<OperationalTestProfileName
     mode: "real-cli",
     database: "sqlite",
     sandbox: "disabled",
-    command: ["bun", "test", "--bail=5", "--max-concurrency=1", "--no-orphans", "backend/tests/e2e/provider_e2e.test.ts"],
+    command: [
+      "bun",
+      "test",
+      "--bail=5",
+      "--max-concurrency=1",
+      "--no-orphans",
+      "backend/tests/e2e/provider_e2e.test.ts",
+    ],
     cwd: "repo",
   },
   "postgres-cli": {
@@ -65,7 +66,14 @@ export const operationalTestProfiles: Readonly<Record<OperationalTestProfileName
     mode: "real-cli",
     database: "postgres",
     sandbox: "disabled",
-    command: ["bun", "test", "--bail=5", "--max-concurrency=1", "--no-orphans", "backend/tests/e2e/provider_e2e.test.ts"],
+    command: [
+      "bun",
+      "test",
+      "--bail=5",
+      "--max-concurrency=1",
+      "--no-orphans",
+      "backend/tests/e2e/provider_e2e.test.ts",
+    ],
     cwd: "repo",
   },
   sandbox: {
@@ -74,7 +82,14 @@ export const operationalTestProfiles: Readonly<Record<OperationalTestProfileName
     mode: "real-cli",
     database: "sqlite",
     sandbox: "required",
-    command: ["bun", "test", "--bail=5", "--max-concurrency=1", "--no-orphans", "backend/tests/e2e/provider_e2e.test.ts"],
+    command: [
+      "bun",
+      "test",
+      "--bail=5",
+      "--max-concurrency=1",
+      "--no-orphans",
+      "backend/tests/e2e/provider_e2e.test.ts",
+    ],
     cwd: "repo",
   },
   browser: {
@@ -94,7 +109,9 @@ export const DEFAULT_OPERATIONAL_TEST_SEED = "eng21";
 export function parseOperationalTestProfile(value: string): OperationalTestProfile {
   const profile = operationalTestProfiles[value as OperationalTestProfileName];
   if (profile === undefined) {
-    throw new Error(`Unknown operational test profile "${value}". Choose one of: ${operationalTestProfileNames.join(", ")}`);
+    throw new Error(
+      `Unknown operational test profile "${value}". Choose one of: ${operationalTestProfileNames.join(", ")}`,
+    );
   }
   return profile;
 }
@@ -166,7 +183,9 @@ async function settled(process: Readonly<ManagedProcess>, timeoutMs: number): Pr
   const result = await Promise.race([
     process.exited.then(() => true),
     new Promise<false>((resolve) => {
-      timer = setTimeout((): void => { resolve(false); }, timeoutMs);
+      timer = setTimeout((): void => {
+        resolve(false);
+      }, timeoutMs);
     }),
   ]);
   if (timer !== undefined) clearTimeout(timer);
@@ -221,12 +240,17 @@ export async function terminateManagedProcess(child: Readonly<ManagedProcess>, g
 export function redactOperationalDiagnostic(value: string): string {
   return value
     .replace(/(authorization\s*:\s*bearer\s+)[^\s\r\n]+/gi, "$1[redacted]")
-    .replace(/((?:password|token|secret|private[_-]?key|client[_-]?secret)\s*[=:]\s*["']?)[^\s"'&,}\r\n]+/gi, "$1[redacted]")
+    .replace(
+      /((?:password|token|secret|private[_-]?key|client[_-]?secret)\s*[=:]\s*["']?)[^\s"'&,}\r\n]+/gi,
+      "$1[redacted]",
+    )
     .replace(/(postgres(?:ql)?:\/\/[^\s/@]+:)[^\s/@]+(@)/gi, "$1[redacted]$2");
 }
 
 /** Redact environment entries while preserving safe values useful for reruns. */
-export function redactOperationalEnvironment(environment: Readonly<Record<string, string | undefined>>): Record<string, string> {
+export function redactOperationalEnvironment(
+  environment: Readonly<Record<string, string | undefined>>,
+): Record<string, string> {
   const redacted: Record<string, string> = {};
   for (const [name, value] of Object.entries(environment)) {
     if (value === undefined) continue;

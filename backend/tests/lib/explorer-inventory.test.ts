@@ -18,24 +18,31 @@ import { ensureExplorerInventory, runExplorerCatalogJob } from "../../src/lib/ex
 describe("Explorer inventory batch loading", () => {
   const orgId = `explorer-inventory-batch-org-${crypto.randomUUID()}`;
   const projectId = `explorer-inventory-batch-project-${crypto.randomUUID()}`;
-  const workspaceIds = Array.from({ length: 120 }, (): string => `explorer-inventory-batch-workspace-${crypto.randomUUID()}`);
+  const workspaceIds = Array.from(
+    { length: 120 },
+    (): string => `explorer-inventory-batch-workspace-${crypto.randomUUID()}`,
+  );
 
   beforeAll(async (): Promise<void> => {
     await db.insert(organizations).values({ id: orgId, name: orgId });
     await db.insert(projects).values({ id: projectId, orgId, name: "Batch project" });
-    await db.insert(workspaces).values(workspaceIds.map((id): typeof workspaces.$inferInsert => ({
-      id,
-      orgId,
-      projectId,
-      name: id,
-      terraformVersion: "1.8.0",
-    })));
+    await db.insert(workspaces).values(
+      workspaceIds.map((id): typeof workspaces.$inferInsert => ({
+        id,
+        orgId,
+        projectId,
+        name: id,
+        terraformVersion: "1.8.0",
+      })),
+    );
   });
 
   afterAll(async (): Promise<void> => {
     await db.delete(explorerCatalogMemberships).where(inArray(explorerCatalogMemberships.workspaceId, workspaceIds));
     await db.delete(explorerWorkspaceInventory).where(inArray(explorerWorkspaceInventory.workspaceId, workspaceIds));
-    await db.delete(noCodeWorkspaceConfigurations).where(inArray(noCodeWorkspaceConfigurations.workspaceId, workspaceIds));
+    await db
+      .delete(noCodeWorkspaceConfigurations)
+      .where(inArray(noCodeWorkspaceConfigurations.workspaceId, workspaceIds));
     await db.delete(workspaceTags).where(inArray(workspaceTags.workspaceId, workspaceIds));
     await db.delete(assessmentResults).where(inArray(assessmentResults.workspaceId, workspaceIds));
     await db.delete(runs).where(inArray(runs.workspaceId, workspaceIds));
@@ -76,7 +83,10 @@ describe("Explorer inventory batch loading", () => {
         assessmentFindFirst.mock.calls.length,
         noCodeFindFirst.mock.calls.length,
       ];
-      batchRelationCalls = batchRelationSpies.reduce((total, spy): number => total + spy.mock.calls.length, tagFindMany.mock.calls.length);
+      batchRelationCalls = batchRelationSpies.reduce(
+        (total, spy): number => total + spy.mock.calls.length,
+        tagFindMany.mock.calls.length,
+      );
     } finally {
       workspaceFindFirst.mockRestore();
       organizationFindFirst.mockRestore();
@@ -130,7 +140,11 @@ describe("Explorer inventory batch loading", () => {
     try {
       await runExplorerCatalogJob(
         { payload: { orgId, backfill: true } } as unknown as Parameters<typeof runExplorerCatalogJob>[0],
-        { signal: new AbortController().signal, canceled: async (): Promise<boolean> => false, heartbeat: async (): Promise<boolean> => true },
+        {
+          signal: new AbortController().signal,
+          canceled: async (): Promise<boolean> => false,
+          heartbeat: async (): Promise<boolean> => true,
+        },
       );
       singleItemCalls = [
         workspaceFindFirst.mock.calls.length,
@@ -141,7 +155,10 @@ describe("Explorer inventory batch loading", () => {
         assessmentFindFirst.mock.calls.length,
         noCodeFindFirst.mock.calls.length,
       ];
-      batchRelationCalls = batchRelationSpies.reduce((total, spy): number => total + spy.mock.calls.length, tagFindMany.mock.calls.length);
+      batchRelationCalls = batchRelationSpies.reduce(
+        (total, spy): number => total + spy.mock.calls.length,
+        tagFindMany.mock.calls.length,
+      );
     } finally {
       workspaceFindFirst.mockRestore();
       organizationFindFirst.mockRestore();

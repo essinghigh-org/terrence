@@ -27,27 +27,31 @@ describe("private registry organization permissions", () => {
   let moduleArchive = "";
 
   const request = (path: string, token: string, method = "GET", body?: unknown): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   const data = async <T>(response: Readonly<Response>): Promise<T> =>
-    (await response.json() as Readonly<{ data: T }>).data;
+    ((await response.json()) as Readonly<{ data: T }>).data;
 
   const upload = async (versionId: string, token: string): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test/api/v2/registry-module-versions/${versionId}/upload`, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/octet-stream",
-      },
-      body: await Bun.file(moduleArchive).arrayBuffer(),
-    }));
+    app.handle(
+      new Request(`http://terrence.test/api/v2/registry-module-versions/${versionId}/upload`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/octet-stream",
+        },
+        body: await Bun.file(moduleArchive).arrayBuffer(),
+      }),
+    );
 
   beforeAll(async () => {
     fixtureDirectory = await mkdtemp(join(tmpdir(), "terrence-registry-permissions-"));
@@ -69,11 +73,13 @@ describe("private registry organization permissions", () => {
       },
       { id: teamIds.none, orgId, name: `no-registry-access-${suffix}` },
     ]);
-    await db.insert(apiTokens).values(Object.entries(tokens).map(([kind, token]) => ({
-      id: `registry-permissions-token-${kind}-${suffix}`,
-      token: createHash("sha256").update(token).digest("hex"),
-      teamId: teamIds[kind as keyof typeof teamIds],
-    })));
+    await db.insert(apiTokens).values(
+      Object.entries(tokens).map(([kind, token]) => ({
+        id: `registry-permissions-token-${kind}-${suffix}`,
+        token: createHash("sha256").update(token).digest("hex"),
+        teamId: teamIds[kind as keyof typeof teamIds],
+      })),
+    );
   });
 
   afterAll(async () => {
@@ -105,17 +111,29 @@ describe("private registry organization permissions", () => {
     const moduleVersionResponse = await request(moduleVersionPath, tokens.modules, "POST", moduleVersionPayload);
     expect(moduleVersionResponse.status).toBe(201);
     const moduleVersionId = (await data<{ id: string }>(moduleVersionResponse)).id;
-    expect((await request(`/api/v2/registry-module-versions/${moduleVersionId}`, tokens.providers, "PATCH", {
-      data: { type: "registry-module-versions", attributes: { deprecated: true } },
-    })).status).toBe(404);
-    expect((await request(`/api/v2/registry-module-versions/${moduleVersionId}`, tokens.modules, "PATCH", {
-      data: { type: "registry-module-versions", attributes: { deprecated: true } },
-    })).status).toBe(200);
+    expect(
+      (
+        await request(`/api/v2/registry-module-versions/${moduleVersionId}`, tokens.providers, "PATCH", {
+          data: { type: "registry-module-versions", attributes: { deprecated: true } },
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await request(`/api/v2/registry-module-versions/${moduleVersionId}`, tokens.modules, "PATCH", {
+          data: { type: "registry-module-versions", attributes: { deprecated: true } },
+        })
+      ).status,
+    ).toBe(200);
     expect((await upload(moduleVersionId, tokens.providers)).status).toBe(404);
     const allowedUpload = await upload(moduleVersionId, tokens.modules);
     expect(allowedUpload.status).toBe(200);
-    expect((await request(`/api/v2/registry-module-versions/${moduleVersionId}`, tokens.providers, "DELETE")).status).toBe(404);
-    expect((await request(`/api/v2/registry-module-versions/${moduleVersionId}`, tokens.modules, "DELETE")).status).toBe(204);
+    expect(
+      (await request(`/api/v2/registry-module-versions/${moduleVersionId}`, tokens.providers, "DELETE")).status,
+    ).toBe(404);
+    expect(
+      (await request(`/api/v2/registry-module-versions/${moduleVersionId}`, tokens.modules, "DELETE")).status,
+    ).toBe(204);
     expect((await request(`/api/v2/registry-modules/${moduleId}`, tokens.providers, "DELETE")).status).toBe(404);
     expect((await request(`/api/v2/registry-modules/${moduleId}`, tokens.modules, "DELETE")).status).toBe(204);
 
@@ -142,7 +160,12 @@ describe("private registry organization permissions", () => {
       },
     };
     expect((await request(providerVersionPath, tokens.modules, "POST", providerVersionPayload)).status).toBe(404);
-    const providerVersionResponse = await request(providerVersionPath, tokens.providers, "POST", providerVersionPayload);
+    const providerVersionResponse = await request(
+      providerVersionPath,
+      tokens.providers,
+      "POST",
+      providerVersionPayload,
+    );
     expect(providerVersionResponse.status).toBe(201);
     const providerVersionId = (await data<{ id: string }>(providerVersionResponse)).id;
 
@@ -164,10 +187,18 @@ describe("private registry organization permissions", () => {
     expect(platformResponse.status).toBe(201);
     const platformId = (await data<{ id: string }>(platformResponse)).id;
     expect((await request(platformPath, tokens.providers)).status).toBe(200);
-    expect((await request(`/api/v2/registry-provider-platforms/${platformId}`, tokens.modules, "DELETE")).status).toBe(404);
-    expect((await request(`/api/v2/registry-provider-platforms/${platformId}`, tokens.providers, "DELETE")).status).toBe(204);
-    expect((await request(`/api/v2/registry-provider-versions/${providerVersionId}`, tokens.modules, "DELETE")).status).toBe(404);
-    expect((await request(`/api/v2/registry-provider-versions/${providerVersionId}`, tokens.providers, "DELETE")).status).toBe(204);
+    expect((await request(`/api/v2/registry-provider-platforms/${platformId}`, tokens.modules, "DELETE")).status).toBe(
+      404,
+    );
+    expect(
+      (await request(`/api/v2/registry-provider-platforms/${platformId}`, tokens.providers, "DELETE")).status,
+    ).toBe(204);
+    expect(
+      (await request(`/api/v2/registry-provider-versions/${providerVersionId}`, tokens.modules, "DELETE")).status,
+    ).toBe(404);
+    expect(
+      (await request(`/api/v2/registry-provider-versions/${providerVersionId}`, tokens.providers, "DELETE")).status,
+    ).toBe(204);
     expect((await request(`/api/v2/registry-providers/${providerId}`, tokens.modules, "DELETE")).status).toBe(404);
     expect((await request(`/api/v2/registry-providers/${providerId}`, tokens.providers, "DELETE")).status).toBe(204);
   });

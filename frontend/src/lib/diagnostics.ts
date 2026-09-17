@@ -86,7 +86,10 @@ function parseBoxedDiagnostic(
   const severity = isSeverityLabel(label) ?? "warning";
   const title = severityTitle(severity, label);
   if (title === "") return null;
-  const body = content.slice(labelIndex + 1).join("\n").replace(/\s+$/, "");
+  const body = content
+    .slice(labelIndex + 1)
+    .join("\n")
+    .replace(/\s+$/, "");
   return { diagnostic: { severity, title, body }, nextIndex: index };
 }
 
@@ -96,9 +99,9 @@ function skipBlankLines(lines: readonly string[], index: number): number {
 }
 
 function isDiagnosticBoundary(firstTrimmed: string): boolean {
-  return isSeverityLabel(firstTrimmed) !== null
-    || firstTrimmed.startsWith(BLOCK_OPEN)
-    || SECTION_START_RE.test(firstTrimmed);
+  return (
+    isSeverityLabel(firstTrimmed) !== null || firstTrimmed.startsWith(BLOCK_OPEN) || SECTION_START_RE.test(firstTrimmed)
+  );
 }
 
 function consumeBodyParagraph(

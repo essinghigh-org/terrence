@@ -4,7 +4,15 @@ import { formatDateTime } from "@/lib/utils";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Switch } from "../components/ui/switch";
-import { Card, CardAction, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "../components/ui/card";
 import { Spinner } from "../components/ui/spinner";
 import { Webhook } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
@@ -39,7 +47,7 @@ export function AdminApprovalWebhook(): React.JSX.Element {
       setLoading(true);
       setLoadError("");
       try {
-        const response = await fetchApi("/admin/operations-settings") as {
+        const response = (await fetchApi("/admin/operations-settings")) as {
           data?: { attributes?: OperationsSettings };
         };
         const attributes = response.data?.attributes ?? {};
@@ -99,9 +107,20 @@ export function AdminApprovalWebhook(): React.JSX.Element {
     return (
       <PageShell variant="form">
         <Card>
-          <CardContent role="alert" className="flex flex-wrap items-center justify-between gap-3 py-8 text-sm text-destructive">
+          <CardContent
+            role="alert"
+            className="flex flex-wrap items-center justify-between gap-3 py-8 text-sm text-destructive"
+          >
             <span>{loadError}</span>
-            <Button type="button" size="sm" variant="outline" onClick={(): void => { setLoadAttempt((attempt): number => attempt + 1); }} disabled={loading}>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={(): void => {
+                setLoadAttempt((attempt): number => attempt + 1);
+              }}
+              disabled={loading}
+            >
               Try again
             </Button>
           </CardContent>
@@ -114,12 +133,12 @@ export function AdminApprovalWebhook(): React.JSX.Element {
     <PageShell variant="form">
       <PageHeader
         eyebrow="Site administration"
-        title={(
+        title={
           <span className="flex items-center gap-2">
             <Webhook className="size-7 text-primary" aria-hidden="true" />
             Approval webhook
           </span>
-        )}
+        }
         description="Allow external systems to approve runs using HMAC-signed webhook requests."
       />
 
@@ -127,7 +146,7 @@ export function AdminApprovalWebhook(): React.JSX.Element {
         <CardHeader variant="section">
           <CardTitle>Webhook configuration</CardTitle>
           <CardDescription>
-            External systems can confirm a run by POSTing {"{ run_id, action: \"confirm\" }"} to{" "}
+            External systems can confirm a run by POSTing {'{ run_id, action: "confirm" }'} to{" "}
             <code className="rounded bg-muted px-1 py-0.5 text-xs">/api/v2/webhooks/run-approval</code> with an
             HMAC-SHA256 signature in <code className="rounded bg-muted px-1 py-0.5 text-xs">X-Terrence-Signature</code>.
           </CardDescription>
@@ -136,7 +155,12 @@ export function AdminApprovalWebhook(): React.JSX.Element {
               <label htmlFor="approval-enabled" className="text-xs font-medium text-muted-foreground cursor-pointer">
                 {approvalEnabled ? "Enabled" : "Disabled"}
               </label>
-              <Switch id="approval-enabled" checked={approvalEnabled} onCheckedChange={setApprovalEnabled} aria-label="Approval webhook" />
+              <Switch
+                id="approval-enabled"
+                checked={approvalEnabled}
+                onCheckedChange={setApprovalEnabled}
+                aria-label="Approval webhook"
+              />
             </div>
           </CardAction>
         </CardHeader>
@@ -150,7 +174,9 @@ export function AdminApprovalWebhook(): React.JSX.Element {
               name="approval-callback-url"
               autoComplete="url"
               value={approvalUrl}
-              onInput={(event): void => { setApprovalUrl(event.currentTarget.value); }}
+              onInput={(event): void => {
+                setApprovalUrl(event.currentTarget.value);
+              }}
               placeholder="https://example.com/hooks/terrence-approval"
               className="max-w-xl"
             />
@@ -173,7 +199,9 @@ export function AdminApprovalWebhook(): React.JSX.Element {
                   setApprovalSecret(event.currentTarget.value);
                   setApprovalClearSecret(false);
                 }}
-                placeholder={approvalSecretSet ? "•••••••• (a secret is stored)" : "HMAC-SHA256 secret for request signatures"}
+                placeholder={
+                  approvalSecretSet ? "•••••••• (a secret is stored)" : "HMAC-SHA256 secret for request signatures"
+                }
                 className="flex-1"
               />
               {approvalSecretSet && (
@@ -200,7 +228,13 @@ export function AdminApprovalWebhook(): React.JSX.Element {
             {saveError !== "" && <span className="text-destructive">{saveError}</span>}
             {savedAt !== "" && <span className="text-success">Webhook settings saved at {savedAt}.</span>}
           </span>
-          <Button type="button" onClick={(): void => { void saveApprovalWebhook(); }} disabled={saving}>
+          <Button
+            type="button"
+            onClick={(): void => {
+              void saveApprovalWebhook();
+            }}
+            disabled={saving}
+          >
             {saving && <Spinner data-icon="inline-start" className="size-4" />}
             {saving ? "Saving…" : "Save changes"}
           </Button>

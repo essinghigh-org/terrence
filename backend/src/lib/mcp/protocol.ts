@@ -5,7 +5,10 @@ export const MCP_CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo";
 export const MCP_SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo";
 
 const buildVersion = process.env["BUILD_VERSION"]?.trim();
-export const MCP_SERVER_INFO = Object.freeze({ name: "terrence-mcp", version: buildVersion === undefined || buildVersion === "" ? "dev" : buildVersion });
+export const MCP_SERVER_INFO = Object.freeze({
+  name: "terrence-mcp",
+  version: buildVersion === undefined || buildVersion === "" ? "dev" : buildVersion,
+});
 export const MCP_SERVER_CAPABILITIES = Object.freeze({ tools: Object.freeze({ listChanged: false }) });
 export const MCP_SUPPORTED_PROTOCOL_VERSIONS = Object.freeze([MCP_PROTOCOL_VERSION]);
 
@@ -42,16 +45,11 @@ export type McpRequestFailure = Readonly<{
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null;
 }
 
-export function mcpError(
-  id: JsonRpcId | null,
-  code: number,
-  message: string,
-  data?: unknown,
-): JsonRpcError {
+export function mcpError(id: JsonRpcId | null, code: number, message: string, data?: unknown): JsonRpcError {
   return {
     jsonrpc: "2.0",
     id,
@@ -100,7 +98,10 @@ type ParsedMeta = Readonly<{
 function parseRequestMeta(id: JsonRpcId, params: Readonly<Record<string, unknown>>): ParsedMeta | McpRequestFailure {
   const meta = record(params["_meta"]);
   if (meta === null) {
-    return invalidParams(id, `params._meta must be an object carrying ${MCP_PROTOCOL_VERSION_META_KEY} and ${MCP_CLIENT_CAPABILITIES_META_KEY}`);
+    return invalidParams(
+      id,
+      `params._meta must be an object carrying ${MCP_PROTOCOL_VERSION_META_KEY} and ${MCP_CLIENT_CAPABILITIES_META_KEY}`,
+    );
   }
   const protocolVersion = meta[MCP_PROTOCOL_VERSION_META_KEY];
   if (typeof protocolVersion !== "string" || protocolVersion === "") {
@@ -112,7 +113,10 @@ function parseRequestMeta(id: JsonRpcId, params: Readonly<Record<string, unknown
   }
   const clientInfoValue = meta[MCP_CLIENT_INFO_META_KEY];
   if (clientInfoValue !== undefined && !validClientInfo(clientInfoValue)) {
-    return invalidParams(id, `params._meta.${MCP_CLIENT_INFO_META_KEY} must contain non-empty name and version strings`);
+    return invalidParams(
+      id,
+      `params._meta.${MCP_CLIENT_INFO_META_KEY} must contain non-empty name and version strings`,
+    );
   }
   return { protocolVersion, clientCapabilities, clientInfo: clientInfoValue ?? null };
 }
@@ -150,27 +154,40 @@ function headerMismatch(id: JsonRpcId, message: string): McpRequestFailure {
 }
 
 /** Validate the Streamable HTTP metadata mirrored from the JSON-RPC body. */
-export function validateModernMcpHeaders(headers: Readonly<Headers>, request: Readonly<ParsedMcpRequest>): McpRequestFailure | null {
+export function validateModernMcpHeaders(
+  headers: Readonly<Headers>,
+  request: Readonly<ParsedMcpRequest>,
+): McpRequestFailure | null {
   const headerVersion = headers.get("mcp-protocol-version");
   if (headerVersion === null) return headerMismatch(request.id, "Header mismatch: MCP-Protocol-Version is required");
   if (headerVersion !== request.protocolVersion) {
-    return headerMismatch(request.id, "Header mismatch: MCP-Protocol-Version does not match params._meta protocol version");
+    return headerMismatch(
+      request.id,
+      "Header mismatch: MCP-Protocol-Version does not match params._meta protocol version",
+    );
   }
   if (request.protocolVersion !== MCP_PROTOCOL_VERSION) {
     return {
       status: 400,
-      response: mcpError(request.id, MCP_UNSUPPORTED_PROTOCOL_VERSION, `Unsupported protocol version: ${request.protocolVersion}`, {
-        supported: [...MCP_SUPPORTED_PROTOCOL_VERSIONS],
-        requested: request.protocolVersion,
-      }),
+      response: mcpError(
+        request.id,
+        MCP_UNSUPPORTED_PROTOCOL_VERSION,
+        `Unsupported protocol version: ${request.protocolVersion}`,
+        {
+          supported: [...MCP_SUPPORTED_PROTOCOL_VERSIONS],
+          requested: request.protocolVersion,
+        },
+      ),
     };
   }
   const method = headers.get("mcp-method");
   if (method === null) return headerMismatch(request.id, "Header mismatch: Mcp-Method is required");
-  if (method !== request.method) return headerMismatch(request.id, "Header mismatch: Mcp-Method does not match the JSON-RPC method");
+  if (method !== request.method)
+    return headerMismatch(request.id, "Header mismatch: Mcp-Method does not match the JSON-RPC method");
   if (request.method !== "tools/call") return null;
   const bodyName = request.params["name"];
-  if (typeof bodyName !== "string" || bodyName === "") return invalidParams(request.id, "tools/call requires a non-empty params.name");
+  if (typeof bodyName !== "string" || bodyName === "")
+    return invalidParams(request.id, "tools/call requires a non-empty params.name");
   const rawName = headers.get("mcp-name");
   if (rawName === null) return headerMismatch(request.id, "Header mismatch: Mcp-Name is required for tools/call");
   const name = decodedHeaderValue(rawName);
@@ -180,7 +197,9 @@ export function validateModernMcpHeaders(headers: Readonly<Headers>, request: Re
 }
 
 export function acceptsModernMcp(headers: Readonly<Headers>): boolean {
-  const mediaTypes = (headers.get("accept") ?? "").split(",").map((value): string => value.split(";", 1)[0]?.trim().toLowerCase() ?? "");
+  const mediaTypes = (headers.get("accept") ?? "")
+    .split(",")
+    .map((value): string => value.split(";", 1)[0]?.trim().toLowerCase() ?? "");
   return mediaTypes.includes("application/json") && mediaTypes.includes("text/event-stream");
 }
 

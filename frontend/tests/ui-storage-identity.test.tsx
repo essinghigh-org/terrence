@@ -19,19 +19,9 @@ import {
   setSingleKeyShortcutsEnabled,
   setWorkspacePinned,
 } from "../src/lib/workspace-shortcuts";
-import {
-  deleteView,
-  getSavedViews,
-  saveView,
-} from "../src/lib/saved-views";
-import {
-  getTablePreferences,
-  setTablePreferences,
-} from "../src/lib/table-preferences";
-import {
-  getLastOrganization,
-  setLastOrganization,
-} from "../src/lib/lastOrganization";
+import { deleteView, getSavedViews, saveView } from "../src/lib/saved-views";
+import { getTablePreferences, setTablePreferences } from "../src/lib/table-preferences";
+import { getLastOrganization, setLastOrganization } from "../src/lib/lastOrganization";
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -219,14 +209,10 @@ test("corrupt localStorage entries return safe defaults and do not crash", () =>
     statusFilter: "",
     projectFilter: "",
   });
-  expect(getSavedViews("org-1")).toEqual([
-    { name: "Recovered", search: "test", statusFilter: "", projectFilter: "" },
-  ]);
+  expect(getSavedViews("org-1")).toEqual([{ name: "Recovered", search: "test", statusFilter: "", projectFilter: "" }]);
 
   setWorkspacePinned("org-1", "my-ws", true);
-  expect(getPinnedWorkspaces()).toEqual([
-    expect.objectContaining({ orgName: "org-1", workspaceName: "my-ws" }),
-  ]);
+  expect(getPinnedWorkspaces()).toEqual([expect.objectContaining({ orgName: "org-1", workspaceName: "my-ws" })]);
   expect(isWorkspacePinned("org-1", "my-ws")).toBe(true);
   setWorkspacePinned("org-1", "my-ws", false);
   expect(getPinnedWorkspaces()).toEqual([]);
@@ -242,16 +228,12 @@ test("legacy unnamespaced localStorage migration", () => {
 
   setActiveUserId("migrated-user");
   const recents = getRecentWorkspaces();
-  expect(recents).toEqual([
-    { orgName: "legacy-org", workspaceName: "legacy-ws", visitedAt: 12345 },
-  ]);
+  expect(recents).toEqual([{ orgName: "legacy-org", workspaceName: "legacy-ws", visitedAt: 12345 }]);
 
   // Scoped key should now contain the migrated items
   const scoped = window.localStorage.getItem("terrence-recent-workspaces:migrated-user");
   expect(scoped).not.toBeNull();
-  expect(JSON.parse(scoped!)).toEqual([
-    { orgName: "legacy-org", workspaceName: "legacy-ws", visitedAt: 12345 },
-  ]);
+  expect(JSON.parse(scoped!)).toEqual([{ orgName: "legacy-org", workspaceName: "legacy-ws", visitedAt: 12345 }]);
 });
 
 test("single-key navigation can be disabled without affecting identity-scoped recents", () => {

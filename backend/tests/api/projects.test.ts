@@ -3,13 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens,
-  organizationMemberships,
-  organizations,
-  projects,
-  users,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, projects, users } from "../../src/db/schema";
 
 describe("projects API contract", () => {
   const suffix = crypto.randomUUID();
@@ -19,30 +13,32 @@ describe("projects API contract", () => {
   const token = `user-token-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
-    await db.insert(projects).values([{
-      id: `default-${suffix}`,
-      orgId,
-      name: "Default Project",
-      description: "Default Project for Organization",
-      defaultExecutionMode: "remote",
-      settingOverwrites: { "execution-mode": false },
-      isDefault: true,
-    }]);
-    await db.insert(organizationMemberships).values([
-      { id: crypto.randomUUID(), userId, orgId, role: "owner" },
+    await db.insert(projects).values([
+      {
+        id: `default-${suffix}`,
+        orgId,
+        name: "Default Project",
+        description: "Default Project for Organization",
+        defaultExecutionMode: "remote",
+        settingOverwrites: { "execution-mode": false },
+        isDefault: true,
+      },
     ]);
+    await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId, role: "owner" }]);
     await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: hashAuthenticationToken(token), userId }]);
   });
 

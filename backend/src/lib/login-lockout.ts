@@ -51,7 +51,8 @@ export async function recordFailedLogin(
       ELSE ${users.loginLockedUntil}
     END
   `;
-  const rows = await db.update(users)
+  const rows = await db
+    .update(users)
     .set({
       loginFailedAttempts: nextAttempts,
       loginFailureWindowStartedAt: nextWindowStart,
@@ -75,16 +76,14 @@ export async function recordFailedLogin(
  * lookup cannot be erased by a racing successful login.
  */
 export async function clearLoginFailures(userId: string, now = Date.now()): Promise<boolean> {
-  const rows = await db.update(users)
+  const rows = await db
+    .update(users)
     .set({
       loginFailedAttempts: 0,
       loginFailureWindowStartedAt: null,
       loginLockedUntil: null,
     })
-    .where(and(
-      eq(users.id, userId),
-      or(isNull(users.loginLockedUntil), lte(users.loginLockedUntil, now)),
-    ))
+    .where(and(eq(users.id, userId), or(isNull(users.loginLockedUntil), lte(users.loginLockedUntil, now))))
     .returning({ id: users.id });
   return rows.length > 0;
 }

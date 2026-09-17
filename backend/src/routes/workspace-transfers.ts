@@ -1,10 +1,23 @@
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { workspaceTransfers, workspaces, organizationMemberships, organizations, projects, type users } from "../db/schema";
+import {
+  workspaceTransfers,
+  workspaces,
+  organizationMemberships,
+  organizations,
+  projects,
+  type users,
+} from "../db/schema";
 import { eq, inArray, or, sql, count, desc } from "drizzle-orm";
 import { authPlugin } from "../auth";
-import { checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, pageRequest, pagination } from "../lib/utils";
+import {
+  checkOrgPermission,
+  checkWorkspacePermission,
+  findAuthorizedWorkspace,
+  pageRequest,
+  pagination,
+} from "../lib/utils";
 import { scopeCoversOrg } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
 import { organizationName } from "../lib/response";
@@ -26,10 +39,18 @@ type WorkspaceTransferItem = Readonly<typeof workspaceTransfers.$inferSelect>;
 
 /** Resolve the orgs a transfer touches: the source workspace's org and the
  * destination org. Either side may be null on legacy/partial records. */
-async function transferOrgIds(transfer: WorkspaceTransferItem): Promise<{ sourceOrgId: string | null; destinationOrgId: string | null }> {
-  const sourceOrgId = transfer.sourceWorkspaceId !== null
-    ? (await db.query.workspaces.findFirst({ where: eq(workspaces.id, transfer.sourceWorkspaceId), columns: { orgId: true } }))?.orgId ?? null
-    : null;
+async function transferOrgIds(
+  transfer: WorkspaceTransferItem,
+): Promise<{ sourceOrgId: string | null; destinationOrgId: string | null }> {
+  const sourceOrgId =
+    transfer.sourceWorkspaceId !== null
+      ? ((
+          await db.query.workspaces.findFirst({
+            where: eq(workspaces.id, transfer.sourceWorkspaceId),
+            columns: { orgId: true },
+          })
+        )?.orgId ?? null)
+      : null;
   return { sourceOrgId, destinationOrgId: transfer.destinationOrgId };
 }
 
@@ -60,14 +81,13 @@ export async function visibleTransferOrgIds(user: NonNullable<ParamCtx["user"]>)
  * organization (within token coverage). Transfers move state, variables,
  * and policy sets between orgs, so their existence and shape are sensitive
  * across that boundary. */
-async function canSeeTransfer(
-  visibleOrgIds: Set<string> | null,
-  transfer: WorkspaceTransferItem,
-): Promise<boolean> {
+async function canSeeTransfer(visibleOrgIds: Set<string> | null, transfer: WorkspaceTransferItem): Promise<boolean> {
   if (visibleOrgIds === null) return true;
   const { sourceOrgId, destinationOrgId } = await transferOrgIds(transfer);
-  return (sourceOrgId !== null && visibleOrgIds.has(sourceOrgId))
-    || (destinationOrgId !== null && visibleOrgIds.has(destinationOrgId));
+  return (
+    (sourceOrgId !== null && visibleOrgIds.has(sourceOrgId)) ||
+    (destinationOrgId !== null && visibleOrgIds.has(destinationOrgId))
+  );
 }
 
 /** Whether the principal may run lifecycle actions (cancel/resume) on this
@@ -106,22 +126,37 @@ async function transferResource(t: WorkspaceTransferItem): Promise<Record<string
       "updated-at": new Date(t.updatedAt).toISOString(),
     },
     relationships: {
-      "source-workspace": t.sourceWorkspaceId ? { data: { id: t.sourceWorkspaceId, type: "workspaces" } } : { data: null },
-      "destination-organization": t.destinationOrgId ? { data: { id: (await organizationName(t.destinationOrgId)) ?? t.destinationOrgId, type: "organizations" } } : { data: null },
-      "destination-project": t.destinationProjectId ? { data: { id: t.destinationProjectId, type: "projects" } } : { data: null },
+      "source-workspace": t.sourceWorkspaceId
+        ? { data: { id: t.sourceWorkspaceId, type: "workspaces" } }
+        : { data: null },
+      "destination-organization": t.destinationOrgId
+        ? { data: { id: (await organizationName(t.destinationOrgId)) ?? t.destinationOrgId, type: "organizations" } }
+        : { data: null },
+      "destination-project": t.destinationProjectId
+        ? { data: { id: t.destinationProjectId, type: "projects" } }
+        : { data: null },
     },
   };
 }
 
 function relationshipId(rels: Record<string, unknown>, name: string): string | null {
   const rel = rels[name] as Record<string, unknown> | undefined;
-  return typeof (rel?.["data"] as Record<string, unknown>)?.["id"] === "string" ? ((rel?.["data"] as Record<string, unknown>)["id"] as string) : null;
+  return typeof (rel?.["data"] as Record<string, unknown>)?.["id"] === "string"
+    ? ((rel?.["data"] as Record<string, unknown>)["id"] as string)
+    : null;
 }
 
 function parseTransferRequest(
   body: unknown,
   set: SetObj,
-): { attributes: Record<string, unknown>; sourceWorkspaceId: string; destinationOrgId: string; destinationProjectId: string | null } | { error: unknown } {
+):
+  | {
+      attributes: Record<string, unknown>;
+      sourceWorkspaceId: string;
+      destinationOrgId: string;
+      destinationProjectId: string | null;
+    }
+  | { error: unknown } {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"] as Record<string, unknown> | undefined;
   const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
@@ -131,7 +166,17 @@ function parseTransferRequest(
   const destinationProjectId = relationshipId(rels, "destination-project");
   if (sourceWorkspaceId === null || destinationOrgId === null) {
     (set as { status: number }).status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A source workspace and a destination organization are required" }] } };
+    return {
+      error: {
+        errors: [
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail: "A source workspace and a destination organization are required",
+          },
+        ],
+      },
+    };
   }
   return { attributes, sourceWorkspaceId, destinationOrgId, destinationProjectId };
 }
@@ -153,20 +198,41 @@ async function authorizeTransferCreation(
   const sourceWorkspace = await findAuthorizedWorkspace(sourceWorkspaceId, user.id, null, null);
   if (sourceWorkspace === undefined) {
     (set as { status: number }).status = 404;
-    return { error: { errors: [{ status: "404", title: "Not Found", detail: "Source workspace not found or not accessible" }] } };
+    return {
+      error: {
+        errors: [{ status: "404", title: "Not Found", detail: "Source workspace not found or not accessible" }],
+      },
+    };
   }
   if (!isSiteAdmin && !(await checkWorkspacePermission(sourceWorkspace, user.id, null, null, "admin"))) {
     (set as { status: number }).status = 404;
-    return { error: { errors: [{ status: "404", title: "Not Found", detail: "Source workspace not found or not accessible" }] } };
+    return {
+      error: {
+        errors: [{ status: "404", title: "Not Found", detail: "Source workspace not found or not accessible" }],
+      },
+    };
   }
-  const destinationOrg = await db.query.organizations.findFirst({ where: eq(organizations.id, destinationOrgId), columns: { id: true } });
+  const destinationOrg = await db.query.organizations.findFirst({
+    where: eq(organizations.id, destinationOrgId),
+    columns: { id: true },
+  });
   if (destinationOrg === undefined) {
     (set as { status: number }).status = 404;
     return { error: { errors: [{ status: "404", title: "Not Found", detail: "Destination organization not found" }] } };
   }
   if (destinationOrg.id === sourceWorkspace.orgId) {
     (set as { status: number }).status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The destination organization must differ from the workspace's current organization" }] } };
+    return {
+      error: {
+        errors: [
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail: "The destination organization must differ from the workspace's current organization",
+          },
+        ],
+      },
+    };
   }
   if (!isSiteAdmin && !(await checkOrgPermission(user.id, destinationOrgId, "owner"))) {
     // Mirror the collection's not-found convention for cross-org probes:
@@ -176,10 +242,23 @@ async function authorizeTransferCreation(
   }
   if (destinationProjectId !== null) {
     // The project must belong to the destination organization.
-    const project = await db.query.projects.findFirst({ where: eq(projects.id, destinationProjectId), columns: { orgId: true } });
+    const project = await db.query.projects.findFirst({
+      where: eq(projects.id, destinationProjectId),
+      columns: { orgId: true },
+    });
     if (project === undefined || project.orgId !== destinationOrgId) {
       (set as { status: number }).status = 422;
-      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The destination project must belong to the destination organization" }] } };
+      return {
+        error: {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "The destination project must belong to the destination organization",
+            },
+          ],
+        },
+      };
     }
   }
   return { sourceWorkspace };
@@ -218,18 +297,25 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
   // level as destructive workspace administration: the caller must be a
   // site admin, an admin of the SOURCE workspace, and (for creation) an
   // owner of the DESTINATION organization.
-  .derive(async ({ user }: { user?: Readonly<typeof users.$inferSelect> | null }): Promise<{ isSiteAdmin: boolean }> => {
-    return { isSiteAdmin: user?.isSiteAdmin === true };
-  })
+  .derive(
+    async ({ user }: { user?: Readonly<typeof users.$inferSelect> | null }): Promise<{ isSiteAdmin: boolean }> => {
+      return { isSiteAdmin: user?.isSiteAdmin === true };
+    },
+  )
   .post("/api/v2/workspace-transfers", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
-
     if (user === null || user === undefined) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const parsed = parseTransferRequest(body, set);
     if ("error" in parsed) return parsed.error;
-    const authorized = await authorizeTransferCreation(user, parsed.sourceWorkspaceId, parsed.destinationOrgId, parsed.destinationProjectId, set);
+    const authorized = await authorizeTransferCreation(
+      user,
+      parsed.sourceWorkspaceId,
+      parsed.destinationOrgId,
+      parsed.destinationProjectId,
+      set,
+    );
     if ("error" in authorized) return authorized.error;
     const transfer = buildTransferRecord(user, parsed, parsed.attributes);
 
@@ -258,17 +344,22 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
     // can run entirely in SQL (sourceWorkspaceId is not an org id itself).
     let sourceWorkspaceIds: string[] | null = null;
     if (visibleOrgIds !== null) {
-      sourceWorkspaceIds = (await db.query.workspaces.findMany({
-        where: inArray(workspaces.orgId, [...visibleOrgIds]),
-        columns: { id: true },
-      })).map((workspace): string => workspace.id);
+      sourceWorkspaceIds = (
+        await db.query.workspaces.findMany({
+          where: inArray(workspaces.orgId, [...visibleOrgIds]),
+          columns: { id: true },
+        })
+      ).map((workspace): string => workspace.id);
     }
-    const where = visibleOrgIds === null
-      ? undefined
-      : or(
-          inArray(workspaceTransfers.destinationOrgId, [...visibleOrgIds]),
-          sourceWorkspaceIds !== null && sourceWorkspaceIds.length > 0 ? inArray(workspaceTransfers.sourceWorkspaceId, sourceWorkspaceIds) : sql`false`,
-        );
+    const where =
+      visibleOrgIds === null
+        ? undefined
+        : or(
+            inArray(workspaceTransfers.destinationOrgId, [...visibleOrgIds]),
+            sourceWorkspaceIds !== null && sourceWorkspaceIds.length > 0
+              ? inArray(workspaceTransfers.sourceWorkspaceId, sourceWorkspaceIds)
+              : sql`false`,
+          );
     const [items, countRows] = await Promise.all([
       db.query.workspaceTransfers.findMany({
         ...(where !== undefined ? { where } : {}),
@@ -276,7 +367,10 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
         limit: size,
         offset: (number - 1) * size,
       }),
-      db.select({ value: count() }).from(workspaceTransfers).where(where ?? sql`true`),
+      db
+        .select({ value: count() })
+        .from(workspaceTransfers)
+        .where(where ?? sql`true`),
     ]);
     return {
       data: await Promise.all(items.map(async (t) => transferResource(t))),
@@ -288,7 +382,9 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const transfer = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, params["transfer_id"] ?? "") });
+    const transfer = await db.query.workspaceTransfers.findFirst({
+      where: eq(workspaceTransfers.id, params["transfer_id"] ?? ""),
+    });
     const visibleOrgIds = await visibleTransferOrgIds(user);
     if (transfer === undefined || !(await canSeeTransfer(visibleOrgIds, transfer))) {
       (set as { status: number }).status = 404;
@@ -296,47 +392,65 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
     }
     return { data: await transferResource(transfer) };
   })
-  .post("/api/v2/workspace-transfers/:transfer_id/actions/cancel", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    if (user === null || user === undefined) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-    const id = params["transfer_id"] ?? "";
-    const transfer = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
-    const visibleOrgIds = await visibleTransferOrgIds(user);
-    if (transfer === undefined || !(await canSeeTransfer(visibleOrgIds, transfer))) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    // Lifecycle needs the creation bar, not bare visibility (issue #614).
-    if (!(await canLifecycleTransfer(user, transfer))) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    await db.update(workspaceTransfers).set({ status: "canceled", updatedAt: Date.now() }).where(eq(workspaceTransfers.id, id));
-    const updated = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
-    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
-    return { data: await transferResource(updated) };
-  })
-  .post("/api/v2/workspace-transfers/:transfer_id/actions/resume", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    if (user === null || user === undefined) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-    const id = params["transfer_id"] ?? "";
-    const transfer = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
-    const visibleOrgIds = await visibleTransferOrgIds(user);
-    if (transfer === undefined || !(await canSeeTransfer(visibleOrgIds, transfer))) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    // Lifecycle needs the creation bar, not bare visibility (issue #614).
-    if (!(await canLifecycleTransfer(user, transfer))) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    await db.update(workspaceTransfers).set({ status: "running", pauseReason: null, updatedAt: Date.now() }).where(eq(workspaceTransfers.id, id));
-    const updated = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
-    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
-    return { data: await transferResource(updated) };
-  });
+  .post(
+    "/api/v2/workspace-transfers/:transfer_id/actions/cancel",
+    async ({ params, user, set }: ParamCtx): Promise<unknown> => {
+      if (user === null || user === undefined) {
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized" }] };
+      }
+      const id = params["transfer_id"] ?? "";
+      const transfer = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
+      const visibleOrgIds = await visibleTransferOrgIds(user);
+      if (transfer === undefined || !(await canSeeTransfer(visibleOrgIds, transfer))) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      // Lifecycle needs the creation bar, not bare visibility (issue #614).
+      if (!(await canLifecycleTransfer(user, transfer))) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await db
+        .update(workspaceTransfers)
+        .set({ status: "canceled", updatedAt: Date.now() })
+        .where(eq(workspaceTransfers.id, id));
+      const updated = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
+      if (updated === undefined) {
+        (set as { status: number }).status = 500;
+        return { errors: [{ status: "500", title: "Internal Server Error" }] };
+      }
+      return { data: await transferResource(updated) };
+    },
+  )
+  .post(
+    "/api/v2/workspace-transfers/:transfer_id/actions/resume",
+    async ({ params, user, set }: ParamCtx): Promise<unknown> => {
+      if (user === null || user === undefined) {
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized" }] };
+      }
+      const id = params["transfer_id"] ?? "";
+      const transfer = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
+      const visibleOrgIds = await visibleTransferOrgIds(user);
+      if (transfer === undefined || !(await canSeeTransfer(visibleOrgIds, transfer))) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      // Lifecycle needs the creation bar, not bare visibility (issue #614).
+      if (!(await canLifecycleTransfer(user, transfer))) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await db
+        .update(workspaceTransfers)
+        .set({ status: "running", pauseReason: null, updatedAt: Date.now() })
+        .where(eq(workspaceTransfers.id, id));
+      const updated = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
+      if (updated === undefined) {
+        (set as { status: number }).status = 500;
+        return { errors: [{ status: "500", title: "Internal Server Error" }] };
+      }
+      return { data: await transferResource(updated) };
+    },
+  );

@@ -36,29 +36,34 @@ const allGroupIds = groupRows.map((row) => row.id);
 let previousScimSettings: typeof scimSettings.$inferSelect | undefined;
 
 function request(method: string, path: string, body?: unknown): Promise<Response> {
-  return app.handle(new Request(`http://terrence.test${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${scimToken}`,
-      ...(body === undefined ? {} : { "Content-Type": "application/scim+json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
+  return app.handle(
+    new Request(`http://terrence.test${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${scimToken}`,
+        ...(body === undefined ? {} : { "Content-Type": "application/scim+json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
 }
 
 beforeAll(async () => {
   await db.delete(scimTokens).where(eq(scimTokens.description, "SCIM security regression tests"));
   previousScimSettings = await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") });
   const now = Date.now();
-  await db.insert(scimSettings).values({
-    id: "scim",
-    enabled: true,
-    paused: false,
-    updatedAt: now,
-  }).onConflictDoUpdate({
-    target: scimSettings.id,
-    set: { enabled: true, paused: false, updatedAt: now },
-  });
+  await db
+    .insert(scimSettings)
+    .values({
+      id: "scim",
+      enabled: true,
+      paused: false,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: scimSettings.id,
+      set: { enabled: true, paused: false, updatedAt: now },
+    });
   await db.insert(scimTokens).values({
     id: tokenId,
     tokenHash: hashAuthenticationToken(scimToken),
@@ -97,11 +102,13 @@ beforeAll(async () => {
       updatedAt: now,
     })),
   ]);
-  await db.insert(scimGroups).values(groupRows.map((group) => ({
-    ...group,
-    createdAt: now,
-    updatedAt: now,
-  })));
+  await db.insert(scimGroups).values(
+    groupRows.map((group) => ({
+      ...group,
+      createdAt: now,
+      updatedAt: now,
+    })),
+  );
 });
 
 afterAll(async () => {
@@ -114,12 +121,15 @@ afterAll(async () => {
   if (previousScimSettings === undefined) {
     await db.delete(scimSettings).where(eq(scimSettings.id, "scim"));
   } else {
-    await db.update(scimSettings).set({
-      enabled: previousScimSettings.enabled,
-      paused: previousScimSettings.paused,
-      siteAdminGroupScimId: previousScimSettings.siteAdminGroupScimId,
-      updatedAt: previousScimSettings.updatedAt,
-    }).where(eq(scimSettings.id, previousScimSettings.id));
+    await db
+      .update(scimSettings)
+      .set({
+        enabled: previousScimSettings.enabled,
+        paused: previousScimSettings.paused,
+        siteAdminGroupScimId: previousScimSettings.siteAdminGroupScimId,
+        updatedAt: previousScimSettings.updatedAt,
+      })
+      .where(eq(scimSettings.id, previousScimSettings.id));
   }
 });
 
@@ -134,7 +144,10 @@ test("reuses mixed-case email identities and applies string active values", asyn
   expect(createdResource.active).toBeFalse();
   expect(createdResource.id).toStartWith("scimuser-");
 
-  const matchingUsers = await db.select().from(users).where(sql`lower(${users.email}) = lower(${`MiXeD-${suffix}@Example.COM`})`);
+  const matchingUsers = await db
+    .select()
+    .from(users)
+    .where(sql`lower(${users.email}) = lower(${`MiXeD-${suffix}@Example.COM`})`);
   expect(matchingUsers).toHaveLength(1);
   expect(matchingUsers[0]?.id).toBe(mixedUserId);
   expect(matchingUsers[0]?.isSuspended).toBeTrue();

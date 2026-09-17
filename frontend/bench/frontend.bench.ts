@@ -12,8 +12,8 @@ type Cv = Parameters<typeof cn>;
 // Typical repeated calls: identical class lists across list rows.
 
 // Heavier real-world shape: button variants + size + extra classes.
-const buttonShapes: Cv[] = ["default", "outline", "ghost", "destructive", "secondary"].flatMap(
-  (variant) => ["default", "sm", "lg"].map((size) => [
+const buttonShapes: Cv[] = ["default", "outline", "ghost", "destructive", "secondary"].flatMap((variant) =>
+  ["default", "sm", "lg"].map((size) => [
     "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium",
     `btn-${variant}`,
     size !== "default" && `btn-${size}`,

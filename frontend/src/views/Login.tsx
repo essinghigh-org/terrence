@@ -57,7 +57,20 @@ function LoginFields({
     return (
       <Field data-invalid={error !== ""}>
         <FieldLabel htmlFor="login-mfa-code">Authentication code</FieldLabel>
-        <Input id="login-mfa-code" name="mfa-code" inputMode="numeric" autoComplete="one-time-code" autoFocus required aria-invalid={error !== ""} value={mfaCode} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onMfaCodeChange(event.currentTarget.value); }} placeholder="6-digit code" />
+        <Input
+          id="login-mfa-code"
+          name="mfa-code"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          autoFocus
+          required
+          aria-invalid={error !== ""}
+          value={mfaCode}
+          onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+            onMfaCodeChange(event.currentTarget.value);
+          }}
+          placeholder="6-digit code"
+        />
       </Field>
     );
   }
@@ -74,11 +87,33 @@ function LoginFields({
         <>
           <Field data-invalid={error !== ""}>
             <FieldLabel htmlFor="login-username">Username or email address</FieldLabel>
-          <Input id="login-username" name="username" value={username} autoComplete="username" autoFocus required aria-invalid={error !== ""} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onUsernameChange(event.currentTarget.value); }} />
+            <Input
+              id="login-username"
+              name="username"
+              value={username}
+              autoComplete="username"
+              autoFocus
+              required
+              aria-invalid={error !== ""}
+              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                onUsernameChange(event.currentTarget.value);
+              }}
+            />
           </Field>
           <Field data-invalid={error !== ""}>
             <FieldLabel htmlFor="login-password">Password</FieldLabel>
-          <Input id="login-password" name="password" type="password" value={password} autoComplete="current-password" required aria-invalid={error !== ""} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onPasswordChange(event.currentTarget.value); }} />
+            <Input
+              id="login-password"
+              name="password"
+              type="password"
+              value={password}
+              autoComplete="current-password"
+              required
+              aria-invalid={error !== ""}
+              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                onPasswordChange(event.currentTarget.value);
+              }}
+            />
           </Field>
         </>
       )}
@@ -86,7 +121,12 @@ function LoginFields({
   );
 }
 
-function SignupLink({ mfaNull, localAuthEnabled, signupEnabled, returnTo }: Readonly<{
+function SignupLink({
+  mfaNull,
+  localAuthEnabled,
+  signupEnabled,
+  returnTo,
+}: Readonly<{
   mfaNull: boolean;
   localAuthEnabled: boolean;
   signupEnabled: boolean;
@@ -103,7 +143,12 @@ function SignupLink({ mfaNull, localAuthEnabled, signupEnabled, returnTo }: Read
   );
 }
 
-function SsoButtons({ ssoEnabled, showLocalForm, samlEnabled, oidcEnabled }: Readonly<{
+function SsoButtons({
+  ssoEnabled,
+  showLocalForm,
+  samlEnabled,
+  oidcEnabled,
+}: Readonly<{
   ssoEnabled: boolean;
   showLocalForm: boolean;
   samlEnabled: boolean;
@@ -116,19 +161,32 @@ function SsoButtons({ ssoEnabled, showLocalForm, samlEnabled, oidcEnabled }: Rea
         {showLocalForm ? "Or sign in with single sign-on" : "Sign in with single sign-on"}
       </p>
       {samlEnabled && (
-        <Button type="button" variant="outline" className="w-full" onClick={(): void => { window.location.href = "/users/saml/auth"; }}>
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full"
+          onClick={(): void => {
+            window.location.href = "/users/saml/auth";
+          }}
+        >
           Sign in with SAML SSO
         </Button>
       )}
       {oidcEnabled && (
-        <Button type="button" variant="outline" className="w-full" onClick={(): void => { window.location.href = "/users/oidc/auth"; }}>
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full"
+          onClick={(): void => {
+            window.location.href = "/users/oidc/auth";
+          }}
+        >
           Sign in with OpenID Connect
         </Button>
       )}
     </div>
   );
 }
-
 
 export function Login(): React.JSX.Element {
   const [username, setUsername] = useState("");
@@ -169,7 +227,11 @@ export function Login(): React.JSX.Element {
     if (searchParams.get("email-verified") === "1") {
       // Neutral wording: this browser cannot prove which account the token
       // verified, so don't assert the signed-in state here.
-      toast.add({ title: "Verification link processed", description: "Sign in to see your verification status.", type: "success" });
+      toast.add({
+        title: "Verification link processed",
+        description: "Sign in to see your verification status.",
+        type: "success",
+      });
       return;
     }
     const failed = searchParams.get("email-verification");
@@ -180,12 +242,20 @@ export function Login(): React.JSX.Element {
         changed: "Your email address changed since this link was sent. Request a new verification email.",
         suspended: "Suspended accounts cannot verify their email address.",
       };
-      toast.add({ title: "Email verification failed", description: reasons[failed] ?? "The verification link was not accepted.", type: "warning" });
+      toast.add({
+        title: "Email verification failed",
+        description: reasons[failed] ?? "The verification link was not accepted.",
+        type: "warning",
+      });
     }
   }, [searchParams]);
 
   useEffect((): void => {
-    fetchApi<{ "signup-enabled"?: boolean; "local-auth-enabled"?: boolean; sso?: { saml?: boolean; oidc?: boolean; ldap?: boolean } }>("/ping")
+    fetchApi<{
+      "signup-enabled"?: boolean;
+      "local-auth-enabled"?: boolean;
+      sso?: { saml?: boolean; oidc?: boolean; ldap?: boolean };
+    }>("/ping")
       .then((data): void => {
         const resp = data;
         setSignupEnabled(resp["signup-enabled"] !== false);
@@ -194,13 +264,20 @@ export function Login(): React.JSX.Element {
         setOidcEnabled(resp.sso?.oidc === true);
         setLdapEnabled(resp.sso?.ldap === true);
       })
-      .catch((): void => { setSignupEnabled(true); setLocalAuthEnabled(true); });
+      .catch((): void => {
+        setSignupEnabled(true);
+        setLocalAuthEnabled(true);
+      });
   }, []);
 
   const ssoEnabled = samlEnabled || oidcEnabled;
   const showLocalForm = localAuthEnabled || ldapEnabled;
 
-  const completeSignIn = async (attributes: { token?: string; "expired-at"?: string | null; "must-change-password"?: boolean }): Promise<void> => {
+  const completeSignIn = async (attributes: {
+    token?: string;
+    "expired-at"?: string | null;
+    "must-change-password"?: boolean;
+  }): Promise<void> => {
     if (!isString(attributes.token)) throw new Error("Missing access token");
     setAuthToken(attributes.token, attributes["expired-at"], true);
     if (oauthState !== null && oauthState !== "") {
@@ -217,11 +294,21 @@ export function Login(): React.JSX.Element {
     setError("");
     setSubmitting(true);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi("/users/login", {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi("/users/login", {
         method: "POST",
         body: JSON.stringify({ data: { attributes: { username, password, "browser-session": true } } }),
-      }) as { data: { attributes: { token?: string; "expired-at"?: string | null; "must-change-password"?: boolean; "mfa-required"?: boolean; "mfa-challenge-token"?: string } } };
+      })) as {
+        data: {
+          attributes: {
+            token?: string;
+            "expired-at"?: string | null;
+            "must-change-password"?: boolean;
+            "mfa-required"?: boolean;
+            "mfa-challenge-token"?: string;
+          };
+        };
+      };
       const attributes = response.data.attributes;
       if (attributes["mfa-required"] === true && isString(attributes["mfa-challenge-token"])) {
         setMfaChallengeToken(attributes["mfa-challenge-token"]);
@@ -252,11 +339,15 @@ export function Login(): React.JSX.Element {
     setError("");
     setSubmitting(true);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi("/users/login/mfa", {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi("/users/login/mfa", {
         method: "POST",
-        body: JSON.stringify({ data: { attributes: { "challenge-token": mfaChallengeToken, code: mfaCode.trim(), "browser-session": true } } }),
-      }) as { data: { attributes: { token: string; "expired-at"?: string | null; "must-change-password"?: boolean } } };
+        body: JSON.stringify({
+          data: { attributes: { "challenge-token": mfaChallengeToken, code: mfaCode.trim(), "browser-session": true } },
+        }),
+      })) as {
+        data: { attributes: { token: string; "expired-at"?: string | null; "must-change-password"?: boolean } };
+      };
       const attributes = response.data.attributes;
       await completeSignIn(attributes);
     } catch (error: unknown) {
@@ -271,11 +362,18 @@ export function Login(): React.JSX.Element {
   return (
     <AuthLayout>
       <Card className="login-card w-full max-w-sm">
-
         <CardHeader>
-          <p className="mb-3 text-xs font-medium tracking-widest text-muted-foreground uppercase">{mfaChallengeToken === null ? "Welcome back" : "One more step"}</p>
-          <h1 className="font-heading text-3xl font-bold tracking-tight">{mfaChallengeToken === null ? "Sign in to Terrence" : "Verify your sign-in"}</h1>
-          <CardDescription>{mfaChallengeToken === null ? "Continue to your organizations and workspaces." : "Enter the 6-digit code from your authenticator app."}</CardDescription>
+          <p className="mb-3 text-xs font-medium tracking-widest text-muted-foreground uppercase">
+            {mfaChallengeToken === null ? "Welcome back" : "One more step"}
+          </p>
+          <h1 className="font-heading text-3xl font-bold tracking-tight">
+            {mfaChallengeToken === null ? "Sign in to Terrence" : "Verify your sign-in"}
+          </h1>
+          <CardDescription>
+            {mfaChallengeToken === null
+              ? "Continue to your organizations and workspaces."
+              : "Enter the 6-digit code from your authenticator app."}
+          </CardDescription>
         </CardHeader>
         <form onSubmit={mfaChallengeToken === null ? handleLogin : handleMfaChallenge}>
           <CardContent>
@@ -291,25 +389,48 @@ export function Login(): React.JSX.Element {
                 password={password}
                 mfaCode={mfaCode}
                 error={error}
-                onUsernameChange={(value: string): void => { setUsername(value); }}
-                onPasswordChange={(value: string): void => { setPassword(value); }}
-                onMfaCodeChange={(value: string): void => { setMfaCode(value); }}
+                onUsernameChange={(value: string): void => {
+                  setUsername(value);
+                }}
+                onPasswordChange={(value: string): void => {
+                  setPassword(value);
+                }}
+                onMfaCodeChange={(value: string): void => {
+                  setMfaCode(value);
+                }}
               />
               <FieldError>{error}</FieldError>
             </FieldGroup>
           </CardContent>
           <CardFooter className="flex flex-col gap-2">
             {mfaChallengeToken === null && (
-              <SsoButtons ssoEnabled={ssoEnabled} showLocalForm={showLocalForm} samlEnabled={samlEnabled} oidcEnabled={oidcEnabled} />
+              <SsoButtons
+                ssoEnabled={ssoEnabled}
+                showLocalForm={showLocalForm}
+                samlEnabled={samlEnabled}
+                oidcEnabled={oidcEnabled}
+              />
             )}
             {(showLocalForm || mfaChallengeToken !== null) && (
-              <Button type="submit" className="w-full" disabled={submitDisabled(submitting, mfaChallengeToken === null, username, password, mfaCode)}>
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={submitDisabled(submitting, mfaChallengeToken === null, username, password, mfaCode)}
+              >
                 {submitting && <Spinner data-icon="inline-start" />}
                 {mfaChallengeToken === null ? "Sign in" : "Verify code"}
               </Button>
             )}
             {mfaChallengeToken !== null && (
-              <Button type="button" variant="link" onClick={(): void => { setMfaChallengeToken(null); setMfaCode(""); setError(""); }}>
+              <Button
+                type="button"
+                variant="link"
+                onClick={(): void => {
+                  setMfaChallengeToken(null);
+                  setMfaCode("");
+                  setError("");
+                }}
+              >
                 Use a different account
               </Button>
             )}

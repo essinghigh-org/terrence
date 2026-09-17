@@ -2,10 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, mock } from "bun:test";
-import {
-  fetchLatestTfeProviderVersion,
-  getLatestTfeProviderVersion,
-} from "../../src/lib/provider-version";
+import { fetchLatestTfeProviderVersion, getLatestTfeProviderVersion } from "../../src/lib/provider-version";
 
 // Latest-release lookup for the tfe provider (provider-surface freshness).
 // The GitHub fetch is stubbed; the disk cache is redirected to a temp file

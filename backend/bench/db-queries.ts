@@ -29,7 +29,9 @@ db.run(`CREATE TABLE runs (
   status_timestamps TEXT
 )`);
 
-const insert = db.prepare("INSERT INTO runs (id, workspace_id, status, created_at, scheduled_at, plan_only, status_timestamps) VALUES (?, ?, ?, ?, ?, ?, ?)");
+const insert = db.prepare(
+  "INSERT INTO runs (id, workspace_id, status, created_at, scheduled_at, plan_only, status_timestamps) VALUES (?, ?, ?, ?, ?, ?, ?)",
+);
 const now = Date.now();
 db.transaction(() => {
   for (let i = 0; i < RUNS; i += 1) {
@@ -42,7 +44,15 @@ db.transaction(() => {
     // applyDueScheduledRuns excludes plan-only runs, so seed both kinds to
     // ensure the benchmark measures the production predicate.
     const planOnly = status === "confirmed" && Math.floor(i / STATUSES.length) % 2 === 0;
-    insert.run(`run-${i}`, ws, status, created, scheduledAt, planOnly ? 1 : 0, JSON.stringify({ "confirmed-at": new Date(created).toISOString() }));
+    insert.run(
+      `run-${i}`,
+      ws,
+      status,
+      created,
+      scheduledAt,
+      planOnly ? 1 : 0,
+      JSON.stringify({ "confirmed-at": new Date(created).toISOString() }),
+    );
   }
 })();
 
@@ -68,10 +78,14 @@ const workspaceList = (): void => {
   db.query("SELECT id FROM runs WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 20").all("ws-42");
 };
 const confirmedDue = (): void => {
-  db.query("SELECT id FROM runs WHERE status = 'confirmed' AND plan_only = 0 AND scheduled_at IS NOT NULL AND scheduled_at <= ? LIMIT 50").all(now);
+  db.query(
+    "SELECT id FROM runs WHERE status = 'confirmed' AND plan_only = 0 AND scheduled_at IS NOT NULL AND scheduled_at <= ? LIMIT 50",
+  ).all(now);
 };
 
-console.log(`\nRuns table: ${RUNS} rows, ${WORKSPACES} workspaces (${db.query("SELECT COUNT(*) FROM runs").get() as object})\n`);
+console.log(
+  `\nRuns table: ${RUNS} rows, ${WORKSPACES} workspaces (${db.query("SELECT COUNT(*) FROM runs").get() as object})\n`,
+);
 console.log("=== BASELINE (no indexes) ===");
 measure("pending queue scan (pollWorkerQueue)", pendingScan);
 measure("workspace run list", workspaceList);

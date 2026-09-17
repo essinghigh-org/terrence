@@ -25,14 +25,16 @@ describe("token TTL policy enforcement", () => {
   const auth = `user-token-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, token = auth) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   let teamId = "";
 
@@ -87,9 +89,9 @@ describe("token TTL policy enforcement", () => {
     await setPolicy("", oneHourMs);
     const res = await request(`/api/v2/organizations/${orgName}/authentication-token`, "POST");
     expect(res.status).toBe(201);
-    const row = (await db.query.apiTokens.findFirst({
+    const row = await db.query.apiTokens.findFirst({
       where: eq(apiTokens.orgId, orgId),
-    }));
+    });
     expect(row).toBeDefined();
     // No expiry requested: two-year default applies, then the policy caps it
     // down to now+1h.

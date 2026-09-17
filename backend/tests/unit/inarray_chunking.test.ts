@@ -9,7 +9,10 @@ describe("inArray chunking #344", (): void => {
     try {
       const dbPath = join(testDir, "terrence.db");
       const result = Bun.spawn({
-        cmd: ["bun", "-e", `
+        cmd: [
+          "bun",
+          "-e",
+          `
           const { mkdtemp } = await import("node:fs/promises");
           const { db } = await import("./src/db/index.ts");
           const { organizations, workspaces, workspaceTags, users, organizationMemberships } = await import("./src/db/schema.ts");
@@ -43,7 +46,8 @@ describe("inArray chunking #344", (): void => {
             tagRows.push(...rows);
           }
           console.log(JSON.stringify({ tagCount: tagRows.length, wsCount: wsIds.length }));
-        `],
+        `,
+        ],
         cwd: join(import.meta.dir, "../.."),
         env: {
           ...Bun.env,
@@ -53,7 +57,11 @@ describe("inArray chunking #344", (): void => {
         stdout: "pipe",
         stderr: "pipe",
       });
-      const [exitCode, stdout, stderr] = await Promise.all([result.exited, new Response(result.stdout).text(), new Response(result.stderr).text()]);
+      const [exitCode, stdout, stderr] = await Promise.all([
+        result.exited,
+        new Response(result.stdout).text(),
+        new Response(result.stderr).text(),
+      ]);
       if (exitCode !== 0) throw new Error("spawn failed: " + stderr + stdout);
       const parsed = JSON.parse(stdout.trim().split("\\n").at(-1)!);
       expect(parsed.tagCount).toBe(510);

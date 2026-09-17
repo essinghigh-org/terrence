@@ -30,7 +30,7 @@ type CreateWorkspaceModalProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: (ws: Readonly<{ id: string; name: string }>) => void;
-}
+};
 
 type WorkspaceProject = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
 
@@ -44,10 +44,10 @@ function executionModeDescription(executionMode: string): string {
   return executionMode === "inherit"
     ? "Use the execution mode and agent pool configured for the selected project."
     : executionMode === "agent"
-    ? "Runs wait for an agent pool to pick them up."
-    : executionMode === "local"
-      ? "Runs execute on your CLI; the server only tracks state."
-      : "Runs execute on the built-in Terrence server worker.";
+      ? "Runs wait for an agent pool to pick them up."
+      : executionMode === "local"
+        ? "Runs execute on your CLI; the server only tracks state."
+        : "Runs execute on the built-in Terrence server worker.";
 }
 
 function executionModeHint(executionMode: string, autoApply: boolean): string {
@@ -88,7 +88,9 @@ function VcsSourceFields({
   return (
     <div className="grid gap-4">
       <div className="flex flex-col gap-2">
-        <label htmlFor="vcs-connection" className="text-sm font-medium leading-none">VCS connection</label>
+        <label htmlFor="vcs-connection" className="text-sm font-medium leading-none">
+          VCS connection
+        </label>
         <Select
           id="vcs-connection"
           name="vcs-connection"
@@ -99,12 +101,18 @@ function VcsSourceFields({
           <SelectItem value="">
             {vcsConnectionsLoading ? "Loading registered connections…" : "Select a registered connection"}
           </SelectItem>
-          {vcsConnections.map((connection: VcsConnection): React.JSX.Element => (
-            <SelectItem key={connection.value} value={connection.value}>{connection.label}</SelectItem>
-          ))}
+          {vcsConnections.map(
+            (connection: VcsConnection): React.JSX.Element => (
+              <SelectItem key={connection.value} value={connection.value}>
+                {connection.label}
+              </SelectItem>
+            ),
+          )}
         </Select>
         {vcsConnectionsError !== "" ? (
-          <p role="alert" className="text-xs text-destructive">{vcsConnectionsError}</p>
+          <p role="alert" className="text-xs text-destructive">
+            {vcsConnectionsError}
+          </p>
         ) : vcsConnections.length === 0 && !vcsConnectionsLoading ? (
           // Named the place to go without linking to it, which left
           // the user to find "organization VCS settings" themselves.
@@ -115,8 +123,8 @@ function VcsSourceFields({
               className="font-medium text-primary underline hover:no-underline"
             >
               Connect GitHub, GitLab or Bitbucket
-            </Link>
-            {" "}to run from a repository.
+            </Link>{" "}
+            to run from a repository.
           </p>
         ) : (
           <p className="text-xs text-muted-foreground">
@@ -127,7 +135,10 @@ function VcsSourceFields({
 
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-1">
-          <label htmlFor="vcs-identifier" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+          <label
+            htmlFor="vcs-identifier"
+            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+          >
             Repository Identifier
           </label>
           <HelpTooltip content="Select from accessible repositories or type a repository path (e.g. 'org/repo-name')." />
@@ -164,7 +175,12 @@ function LocalSourceHint({
 }>): React.JSX.Element {
   return (
     <p className="text-sm text-muted-foreground">
-      Code will be loaded from <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">/app/backend/storage/local/{orgName}/{projectId === "" ? "default" : projectId}/{name.trim() === "" ? "{name}" : name.trim()}</code>. Make sure to bind mount this path to your Terraform code.
+      Code will be loaded from{" "}
+      <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+        /app/backend/storage/local/{orgName}/{projectId === "" ? "default" : projectId}/
+        {name.trim() === "" ? "{name}" : name.trim()}
+      </code>
+      . Make sure to bind mount this path to your Terraform code.
     </p>
   );
 }
@@ -187,18 +203,24 @@ function AgentPoolFields({
     <>
       {agentPools.pools.length > 0 && (
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="create-agent-pool" className="text-sm font-medium">Agent pool</label>
+          <label htmlFor="create-agent-pool" className="text-sm font-medium">
+            Agent pool
+          </label>
           <Select id="create-agent-pool" value={agentPoolId} onValueChange={onAgentPoolChange}>
             <SelectItem value="">Choose an agent pool</SelectItem>
-            {agentPools.pools.map((pool) => <SelectItem key={pool.id} value={pool.id}>{pool.attributes.name}</SelectItem>)}
+            {agentPools.pools.map((pool) => (
+              <SelectItem key={pool.id} value={pool.id}>
+                {pool.attributes.name}
+              </SelectItem>
+            ))}
           </Select>
         </div>
       )}
-      {agentPools.loading && (
-        <p className="text-xs text-muted-foreground">Checking organization agent pools…</p>
-      )}
+      {agentPools.loading && <p className="text-xs text-muted-foreground">Checking organization agent pools…</p>}
       {!agentPools.loading && agentPools.error !== "" && (
-        <p role="alert" className="text-xs text-destructive">{agentPools.error}</p>
+        <p role="alert" className="text-xs text-destructive">
+          {agentPools.error}
+        </p>
       )}
       {!agentPools.loading && agentPools.error === "" && agentPools.pools.length === 0 && (
         <Callout tone="warning" className="p-3 text-xs">
@@ -236,23 +258,18 @@ function ExecutionModeFields({
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-1">
-        <label htmlFor="exec-mode" className="text-sm font-medium">Execution mode</label>
+        <label htmlFor="exec-mode" className="text-sm font-medium">
+          Execution mode
+        </label>
         <HelpTooltip content="Remote runs execute on the built-in Terrence server worker, agent runs execute in an agent pool, and local runs execute on your CLI." />
       </div>
-      <Select
-        id="exec-mode"
-        name="execution-mode"
-        value={executionMode}
-        onValueChange={onExecutionModeChange}
-      >
+      <Select id="exec-mode" name="execution-mode" value={executionMode} onValueChange={onExecutionModeChange}>
         <SelectItem value="inherit">Use project default</SelectItem>
         <SelectItem value="remote">Terrence server (Remote)</SelectItem>
         <SelectItem value="agent">Agent pool</SelectItem>
         <SelectItem value="local">Your computer (Local)</SelectItem>
       </Select>
-      <p className="text-xs text-muted-foreground">
-        {executionModeDescription(executionMode)}
-      </p>
+      <p className="text-xs text-muted-foreground">{executionModeDescription(executionMode)}</p>
       <AgentPoolFields
         executionMode={executionMode}
         agentPools={agentPools}
@@ -277,7 +294,9 @@ function EngineVersionFields({
 }>): React.JSX.Element {
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor="tf-version" className="text-sm font-medium">Engine version</label>
+      <label htmlFor="tf-version" className="text-sm font-medium">
+        Engine version
+      </label>
       <Select
         id="tf-version"
         name="terraform-version"
@@ -288,9 +307,19 @@ function EngineVersionFields({
         {terraformVersion !== "latest" && !availableVersions.includes(terraformVersion) && (
           <SelectItem value={terraformVersion}>{terraformVersion} (organization default)</SelectItem>
         )}
-        {availableVersions.map((version): React.JSX.Element => <SelectItem key={version} value={version}>{version}</SelectItem>)}
+        {availableVersions.map(
+          (version): React.JSX.Element => (
+            <SelectItem key={version} value={version}>
+              {version}
+            </SelectItem>
+          ),
+        )}
       </Select>
-      <p className="text-xs text-muted-foreground">{versionsLoading ? "Loading supported versions…" : "Versions are fetched from the selected engine release catalog."}</p>
+      <p className="text-xs text-muted-foreground">
+        {versionsLoading
+          ? "Loading supported versions…"
+          : "Versions are fetched from the selected engine release catalog."}
+      </p>
     </div>
   );
 }
@@ -300,7 +329,12 @@ function resolveVcsRepo(
   vcsIdentifier: string,
   vcsConnections: VcsConnection[],
   vcsConnectionValue: string,
-): { ok: true; vcsRepo: { identifier: string; "github-app-installation-id"?: string; "oauth-token-id"?: string } | undefined } | { ok: false } {
+):
+  | {
+      ok: true;
+      vcsRepo: { identifier: string; "github-app-installation-id"?: string; "oauth-token-id"?: string } | undefined;
+    }
+  | { ok: false } {
   if (sourceType !== "vcs") return { ok: true, vcsRepo: undefined };
   const identifier = vcsIdentifier.trim();
   const connection = vcsConnections.find((candidate): boolean => candidate.value === vcsConnectionValue);
@@ -316,17 +350,19 @@ function resolveVcsRepo(
   };
 }
 
-function buildCreatePayload(input: Readonly<{
-  workspaceName: string;
-  autoApply: boolean;
-  executionMode: string;
-  agentPoolId: string;
-  iacBinary: string;
-  normalizedVersion: string;
-  sourceType: string;
-  vcsRepo: { identifier: string; "github-app-installation-id"?: string; "oauth-token-id"?: string } | undefined;
-  projectId: string;
-}>): Record<string, unknown> {
+function buildCreatePayload(
+  input: Readonly<{
+    workspaceName: string;
+    autoApply: boolean;
+    executionMode: string;
+    agentPoolId: string;
+    iacBinary: string;
+    normalizedVersion: string;
+    sourceType: string;
+    vcsRepo: { identifier: string; "github-app-installation-id"?: string; "oauth-token-id"?: string } | undefined;
+    projectId: string;
+  }>,
+): Record<string, unknown> {
   const data: Record<string, unknown> = {
     attributes: {
       name: input.workspaceName,
@@ -347,15 +383,7 @@ function buildCreatePayload(input: Readonly<{
 }
 
 export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>): React.JSX.Element {
-  const {
-    orgName,
-    defaultIacBinary,
-    defaultTerraformVersion,
-    projects = [],
-    open,
-    onOpenChange,
-    onCreated,
-  } = props;
+  const { orgName, defaultIacBinary, defaultTerraformVersion, projects = [], open, onOpenChange, onCreated } = props;
   const [name, setName] = useState("");
   const [projectId, setProjectId] = useState("");
   const [autoApply, setAutoApply] = useState(false);
@@ -387,14 +415,19 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
   }, [defaultIacBinary, defaultTerraformVersion, open]);
 
   useEffect((): void => {
-    if (open) { setProjectId(""); setAgentPoolId(""); }
+    if (open) {
+      setProjectId("");
+      setAgentPoolId("");
+    }
   }, [open, orgName]);
 
   useEffect((): (() => void) | undefined => {
     if (!open) return undefined;
     const controller = new AbortController();
     setVersionsLoading(true);
-    void fetchApi<{ data?: unknown }>(`/available-versions?tool=${encodeURIComponent(iacBinary)}`, { signal: controller.signal })
+    void fetchApi<{ data?: unknown }>(`/available-versions?tool=${encodeURIComponent(iacBinary)}`, {
+      signal: controller.signal,
+    })
       .then((response): void => {
         const versions = response.data;
         if (!controller.signal.aborted && Array.isArray(versions)) {
@@ -402,8 +435,12 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
         }
       })
       .catch((): void => undefined)
-      .finally((): void => { if (!controller.signal.aborted) setVersionsLoading(false); });
-    return (): void => { controller.abort(); };
+      .finally((): void => {
+        if (!controller.signal.aborted) setVersionsLoading(false);
+      });
+    return (): void => {
+      controller.abort();
+    };
   }, [iacBinary, open]);
 
   // Fetch registered VCS connections
@@ -417,7 +454,8 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
         if (!controller.signal.aborted) {
           setVcsConnections(connections);
           setVcsConnectionValue((current: string): string =>
-            connections.some((connection: VcsConnection): boolean => connection.value === current) ? current : "");
+            connections.some((connection: VcsConnection): boolean => connection.value === current) ? current : "",
+          );
         }
       })
       .catch((): void => {
@@ -491,7 +529,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
     setLoading(true);
     const normalizedVersion = terraformVersion.trim() !== "" ? terraformVersion.trim() : "latest";
     try {
-      const res = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces`, {
+      const res = (await fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces`, {
         method: "POST",
         body: JSON.stringify({
           data: buildCreatePayload({
@@ -506,7 +544,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             projectId,
           }),
         }),
-      }) as { data: { id: string } };
+      })) as { data: { id: string } };
       onCreated({ id: res.data.id, name: workspaceName });
       onOpenChange(false);
       setName("");
@@ -529,35 +567,45 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
   };
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen): void => { if (!loading) onOpenChange(nextOpen); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen): void => {
+        if (!loading) onOpenChange(nextOpen);
+      }}
+    >
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>New Workspace</DialogTitle>
-          <DialogDescription>A workspace keeps the code, state, and run history for one piece of infrastructure in {orgName}.</DialogDescription>
+          <DialogDescription>
+            A workspace keeps the code, state, and run history for one piece of infrastructure in {orgName}.
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4 py-2">
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="ws-name" className="text-sm font-medium">Workspace name</label>
+            <label htmlFor="ws-name" className="text-sm font-medium">
+              Workspace name
+            </label>
             <Input
               id="ws-name"
               name="workspace-name"
               autoComplete="off"
               spellCheck={false}
               value={name}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
-              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                setName(event.currentTarget.value);
+              }}
+              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                setName(event.currentTarget.value);
+              }}
               placeholder="my-infrastructure"
             />
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="iac-tool" className="text-sm font-medium">Execution engine</label>
-            <Select
-              id="iac-tool"
-              name="iac-binary"
-              value={iacBinary}
-              onValueChange={setIacBinary}
-            >
+            <label htmlFor="iac-tool" className="text-sm font-medium">
+              Execution engine
+            </label>
+            <Select id="iac-tool" name="iac-binary" value={iacBinary} onValueChange={setIacBinary}>
               <SelectItem value="tofu">OpenTofu</SelectItem>
               <SelectItem value="terraform">Terraform</SelectItem>
             </Select>
@@ -565,13 +613,10 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
 
           <div className="space-y-4">
             <div className="flex flex-col gap-1.5 mb-4">
-              <label htmlFor="source-type" className="text-sm font-medium">Workspace source</label>
-              <Select
-                id="source-type"
-                name="workspace-source"
-                value={sourceType}
-                onValueChange={setSourceType}
-              >
+              <label htmlFor="source-type" className="text-sm font-medium">
+                Workspace source
+              </label>
+              <Select id="source-type" name="workspace-source" value={sourceType} onValueChange={setSourceType}>
                 <SelectItem value="tfe-api">CLI or CI pipeline</SelectItem>
                 <SelectItem value="local">Directory on the server</SelectItem>
                 <SelectItem value="vcs">Git repository</SelectItem>
@@ -579,7 +624,9 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             </div>
 
             {sourceType === "tfe-api" && (
-              <p className="text-sm text-muted-foreground">Use your existing Terraform or OpenTofu workflow. Connect your CLI after creating the workspace.</p>
+              <p className="text-sm text-muted-foreground">
+                Use your existing Terraform or OpenTofu workflow. Connect your CLI after creating the workspace.
+              </p>
             )}
             {sourceType === "vcs" && (
               <VcsSourceFields
@@ -597,9 +644,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
               />
             )}
 
-            {sourceType === "local" && (
-              <LocalSourceHint orgName={orgName} projectId={projectId} name={name} />
-            )}
+            {sourceType === "local" && <LocalSourceHint orgName={orgName} projectId={projectId} name={name} />}
           </div>
           <details className="group rounded-lg border border-border">
             <summary className="cursor-pointer rounded-lg px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -609,55 +654,72 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
               </span>
             </summary>
             <div className="flex flex-col gap-4 border-t border-border p-4">
-          {projects.length > 0 && (
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="workspace-project" className="text-sm font-medium">Project (optional)</label>
-              <Select
-                id="workspace-project"
-                name="project"
-                value={projectId}
-                onValueChange={setProjectId}
-              >
-                <SelectItem value="">Organization default project</SelectItem>
-                {projects.map((project): React.JSX.Element => (
-                  <SelectItem key={project.id} value={project.id}>{project.attributes.name}</SelectItem>
-                ))}
-              </Select>
-              <p className="text-xs text-muted-foreground">Choose the project that will own this workspace.</p>
-            </div>
-          )}
+              {projects.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="workspace-project" className="text-sm font-medium">
+                    Project (optional)
+                  </label>
+                  <Select id="workspace-project" name="project" value={projectId} onValueChange={setProjectId}>
+                    <SelectItem value="">Organization default project</SelectItem>
+                    {projects.map(
+                      (project): React.JSX.Element => (
+                        <SelectItem key={project.id} value={project.id}>
+                          {project.attributes.name}
+                        </SelectItem>
+                      ),
+                    )}
+                  </Select>
+                  <p className="text-xs text-muted-foreground">Choose the project that will own this workspace.</p>
+                </div>
+              )}
 
-          <ExecutionModeFields
-            executionMode={executionMode}
-            onExecutionModeChange={setExecutionMode}
-            agentPools={agentPools}
-            agentPoolId={agentPoolId}
-            onAgentPoolChange={setAgentPoolId}
-            orgName={orgName}
-          />
+              <ExecutionModeFields
+                executionMode={executionMode}
+                onExecutionModeChange={setExecutionMode}
+                agentPools={agentPools}
+                agentPoolId={agentPoolId}
+                onAgentPoolChange={setAgentPoolId}
+                orgName={orgName}
+              />
 
-          <EngineVersionFields
-            terraformVersion={terraformVersion}
-            onTerraformVersionChange={setTerraformVersion}
-            availableVersions={availableVersions}
-            versionsLoading={versionsLoading}
-          />
+              <EngineVersionFields
+                terraformVersion={terraformVersion}
+                onTerraformVersionChange={setTerraformVersion}
+                availableVersions={availableVersions}
+                versionsLoading={versionsLoading}
+              />
 
-          <div className="flex items-center gap-2 mt-1">
-            <Checkbox id="auto-apply" checked={autoApply} onCheckedChange={(c: boolean): void => { setAutoApply(c); }} />
-            <label htmlFor="auto-apply" className="text-sm font-medium leading-none cursor-pointer">
-              Apply changes without manual approval
-            </label>
-          </div>
-
+              <div className="flex items-center gap-2 mt-1">
+                <Checkbox
+                  id="auto-apply"
+                  checked={autoApply}
+                  onCheckedChange={(c: boolean): void => {
+                    setAutoApply(c);
+                  }}
+                />
+                <label htmlFor="auto-apply" className="text-sm font-medium leading-none cursor-pointer">
+                  Apply changes without manual approval
+                </label>
+              </div>
             </div>
           </details>
           <p className="text-xs text-muted-foreground" role="status">
             {executionModeHint(executionMode, autoApply)}
           </p>
-          {submitError !== "" && <p role="alert" className="text-sm text-destructive">{submitError}</p>}
+          {submitError !== "" && (
+            <p role="alert" className="text-sm text-destructive">
+              {submitError}
+            </p>
+          )}
           <DialogFooter className="mt-4">
-            <Button type="button" variant="outline" disabled={loading} onClick={(): void => { onOpenChange(false); }}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={loading}
+              onClick={(): void => {
+                onOpenChange(false);
+              }}
+            >
               Cancel
             </Button>
             <Button type="submit" disabled={loading || name.trim() === ""}>

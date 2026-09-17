@@ -20,11 +20,13 @@ export function UnsavedChangesProvider({ children }: Readonly<{ children: ReactN
       });
     };
   }, []);
-  const blocker = useBlocker(({ currentLocation, nextLocation }): boolean => guards.size > 0 && (
-    currentLocation.pathname !== nextLocation.pathname
-    || currentLocation.search !== nextLocation.search
-    || currentLocation.hash !== nextLocation.hash
-  ));
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }): boolean =>
+      guards.size > 0 &&
+      (currentLocation.pathname !== nextLocation.pathname ||
+        currentLocation.search !== nextLocation.search ||
+        currentLocation.hash !== nextLocation.hash),
+  );
 
   useEffect((): void => {
     if (guards.size === 0 && blocker.state === "blocked") blocker.reset();
@@ -40,8 +42,12 @@ export function UnsavedChangesProvider({ children }: Readonly<{ children: ReactN
         cancelText="Stay"
         confirmText="Discard and leave"
         confirmVariant="default"
-        onOpenChange={(open): void => { if (!open && blocker.state === "blocked") blocker.reset(); }}
-        onConfirm={(): void => { if (blocker.state === "blocked") blocker.proceed(); }}
+        onOpenChange={(open): void => {
+          if (!open && blocker.state === "blocked") blocker.reset();
+        }}
+        onConfirm={(): void => {
+          if (blocker.state === "blocked") blocker.proceed();
+        }}
       />
     </guardContext.Provider>
   );
@@ -53,7 +59,9 @@ export function useUnsavedChangesWarning(active: boolean, message = defaultMessa
   useEffect((): (() => void) | undefined => {
     if (!active) return;
     const unregister = register?.(message);
-    const beforeUnload = (event: BeforeUnloadEvent): void => { event.preventDefault(); };
+    const beforeUnload = (event: BeforeUnloadEvent): void => {
+      event.preventDefault();
+    };
     window.addEventListener("beforeunload", beforeUnload);
     return (): void => {
       unregister?.();

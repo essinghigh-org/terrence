@@ -57,13 +57,15 @@ describe("initial site-admin election", () => {
 
   test("local signup on an empty instance does NOT create a site admin", async () => {
     const username = `signup-${crypto.randomUUID()}`;
-    const response = await app.handle(new Request("http://localhost/api/v2/users", {
-      method: "POST",
-      headers: { "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({
-        data: { type: "users", attributes: { username, password: "signup-password" } },
+    const response = await app.handle(
+      new Request("http://localhost/api/v2/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { type: "users", attributes: { username, password: "signup-password" } },
+        }),
       }),
-    }));
+    );
     expect(response.status).toBe(201);
     const registered = (await response.json()).data as { attributes: { "is-site-admin": boolean }; id: string };
     expect(registered.attributes["is-site-admin"]).toBe(false);
@@ -75,13 +77,15 @@ describe("initial site-admin election", () => {
   test("bootstrap still works after a signup user exists (no duplicate election)", async () => {
     // Seed one non-admin user, then bootstrap: it must skip, not promote.
     const username = `seeded-${crypto.randomUUID()}`;
-    const signup = await app.handle(new Request("http://localhost/api/v2/users", {
-      method: "POST",
-      headers: { "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({
-        data: { type: "users", attributes: { username, password: "seed-password" } },
+    const signup = await app.handle(
+      new Request("http://localhost/api/v2/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { type: "users", attributes: { username, password: "seed-password" } },
+        }),
       }),
-    }));
+    );
     expect(signup.status).toBe(201);
     process.env["ADMIN_PASSWORD"] = "bootstrap-admin-2";
     let adminId = "";

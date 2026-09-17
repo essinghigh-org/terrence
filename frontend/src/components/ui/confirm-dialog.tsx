@@ -151,9 +151,7 @@ export function ConfirmDialog({
               {title}
             </DialogTitle>
             {description !== undefined && (
-              <DialogDescription className="mt-2 text-sm text-muted-foreground">
-                {description}
-              </DialogDescription>
+              <DialogDescription className="mt-2 text-sm text-muted-foreground">{description}</DialogDescription>
             )}
           </DialogHeader>
 
@@ -162,7 +160,9 @@ export function ConfirmDialog({
               requireText={requireText}
               requireTextLabel={requireTextLabel}
               typedText={typedText}
-              onTypedText={(value: string): void => { setTypedText(value); }}
+              onTypedText={(value: string): void => {
+                setTypedText(value);
+              }}
             />
           )}
 
@@ -170,7 +170,9 @@ export function ConfirmDialog({
             <ConfirmCheckboxRequirement
               requireCheckbox={requireCheckbox}
               checked={checked}
-              onChecked={(value: boolean): void => { setChecked(value); }}
+              onChecked={(value: boolean): void => {
+                setChecked(value);
+              }}
             />
           )}
 
@@ -185,11 +187,7 @@ export function ConfirmDialog({
             >
               {cancelText}
             </Button>
-            <Button
-              type="submit"
-              variant={confirmVariant}
-              disabled={!isConfirmed || loading}
-            >
+            <Button type="submit" variant={confirmVariant} disabled={!isConfirmed || loading}>
               {loading && <Spinner data-icon="inline-start" className="mr-1.5" />}
               {loading ? "Processing…" : confirmText}
             </Button>

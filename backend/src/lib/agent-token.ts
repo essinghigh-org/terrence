@@ -15,9 +15,6 @@ export function agentPoolTokenExpiresAt(token: Pick<AgentPoolTokenLifecycle, "cr
   return token.expiresAt ?? token.createdAt + AGENT_POOL_TOKEN_DEFAULT_TTL_MS;
 }
 
-export function isAgentPoolTokenActive(
-  token: AgentPoolTokenLifecycle,
-  now = Date.now(),
-): boolean {
+export function isAgentPoolTokenActive(token: AgentPoolTokenLifecycle, now = Date.now()): boolean {
   return token.revokedAt === null && agentPoolTokenExpiresAt(token) > now;
 }

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { EXECUTOR_BACKENDS, executorBackendFromEnv, executorPolicyAllows, executorPolicyAllowsLocal, hasHardIsolation } from "../../src/worker/executor-policy";
+import {
+  EXECUTOR_BACKENDS,
+  executorBackendFromEnv,
+  executorPolicyAllows,
+  executorPolicyAllowsLocal,
+  hasHardIsolation,
+} from "../../src/worker/executor-policy";
 
 describe("executor policy (35-39)", () => {
   it("defaults to landlock only when absent and rejects unknown backends", () => {

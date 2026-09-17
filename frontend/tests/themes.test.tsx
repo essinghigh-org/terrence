@@ -41,8 +41,8 @@ afterEach((): void => {
 
 test("lists extensible light/dark themes and persists a selection", async () => {
   let updatedTheme = "";
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/account/details") return account();
     if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
@@ -50,16 +50,20 @@ test("lists extensible light/dark themes and persists a selection", async () => 
     if (url === "/api/v2/account/mfa") return json({ data: { attributes: { enabled: false } } });
     if (url === "/api/v2/account/update" && init?.method === "PATCH") {
       const body = isString(init.body) ? init.body : "";
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       updatedTheme = JSON.parse(body).data.attributes.theme as string;
       return account(updatedTheme);
     }
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
-  const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
-// SAFETY: the component renders this element type for the queried role/label.
-  const select = await view.findByLabelText("Theme") as HTMLSelectElement;
+  const view = render(
+    <MemoryRouter>
+      <AccountSettings />
+    </MemoryRouter>,
+  );
+  // SAFETY: the component renders this element type for the queried role/label.
+  const select = (await view.findByLabelText("Theme")) as HTMLSelectElement;
 
   expect(select.querySelectorAll("optgroup")).toHaveLength(2);
   expect(view.getByRole("option", { name: "Catppuccin Latte" })).toBeTruthy();
@@ -86,11 +90,15 @@ test("changes the display timezone locally without an account update", async () 
     if (url === "/api/v2/account/mfa") return json({ data: { attributes: { enabled: false } } });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-  const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
-// SAFETY: the component renders this element type for the queried role/label.
-  const select = await view.findByLabelText("Timezone") as HTMLSelectElement;
+  const view = render(
+    <MemoryRouter>
+      <AccountSettings />
+    </MemoryRouter>,
+  );
+  // SAFETY: the component renders this element type for the queried role/label.
+  const select = (await view.findByLabelText("Timezone")) as HTMLSelectElement;
 
   expect(select.value).toBe("local");
   fireEvent.change(select, { target: { value: "utc" } });
@@ -133,8 +141,8 @@ test("expanded catalog ships balanced light and dark families", (): void => {
 
 test("selects and applies a newly added dark theme end to end", async () => {
   let updatedTheme = "";
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/account/details") return account();
     if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
@@ -142,16 +150,20 @@ test("selects and applies a newly added dark theme end to end", async () => {
     if (url === "/api/v2/account/mfa") return json({ data: { attributes: { enabled: false } } });
     if (url === "/api/v2/account/update" && init?.method === "PATCH") {
       const body = isString(init.body) ? init.body : "";
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       updatedTheme = JSON.parse(body).data.attributes.theme as string;
       return account(updatedTheme);
     }
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
-  const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
-// SAFETY: the component renders this element type for the queried role/label.
-  const select = await view.findByLabelText("Theme") as HTMLSelectElement;
+  const view = render(
+    <MemoryRouter>
+      <AccountSettings />
+    </MemoryRouter>,
+  );
+  // SAFETY: the component renders this element type for the queried role/label.
+  const select = (await view.findByLabelText("Theme")) as HTMLSelectElement;
 
   expect(view.getByRole("option", { name: "Kanagawa Wave" })).toBeTruthy();
   expect(view.getByRole("option", { name: "Everforest Light" })).toBeTruthy();

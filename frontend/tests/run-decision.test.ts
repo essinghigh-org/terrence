@@ -9,11 +9,13 @@ const attributes = (over: Partial<RunAttributes>): RunAttributes => ({
   ...over,
 });
 
-const options = (over: Partial<{
-  fresh: boolean;
-  speculative: boolean;
-  awaitingAction: string | null;
-}> = {}): Readonly<{ fresh: boolean; speculative: boolean; awaitingAction: string | null }> => ({
+const options = (
+  over: Partial<{
+    fresh: boolean;
+    speculative: boolean;
+    awaitingAction: string | null;
+  }> = {},
+): Readonly<{ fresh: boolean; speculative: boolean; awaitingAction: string | null }> => ({
   fresh: true,
   speculative: false,
   awaitingAction: null,

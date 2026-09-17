@@ -2,7 +2,16 @@ import { newResourceId } from "../lib/resource-id";
 import { localSignupEnabled } from "../lib/settings";
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { users, apiTokens, refreshSessions, organizationMemberships, organizations, samlSettings, teams, user2FA } from "../db/schema";
+import {
+  users,
+  apiTokens,
+  refreshSessions,
+  organizationMemberships,
+  organizations,
+  samlSettings,
+  teams,
+  user2FA,
+} from "../db/schema";
 import { and, count, eq, gt, inArray, isNotNull, isNull, lt, ne, or } from "drizzle-orm";
 import { timingSafeEqual } from "node:crypto";
 import { userResource } from "../lib/response";
@@ -14,7 +23,12 @@ import { authPlugin } from "../auth";
 import { lockFirstUserElection } from "../db/first-user";
 import { generateTotpSecret, matchingTotpCounter, otpauthUrl } from "../lib/totp";
 import { encryptSecret, decryptSecret, isEncryptedSecret } from "../lib/secrets";
-import { generateAuthenticationToken, hashAuthenticationToken, opaqueToken, tokenHashCandidates } from "../lib/token-service";
+import {
+  generateAuthenticationToken,
+  hashAuthenticationToken,
+  opaqueToken,
+  tokenHashCandidates,
+} from "../lib/token-service";
 
 import { issueMfaChallenge, consumeMfaChallenge } from "../lib/mfa-challenge";
 import { withDbLock } from "../lib/db-lock";
@@ -124,9 +138,11 @@ async function refreshSessionForToken(rawToken: string): Promise<typeof refreshS
 }
 
 export function isUserLoginBlocked(user: Readonly<typeof users.$inferSelect>): boolean {
-  return user.isSuspended === true
-    || user.isProvisional === true
-    || (user as unknown as { deletedAt?: number | null }).deletedAt != null;
+  return (
+    user.isSuspended === true ||
+    user.isProvisional === true ||
+    (user as unknown as { deletedAt?: number | null }).deletedAt != null
+  );
 }
 
 function refreshCookieCandidates(request: RequestInfo | undefined): string[] {
@@ -196,12 +212,19 @@ export async function revokeBrowserSession(
   });
 }
 
-export async function browserSessionDetails(
-  request: RequestInfo | undefined,
-): Promise<{ user: Readonly<typeof users.$inferSelect>; session: Readonly<typeof refreshSessions.$inferSelect> } | null> {
+export async function browserSessionDetails(request: RequestInfo | undefined): Promise<{
+  user: Readonly<typeof users.$inferSelect>;
+  session: Readonly<typeof refreshSessions.$inferSelect>;
+} | null> {
   for (const token of refreshCookieCandidates(request)) {
     const current = await refreshSessionForToken(token);
-    if (current === undefined || current.rotatedAt !== null || current.revokedAt !== null || current.expiresAt <= Date.now()) continue;
+    if (
+      current === undefined ||
+      current.rotatedAt !== null ||
+      current.revokedAt !== null ||
+      current.expiresAt <= Date.now()
+    )
+      continue;
     const user = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
     if (user === undefined || isUserLoginBlocked(user)) continue;
     return { user, session: current };
@@ -235,41 +258,34 @@ export function accessTokenDocument(
       attributes: {
         token,
         "must-change-password": user.mustChangePassword,
-        ...(expiresAt === undefined
-          ? {}
-          : { "expired-at": new Date(expiresAt).toISOString(), refreshable }),
+        ...(expiresAt === undefined ? {} : { "expired-at": new Date(expiresAt).toISOString(), refreshable }),
       },
     },
   };
 }
 
-async function revokeRefreshFamily(
-  familyId: string,
-  userId: string,
-  revokedAt = Date.now(),
-): Promise<boolean> {
+async function revokeRefreshFamily(familyId: string, userId: string, revokedAt = Date.now()): Promise<boolean> {
   return db.transaction(async (tx: unknown): Promise<boolean> => {
     const t = tx as typeof db;
     const family = await t.query.refreshSessions.findMany({
-      where: and(
-        eq(refreshSessions.familyId, familyId),
-        eq(refreshSessions.userId, userId),
-      ),
+      where: and(eq(refreshSessions.familyId, familyId), eq(refreshSessions.userId, userId)),
       columns: { accessTokenId: true },
     });
     if (family.length === 0) return false;
-    await t.update(refreshSessions)
+    await t
+      .update(refreshSessions)
       .set({ revokedAt })
-      .where(and(
-        eq(refreshSessions.familyId, familyId),
-        eq(refreshSessions.userId, userId),
-      ));
+      .where(and(eq(refreshSessions.familyId, familyId), eq(refreshSessions.userId, userId)));
     const accessTokenIds = [...new Set(family.map((session): string => session.accessTokenId))];
     if (accessTokenIds.length > 0) {
-      await t.delete(apiTokens).where(and(
-        or(inArray(apiTokens.id, accessTokenIds), eq(apiTokens.refreshFamilyId, familyId)),
-        eq(apiTokens.userId, userId),
-      ));
+      await t
+        .delete(apiTokens)
+        .where(
+          and(
+            or(inArray(apiTokens.id, accessTokenIds), eq(apiTokens.refreshFamilyId, familyId)),
+            eq(apiTokens.userId, userId),
+          ),
+        );
     }
     return true;
   });
@@ -283,12 +299,20 @@ async function revokeAllRefreshSessions(userId: string, revokedAt = Date.now()):
       where: eq(refreshSessions.userId, userId),
       columns: { accessTokenId: true },
     });
-    await t.update(refreshSessions)
+    await t
+      .update(refreshSessions)
       .set({ revokedAt })
       .where(and(eq(refreshSessions.userId, userId), isNull(refreshSessions.revokedAt)));
     const accessTokenIds = [...new Set(sessions.map((session): string => session.accessTokenId))];
     if (accessTokenIds.length > 0) {
-      await t.delete(apiTokens).where(and(or(inArray(apiTokens.id, accessTokenIds), isNotNull(apiTokens.refreshFamilyId)), eq(apiTokens.userId, userId)));
+      await t
+        .delete(apiTokens)
+        .where(
+          and(
+            or(inArray(apiTokens.id, accessTokenIds), isNotNull(apiTokens.refreshFamilyId)),
+            eq(apiTokens.userId, userId),
+          ),
+        );
     }
   });
 }
@@ -374,7 +398,11 @@ function isCurrentFamily(
   currentAccessTokenId: string | null,
   currentFamilyId: string | null,
 ): boolean {
-  return (existing?.current ?? false) || session.accessTokenId === currentAccessTokenId || session.familyId === currentFamilyId;
+  return (
+    (existing?.current ?? false) ||
+    session.accessTokenId === currentAccessTokenId ||
+    session.familyId === currentFamilyId
+  );
 }
 
 function familyLastRotatedAt(existing: SessionFamily | undefined, rotatedAt: number | null): number | null {
@@ -410,9 +438,7 @@ function sessionFamilyResource(familyId: string, family: SessionFamily): Record<
     type: "browser-sessions",
     attributes: {
       "created-at": new Date(family.createdAt).toISOString(),
-      "last-rotated-at": family.lastRotatedAt === null
-        ? null
-        : new Date(family.lastRotatedAt).toISOString(),
+      "last-rotated-at": family.lastRotatedAt === null ? null : new Date(family.lastRotatedAt).toISOString(),
       "expires-at": new Date(family.expiresAt).toISOString(),
       "ip-address": family.ipAddress,
       "user-agent": family.userAgent,
@@ -428,7 +454,10 @@ function browserSessionResources(
 ): Record<string, unknown>[] {
   const families = new Map<string, SessionFamily>();
   for (const session of sessions) {
-    families.set(session.familyId, mergeSessionFamily(families.get(session.familyId), session, currentAccessTokenId, currentFamilyId));
+    families.set(
+      session.familyId,
+      mergeSessionFamily(families.get(session.familyId), session, currentAccessTokenId, currentFamilyId),
+    );
   }
 
   return [...families.entries()]
@@ -448,11 +477,17 @@ function refreshUnauthorized(
   return { errors: [{ status: "401", title: "Unauthorized", detail }] };
 }
 
-async function resolveMfaSeed(mfa: Readonly<{ secret: string; secretEncrypted: string | null }>): Promise<string | null> {
+async function resolveMfaSeed(
+  mfa: Readonly<{ secret: string; secretEncrypted: string | null }>,
+): Promise<string | null> {
   const raw = mfa.secretEncrypted ?? (mfa.secret !== "" ? mfa.secret : null);
   if (raw === null) return null;
   if (!isEncryptedSecret(raw)) return raw;
-  try { return await decryptSecret(raw); } catch { return null; }
+  try {
+    return await decryptSecret(raw);
+  } catch {
+    return null;
+  }
 }
 
 type MfaUpdate = Readonly<{
@@ -474,17 +509,18 @@ async function acceptTotpCode(
   if (counter === null) return false;
   const sameSecret = and(
     eq(user2FA.secret, mfa.secret),
-    mfa.secretEncrypted === null
-      ? isNull(user2FA.secretEncrypted)
-      : eq(user2FA.secretEncrypted, mfa.secretEncrypted),
+    mfa.secretEncrypted === null ? isNull(user2FA.secretEncrypted) : eq(user2FA.secretEncrypted, mfa.secretEncrypted),
   );
-  const accepted = await db.update(user2FA)
+  const accepted = await db
+    .update(user2FA)
     .set({ ...updates, lastAcceptedCounter: counter })
-    .where(and(
-      eq(user2FA.userId, userId),
-      sameSecret,
-      or(isNull(user2FA.lastAcceptedCounter), lt(user2FA.lastAcceptedCounter, counter)),
-    ))
+    .where(
+      and(
+        eq(user2FA.userId, userId),
+        sameSecret,
+        or(isNull(user2FA.lastAcceptedCounter), lt(user2FA.lastAcceptedCounter, counter)),
+      ),
+    )
     .returning({ userId: user2FA.userId });
   return accepted.length === 1;
 }
@@ -522,12 +558,14 @@ function resolveIactToken(request: RequestInfo | undefined): string | null {
   // out of proxy logs, browser history, and traces entirely.
   const queryEnabled = envFlag("IACT_QUERY_TOKEN_ENABLED");
   const queryToken = request === undefined || !queryEnabled ? null : new URL(request.url).searchParams.get("token");
-  const headerToken = request === undefined ? null
-    : request.headers.get("x-iact-token")
-      ?? (() => {
-        const authorization = request.headers.get("authorization") ?? "";
-        return authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : null;
-      })();
+  const headerToken =
+    request === undefined
+      ? null
+      : (request.headers.get("x-iact-token") ??
+        (() => {
+          const authorization = request.headers.get("authorization") ?? "";
+          return authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : null;
+        })());
   return queryToken ?? headerToken;
 }
 
@@ -535,12 +573,12 @@ async function verifyIactElection(configuredToken: string | undefined, suppliedT
   const configured = Buffer.from(configuredToken ?? "");
   const supplied = Buffer.from(suppliedToken ?? "");
   if (
-    configuredToken === undefined
-    || configuredToken === ""
-    || suppliedToken === null
-    || configured.length !== supplied.length
-    || !timingSafeEqual(configured, supplied)
-    || (await db.select({ value: count() }).from(users))[0]?.value !== 0
+    configuredToken === undefined ||
+    configuredToken === "" ||
+    suppliedToken === null ||
+    configured.length !== supplied.length ||
+    !timingSafeEqual(configured, supplied) ||
+    (await db.select({ value: count() }).from(users))[0]?.value !== 0
   ) {
     return false;
   }
@@ -548,9 +586,9 @@ async function verifyIactElection(configuredToken: string | undefined, suppliedT
 }
 
 function parseInitialAdminPayload(body: unknown): { username: string; email: string; password: string } | null {
-  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const username = typeof payload["username"] === "string" ? normalizeUsername(payload["username"]) ?? "" : "";
-  const email = typeof payload["email"] === "string" ? normalizeEmail(payload["email"]) ?? "" : "";
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const username = typeof payload["username"] === "string" ? (normalizeUsername(payload["username"]) ?? "") : "";
+  const email = typeof payload["email"] === "string" ? (normalizeEmail(payload["email"]) ?? "") : "";
   const password = typeof payload["password"] === "string" ? payload["password"] : "";
   if (username === "" || email === "" || password === "") return null;
   return { username, email, password };
@@ -626,7 +664,13 @@ async function provisionLdapUser(
       // the specifics server-side only.
       log.warn("LDAP provisioning conflict", { username });
       (set as { status: number }).status = 401;
-      return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "This account cannot be provisioned from the directory" }] } };
+      return {
+        error: {
+          errors: [
+            { status: "401", title: "Unauthorized", detail: "This account cannot be provisioned from the directory" },
+          ],
+        },
+      };
     }
     throw error;
   }
@@ -641,7 +685,13 @@ async function authenticateLocalLogin(
 ): Promise<{ user: typeof users.$inferSelect } | { error: unknown }> {
   if (ldapUnavailable && !localAuthEnabled) {
     (set as { status: number }).status = 503;
-    return { error: { errors: [{ status: "503", title: "Service Unavailable", detail: "The LDAP directory is temporarily unavailable." }] } };
+    return {
+      error: {
+        errors: [
+          { status: "503", title: "Service Unavailable", detail: "The LDAP directory is temporarily unavailable." },
+        ],
+      },
+    };
   }
   if (!localAuthEnabled) {
     (set as { status: number }).status = 401;
@@ -649,9 +699,10 @@ async function authenticateLocalLogin(
   }
   const loginEmail = normalizeEmail(username);
   const found = await db.query.users.findFirst({
-    where: loginEmail === null
-      ? eq(users.username, username)
-      : or(eq(users.username, username), eq(users.email, loginEmail)),
+    where:
+      loginEmail === null
+        ? eq(users.username, username)
+        : or(eq(users.username, username), eq(users.email, loginEmail)),
   });
   if (found !== undefined && isLoginLocked(found)) {
     // Preserve the dummy-hash timing path without changing lockout behavior.
@@ -659,9 +710,10 @@ async function authenticateLocalLogin(
     (set as { status: number }).status = 401;
     return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] } };
   }
-  const passwordValid = found === undefined
-    ? await passwordMatches(password)
-    : await verifyAndUpgradePassword(found.id, password, found.passwordHash);
+  const passwordValid =
+    found === undefined
+      ? await passwordMatches(password)
+      : await verifyAndUpgradePassword(found.id, password, found.passwordHash);
   if (found === undefined || !passwordValid) {
     if (found !== undefined && !isUserLoginBlocked(found)) {
       const failure = await recordFailedLogin(found.id);
@@ -705,9 +757,7 @@ async function checkPostLoginState(
   return null;
 }
 
-async function mfaChallengeResponse(
-  user: Readonly<typeof users.$inferSelect>,
-): Promise<unknown> {
+async function mfaChallengeResponse(user: Readonly<typeof users.$inferSelect>): Promise<unknown> {
   // If MFA is enabled for this account, issue a short-lived challenge token
   // instead of an access token. The client completes login via
   // POST /users/login/mfa with a valid TOTP code.
@@ -748,7 +798,9 @@ function parseMfaChallengeRequest(
 
   if (challengeToken === "" || code === "") {
     (set as { status: number }).status = 400;
-    return { error: { errors: [{ status: "400", title: "Bad Request", detail: "Missing MFA challenge token or code" }] } };
+    return {
+      error: { errors: [{ status: "400", title: "Bad Request", detail: "Missing MFA challenge token or code" }] },
+    };
   }
   return { challengeToken, code, browserSession };
 }
@@ -761,7 +813,9 @@ async function validateMfaChallenge(
   const challenge = await consumeMfaChallenge(challengeToken);
   if (challenge === null) {
     (set as { status: number }).status = 401;
-    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "MFA challenge has expired or is invalid" }] } };
+    return {
+      error: { errors: [{ status: "401", title: "Unauthorized", detail: "MFA challenge has expired or is invalid" }] },
+    };
   }
 
   const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, challenge.userId) });
@@ -807,9 +861,10 @@ async function resolveGraceSuccessor(
   const successor = await db.query.refreshSessions.findFirst({
     where: eq(refreshSessions.tokenHash, successorHash),
   });
-  const successorUser = successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
-    ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
-    : undefined;
+  const successorUser =
+    successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
+      ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
+      : undefined;
   if (successor !== undefined && successorUser !== undefined && !isUserLoginBlocked(successorUser)) {
     return { successor, successorUser };
   }
@@ -880,14 +935,17 @@ async function processRefreshCandidate(
   // family. Only rotations within REFRESH_GRACE_MS are forgiven.
   const rotated = await db.transaction(async (tx: unknown): Promise<boolean> => {
     const t = tx as typeof db;
-    const claimed = await t.update(refreshSessions)
+    const claimed = await t
+      .update(refreshSessions)
       .set({ rotatedAt: now, rotatedAtMs: now, successorHash: tokenHash(refreshToken) })
-      .where(and(
-        eq(refreshSessions.id, current.id),
-        isNull(refreshSessions.rotatedAt),
-        isNull(refreshSessions.revokedAt),
-        gt(refreshSessions.expiresAt, now),
-      ))
+      .where(
+        and(
+          eq(refreshSessions.id, current.id),
+          isNull(refreshSessions.rotatedAt),
+          isNull(refreshSessions.revokedAt),
+          gt(refreshSessions.expiresAt, now),
+        ),
+      )
       .returning({ id: refreshSessions.id });
     if (claimed.length === 0) return false;
     await t.delete(apiTokens).where(eq(apiTokens.id, current.accessTokenId));
@@ -986,7 +1044,7 @@ function parseSignupCredentials(
   set: SetObj,
 ): { username: string; password: string; email: unknown } | { error: unknown } {
   const attrs = extractAttrs(body) ?? {};
-  const username = typeof attrs["username"] === "string" ? normalizeUsername(attrs["username"]) ?? "" : "";
+  const username = typeof attrs["username"] === "string" ? (normalizeUsername(attrs["username"]) ?? "") : "";
   const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
 
   if (username === "" || password === "") {
@@ -997,7 +1055,9 @@ function parseSignupCredentials(
   const policyCheck = checkPasswordPolicy(loadPasswordPolicy(), password, username);
   if (!policyCheck.ok) {
     (set as { status: number }).status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyCheck.errors.join(" ") }] } };
+    return {
+      error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyCheck.errors.join(" ") }] },
+    };
   }
   return { username, password, email: attrs["email"] };
 }
@@ -1008,10 +1068,15 @@ function resolveSignupEmail(email: unknown, username: string, set: SetObj): { em
   // pragmatic pattern scans in linear time and is sufficient for signup.
   const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
-  const emailStr = typeof email === "string" && email.trim() !== "" ? normalizeEmail(email) ?? "" : `${username}@example.com`;
+  const emailStr =
+    typeof email === "string" && email.trim() !== "" ? (normalizeEmail(email) ?? "") : `${username}@example.com`;
   if (!EMAIL_REGEX.test(emailStr)) {
     (set as { status: number }).status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email address is required" }] } };
+    return {
+      error: {
+        errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email address is required" }],
+      },
+    };
   }
   return { email: emailStr };
 }
@@ -1053,11 +1118,7 @@ async function createLocalSignupUser(
 
 type AccountChanges = { username?: string; email?: string | null; emailVerifiedAt?: number | null; theme?: string };
 
-function parseUsernameChange(
-  attrs: Attrs,
-  changes: AccountChanges,
-  set: SetObj,
-): unknown {
+function parseUsernameChange(attrs: Attrs, changes: AccountChanges, set: SetObj): unknown {
   if (!Object.hasOwn(attrs, "username")) return null;
   if (typeof attrs["username"] !== "string" || attrs["username"].trim() === "") {
     (set as { status: number }).status = 422;
@@ -1066,18 +1127,15 @@ function parseUsernameChange(
   const normalizedUsername = normalizeUsername(attrs["username"]);
   if (normalizedUsername === null) {
     (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username contains invalid characters" }] };
+    return {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username contains invalid characters" }],
+    };
   }
   changes.username = normalizedUsername;
   return null;
 }
 
-function parseEmailChange(
-  attrs: Attrs,
-  currentEmail: string | null,
-  changes: AccountChanges,
-  set: SetObj,
-): unknown {
+function parseEmailChange(attrs: Attrs, currentEmail: string | null, changes: AccountChanges, set: SetObj): unknown {
   if (!Object.hasOwn(attrs, "email")) return null;
   const emailVal = attrs["email"];
   if (emailVal !== null && (typeof emailVal !== "string" || emailVal.trim() === "")) {
@@ -1094,11 +1152,7 @@ function parseEmailChange(
   return null;
 }
 
-function parseThemeChange(
-  attrs: Attrs,
-  changes: AccountChanges,
-  set: SetObj,
-): unknown {
+function parseThemeChange(attrs: Attrs, changes: AccountChanges, set: SetObj): unknown {
   if (!Object.hasOwn(attrs, "theme")) return null;
   if (typeof attrs["theme"] !== "string" || attrs["theme"].length > 64 || !THEME_ID_PATTERN.test(attrs["theme"])) {
     (set as { status: number }).status = 422;
@@ -1283,9 +1337,18 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     return undefined;
   })
   .post("/api/v2/users", async ({ body, set }: ReqCtx): Promise<unknown> => {
-    if (!await localSignupEnabled()) {
+    if (!(await localSignupEnabled())) {
       (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: "Registration is disabled on this instance. Ask a site administrator to create an account or enable registration in authentication settings." }] };
+      return {
+        errors: [
+          {
+            status: "403",
+            title: "Forbidden",
+            detail:
+              "Registration is disabled on this instance. Ask a site administrator to create an account or enable registration in authentication settings.",
+          },
+        ],
+      };
     }
     const parsed = parseSignupCredentials(body, set);
     if ("error" in parsed) return parsed.error;
@@ -1313,7 +1376,6 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return localSignupAcknowledgement(id, parsed.username, normalizedEmail);
     }
 
-
     return createLocalSignupUser(id, parsed.username, normalizedEmail, passwordHash, set);
   })
   .use(authPlugin)
@@ -1321,7 +1383,15 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     // Return 401 for invalid or expired tokens (distinct from "no auth" → 404)
     if (tokenError !== null && tokenError !== undefined) {
       (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: tokenError === "expired" ? "Token expired" : "Invalid token" }] };
+      return {
+        errors: [
+          {
+            status: "401",
+            title: "Unauthorized",
+            detail: tokenError === "expired" ? "Token expired" : "Invalid token",
+          },
+        ],
+      };
     }
     if (user !== null && user !== undefined) return { data: userResource(user) };
 
@@ -1333,9 +1403,10 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       }
     }
 
-    const org = orgId !== null && orgId !== undefined
-      ? await db.query.organizations.findFirst({ where: eq(organizations.id, orgId) })
-      : null;
+    const org =
+      orgId !== null && orgId !== undefined
+        ? await db.query.organizations.findFirst({ where: eq(organizations.id, orgId) })
+        : null;
     if (org === null || org === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -1364,7 +1435,8 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    await db.update(refreshSessions)
+    await db
+      .update(refreshSessions)
       .set({ revokedAt: Date.now() })
       .where(and(eq(refreshSessions.userId, user.id), isNull(refreshSessions.revokedAt)));
     if (token !== null && token !== undefined) {
@@ -1373,36 +1445,41 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     (set as { status: number }).status = 204;
     return undefined;
   })
-  .delete("/api/v2/account/sessions/:family_id", async ({ params, request, server, user, token, set }: AuthReqCtx): Promise<unknown> => {
-    const familyId = params?.["family_id"] ?? "";
-    if (user === null || user === undefined || familyId === "") {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const current = await withRefreshRotationLock(async (): Promise<boolean | null> => {
-      const activeFamily = await db.query.refreshSessions.findMany({
-        where: and(
-          eq(refreshSessions.familyId, familyId),
-          eq(refreshSessions.userId, user.id),
-          isNull(refreshSessions.revokedAt),
-          gt(refreshSessions.expiresAt, Date.now()),
-        ),
-        columns: { accessTokenId: true, rotatedAt: true },
+  .delete(
+    "/api/v2/account/sessions/:family_id",
+    async ({ params, request, server, user, token, set }: AuthReqCtx): Promise<unknown> => {
+      const familyId = params?.["family_id"] ?? "";
+      if (user === null || user === undefined || familyId === "") {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const current = await withRefreshRotationLock(async (): Promise<boolean | null> => {
+        const activeFamily = await db.query.refreshSessions.findMany({
+          where: and(
+            eq(refreshSessions.familyId, familyId),
+            eq(refreshSessions.userId, user.id),
+            isNull(refreshSessions.revokedAt),
+            gt(refreshSessions.expiresAt, Date.now()),
+          ),
+          columns: { accessTokenId: true, rotatedAt: true },
+        });
+        if (!activeFamily.some((session): boolean => session.rotatedAt === null)) return null;
+        const isCurrent =
+          token !== null &&
+          token !== undefined &&
+          (token.refreshFamilyId === familyId ||
+            activeFamily.some((session): boolean => session.accessTokenId === token.id));
+        return (await revokeRefreshFamily(familyId, user.id)) ? isCurrent : null;
       });
-      if (!activeFamily.some((session): boolean => session.rotatedAt === null)) return null;
-      const isCurrent = token !== null
-        && token !== undefined
-        && (token.refreshFamilyId === familyId || activeFamily.some((session): boolean => session.accessTokenId === token.id));
-      return await revokeRefreshFamily(familyId, user.id) ? isCurrent : null;
-    });
-    if (current === null) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (current) clearRefreshCookie(set, request, server);
-    (set as { status: number }).status = 204;
-    return undefined;
-  })
+      if (current === null) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (current) clearRefreshCookie(set, request, server);
+      (set as { status: number }).status = 204;
+      return undefined;
+    },
+  )
   .patch("/api/v2/account/update", async ({ user, body, set }: AuthReqCtx): Promise<unknown> => {
     if (user === null || user === undefined) {
       (set as { status: number }).status = 404;
@@ -1446,9 +1523,19 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
 
     const attrs = extractAttrs(body) ?? {};
-    const currentPassword = typeof attrs["current_password"] === "string" ? attrs["current_password"] : (typeof attrs["current-password"] === "string" ? attrs["current-password"] : "");
+    const currentPassword =
+      typeof attrs["current_password"] === "string"
+        ? attrs["current_password"]
+        : typeof attrs["current-password"] === "string"
+          ? attrs["current-password"]
+          : "";
     const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
-    const confirmation = typeof attrs["password_confirmation"] === "string" ? attrs["password_confirmation"] : (typeof attrs["password-confirmation"] === "string" ? attrs["password-confirmation"] : "");
+    const confirmation =
+      typeof attrs["password_confirmation"] === "string"
+        ? attrs["password_confirmation"]
+        : typeof attrs["password-confirmation"] === "string"
+          ? attrs["password-confirmation"]
+          : "";
     if (currentPassword === "" || password === "" || password !== confirmation) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid password change request" }] };
@@ -1469,14 +1556,12 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const passwordHash = await hashPassword(password);
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
-      await t.update(users)
-        .set({ passwordHash, mustChangePassword: false })
-        .where(eq(users.id, user.id));
+      await t.update(users).set({ passwordHash, mustChangePassword: false }).where(eq(users.id, user.id));
       if (token !== null && token !== undefined) {
-        await t.delete(apiTokens)
-          .where(and(eq(apiTokens.userId, user.id), ne(apiTokens.id, token.id)));
+        await t.delete(apiTokens).where(and(eq(apiTokens.userId, user.id), ne(apiTokens.id, token.id)));
       }
-      await t.update(refreshSessions)
+      await t
+        .update(refreshSessions)
         .set({ revokedAt: Date.now() })
         .where(and(eq(refreshSessions.userId, user.id), isNull(refreshSessions.revokedAt)));
     });
@@ -1517,10 +1602,13 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     // verify flips it on after a valid code. The plaintext column keeps "" so
     // the NOT NULL constraint holds; readers prefer secretEncrypted.
     const secretEncrypted = await encryptSecret(secret);
-    await db.insert(user2FA).values({ userId: user.id, secret: "", secretEncrypted, enabled: false }).onConflictDoUpdate({
-      target: user2FA.userId,
-      set: { secret: "", secretEncrypted, enabled: false, lastAcceptedCounter: null },
-    });
+    await db
+      .insert(user2FA)
+      .values({ userId: user.id, secret: "", secretEncrypted, enabled: false })
+      .onConflictDoUpdate({
+        target: user2FA.userId,
+        set: { secret: "", secretEncrypted, enabled: false, lastAcceptedCounter: null },
+      });
     await auditLog("enroll", "mfa", user.id, user.id, null, { userId: user.id });
     return {
       data: {
@@ -1545,9 +1633,10 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
-    const seedUpdate = mfa.secretEncrypted === null && mfa.secret !== ""
-      ? { secret: "", secretEncrypted: await encryptSecret(mfa.secret) }
-      : {};
+    const seedUpdate =
+      mfa.secretEncrypted === null && mfa.secret !== ""
+        ? { secret: "", secretEncrypted: await encryptSecret(mfa.secret) }
+        : {};
     if (!(await acceptTotpCode(user.id, mfa, code, { ...seedUpdate, enabled: true }))) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
@@ -1557,9 +1646,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     if (token !== undefined && token !== "") {
       const session = await refreshSessionForToken(token);
       if (session !== undefined) {
-        await db.update(refreshSessions)
-          .set({ mfaVerified: true })
-          .where(eq(refreshSessions.id, session.id));
+        await db.update(refreshSessions).set({ mfaVerified: true }).where(eq(refreshSessions.id, session.id));
       }
     }
     return { data: { type: "mfa", attributes: { enabled: true } } };

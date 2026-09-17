@@ -3,7 +3,16 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { apiTokens, organizationMemberships, organizations, runs, stateVersions, systemApiTokens, users, workspaces } from "../../src/db/schema";
+import {
+  apiTokens,
+  organizationMemberships,
+  organizations,
+  runs,
+  stateVersions,
+  systemApiTokens,
+  users,
+  workspaces,
+} from "../../src/db/schema";
 import { hashSystemApiToken } from "../../src/lib/system-api";
 import { modernMcpInit } from "./mcp_test_helpers";
 
@@ -18,7 +27,7 @@ export type OrgSeed = {
   membershipId: string;
   systemToken: string;
   systemTokenId: string;
-}
+};
 
 export function seedOrg(prefix: string): OrgSeed {
   const suffix = crypto.randomUUID();
@@ -45,7 +54,9 @@ export async function persistSeed(seed: OrgSeed): Promise<void> {
     orgId: seed.orgId,
     role: "owner",
   });
-  await db.insert(apiTokens).values({ id: seed.tokenId, token: hashAuthenticationToken(seed.token), userId: seed.userId });
+  await db
+    .insert(apiTokens)
+    .values({ id: seed.tokenId, token: hashAuthenticationToken(seed.token), userId: seed.userId });
   await db.insert(systemApiTokens).values({
     id: seed.systemTokenId,
     tokenHash: hashSystemApiToken(seed.systemToken),
@@ -63,20 +74,34 @@ export async function cleanupSeed(seed: OrgSeed): Promise<void> {
 }
 
 /** Build related rows without deriving any expected capability or outcome. */
-export async function persistExecutionSeed(input: Readonly<{
-  orgId: string;
-  workspaceId: string;
-  workspaceName: string;
-  runId: string;
-  status: string;
-  stateId: string;
-  serial: number;
-  statePayload: string;
-  statusTimestamps?: Readonly<Record<string, string>>;
-}>): Promise<void> {
+export async function persistExecutionSeed(
+  input: Readonly<{
+    orgId: string;
+    workspaceId: string;
+    workspaceName: string;
+    runId: string;
+    status: string;
+    stateId: string;
+    serial: number;
+    statePayload: string;
+    statusTimestamps?: Readonly<Record<string, string>>;
+  }>,
+): Promise<void> {
   await db.insert(workspaces).values({ id: input.workspaceId, orgId: input.orgId, name: input.workspaceName });
-  await db.insert(runs).values({ id: input.runId, workspaceId: input.workspaceId, status: input.status, createdAt: Date.now(), statusTimestamps: input.statusTimestamps ?? {} });
-  await db.insert(stateVersions).values({ id: input.stateId, workspaceId: input.workspaceId, runId: input.runId, serial: input.serial, statePayload: input.statePayload });
+  await db.insert(runs).values({
+    id: input.runId,
+    workspaceId: input.workspaceId,
+    status: input.status,
+    createdAt: Date.now(),
+    statusTimestamps: input.statusTimestamps ?? {},
+  });
+  await db.insert(stateVersions).values({
+    id: input.stateId,
+    workspaceId: input.workspaceId,
+    runId: input.runId,
+    serial: input.serial,
+    statePayload: input.statePayload,
+  });
 }
 
 export const request = (path: string, init?: RequestInit): Promise<Response> => {
@@ -95,7 +120,7 @@ export type JsonApiResource = {
   attributes: Record<string, unknown>;
   relationships?: Record<string, unknown>;
   links?: Record<string, unknown>;
-}
+};
 
 export function expectResource(resource: unknown, type: string): asserts resource is JsonApiResource {
   expect(resource).toBeTypeOf("object");

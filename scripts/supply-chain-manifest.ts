@@ -76,12 +76,7 @@ export type DependencyChangeSummary = Readonly<{
 
 type WorkspaceInput = Readonly<{ path: string; packageJson: Readonly<PackageJson> }>;
 
-const DEPENDENCY_SECTIONS = [
-  "dependencies",
-  "devDependencies",
-  "optionalDependencies",
-  "peerDependencies",
-] as const;
+const DEPENDENCY_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -144,7 +139,9 @@ function packageCoordinate(coordinate: string): Readonly<{ name: string; version
   return { name: resolved.slice(0, separator), version: resolved.slice(separator + 1) };
 }
 
-function packageDependencies(metadata: Readonly<JsonRecord> | undefined): readonly Readonly<{ name: string; range: string }>[] {
+function packageDependencies(
+  metadata: Readonly<JsonRecord> | undefined,
+): readonly Readonly<{ name: string; range: string }>[] {
   return Object.entries(stringRecord(metadata?.["dependencies"]))
     .map(([name, range]): Readonly<{ name: string; range: string }> => ({ name, range }))
     .sort((left, right): number => left.name.localeCompare(right.name));
@@ -154,7 +151,8 @@ function lockedPackages(lock: Readonly<BunLock>): readonly LockedPackage[] {
   if (!isRecord(lock.packages)) throw new Error("bun.lock packages are missing");
   return Object.entries(lock.packages)
     .map(([locator, value]): LockedPackage | null => {
-      if (!Array.isArray(value) || typeof value[0] !== "string") throw new Error(`Invalid Bun package entry: ${locator}`);
+      if (!Array.isArray(value) || typeof value[0] !== "string")
+        throw new Error(`Invalid Bun package entry: ${locator}`);
       const coordinate = packageCoordinate(value[0]);
       const integrity = typeof value[3] === "string" ? value[3] : "";
       if (integrity === "" && !value[0].includes("@workspace:")) {
@@ -163,23 +161,25 @@ function lockedPackages(lock: Readonly<BunLock>): readonly LockedPackage[] {
       return value[0].includes("@workspace:")
         ? null
         : {
-          locator,
-          name: coordinate.name,
-          version: coordinate.version,
-          integrity,
-          dependencies: packageDependencies(isRecord(value[2]) ? value[2] : undefined),
-        };
+            locator,
+            name: coordinate.name,
+            version: coordinate.version,
+            integrity,
+            dependencies: packageDependencies(isRecord(value[2]) ? value[2] : undefined),
+          };
     })
     .filter((entry): entry is LockedPackage => entry !== null)
     .sort((left, right): number => left.locator.localeCompare(right.locator));
 }
 
 function workspaceDependencies(packageJson: Readonly<PackageJson>): readonly Dependency[] {
-  return DEPENDENCY_SECTIONS.flatMap((section): Dependency[] => Object.entries(stringRecord(packageJson[section]))
-    .map(([name, range]): Dependency => ({ name, range, section })))
-    .sort((left, right): number => left.section.localeCompare(right.section) === 0
+  return DEPENDENCY_SECTIONS.flatMap((section): Dependency[] =>
+    Object.entries(stringRecord(packageJson[section])).map(([name, range]): Dependency => ({ name, range, section })),
+  ).sort((left, right): number =>
+    left.section.localeCompare(right.section) === 0
       ? left.name.localeCompare(right.name)
-      : left.section.localeCompare(right.section));
+      : left.section.localeCompare(right.section),
+  );
 }
 
 export function createDependencyManifest(
@@ -192,17 +192,20 @@ export function createDependencyManifest(
   const lockfileVersion = typeof lock.lockfileVersion === "number" ? lock.lockfileVersion : 0;
   const configVersion = typeof lock.configVersion === "number" ? lock.configVersion : 0;
   if (packageManager === "") throw new Error("package.json must pin packageManager");
-  if (lockfileVersion === 0 || configVersion === 0) throw new Error("bun.lock must declare lockfile and config versions");
+  if (lockfileVersion === 0 || configVersion === 0)
+    throw new Error("bun.lock must declare lockfile and config versions");
   return {
     schema: 1,
     packageManager,
     lockfile: { path: "bun.lock", sha256: lockSha256, lockfileVersion, configVersion },
-    workspaces: workspaces.map(({ path, packageJson }): WorkspaceManifest => ({
-      name: stringValue(packageJson.name, path === "." ? "root" : path),
-      path,
-      version: typeof packageJson.version === "string" ? packageJson.version : null,
-      dependencies: workspaceDependencies(packageJson),
-    })),
+    workspaces: workspaces.map(
+      ({ path, packageJson }): WorkspaceManifest => ({
+        name: stringValue(packageJson.name, path === "." ? "root" : path),
+        path,
+        version: typeof packageJson.version === "string" ? packageJson.version : null,
+        dependencies: workspaceDependencies(packageJson),
+      }),
+    ),
     packages: lockedPackages(lock),
     overrides: stringRecord(rootPackageJson.overrides),
   };
@@ -286,7 +289,13 @@ export function createSpdxSbom(manifest: DependencyManifest): JsonRecord {
       licenseConcluded: "NOASSERTION",
       licenseDeclared: "NOASSERTION",
       ...(checksum === null ? {} : { checksums: [{ algorithm: "SHA512", checksum }] }),
-      externalRefs: [{ referenceCategory: "PACKAGE-MANAGER", referenceType: "purl", referenceLocator: npmPurl(entry.name, entry.version) }],
+      externalRefs: [
+        {
+          referenceCategory: "PACKAGE-MANAGER",
+          referenceType: "purl",
+          referenceLocator: npmPurl(entry.name, entry.version),
+        },
+      ],
       comment: `Bun lock locator: ${entry.locator}`,
     };
   });
@@ -301,11 +310,13 @@ export function createSpdxSbom(manifest: DependencyManifest): JsonRecord {
       creators: ["Tool: terrence dependency manifest"],
     },
     packages,
-    relationships: packages.map((entry): JsonRecord => ({
-      spdxElementId: "SPDXRef-DOCUMENT",
-      relationshipType: "DESCRIBES",
-      relatedSpdxElement: spdxId(entry),
-    })),
+    relationships: packages.map(
+      (entry): JsonRecord => ({
+        spdxElementId: "SPDXRef-DOCUMENT",
+        relationshipType: "DESCRIBES",
+        relatedSpdxElement: spdxId(entry),
+      }),
+    ),
   };
 }
 
@@ -323,8 +334,15 @@ function markdownSummary(summary: DependencyChangeSummary): string {
   } else if (summary.changes.length === 0) {
     lines.push("No locked package version changes.", "");
   } else {
-    lines.push("| Package | Previous versions | Current versions |", "| --- | --- | --- |", ...summary.changes.map((change): string =>
-      `| \`${change.name}\` | ${change.from.length === 0 ? "(new)" : change.from.join(", ")} | ${change.to.length === 0 ? "(removed)" : change.to.join(", ")} |`), "");
+    lines.push(
+      "| Package | Previous versions | Current versions |",
+      "| --- | --- | --- |",
+      ...summary.changes.map(
+        (change): string =>
+          `| \`${change.name}\` | ${change.from.length === 0 ? "(new)" : change.from.join(", ")} | ${change.to.length === 0 ? "(removed)" : change.to.join(", ")} |`,
+      ),
+      "",
+    );
   }
   return `${lines.join("\n")}\n`;
 }
@@ -349,24 +367,44 @@ async function readPackageJson(path: string): Promise<PackageJson> {
 async function buildFromFiles(root: string): Promise<DependencyManifest> {
   const rootPackageJson = await readPackageJson(resolve(root, "package.json"));
   const workspacePaths = [".", "backend", "frontend"];
-  const workspaces = await Promise.all(workspacePaths.map(async (path): Promise<WorkspaceInput> => ({
-    path,
-    packageJson: await readPackageJson(resolve(root, path, "package.json")),
-  })));
+  const workspaces = await Promise.all(
+    workspacePaths.map(
+      async (path): Promise<WorkspaceInput> => ({
+        path,
+        packageJson: await readPackageJson(resolve(root, path, "package.json")),
+      }),
+    ),
+  );
   const lockPath = resolve(root, "bun.lock");
   const lockText = await readFile(lockPath, "utf8");
-  return createDependencyManifest(rootPackageJson, workspaces, parseBunLock(lockText), createHash("sha256").update(lockText).digest("hex"));
+  return createDependencyManifest(
+    rootPackageJson,
+    workspaces,
+    parseBunLock(lockText),
+    createHash("sha256").update(lockText).digest("hex"),
+  );
 }
 
 async function buildBaseline(ref: string): Promise<DependencyManifest> {
   const rootPackageJson = JSON.parse(await gitFile(ref, "package.json")) as PackageJson;
   const workspacePaths = [".", "backend", "frontend"];
-  const workspaces = await Promise.all(workspacePaths.map(async (path): Promise<WorkspaceInput> => ({
-    path,
-    packageJson: JSON.parse(await gitFile(ref, path === "." ? "package.json" : `${path}/package.json`)) as PackageJson,
-  })));
+  const workspaces = await Promise.all(
+    workspacePaths.map(
+      async (path): Promise<WorkspaceInput> => ({
+        path,
+        packageJson: JSON.parse(
+          await gitFile(ref, path === "." ? "package.json" : `${path}/package.json`),
+        ) as PackageJson,
+      }),
+    ),
+  );
   const lockText = await gitFile(ref, "bun.lock");
-  return createDependencyManifest(rootPackageJson, workspaces, parseBunLock(lockText), createHash("sha256").update(lockText).digest("hex"));
+  return createDependencyManifest(
+    rootPackageJson,
+    workspaces,
+    parseBunLock(lockText),
+    createHash("sha256").update(lockText).digest("hex"),
+  );
 }
 
 function argument(name: string): string | undefined {
@@ -380,7 +418,9 @@ if (import.meta.main) {
   const summaryOutput = argument("summary-output");
   const baseRef = argument("base-ref") ?? null;
   if (output === undefined || sbomOutput === undefined || summaryOutput === undefined) {
-    throw new Error("Usage: supply-chain-manifest.ts --output FILE --sbom-output FILE --summary-output FILE [--base-ref REF]");
+    throw new Error(
+      "Usage: supply-chain-manifest.ts --output FILE --sbom-output FILE --summary-output FILE [--base-ref REF]",
+    );
   }
   const root = resolve(import.meta.dir, "..");
   const manifest = await buildFromFiles(root);

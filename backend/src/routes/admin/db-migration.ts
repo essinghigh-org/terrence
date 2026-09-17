@@ -38,16 +38,23 @@ function setStatus(set: ParamCtx["set"], status: number): void {
   (set as { status?: number }).status = status;
 }
 
-function errorBody(status: number, title: string, detail: string, code?: string): {
+function errorBody(
+  status: number,
+  title: string,
+  detail: string,
+  code?: string,
+): {
   errors: { status: string; title: string; detail: string; code?: string }[];
 } {
   return {
-    errors: [{
-      status: String(status),
-      title,
-      detail,
-      ...(code === undefined ? {} : { code }),
-    }],
+    errors: [
+      {
+        status: String(status),
+        title,
+        detail,
+        ...(code === undefined ? {} : { code }),
+      },
+    ],
   };
 }
 
@@ -143,7 +150,9 @@ export const dbMigrationRoutes = new Elysia({ name: "admin-db-migration" })
   })
   .post("/api/v2/admin/db-migration/cancel", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (!requireAdmin(user, set)) return;
-    return runWizardAction((): void => { requestCancel(); }, set);
+    return runWizardAction((): void => {
+      requestCancel();
+    }, set);
   })
   .post("/api/v2/admin/db-migration/switch", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (!requireAdmin(user, set)) return;

@@ -18,11 +18,22 @@ test("an import label or active status alone never permits environment removal",
 });
 
 test("database storage must be active and explicitly complete", () => {
-  assert.equal(githubAppStorageNotice({ status: "active", "credential-storage": "database", "environment-removable": true }).canRemoveEnvironment, true);
+  assert.equal(
+    githubAppStorageNotice({ status: "active", "credential-storage": "database", "environment-removable": true })
+      .canRemoveEnvironment,
+    true,
+  );
   for (const status of ["invalid", "disconnected", "unconfigured"]) {
-    assert.equal(githubAppStorageNotice({ status, "credential-storage": "database", "environment-removable": true }).canRemoveEnvironment, false);
+    assert.equal(
+      githubAppStorageNotice({ status, "credential-storage": "database", "environment-removable": true })
+        .canRemoveEnvironment,
+      false,
+    );
   }
-  assert.equal(githubAppStorageNotice({ status: "active", "credential-storage": "database" }).canRemoveEnvironment, false);
+  assert.equal(
+    githubAppStorageNotice({ status: "active", "credential-storage": "database" }).canRemoveEnvironment,
+    false,
+  );
 });
 
 test("environment-only operation clearly requires keeping deployment credentials", () => {
@@ -42,7 +53,8 @@ test("creation accepts only the same-origin handoff with state", () => {
     "https://terrence.test/login?state=abc",
     "https://user:password@terrence.test/api/v2/admin/github-app/manifest/redirect?state=abc",
     "javascript:alert(1)",
-  ]) assert.throws(() => githubAppAuthorizationUrl(payload(value), "https://terrence.test", "manifest"));
+  ])
+    assert.throws(() => githubAppAuthorizationUrl(payload(value), "https://terrence.test", "manifest"));
 });
 
 test("installation resume is still a GET navigation to the configured GitHub host", () => {
@@ -50,7 +62,13 @@ test("installation resume is still a GET navigation to the configured GitHub hos
     const url = `https://${host}/apps/terrence/installations/new?state=abc`;
     assert.equal(githubAppAuthorizationUrl(payload(url), "https://terrence.test", "installation"), url);
   }
-  assert.throws(() => githubAppAuthorizationUrl(payload("https://github.com/settings/apps/new?state=abc"), "https://terrence.test", "installation"));
+  assert.throws(() =>
+    githubAppAuthorizationUrl(
+      payload("https://github.com/settings/apps/new?state=abc"),
+      "https://terrence.test",
+      "installation",
+    ),
+  );
 });
 
 test("malformed API responses fail with a setup error", () => {

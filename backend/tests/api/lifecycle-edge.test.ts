@@ -8,19 +8,24 @@ import { apiTokens, organizations, organizationMemberships, users, workspaces, t
 const suffix = crypto.randomUUID();
 
 describe("lifecycle edge — deleted/transferred IDs against old URLs", () => {
-  let orgId = "", orgName = "";
-  let wsId = "", teamId = "";
-  let userId = "", token = "";
+  let orgId = "",
+    orgName = "";
+  let wsId = "",
+    teamId = "";
+  let userId = "",
+    token = "";
 
   const req = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body !== undefined ? { "Content-Type": "application/vnd.api+json" } : {}),
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body !== undefined ? { "Content-Type": "application/vnd.api+json" } : {}),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      }),
+    );
 
   beforeAll(async () => {
     userId = `lc-user-${suffix}`;
@@ -34,7 +39,9 @@ describe("lifecycle edge — deleted/transferred IDs against old URLs", () => {
     await db.insert(organizationMemberships).values([{ id: `om-lc-${suffix}`, userId, orgId, role: "owner" }]);
     await db.insert(teams).values([{ id: teamId, orgId, name: `team-${suffix}` }]);
     await db.insert(workspaces).values([{ id: wsId, orgId, name: `ws-${suffix}` }]);
-    await db.insert(apiTokens).values([{ id: `api-lc-${suffix}`, token: createHash("sha256").update(token).digest("hex"), userId }]);
+    await db
+      .insert(apiTokens)
+      .values([{ id: `api-lc-${suffix}`, token: createHash("sha256").update(token).digest("hex"), userId }]);
   });
 
   afterAll(async () => {
@@ -50,13 +57,19 @@ describe("lifecycle edge — deleted/transferred IDs against old URLs", () => {
     const doomedId = `lc-doomed-user-${suffix}`;
     const doomedToken = `tok-doomed-${suffix}`;
     await db.insert(users).values([{ id: doomedId, username: doomedId, passwordHash: "h" }]);
-    await db.insert(apiTokens).values([{ id: `api-doomed-${suffix}`, token: createHash("sha256").update(doomedToken).digest("hex"), userId: doomedId }]);
+    await db
+      .insert(apiTokens)
+      .values([
+        { id: `api-doomed-${suffix}`, token: createHash("sha256").update(doomedToken).digest("hex"), userId: doomedId },
+      ]);
     // Soft-delete the user (set deletedAt or remove row, depending on schema)
     await db.delete(apiTokens).where(eq(apiTokens.token, createHash("sha256").update(doomedToken).digest("hex")));
     await db.delete(users).where(eq(users.id, doomedId));
-    const res = await app.handle(new Request(`http://terrence.test/api/v2/users/${doomedId}`, {
-      headers: { Authorization: `Bearer ${doomedToken}` },
-    }));
+    const res = await app.handle(
+      new Request(`http://terrence.test/api/v2/users/${doomedId}`, {
+        headers: { Authorization: `Bearer ${doomedToken}` },
+      }),
+    );
     expect([401, 404]).toContain(res.status);
   });
 

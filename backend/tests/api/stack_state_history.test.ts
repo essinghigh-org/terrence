@@ -20,9 +20,11 @@ const legacyDescriptionPath = join(descriptionDir, "legacy.tfstate");
 const currentDescriptionPath = join(descriptionDir, "current.tfstate");
 
 function request(path: string): Promise<Response> {
-  return app.handle(new Request(`http://terrence.test${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  }));
+  return app.handle(
+    new Request(`http://terrence.test${path}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+  );
 }
 
 describe("Stack state history API", () => {
@@ -33,9 +35,21 @@ describe("Stack state history API", () => {
     await writeFile(currentDescriptionPath, JSON.stringify({ serial: 2 }), { mode: 0o600 });
     await db.insert(users).values({ id: userId, username: `stack-state-user-${suffix}@test`, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: `stack-state-org-${suffix}` });
-    await db.insert(organizationMemberships).values({ id: `stack-state-membership-${suffix}`, userId, orgId, role: "owner" });
-    await db.insert(apiTokens).values({ id: `stack-state-token-row-${suffix}`, token: hashAuthenticationToken(token), userId });
-    await db.insert(stacks).values({ id: stackId, orgId, projectId: null, executionMode: "remote", name: "stack-state-history", createdAt: now, updatedAt: now });
+    await db
+      .insert(organizationMemberships)
+      .values({ id: `stack-state-membership-${suffix}`, userId, orgId, role: "owner" });
+    await db
+      .insert(apiTokens)
+      .values({ id: `stack-state-token-row-${suffix}`, token: hashAuthenticationToken(token), userId });
+    await db.insert(stacks).values({
+      id: stackId,
+      orgId,
+      projectId: null,
+      executionMode: "remote",
+      name: "stack-state-history",
+      createdAt: now,
+      updatedAt: now,
+    });
     await db.insert(stackRecords).values([
       {
         id: legacyStateId,
@@ -67,7 +81,9 @@ describe("Stack state history API", () => {
     await db.delete(stackRecords).where(inArray(stackRecords.id, [legacyStateId, currentStateId]));
     await db.delete(stacks).where(eq(stacks.id, stackId));
     await db.delete(apiTokens).where(eq(apiTokens.token, hashAuthenticationToken(token)));
-    await db.delete(organizationMemberships).where(and(eq(organizationMemberships.userId, userId), eq(organizationMemberships.orgId, orgId)));
+    await db
+      .delete(organizationMemberships)
+      .where(and(eq(organizationMemberships.userId, userId), eq(organizationMemberships.orgId, orgId)));
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(users).where(eq(users.id, userId));
   });
@@ -75,7 +91,9 @@ describe("Stack state history API", () => {
   test("normalizes legacy state status/current fields in the list resource", async () => {
     const response = await request(`/api/v2/stacks/${stackId}/stack-states`);
     expect(response.status).toBe(200);
-    const body = await response.json() as { data: { id: string; attributes: { status: string; "is-current": boolean } }[] };
+    const body = (await response.json()) as {
+      data: { id: string; attributes: { status: string; "is-current": boolean } }[];
+    };
     expect(body.data).toHaveLength(2);
     const legacy = body.data.find((resource) => resource.id === legacyStateId);
     const current = body.data.find((resource) => resource.id === currentStateId);
@@ -89,7 +107,7 @@ describe("Stack state history API", () => {
   test("uses the same normalized fields for a historical detail resource", async () => {
     const response = await request(`/api/v2/stack-states/${legacyStateId}`);
     expect(response.status).toBe(200);
-    const body = await response.json() as { data: { attributes: { status: string; "is-current": boolean } } };
+    const body = (await response.json()) as { data: { attributes: { status: string; "is-current": boolean } } };
     expect(body.data.attributes.status).toBe("superseded");
     expect(body.data.attributes["is-current"]).toBe(false);
   });
@@ -97,10 +115,10 @@ describe("Stack state history API", () => {
   test("downloads the immutable payload for each state generation", async () => {
     const historicalResponse = await request(`/api/v2/stack-states/${legacyStateId}/description/download`);
     expect(historicalResponse.status).toBe(200);
-    expect((await historicalResponse.json() as { serial: number }).serial).toBe(1);
+    expect(((await historicalResponse.json()) as { serial: number }).serial).toBe(1);
 
     const currentResponse = await request(`/api/v2/stack-states/${currentStateId}/description/download`);
     expect(currentResponse.status).toBe(200);
-    expect((await currentResponse.json() as { serial: number }).serial).toBe(2);
+    expect(((await currentResponse.json()) as { serial: number }).serial).toBe(2);
   });
 });

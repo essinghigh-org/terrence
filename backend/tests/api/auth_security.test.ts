@@ -45,11 +45,14 @@ afterAll(async () => {
 describe("account login lockout", () => {
   it("does not clear a lock that is set while password validation is in flight", async () => {
     const now = Date.now();
-    await db.update(users).set({
-      loginFailedAttempts: 5,
-      loginFailureWindowStartedAt: now - 1_000,
-      loginLockedUntil: now + 60_000,
-    }).where(eq(users.id, guardedUserId));
+    await db
+      .update(users)
+      .set({
+        loginFailedAttempts: 5,
+        loginFailureWindowStartedAt: now - 1_000,
+        loginLockedUntil: now + 60_000,
+      })
+      .where(eq(users.id, guardedUserId));
 
     expect(await clearLoginFailures(guardedUserId, now)).toBe(false);
     const stillLocked = await db.query.users.findFirst({ where: eq(users.id, guardedUserId) });
@@ -58,7 +61,10 @@ describe("account login lockout", () => {
       loginLockedUntil: now + 60_000,
     });
 
-    await db.update(users).set({ loginLockedUntil: now - 1 }).where(eq(users.id, guardedUserId));
+    await db
+      .update(users)
+      .set({ loginLockedUntil: now - 1 })
+      .where(eq(users.id, guardedUserId));
     expect(await clearLoginFailures(guardedUserId, now)).toBe(true);
     const cleared = await db.query.users.findFirst({ where: eq(users.id, guardedUserId) });
     expect(cleared).toMatchObject({
@@ -86,11 +92,14 @@ describe("account login lockout", () => {
   it("preserves an active lock when a delayed failure arrives after the failure window", async () => {
     const now = Date.now();
     const lockedUntil = now + 60_000;
-    await db.update(users).set({
-      loginFailedAttempts: 5,
-      loginFailureWindowStartedAt: now - LOGIN_FAILURE_WINDOW_MS - 1,
-      loginLockedUntil: lockedUntil,
-    }).where(eq(users.id, guardedUserId));
+    await db
+      .update(users)
+      .set({
+        loginFailedAttempts: 5,
+        loginFailureWindowStartedAt: now - LOGIN_FAILURE_WINDOW_MS - 1,
+        loginLockedUntil: lockedUntil,
+      })
+      .where(eq(users.id, guardedUserId));
 
     const result = await recordFailedLogin(guardedUserId, now);
     expect(result.lockedUntil).toBe(lockedUntil);

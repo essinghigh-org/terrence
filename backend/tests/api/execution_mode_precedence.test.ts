@@ -3,9 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens, organizationMemberships, organizations, projects, users, workspaces,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, projects, users, workspaces } from "../../src/db/schema";
 
 /**
  * ORG-011: Site -> org -> project -> workspace setting precedence.
@@ -26,14 +24,16 @@ describe("Execution-mode setting precedence (ORG-011)", () => {
   const token = `token-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   let projectId = `prj-${suffix}`;
 
@@ -41,7 +41,11 @@ describe("Execution-mode setting precedence (ORG-011)", () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({
-      id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
+      id: `mem-${suffix}`,
+      userId,
+      orgId,
+      role: "owner",
+      status: "active",
     });
     await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
     // Project with a non-default execution mode so inheritance is observable.

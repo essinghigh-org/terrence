@@ -11,7 +11,18 @@ describe("the reference format API v2 - Workspaces", () => {
 
   beforeAll(async () => {
     // Need to clean up everything that references orgs/users to avoid FK constraint errors
-    const { stateVersions, runs, workspaces: wsModel, workspaceVariables, organizationMemberships, apiTokens, users, configurationVersions, logs, workspaceTags } = await import("../../src/db/schema");
+    const {
+      stateVersions,
+      runs,
+      workspaces: wsModel,
+      workspaceVariables,
+      organizationMemberships,
+      apiTokens,
+      users,
+      configurationVersions,
+      logs,
+      workspaceTags,
+    } = await import("../../src/db/schema");
     await db.delete(logs);
     await db.delete(runs);
     await db.delete(configurationVersions);
@@ -31,7 +42,7 @@ describe("the reference format API v2 - Workspaces", () => {
         body: JSON.stringify({
           data: { type: "users", attributes: { username: "ws-owner", password: "securepassword" } },
         }),
-      })
+      }),
     );
     expect(res.status).toBe(201);
 
@@ -42,7 +53,7 @@ describe("the reference format API v2 - Workspaces", () => {
         body: JSON.stringify({
           data: { attributes: { username: "ws-owner", password: "securepassword" } },
         }),
-      })
+      }),
     );
     userToken = (await loginRes.json()).data.attributes.token;
 
@@ -51,12 +62,12 @@ describe("the reference format API v2 - Workspaces", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
-          data: { type: "organizations", attributes: { name: "homelab" } }
-        })
-      })
+          data: { type: "organizations", attributes: { name: "homelab" } },
+        }),
+      }),
     );
     expect(orgRes.status).toBe(201);
   });
@@ -66,8 +77,8 @@ describe("the reference format API v2 - Workspaces", () => {
       new Request("http://localhost/api/v2/organizations/homelab/workspaces", {
         method: "POST",
         headers: {
-           "Content-Type": "application/vnd.api+json",
-           "Authorization": `Bearer ${userToken}`
+          "Content-Type": "application/vnd.api+json",
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: {
@@ -78,7 +89,7 @@ describe("the reference format API v2 - Workspaces", () => {
             },
           },
         }),
-      })
+      }),
     );
 
     expect(response.status).toBe(201);
@@ -91,8 +102,8 @@ describe("the reference format API v2 - Workspaces", () => {
     const response = await app.handle(
       new Request("http://localhost/api/v2/organizations/homelab/workspaces/k8s-cluster", {
         method: "GET",
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
 
     expect(response.status).toBe(200);
@@ -111,13 +122,23 @@ describe("the reference format API v2 - Workspaces", () => {
     expect(await archive.exited).toBe(0);
     const configurationVersionId = crypto.randomUUID();
     const runId = crypto.randomUUID();
-    await db.insert(configurationVersions).values({ id: configurationVersionId, workspaceId: workspace?.id ?? "", status: "uploaded", archivePath });
-    await db.insert(runs).values({ id: runId, workspaceId: workspace?.id ?? "", configurationVersionId, status: "applied", createdAt: Date.now() + 1 });
+    await db
+      .insert(configurationVersions)
+      .values({ id: configurationVersionId, workspaceId: workspace?.id ?? "", status: "uploaded", archivePath });
+    await db.insert(runs).values({
+      id: runId,
+      workspaceId: workspace?.id ?? "",
+      configurationVersionId,
+      status: "applied",
+      createdAt: Date.now() + 1,
+    });
 
     try {
-      const response = await app.handle(new Request("http://localhost/api/v2/workspaces/" + workspace?.id + "/readme", {
-        headers: { Authorization: `Bearer ${userToken}` },
-      }));
+      const response = await app.handle(
+        new Request("http://localhost/api/v2/workspaces/" + workspace?.id + "/readme", {
+          headers: { Authorization: `Bearer ${userToken}` },
+        }),
+      );
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body.data.attributes.content).toContain("Managed infrastructure.");
@@ -161,9 +182,11 @@ describe("the reference format API v2 - Workspaces", () => {
       },
     ]);
     try {
-      const response = await app.handle(new Request("http://localhost/api/v2/organizations/homelab/workspaces?include=current_run", {
-        headers: { Authorization: `Bearer ${userToken}` },
-      }));
+      const response = await app.handle(
+        new Request("http://localhost/api/v2/organizations/homelab/workspaces?include=current_run", {
+          headers: { Authorization: `Bearer ${userToken}` },
+        }),
+      );
       expect(response.status).toBe(200);
       const body = await response.json();
       const workspaceResource = body.data.find((entry: { id: string }): boolean => entry.id === workspace?.id);
@@ -179,9 +202,11 @@ describe("the reference format API v2 - Workspaces", () => {
       expect(body.included.some((entry: { id: string }): boolean => entry.id === olderRunId)).toBe(false);
 
       // Without include, the relationship must stay absent (the reference format default shape).
-      const plainResponse = await app.handle(new Request("http://localhost/api/v2/organizations/homelab/workspaces", {
-        headers: { Authorization: `Bearer ${userToken}` },
-      }));
+      const plainResponse = await app.handle(
+        new Request("http://localhost/api/v2/organizations/homelab/workspaces", {
+          headers: { Authorization: `Bearer ${userToken}` },
+        }),
+      );
       const plainBody = await plainResponse.json();
       const plainWorkspace = plainBody.data.find((entry: { id: string }): boolean => entry.id === workspace?.id);
       expect(plainWorkspace.relationships["current-run"]).toBeUndefined();
@@ -212,8 +237,16 @@ describe("the reference format API v2 - Workspaces", () => {
       id: olderStateVersionId,
       workspaceId: workspace?.id ?? "",
       serial: 1,
-      statePayload: JSON.stringify({ version: 4, serial: 1, resources: [{ mode: "managed", type: "null_resource", name: "older", instances: [{ dependencies: [] }] }] }),
-      jsonState: JSON.stringify({ version: 4, serial: 1, resources: [{ mode: "managed", type: "null_resource", name: "older", instances: [{ dependencies: [] }] }] }),
+      statePayload: JSON.stringify({
+        version: 4,
+        serial: 1,
+        resources: [{ mode: "managed", type: "null_resource", name: "older", instances: [{ dependencies: [] }] }],
+      }),
+      jsonState: JSON.stringify({
+        version: 4,
+        serial: 1,
+        resources: [{ mode: "managed", type: "null_resource", name: "older", instances: [{ dependencies: [] }] }],
+      }),
       status: "finalized",
       intermediate: false,
       createdAt: Date.now() - 1,
@@ -240,9 +273,11 @@ describe("the reference format API v2 - Workspaces", () => {
     });
 
     try {
-      const response = await app.handle(new Request("http://localhost/api/v2/workspaces/" + workspace?.id + "/dependency-graph", {
-        headers: { Authorization: `Bearer ${userToken}` },
-      }));
+      const response = await app.handle(
+        new Request("http://localhost/api/v2/workspaces/" + workspace?.id + "/dependency-graph", {
+          headers: { Authorization: `Bearer ${userToken}` },
+        }),
+      );
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body.data.attributes.nodes).toEqual([

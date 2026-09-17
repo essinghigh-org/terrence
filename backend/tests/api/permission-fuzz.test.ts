@@ -4,27 +4,37 @@ import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
-  apiTokens, organizations, organizationMemberships, projects, workspaces, users,
+  apiTokens,
+  organizations,
+  organizationMemberships,
+  projects,
+  workspaces,
+  users,
   runs,
 } from "../../src/db/schema";
 
 const suffix = crypto.randomUUID();
 
 describe("permission fuzzing — cross-org IDOR guard", () => {
-  let orgA = "", orgB = "";
-  let wsA = "", wsB = "";
+  let orgA = "",
+    orgB = "";
+  let wsA = "",
+    wsB = "";
   let projA = "";
-  let ownerToken = "", otherToken = "";
+  let ownerToken = "",
+    otherToken = "";
 
   const req = (path: string, token: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body !== undefined ? { "Content-Type": "application/vnd.api+json" } : {}),
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body !== undefined ? { "Content-Type": "application/vnd.api+json" } : {}),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      }),
+    );
 
   beforeAll(async () => {
     const ownerId = `fuzz-owner-${suffix}`;
@@ -41,7 +51,10 @@ describe("permission fuzzing — cross-org IDOR guard", () => {
       { id: ownerId, username: ownerId, passwordHash: "h" },
       { id: otherId, username: otherId, passwordHash: "h" },
     ]);
-    await db.insert(organizations).values([{ id: orgA, name: orgA }, { id: orgB, name: orgB }]);
+    await db.insert(organizations).values([
+      { id: orgA, name: orgA },
+      { id: orgB, name: orgB },
+    ]);
     await db.insert(organizationMemberships).values([
       { id: `om-fuzz-a-${suffix}`, userId: ownerId, orgId: orgA, role: "owner" },
       { id: `om-fuzz-b-${suffix}`, userId: otherId, orgId: orgB, role: "owner" },
@@ -59,10 +72,14 @@ describe("permission fuzzing — cross-org IDOR guard", () => {
 
   afterAll(async () => {
     await db.delete(runs).where(inArray(runs.workspaceId, [wsA, wsB]));
-    await db.delete(apiTokens).where(inArray(apiTokens.token, [
-      createHash("sha256").update(ownerToken).digest("hex"),
-      createHash("sha256").update(otherToken).digest("hex"),
-    ]));
+    await db
+      .delete(apiTokens)
+      .where(
+        inArray(apiTokens.token, [
+          createHash("sha256").update(ownerToken).digest("hex"),
+          createHash("sha256").update(otherToken).digest("hex"),
+        ]),
+      );
     await db.delete(workspaces).where(inArray(workspaces.id, [wsA, wsB]));
     await db.delete(projects).where(eq(projects.id, projA));
     await db.delete(organizationMemberships).where(inArray(organizationMemberships.orgId, [orgA, orgB]));

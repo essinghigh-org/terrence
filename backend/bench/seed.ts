@@ -60,7 +60,7 @@ export type BenchContext = {
   moduleId: string;
   policySetId: string;
   policyId: string;
-}
+};
 
 export const BENCH_ORG = "bench-org";
 export const WORKSPACE_COUNT = 50;
@@ -132,25 +132,29 @@ export async function seedBenchmark(): Promise<BenchContext> {
   ]);
 
   const projectIds = Array.from({ length: PROJECT_COUNT }, (): string => `prj-${randomUUID()}`);
-  await db.insert(projects).values(projectIds.map((id, index): typeof projects.$inferInsert => ({
-    id,
-    orgId,
-    name: `project-${index + 1}`,
-    isDefault: index === 0,
-    createdAt: now,
-  })));
+  await db.insert(projects).values(
+    projectIds.map((id, index): typeof projects.$inferInsert => ({
+      id,
+      orgId,
+      name: `project-${index + 1}`,
+      isDefault: index === 0,
+      createdAt: now,
+    })),
+  );
 
   const workspaceIds = Array.from({ length: WORKSPACE_COUNT }, (): string => `ws-${randomUUID()}`);
-  await db.insert(workspaces).values(workspaceIds.map((id, index): typeof workspaces.$inferInsert => ({
-    id,
-    orgId,
-    projectId: projectIds[index % PROJECT_COUNT],
-    name: `workspace-${String(index + 1).padStart(2, "0")}`,
-    createdAt: now - (WORKSPACE_COUNT - index) * 60_000,
-  })));
+  await db.insert(workspaces).values(
+    workspaceIds.map((id, index): typeof workspaces.$inferInsert => ({
+      id,
+      orgId,
+      projectId: projectIds[index % PROJECT_COUNT],
+      name: `workspace-${String(index + 1).padStart(2, "0")}`,
+      createdAt: now - (WORKSPACE_COUNT - index) * 60_000,
+    })),
+  );
 
   const tagValues = ["env:dev", "env:prod", "team:core", "team:platform"];
-  const tagRows = workspaceIds.flatMap((id, index): typeof workspaceTags.$inferInsert[] => {
+  const tagRows = workspaceIds.flatMap((id, index): (typeof workspaceTags.$inferInsert)[] => {
     const first = tagValues[index % tagValues.length];
     const second = tagValues[(index + 2) % tagValues.length];
     return [
@@ -175,13 +179,15 @@ export async function seedBenchmark(): Promise<BenchContext> {
     userId: memberUserId,
     createdAt: now,
   });
-  await db.insert(teamWorkspaces).values(workspaceIds.map((id): typeof teamWorkspaces.$inferInsert => ({
-    id: `tw-${randomUUID()}`,
-    teamId,
-    workspaceId: id,
-    access: "write",
-    permissions: null,
-  })));
+  await db.insert(teamWorkspaces).values(
+    workspaceIds.map((id): typeof teamWorkspaces.$inferInsert => ({
+      id: `tw-${randomUUID()}`,
+      teamId,
+      workspaceId: id,
+      access: "write",
+      permissions: null,
+    })),
+  );
 
   // Reader team: read-varsets + read-projects OR the workspace read shortcut,
   // so it must ONLY ever be used for the varsets/projects scenarios.
@@ -207,15 +213,20 @@ export async function seedBenchmark(): Promise<BenchContext> {
     const id = `cv-${randomUUID()}`;
     return id;
   });
-  await db.insert(configurationVersions).values(configurationVersionIds.map((id, index): typeof configurationVersions.$inferInsert => ({
-    id,
-    workspaceId: workspaceIds[index]!,
-    status: "uploaded",
-    autoQueueRuns: true,
-    source: "tfe-api",
-    createdAt: now - (index * RUNS_PER_WORKSPACE + 1) * 30_000,
-    statusTimestamps: { uploadedAt: new Date(now - (index * RUNS_PER_WORKSPACE + 1) * 30_000).toISOString(), archivedAt: new Date(now).toISOString() },
-  })));
+  await db.insert(configurationVersions).values(
+    configurationVersionIds.map((id, index): typeof configurationVersions.$inferInsert => ({
+      id,
+      workspaceId: workspaceIds[index]!,
+      status: "uploaded",
+      autoQueueRuns: true,
+      source: "tfe-api",
+      createdAt: now - (index * RUNS_PER_WORKSPACE + 1) * 30_000,
+      statusTimestamps: {
+        uploadedAt: new Date(now - (index * RUNS_PER_WORKSPACE + 1) * 30_000).toISOString(),
+        archivedAt: new Date(now).toISOString(),
+      },
+    })),
+  );
 
   // Runs: 3 per workspace, newest first per workspace, terminal statuses so a
   // (disabled) worker would have nothing to do. Latest run gets an "applied"
@@ -273,27 +284,72 @@ export async function seedBenchmark(): Promise<BenchContext> {
   // scenarios return real content.
   const firstRunId = runIds[0]!;
   await db.insert(logs).values([
-    { id: `log-${randomUUID()}`, runId: firstRunId, phase: "plan", outputText: "Terraform will perform the following actions:\n  # aws_instance.bench\n  + resource \"aws_instance\" \"bench\" {\n      + ami = \"ami-123\"\n    }\nPlan: 1 to add, 0 to change, 0 to destroy.\n", createdAt: now },
-    { id: `log-${randomUUID()}`, runId: firstRunId, phase: "apply", outputText: "Apply complete! Resources: 1 added.\n", createdAt: now },
+    {
+      id: `log-${randomUUID()}`,
+      runId: firstRunId,
+      phase: "plan",
+      outputText:
+        'Terraform will perform the following actions:\n  # aws_instance.bench\n  + resource "aws_instance" "bench" {\n      + ami = "ami-123"\n    }\nPlan: 1 to add, 0 to change, 0 to destroy.\n',
+      createdAt: now,
+    },
+    {
+      id: `log-${randomUUID()}`,
+      runId: firstRunId,
+      phase: "apply",
+      outputText: "Apply complete! Resources: 1 added.\n",
+      createdAt: now,
+    },
   ]);
   await db.insert(runComments).values([
-    { id: `rc-${randomUUID()}`, runId: firstRunId, userId: memberUserId, body: "Benchmark seed comment", createdAt: now },
+    {
+      id: `rc-${randomUUID()}`,
+      runId: firstRunId,
+      userId: memberUserId,
+      body: "Benchmark seed comment",
+      createdAt: now,
+    },
   ]);
   await db.insert(auditLogs).values([
-    { id: `al-${randomUUID()}`, orgId, userId: memberUserId, action: "create", resourceType: "runs", resourceId: firstRunId, details: { fromStatus: undefined, toStatus: "applied", status: "applied", source: "tfe-api", triggerReason: "manual" }, createdAt: now },
-    { id: `al-${randomUUID()}`, orgId, userId: memberUserId, action: "update", resourceType: "runs", resourceId: firstRunId, details: { fromStatus: "pending", toStatus: "planning", status: "planning" }, createdAt: now + 1 },
+    {
+      id: `al-${randomUUID()}`,
+      orgId,
+      userId: memberUserId,
+      action: "create",
+      resourceType: "runs",
+      resourceId: firstRunId,
+      details: {
+        fromStatus: undefined,
+        toStatus: "applied",
+        status: "applied",
+        source: "tfe-api",
+        triggerReason: "manual",
+      },
+      createdAt: now,
+    },
+    {
+      id: `al-${randomUUID()}`,
+      orgId,
+      userId: memberUserId,
+      action: "update",
+      resourceType: "runs",
+      resourceId: firstRunId,
+      details: { fromStatus: "pending", toStatus: "planning", status: "planning" },
+      createdAt: now + 1,
+    },
   ]);
 
   // Registry modules + versions.
   const moduleIds = Array.from({ length: MODULE_COUNT }, (): string => `mod-${randomUUID()}`);
-  await db.insert(registryModules).values(moduleIds.map((id, index): typeof registryModules.$inferInsert => ({
-    id,
-    orgId,
-    namespace: "bench-ns",
-    name: `module-${index + 1}`,
-    provider: "aws",
-    createdAt: now,
-  })));
+  await db.insert(registryModules).values(
+    moduleIds.map((id, index): typeof registryModules.$inferInsert => ({
+      id,
+      orgId,
+      namespace: "bench-ns",
+      name: `module-${index + 1}`,
+      provider: "aws",
+      createdAt: now,
+    })),
+  );
   const moduleVersionRows = moduleIds.map((id, index): typeof registryModuleVersions.$inferInsert => ({
     id: `rmv-${randomUUID()}`,
     moduleId: id,
@@ -301,27 +357,46 @@ export async function seedBenchmark(): Promise<BenchContext> {
     status: "ok",
     createdAt: now,
   }));
-  await insertInChunks(async (rows): Promise<unknown> => db.insert(registryModuleVersions).values(rows), moduleVersionRows);
+  await insertInChunks(
+    async (rows): Promise<unknown> => db.insert(registryModuleVersions).values(rows),
+    moduleVersionRows,
+  );
 
   // Policy sets + policies + workspace links.
   const policySetIds = Array.from({ length: POLICY_SET_COUNT }, (): string => `ps-${randomUUID()}`);
-  await db.insert(policySets).values(policySetIds.map((id, index): typeof policySets.$inferInsert => ({
-    id,
-    orgId,
-    name: `policy-set-${index + 1}`,
-    kind: "sentinel",
-    global: false,
-    overridable: true,
-    createdAt: now,
-  })));
-  await db.insert(policySetWorkspaces).values(policySetIds.map((id, index): typeof policySetWorkspaces.$inferInsert => ({
-    id: `psw-${randomUUID()}`,
-    policySetId: id,
-    workspaceId: workspaceIds[index]!,
-  })));
-  const policyRows = policySetIds.flatMap((setId, setIndex): typeof policies.$inferInsert[] => [
-    { id: `pol-${randomUUID()}`, policySetId: setId, name: `policy-${setIndex + 1}-a`, enforcementLevel: "soft-mandatory", createdAt: now },
-    { id: `pol-${randomUUID()}`, policySetId: setId, name: `policy-${setIndex + 1}-b`, enforcementLevel: "advisory", createdAt: now },
+  await db.insert(policySets).values(
+    policySetIds.map((id, index): typeof policySets.$inferInsert => ({
+      id,
+      orgId,
+      name: `policy-set-${index + 1}`,
+      kind: "sentinel",
+      global: false,
+      overridable: true,
+      createdAt: now,
+    })),
+  );
+  await db.insert(policySetWorkspaces).values(
+    policySetIds.map((id, index): typeof policySetWorkspaces.$inferInsert => ({
+      id: `psw-${randomUUID()}`,
+      policySetId: id,
+      workspaceId: workspaceIds[index]!,
+    })),
+  );
+  const policyRows = policySetIds.flatMap((setId, setIndex): (typeof policies.$inferInsert)[] => [
+    {
+      id: `pol-${randomUUID()}`,
+      policySetId: setId,
+      name: `policy-${setIndex + 1}-a`,
+      enforcementLevel: "soft-mandatory",
+      createdAt: now,
+    },
+    {
+      id: `pol-${randomUUID()}`,
+      policySetId: setId,
+      name: `policy-${setIndex + 1}-b`,
+      enforcementLevel: "advisory",
+      createdAt: now,
+    },
   ]);
   await insertInChunks(async (rows): Promise<unknown> => db.insert(policies).values(rows), policyRows);
   const firstPolicyId = policyRows[0]!.id;
@@ -329,30 +404,49 @@ export async function seedBenchmark(): Promise<BenchContext> {
   const variableSetIds = Array.from({ length: 3 }, (): string => `vs-${randomUUID()}`);
   const vsRows: (typeof variableSets.$inferInsert)[] = [
     { id: variableSetIds[0]!, orgId, name: "global-vars", global: true, priority: false },
-    { id: variableSetIds[1]!, orgId, parentProjectId: projectIds[0], name: "project-one-vars", global: false, priority: false },
-    { id: variableSetIds[2]!, orgId, parentProjectId: projectIds[1], name: "project-two-vars", global: false, priority: false },
+    {
+      id: variableSetIds[1]!,
+      orgId,
+      parentProjectId: projectIds[0],
+      name: "project-one-vars",
+      global: false,
+      priority: false,
+    },
+    {
+      id: variableSetIds[2]!,
+      orgId,
+      parentProjectId: projectIds[1],
+      name: "project-two-vars",
+      global: false,
+      priority: false,
+    },
   ];
   await db.insert(variableSets).values(vsRows);
 
-  await db.insert(variableSetWorkspaces).values(workspaceIds.map((id): typeof variableSetWorkspaces.$inferInsert => ({
-    id: `vsw-${randomUUID()}`,
-    variableSetId: variableSetIds[0]!,
-    workspaceId: id,
-  })));
+  await db.insert(variableSetWorkspaces).values(
+    workspaceIds.map((id): typeof variableSetWorkspaces.$inferInsert => ({
+      id: `vsw-${randomUUID()}`,
+      variableSetId: variableSetIds[0]!,
+      workspaceId: id,
+    })),
+  );
   await db.insert(variableSetProjects).values({
     id: `vsp-${randomUUID()}`,
     variableSetId: variableSetIds[1]!,
     projectId: projectIds[0]!,
   });
-  const vsVariableRows = variableSetIds.flatMap((setId, setIndex): typeof variableSetVariables.$inferInsert[] =>
-    ["region", "instance_type", "ami_id", "tags"].slice(0, 3 + setIndex).map((key): typeof variableSetVariables.$inferInsert => ({
-      id: `vsv-${randomUUID()}`,
-      variableSetId: setId,
-      key,
-      value: `value-${key}-${setIndex}`,
-      category: "terraform",
-      sensitive: false,
-    })));
+  const vsVariableRows = variableSetIds.flatMap((setId, setIndex): (typeof variableSetVariables.$inferInsert)[] =>
+    ["region", "instance_type", "ami_id", "tags"]
+      .slice(0, 3 + setIndex)
+      .map((key): typeof variableSetVariables.$inferInsert => ({
+        id: `vsv-${randomUUID()}`,
+        variableSetId: setId,
+        key,
+        value: `value-${key}-${setIndex}`,
+        category: "terraform",
+        sensitive: false,
+      })),
+  );
   await db.insert(variableSetVariables).values(vsVariableRows);
 
   return {

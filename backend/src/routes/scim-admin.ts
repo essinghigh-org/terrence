@@ -34,7 +34,6 @@ type MappedTeam = Readonly<{ id: string; orgId: string }>;
 const SCIM_SETTINGS_ID = "scim";
 const DAY_MS = 86_400_000;
 
-
 function requireAdmin(
   user: ParamCtx["user"],
   set: SetObj,
@@ -47,22 +46,26 @@ function requireAdmin(
 }
 
 async function currentSettings(): Promise<ScimSettings> {
-  await db.insert(scimSettings).values({
-    id: SCIM_SETTINGS_ID,
-    enabled: false,
-    paused: false,
-    siteAdminGroupScimId: null,
-    updatedAt: Date.now(),
-  }).onConflictDoNothing();
+  await db
+    .insert(scimSettings)
+    .values({
+      id: SCIM_SETTINGS_ID,
+      enabled: false,
+      paused: false,
+      siteAdminGroupScimId: null,
+      updatedAt: Date.now(),
+    })
+    .onConflictDoNothing();
   const settings = await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, SCIM_SETTINGS_ID) });
   if (settings === undefined) throw new Error("SCIM settings are unavailable");
   return settings;
 }
 
 async function settingsResource(settings: ScimSettings): Promise<Record<string, unknown>> {
-  const group = settings.siteAdminGroupScimId === null
-    ? undefined
-    : await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, settings.siteAdminGroupScimId) });
+  const group =
+    settings.siteAdminGroupScimId === null
+      ? undefined
+      : await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, settings.siteAdminGroupScimId) });
   return {
     id: SCIM_SETTINGS_ID,
     type: "scim-settings",
@@ -79,7 +82,8 @@ function jsonApiAttributes(
   body: unknown,
   type: "authentication-tokens" | "scim-group-mapping" | "scim-settings",
 ): Readonly<{ attributes: Readonly<Record<string, unknown>> }> | Readonly<{ error: string }> {
-  if (body === null || typeof body !== "object" || Array.isArray(body)) return { error: "Request body must be an object" };
+  if (body === null || typeof body !== "object" || Array.isArray(body))
+    return { error: "Request body must be an object" };
   const data = (body as Record<string, unknown>)["data"];
   if (data === null || typeof data !== "object" || Array.isArray(data)) return { error: "data must be an object" };
   const record = data as Record<string, unknown>;
@@ -113,28 +117,37 @@ export async function reconcileTeam(team: MappedTeam, groupId: string, transacti
   const links = await tx.query.scimGroupMemberships.findMany({
     where: eq(scimGroupMemberships.groupId, groupId),
   });
-  const identities = links.length === 0
-    ? []
-    : await tx.query.scimUserIdentities.findMany({
-      where: inArray(scimUserIdentities.id, links.map((link): string => link.scimUserId)),
-    });
+  const identities =
+    links.length === 0
+      ? []
+      : await tx.query.scimUserIdentities.findMany({
+          where: inArray(
+            scimUserIdentities.id,
+            links.map((link): string => link.scimUserId),
+          ),
+        });
   const userIds = [...new Set(identities.map((identity): string => identity.userId))];
 
   // SCIM owns only the rows it created. Manual/admin team assignments must
   // survive the next directory sync.
-  await tx.delete(teamMemberships).where(and(eq(teamMemberships.teamId, team.id), eq(teamMemberships.ssoSource, "scim")));
+  await tx
+    .delete(teamMemberships)
+    .where(and(eq(teamMemberships.teamId, team.id), eq(teamMemberships.ssoSource, "scim")));
 
   // Pre-fetch all org memberships to avoid N+1
-  const existingMemberships = userIds.length === 0
-    ? new Map<string, typeof organizationMemberships.$inferSelect>()
-    : new Map(
-        (await tx.query.organizationMemberships.findMany({
-          where: and(
-            inArray(organizationMemberships.userId, userIds),
-            eq(organizationMemberships.orgId, team.orgId),
-          ),
-        })).map((m): [string, typeof organizationMemberships.$inferSelect] => [m.userId, m]),
-      );
+  const existingMemberships =
+    userIds.length === 0
+      ? new Map<string, typeof organizationMemberships.$inferSelect>()
+      : new Map(
+          (
+            await tx.query.organizationMemberships.findMany({
+              where: and(
+                inArray(organizationMemberships.userId, userIds),
+                eq(organizationMemberships.orgId, team.orgId),
+              ),
+            })
+          ).map((m): [string, typeof organizationMemberships.$inferSelect] => [m.userId, m]),
+        );
 
   for (const userId of userIds) {
     const membership = existingMemberships.get(userId);
@@ -147,13 +160,16 @@ export async function reconcileTeam(team: MappedTeam, groupId: string, transacti
         status: "active",
       });
     }
-    await tx.insert(teamMemberships).values({
-      id: newResourceId("tm"),
-      teamId: team.id,
-      userId,
-      createdAt: Date.now(),
-      ssoSource: "scim",
-    }).onConflictDoNothing();
+    await tx
+      .insert(teamMemberships)
+      .values({
+        id: newResourceId("tm"),
+        teamId: team.id,
+        userId,
+        createdAt: Date.now(),
+        ssoSource: "scim",
+      })
+      .onConflictDoNothing();
   }
 }
 
@@ -164,9 +180,18 @@ export async function reconcileScimSiteAdmins(transaction: unknown): Promise<voi
   const groupId = settings?.enabled === true ? settings.siteAdminGroupScimId : null;
   const desiredUserIds = new Set<string>();
   if (groupId !== null) {
-    const links = await tx.query.scimGroupMemberships.findMany({ where: eq(scimGroupMemberships.groupId, groupId), columns: { scimUserId: true } });
+    const links = await tx.query.scimGroupMemberships.findMany({
+      where: eq(scimGroupMemberships.groupId, groupId),
+      columns: { scimUserId: true },
+    });
     if (links.length > 0) {
-      const identities = await tx.query.scimUserIdentities.findMany({ where: inArray(scimUserIdentities.id, links.map((link): string => link.scimUserId)), columns: { userId: true } });
+      const identities = await tx.query.scimUserIdentities.findMany({
+        where: inArray(
+          scimUserIdentities.id,
+          links.map((link): string => link.scimUserId),
+        ),
+        columns: { userId: true },
+      });
       for (const identity of identities) desiredUserIds.add(identity.userId);
     }
   }
@@ -177,7 +202,10 @@ export async function reconcileScimSiteAdmins(transaction: unknown): Promise<voi
   });
   for (const user of current) {
     if (desiredUserIds.has(user.id)) continue;
-    await tx.update(users).set({ scimSiteAdmin: false, isSiteAdmin: user.ssoSiteAdmin === true }).where(eq(users.id, user.id));
+    await tx
+      .update(users)
+      .set({ scimSiteAdmin: false, isSiteAdmin: user.ssoSiteAdmin === true })
+      .where(eq(users.id, user.id));
   }
   if (desiredUserIds.size === 0) return;
   const liveUsers = await tx.query.users.findMany({
@@ -221,7 +249,9 @@ async function resolveSettingsPatch(
   const paused = typeof attributes["paused"] === "boolean" ? attributes["paused"] : current.paused;
   if (paused && !enabled) return { detail: "SCIM must be enabled before it can be paused" };
   if (typeof attributes["site-admin-group-scim-id"] === "string") {
-    const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, attributes["site-admin-group-scim-id"]) });
+    const group = await db.query.scimGroups.findFirst({
+      where: eq(scimGroups.id, attributes["site-admin-group-scim-id"]),
+    });
     if (group === undefined) return { detail: "SCIM group not found" };
   }
   return { enabled, paused };
@@ -237,14 +267,15 @@ async function persistSettingsPatch(
   // anything outside string|null|undefined as "not provided".
   const groupId = typeof requestedGroup === "string" ? requestedGroup : requestedGroup === null ? null : undefined;
   await db.transaction(async (tx): Promise<void> => {
-    await tx.update(scimSettings).set({
-      enabled,
-      paused,
-      siteAdminGroupScimId: groupId === undefined
-        ? current.siteAdminGroupScimId
-        : groupId,
-      updatedAt: Date.now(),
-    }).where(eq(scimSettings.id, SCIM_SETTINGS_ID));
+    await tx
+      .update(scimSettings)
+      .set({
+        enabled,
+        paused,
+        siteAdminGroupScimId: groupId === undefined ? current.siteAdminGroupScimId : groupId,
+        updatedAt: Date.now(),
+      })
+      .where(eq(scimSettings.id, SCIM_SETTINGS_ID));
     await reconcileScimSiteAdmins(tx);
   });
 }
@@ -258,22 +289,35 @@ async function checkMappingPreconditions(
   if (team === undefined || group === undefined) return { error: apiError(set, 404, "Not Found") };
   if (!settings.enabled) return { error: apiError(set, 422, "Unprocessable Entity", "SCIM is not enabled") };
   if (team.name.toLocaleLowerCase() === "owners" || settings.siteAdminGroupScimId === group.id) {
-    return { error: apiError(set, 422, "Unprocessable Entity", "Owners and site administrator groups cannot be mapped") };
+    return {
+      error: apiError(set, 422, "Unprocessable Entity", "Owners and site administrator groups cannot be mapped"),
+    };
   }
   return { ok: true };
 }
 
-async function checkMappingLimits(teamId: string, groupId: string, set: SetObj): Promise<{ error: unknown } | { ok: true }> {
+async function checkMappingLimits(
+  teamId: string,
+  groupId: string,
+  set: SetObj,
+): Promise<{ error: unknown } | { ok: true }> {
   const existing = await db.query.teamScimGroupMappings.findFirst({
     where: eq(teamScimGroupMappings.teamId, teamId),
   });
   if (existing !== undefined) return { error: apiError(set, 409, "Conflict", "Team already has a SCIM group mapping") };
-  const memberCount = (await db.select({ value: count() }).from(scimGroupMemberships)
-    .where(eq(scimGroupMemberships.groupId, groupId)))[0]?.value ?? 0;
+  const memberCount =
+    (await db.select({ value: count() }).from(scimGroupMemberships).where(eq(scimGroupMemberships.groupId, groupId)))[0]
+      ?.value ?? 0;
   if (memberCount > 1_000) return { error: apiError(set, 413, "Payload Too Large") };
-  const linkCount = (await db.select({ value: count() }).from(teamScimGroupMappings)
-    .where(eq(teamScimGroupMappings.scimGroupId, groupId)))[0]?.value ?? 0;
-  if (linkCount >= 10_000) return { error: apiError(set, 422, "Unprocessable Entity", "SCIM group mapping limit reached") };
+  const linkCount =
+    (
+      await db
+        .select({ value: count() })
+        .from(teamScimGroupMappings)
+        .where(eq(teamScimGroupMappings.scimGroupId, groupId))
+    )[0]?.value ?? 0;
+  if (linkCount >= 10_000)
+    return { error: apiError(set, 422, "Unprocessable Entity", "SCIM group mapping limit reached") };
   return { ok: true };
 }
 
@@ -305,15 +349,26 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     if (denied !== undefined) return denied;
     await currentSettings();
     await db.transaction(async (tx): Promise<void> => {
-      await tx.update(scimSettings).set({
-        enabled: false,
-        paused: false,
-        siteAdminGroupScimId: null,
-        updatedAt: Date.now(),
-      }).where(eq(scimSettings.id, SCIM_SETTINGS_ID));
+      await tx
+        .update(scimSettings)
+        .set({
+          enabled: false,
+          paused: false,
+          siteAdminGroupScimId: null,
+          updatedAt: Date.now(),
+        })
+        .where(eq(scimSettings.id, SCIM_SETTINGS_ID));
       const mappedTeams = await tx.query.teamScimGroupMappings.findMany({ columns: { teamId: true } });
       if (mappedTeams.length > 0) {
-        await tx.delete(teamMemberships).where(and(eq(teamMemberships.ssoSource, "scim"), inArray(teamMemberships.teamId, mappedTeams.map((mapping): string => mapping.teamId))));
+        await tx.delete(teamMemberships).where(
+          and(
+            eq(teamMemberships.ssoSource, "scim"),
+            inArray(
+              teamMemberships.teamId,
+              mappedTeams.map((mapping): string => mapping.teamId),
+            ),
+          ),
+        );
       }
       await tx.delete(teamScimGroupMappings);
       await tx.delete(scimGroupMemberships);
@@ -352,7 +407,7 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     if (rawExpiry !== undefined && typeof rawExpiry !== "string") {
       return apiError(set, 400, "Bad Request", "expired-at must be an ISO-8601 timestamp");
     }
-    const expiresAt = typeof rawExpiry === "string" ? Date.parse(rawExpiry) : now + (365 * DAY_MS);
+    const expiresAt = typeof rawExpiry === "string" ? Date.parse(rawExpiry) : now + 365 * DAY_MS;
     if (!Number.isFinite(expiresAt) || expiresAt - now < 29 * DAY_MS || expiresAt - now > 365 * DAY_MS) {
       return apiError(set, 400, "Bad Request", "expired-at must be between 29 and 365 days in the future");
     }
@@ -372,7 +427,8 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
   .delete("/api/v2/admin/scim-tokens/:token_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const denied = requireAdmin(user, set);
     if (denied !== undefined) return denied;
-    const deleted = await db.delete(scimTokens)
+    const deleted = await db
+      .delete(scimTokens)
       .where(eq(scimTokens.id, params["token_id"] ?? ""))
       .returning({ id: scimTokens.id });
     if (deleted.length === 0) return apiError(set, 404, "Not Found");
@@ -386,112 +442,131 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     const query = new URL(request.url).searchParams.get("q")?.toLocaleLowerCase() ?? "";
     // ponytail: filter in memory until a real deployment shows a group catalog large enough to need indexed search.
     const allGroups = await db.query.scimGroups.findMany({ orderBy: [asc(scimGroups.name)] });
-    const matching = query === ""
-      ? allGroups
-      : allGroups.filter((group): boolean => group.name.toLocaleLowerCase().includes(query));
-    const data = matching
-      .slice((number - 1) * size, number * size)
-      .map((group): Record<string, unknown> => ({
+    const matching =
+      query === "" ? allGroups : allGroups.filter((group): boolean => group.name.toLocaleLowerCase().includes(query));
+    const data = matching.slice((number - 1) * size, number * size).map(
+      (group): Record<string, unknown> => ({
         id: group.id,
         type: "scim-groups",
         attributes: { name: group.name },
-      }));
+      }),
+    );
     return { data, ...pagination(request, number, size, matching.length) };
   })
-  .get("/api/v2/admin/teams/:external_id/scim-group-mapping", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const denied = requireAdmin(user, set, true);
-    if (denied !== undefined) return denied;
-    const teamId = params["external_id"] ?? "";
-    const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
-    if (team === undefined) return apiError(set, 404, "Not Found");
-    const mapping = await db.query.teamScimGroupMappings.findFirst({ where: eq(teamScimGroupMappings.teamId, team.id) });
-    if (mapping === undefined) return apiError(set, 404, "Not Found");
-    const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, mapping.scimGroupId) });
-    return {
-      data: {
-        id: mapping.teamId,
-        type: "scim-group-mapping",
-        attributes: {
-          "scim-group-id": mapping.scimGroupId,
-          "scim-group-name": group?.name ?? null,
-          "scim-sync-paused": mapping.syncPaused,
-        },
-      },
-    };
-  })
-  .post("/api/v2/admin/teams/:external_id/scim-group-mapping", async ({ params, user, body, set }: ParamCtx): Promise<unknown> => {
-    const denied = requireAdmin(user, set, true);
-    if (denied !== undefined) return denied;
-    const input = jsonApiAttributes(body, "scim-group-mapping");
-    if ("error" in input) return apiError(set, 422, "Unprocessable Entity", input.error);
-    const groupId = input.attributes["scim-group-id"];
-    if (typeof groupId !== "string" || groupId === "") {
-      return apiError(set, 422, "Unprocessable Entity", "scim-group-id must be a non-empty string");
-    }
-    const [team, group, settings] = await Promise.all([
-      db.query.teams.findFirst({ where: eq(teams.id, params["external_id"] ?? "") }),
-      db.query.scimGroups.findFirst({ where: eq(scimGroups.id, groupId) }),
-      currentSettings(),
-    ]);
-    const preconditions = await checkMappingPreconditions(team, group, settings, set);
-    if ("error" in preconditions) return preconditions.error;
-    if (team === undefined || group === undefined) return apiError(set, 404, "Not Found");
-    const limits = await checkMappingLimits(team.id, group.id, set);
-    if ("error" in limits) return limits.error;
-
-    await db.transaction(async (tx): Promise<void> => {
-      await tx.insert(teamScimGroupMappings).values({
-        teamId: team.id,
-        scimGroupId: group.id,
-        syncPaused: false,
-        updatedAt: Date.now(),
+  .get(
+    "/api/v2/admin/teams/:external_id/scim-group-mapping",
+    async ({ params, user, set }: ParamCtx): Promise<unknown> => {
+      const denied = requireAdmin(user, set, true);
+      if (denied !== undefined) return denied;
+      const teamId = params["external_id"] ?? "";
+      const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
+      if (team === undefined) return apiError(set, 404, "Not Found");
+      const mapping = await db.query.teamScimGroupMappings.findFirst({
+        where: eq(teamScimGroupMappings.teamId, team.id),
       });
-      await reconcileTeam(team, group.id, tx);
-    });
-    (set as { status: number }).status = 204;
-    return;
-  })
-  .patch("/api/v2/admin/teams/:external_id/scim-group-mapping", async ({ params, user, body, set }: ParamCtx): Promise<unknown> => {
-    const denied = requireAdmin(user, set, true);
-    if (denied !== undefined) return denied;
-    const input = jsonApiAttributes(body, "scim-group-mapping");
-    if ("error" in input) return apiError(set, 422, "Unprocessable Entity", input.error);
-    const paused = input.attributes["scim-sync-paused"];
-    if (typeof paused !== "boolean") return apiError(set, 422, "Unprocessable Entity", "scim-sync-paused must be a boolean");
-    const teamId = params["external_id"] ?? "";
-    const [team, mapping] = await Promise.all([
-      db.query.teams.findFirst({ where: eq(teams.id, teamId) }),
-      db.query.teamScimGroupMappings.findFirst({ where: eq(teamScimGroupMappings.teamId, teamId) }),
-    ]);
-    if (team === undefined) return apiError(set, 404, "Not Found");
-    if (mapping === undefined) return apiError(set, 409, "Conflict", "Team does not have a SCIM group mapping");
-    if (mapping.syncPaused === paused) {
+      if (mapping === undefined) return apiError(set, 404, "Not Found");
+      const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, mapping.scimGroupId) });
+      return {
+        data: {
+          id: mapping.teamId,
+          type: "scim-group-mapping",
+          attributes: {
+            "scim-group-id": mapping.scimGroupId,
+            "scim-group-name": group?.name ?? null,
+            "scim-sync-paused": mapping.syncPaused,
+          },
+        },
+      };
+    },
+  )
+  .post(
+    "/api/v2/admin/teams/:external_id/scim-group-mapping",
+    async ({ params, user, body, set }: ParamCtx): Promise<unknown> => {
+      const denied = requireAdmin(user, set, true);
+      if (denied !== undefined) return denied;
+      const input = jsonApiAttributes(body, "scim-group-mapping");
+      if ("error" in input) return apiError(set, 422, "Unprocessable Entity", input.error);
+      const groupId = input.attributes["scim-group-id"];
+      if (typeof groupId !== "string" || groupId === "") {
+        return apiError(set, 422, "Unprocessable Entity", "scim-group-id must be a non-empty string");
+      }
+      const [team, group, settings] = await Promise.all([
+        db.query.teams.findFirst({ where: eq(teams.id, params["external_id"] ?? "") }),
+        db.query.scimGroups.findFirst({ where: eq(scimGroups.id, groupId) }),
+        currentSettings(),
+      ]);
+      const preconditions = await checkMappingPreconditions(team, group, settings, set);
+      if ("error" in preconditions) return preconditions.error;
+      if (team === undefined || group === undefined) return apiError(set, 404, "Not Found");
+      const limits = await checkMappingLimits(team.id, group.id, set);
+      if ("error" in limits) return limits.error;
+
+      await db.transaction(async (tx): Promise<void> => {
+        await tx.insert(teamScimGroupMappings).values({
+          teamId: team.id,
+          scimGroupId: group.id,
+          syncPaused: false,
+          updatedAt: Date.now(),
+        });
+        await reconcileTeam(team, group.id, tx);
+      });
       (set as { status: number }).status = 204;
       return;
-    }
-    await db.transaction(async (tx): Promise<void> => {
-      await tx.update(teamScimGroupMappings).set({
-        syncPaused: paused,
-        ...(paused ? {} : { updatedAt: Date.now() }),
-      }).where(eq(teamScimGroupMappings.teamId, team.id));
-      if (!paused) await reconcileTeam(team, mapping.scimGroupId, tx);
-    });
-    (set as { status: number }).status = 204;
-    return;
-  })
-  .delete("/api/v2/admin/teams/:external_id/scim-group-mapping", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const denied = requireAdmin(user, set, true);
-    if (denied !== undefined) return denied;
-    const teamId = params["external_id"] ?? "";
-    const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
-    if (team === undefined) {
+    },
+  )
+  .patch(
+    "/api/v2/admin/teams/:external_id/scim-group-mapping",
+    async ({ params, user, body, set }: ParamCtx): Promise<unknown> => {
+      const denied = requireAdmin(user, set, true);
+      if (denied !== undefined) return denied;
+      const input = jsonApiAttributes(body, "scim-group-mapping");
+      if ("error" in input) return apiError(set, 422, "Unprocessable Entity", input.error);
+      const paused = input.attributes["scim-sync-paused"];
+      if (typeof paused !== "boolean")
+        return apiError(set, 422, "Unprocessable Entity", "scim-sync-paused must be a boolean");
+      const teamId = params["external_id"] ?? "";
+      const [team, mapping] = await Promise.all([
+        db.query.teams.findFirst({ where: eq(teams.id, teamId) }),
+        db.query.teamScimGroupMappings.findFirst({ where: eq(teamScimGroupMappings.teamId, teamId) }),
+      ]);
+      if (team === undefined) return apiError(set, 404, "Not Found");
+      if (mapping === undefined) return apiError(set, 409, "Conflict", "Team does not have a SCIM group mapping");
+      if (mapping.syncPaused === paused) {
+        (set as { status: number }).status = 204;
+        return;
+      }
+      await db.transaction(async (tx): Promise<void> => {
+        await tx
+          .update(teamScimGroupMappings)
+          .set({
+            syncPaused: paused,
+            ...(paused ? {} : { updatedAt: Date.now() }),
+          })
+          .where(eq(teamScimGroupMappings.teamId, team.id));
+        if (!paused) await reconcileTeam(team, mapping.scimGroupId, tx);
+      });
       (set as { status: number }).status = 204;
       return;
-    }
-    await db.transaction(async (tx): Promise<void> => {
-      await tx.delete(teamScimGroupMappings).where(eq(teamScimGroupMappings.teamId, team.id));
-      await tx.delete(teamMemberships).where(and(eq(teamMemberships.teamId, team.id), eq(teamMemberships.ssoSource, "scim")));
-    });
-    (set as { status: number }).status = 204;
-    return;
-  });
+    },
+  )
+  .delete(
+    "/api/v2/admin/teams/:external_id/scim-group-mapping",
+    async ({ params, user, set }: ParamCtx): Promise<unknown> => {
+      const denied = requireAdmin(user, set, true);
+      if (denied !== undefined) return denied;
+      const teamId = params["external_id"] ?? "";
+      const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
+      if (team === undefined) {
+        (set as { status: number }).status = 204;
+        return;
+      }
+      await db.transaction(async (tx): Promise<void> => {
+        await tx.delete(teamScimGroupMappings).where(eq(teamScimGroupMappings.teamId, team.id));
+        await tx
+          .delete(teamMemberships)
+          .where(and(eq(teamMemberships.teamId, team.id), eq(teamMemberships.ssoSource, "scim")));
+      });
+      (set as { status: number }).status = 204;
+      return;
+    },
+  );

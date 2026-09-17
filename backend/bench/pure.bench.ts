@@ -3,7 +3,12 @@
  * Run: bun run bench/pure.bench.ts [--json bench/baseline-pure.json]
  */
 import { suite, report } from "./harness";
-import { applySecurityHeaders, buildContentSecurityPolicy, staticCacheControl, staticMimeFor } from "../src/lib/security-headers";
+import {
+  applySecurityHeaders,
+  buildContentSecurityPolicy,
+  staticCacheControl,
+  staticMimeFor,
+} from "../src/lib/security-headers";
 import { privateHostReason, validateExternalUrlResolved } from "../src/lib/url-safety";
 import { planJsonResourceCounts, type PlanJson } from "../src/lib/plan-json";
 import { renderPayloadForDestination } from "../src/lib/notifications";
@@ -14,7 +19,7 @@ await suite("security-headers", {
   "applySecurityHeaders (fresh target)": () => {
     applySecurityHeaders({});
   },
-  "buildContentSecurityPolicy": () => {
+  buildContentSecurityPolicy: () => {
     buildContentSecurityPolicy();
   },
   "staticCacheControl (asset path)": () => {
@@ -27,19 +32,42 @@ await suite("security-headers", {
 
 // --- url-safety (webhook + notification path) ---
 const HOSTS = [
-  "example.com", "api.github.com", "terraform.example.com", "localhost", "127.0.0.1",
-  "169.254.169.254", "10.0.0.1", "192.168.1.69", "172.16.4.4", "100.64.0.1",
-  "224.0.0.1", "240.0.0.1", "0.0.0.0", "2130706433", "localhost.nip.io",
-  "169.254.169.254.nip.io", "0x7f000001.nip.io", "::1", "[::1]",
-  "0:0:0:0:0:ffff:127.0.0.1", "2001:4860:4860::8888", "sub.domain.co.uk",
-  "my-workspace-123.s3.amazonaws.com", "8.8.8.8", "1.1.1.1",
+  "example.com",
+  "api.github.com",
+  "terraform.example.com",
+  "localhost",
+  "127.0.0.1",
+  "169.254.169.254",
+  "10.0.0.1",
+  "192.168.1.69",
+  "172.16.4.4",
+  "100.64.0.1",
+  "224.0.0.1",
+  "240.0.0.1",
+  "0.0.0.0",
+  "2130706433",
+  "localhost.nip.io",
+  "169.254.169.254.nip.io",
+  "0x7f000001.nip.io",
+  "::1",
+  "[::1]",
+  "0:0:0:0:0:ffff:127.0.0.1",
+  "2001:4860:4860::8888",
+  "sub.domain.co.uk",
+  "my-workspace-123.s3.amazonaws.com",
+  "8.8.8.8",
+  "1.1.1.1",
 ];
 await suite("url-safety", {
   "privateHostReason over 24-host corpus": () => {
     for (const host of HOSTS) privateHostReason(host);
   },
   "validateExternalUrlResolved (public stub resolver)": async () => {
-    for (const url of ["https://example.com/hook", "https://api.github.com/repos/x", "https://terraform.example.com/api"]) {
+    for (const url of [
+      "https://example.com/hook",
+      "https://api.github.com/repos/x",
+      "https://terraform.example.com/api",
+    ]) {
       await validateExternalUrlResolved(url, false, async (): Promise<string[]> => ["93.184.216.34"]);
     }
   },
@@ -88,7 +116,19 @@ const runPayload: Record<string, unknown> = {
 };
 await suite("notifications", {
   "renderPayloadForDestination (generic)": () => {
-    renderPayloadForDestination({ id: "cfg", workspaceId: "ws", name: "n", destinationType: "generic", url: "https://x.invalid", triggers: [], enabled: true, token: null } as never, runPayload);
+    renderPayloadForDestination(
+      {
+        id: "cfg",
+        workspaceId: "ws",
+        name: "n",
+        destinationType: "generic",
+        url: "https://x.invalid",
+        triggers: [],
+        enabled: true,
+        token: null,
+      } as never,
+      runPayload,
+    );
   },
 });
 
@@ -133,7 +173,7 @@ const fakeRequest = {
   url: "https://terrence.local/api/v2/organizations/acme/workspaces?page%5Bnumber%5D=2&page%5Bsize%5D=25",
 } as never;
 await suite("request-helpers", {
-  "pageRequest": () => {
+  pageRequest: () => {
     pageRequest(fakeRequest);
   },
   "pagination (25/page, 1000 total)": () => {

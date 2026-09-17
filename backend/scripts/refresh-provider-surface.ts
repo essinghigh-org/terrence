@@ -67,8 +67,8 @@ async function resolveTargetVersion(current: string | null): Promise<string> {
   const latest = await fetchLatestTfeProviderVersion();
   if (latest === null) {
     throw new Error(
-      "Could not resolve the latest provider version (GitHub API unavailable). "
-      + `Current catalog: ${current ?? "unknown"}. Set TFE_PROVIDER_VERSION to pin.`,
+      "Could not resolve the latest provider version (GitHub API unavailable). " +
+        `Current catalog: ${current ?? "unknown"}. Set TFE_PROVIDER_VERSION to pin.`,
     );
   }
   return latest;
@@ -77,44 +77,64 @@ async function resolveTargetVersion(current: string | null): Promise<string> {
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
   if (value !== null && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, entry]) => [key, canonical(entry)]));
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, entry]) => [key, canonical(entry)]),
+    );
   }
   return value;
 }
 
 function schemaHash(schema: unknown): string {
-  return createHash("sha256").update(JSON.stringify(canonical(schema))).digest("hex");
+  return createHash("sha256")
+    .update(JSON.stringify(canonical(schema)))
+    .digest("hex");
 }
 
 function generateSchema(version: string): { resources: Record<string, unknown>; dataSources: Record<string, unknown> } {
   const dir = mkdtempSync(join(tmpdir(), "provider-surface-"));
   try {
-    writeFileSync(join(dir, "main.tf"), [
-      'terraform {',
-      '  required_providers {',
-      `    tfe = { source = "hashicorp/tfe", version = "= ${version}" }`,
-      '  }',
-      '}',
-      '',
-    ].join("\n"));
+    writeFileSync(
+      join(dir, "main.tf"),
+      [
+        "terraform {",
+        "  required_providers {",
+        `    tfe = { source = "hashicorp/tfe", version = "= ${version}" }`,
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
     const env = {
       ...process.env,
       TF_IN_AUTOMATION: "1",
       TF_PLUGIN_CACHE_DIR: PLUGIN_CACHE,
     };
     const init = spawnSync(TERRAFORM_BIN, ["init", "-input=false", "-no-color"], {
-      cwd: dir, env, encoding: "utf8", timeout: 120_000,
+      cwd: dir,
+      env,
+      encoding: "utf8",
+      timeout: 120_000,
     });
     if (init.status !== 0) {
       throw new Error(`terraform init failed (exit ${init.status}):\n${init.stderr ?? init.stdout}`);
     }
     const schema = spawnSync(TERRAFORM_BIN, ["providers", "schema", "-json"], {
-      cwd: dir, env, encoding: "utf8", timeout: 120_000,
+      cwd: dir,
+      env,
+      encoding: "utf8",
+      timeout: 120_000,
     });
     if (schema.status !== 0) {
       throw new Error(`terraform providers schema failed (exit ${schema.status}):\n${schema.stderr ?? schema.stdout}`);
     }
-    const parsed = JSON.parse(schema.stdout) as { provider_schemas?: Record<string, { resource_schemas?: Record<string, unknown>; data_source_schemas?: Record<string, unknown> }> };
+    const parsed = JSON.parse(schema.stdout) as {
+      provider_schemas?: Record<
+        string,
+        { resource_schemas?: Record<string, unknown>; data_source_schemas?: Record<string, unknown> }
+      >;
+    };
     const address = Object.keys(parsed.provider_schemas ?? {}).find((key): boolean => key.endsWith("/hashicorp/tfe"));
     const providerSchema = address !== undefined ? parsed.provider_schemas?.[address] : undefined;
     if (providerSchema === undefined) {
@@ -131,20 +151,30 @@ function generateSchema(version: string): { resources: Record<string, unknown>; 
 
 function mergeStatuses(existing: SurfaceEntry[], schemas: Record<string, unknown>): SurfaceEntry[] {
   const byName = new Map(existing.map((entry): [string, string] => [entry.name, entry.status]));
-  return Object.keys(schemas).sort().map((name): SurfaceEntry => ({
-    name,
-    status: byName.get(name) ?? "backend-gap",
-    schema_hash: schemaHash(schemas[name]),
-  }));
+  return Object.keys(schemas)
+    .sort()
+    .map(
+      (name): SurfaceEntry => ({
+        name,
+        status: byName.get(name) ?? "backend-gap",
+        schema_hash: schemaHash(schemas[name]),
+      }),
+    );
 }
 
-function schemaHashesMatch(surface: Surface, resources: Record<string, unknown>, dataSources: Record<string, unknown>): boolean {
+function schemaHashesMatch(
+  surface: Surface,
+  resources: Record<string, unknown>,
+  dataSources: Record<string, unknown>,
+): boolean {
   const matches = (entry: SurfaceEntry, schemas: Record<string, unknown>): boolean =>
     Object.prototype.hasOwnProperty.call(schemas, entry.name) && schemaHash(schemas[entry.name]) === entry.schema_hash;
   if (surface.resources.length !== Object.keys(resources).length) return false;
   if (surface.data_sources.length !== Object.keys(dataSources).length) return false;
-  return surface.resources.every((entry): boolean => matches(entry, resources))
-    && surface.data_sources.every((entry): boolean => matches(entry, dataSources));
+  return (
+    surface.resources.every((entry): boolean => matches(entry, resources)) &&
+    surface.data_sources.every((entry): boolean => matches(entry, dataSources))
+  );
 }
 
 function commentFor(version: string): string {
@@ -155,8 +185,8 @@ async function main(): Promise<void> {
   const existing = loadSurface(SURFACE_SRC);
   const current = catalogVersion(existing);
   const target = await resolveTargetVersion(current);
-  const hasSchemaHashes = [...existing.resources, ...existing.data_sources].every((entry): boolean =>
-    typeof entry.schema_hash === "string" && /^[0-9a-f]{64}$/i.test(entry.schema_hash),
+  const hasSchemaHashes = [...existing.resources, ...existing.data_sources].every(
+    (entry): boolean => typeof entry.schema_hash === "string" && /^[0-9a-f]{64}$/i.test(entry.schema_hash),
   );
   let generated: { resources: Record<string, unknown>; dataSources: Record<string, unknown> } | undefined;
   if (target === current && hasSchemaHashes && process.env.TERRENCE_PROVIDER_SURFACE_FORCE !== "1") {
@@ -183,17 +213,27 @@ async function main(): Promise<void> {
 
   const resourceNames = Object.keys(resources);
   const dataSourceNames = Object.keys(dataSources);
-  const added = resourceNames.filter((name): boolean => !existing.resources.some((entry): boolean => entry.name === name));
-  const removed = existing.resources.filter((entry): boolean => !resourceNames.includes(entry.name)).map((entry): string => entry.name);
-  const addedDataSources = dataSourceNames.filter((name): boolean => !existing.data_sources.some((entry): boolean => entry.name === name));
-  const removedDataSources = existing.data_sources.filter((entry): boolean => !dataSourceNames.includes(entry.name)).map((entry): string => entry.name);
+  const added = resourceNames.filter(
+    (name): boolean => !existing.resources.some((entry): boolean => entry.name === name),
+  );
+  const removed = existing.resources
+    .filter((entry): boolean => !resourceNames.includes(entry.name))
+    .map((entry): string => entry.name);
+  const addedDataSources = dataSourceNames.filter(
+    (name): boolean => !existing.data_sources.some((entry): boolean => entry.name === name),
+  );
+  const removedDataSources = existing.data_sources
+    .filter((entry): boolean => !dataSourceNames.includes(entry.name))
+    .map((entry): string => entry.name);
 
   const payload = `${JSON.stringify(next, null, 2)}\n`;
   writeFileSync(SURFACE_SRC, payload);
   writeFileSync(SURFACE_E2E, payload);
   console.log(`Refreshed provider surface: v${current ?? "?"} -> v${target}`);
   console.log(`Resources: ${existing.resource_count} -> ${next.resource_count} (covered ${next.resources_covered})`);
-  console.log(`Data sources: ${existing.data_source_count} -> ${next.data_source_count} (covered ${next.data_sources_covered})`);
+  console.log(
+    `Data sources: ${existing.data_source_count} -> ${next.data_source_count} (covered ${next.data_sources_covered})`,
+  );
   if (added.length > 0) console.log(`Added (backend-gap): ${added.join(", ")}`);
   if (removed.length > 0) console.log(`Removed: ${removed.join(", ")}`);
   if (addedDataSources.length > 0) console.log(`Added data sources (backend-gap): ${addedDataSources.join(", ")}`);

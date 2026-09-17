@@ -34,17 +34,17 @@ function dropdownVisibility(
   };
 }
 
-function DropdownChevron({ loading, open }: Readonly<{
+function DropdownChevron({
+  loading,
+  open,
+}: Readonly<{
   loading: boolean;
   open: boolean;
 }>): React.JSX.Element {
   if (loading) return <Spinner className="size-4" />;
   return (
     <svg
-      className={cn(
-        "size-4 text-muted-foreground transition-transform",
-        open && "rotate-180",
-      )}
+      className={cn("size-4 text-muted-foreground transition-transform", open && "rotate-180")}
       xmlns="http://www.w3.org/2000/svg"
       viewBox="0 0 24 24"
       fill="none"
@@ -59,16 +59,17 @@ function DropdownChevron({ loading, open }: Readonly<{
   );
 }
 
-function NoReposMatch({ visible, search }: Readonly<{
+function NoReposMatch({
+  visible,
+  search,
+}: Readonly<{
   visible: boolean;
   search: string;
 }>): React.JSX.Element | null {
   if (!visible) return null;
   return (
     <div className="absolute z-50 mt-1 w-full rounded-lg border border-border bg-popover p-2 shadow-md">
-      <p className="text-sm text-muted-foreground">
-        No repositories match &ldquo;{search}&rdquo;
-      </p>
+      <p className="text-sm text-muted-foreground">No repositories match &ldquo;{search}&rdquo;</p>
     </div>
   );
 }
@@ -114,7 +115,9 @@ export function VcsRepoSelector({
         return { repo, score };
       })
       .filter(({ score }): boolean => Number.isFinite(score) && score > 0)
-      .sort((left, right): number => right.score - left.score || left.repo.identifier.localeCompare(right.repo.identifier))
+      .sort(
+        (left, right): number => right.score - left.score || left.repo.identifier.localeCompare(right.repo.identifier),
+      )
       .map(({ repo }): VcsRepoOption => repo);
   }, [repositories, search]);
 
@@ -124,7 +127,7 @@ export function VcsRepoSelector({
     const handleClick = (event: MouseEvent): void => {
       if (
         containerRef.current !== null &&
-// SAFETY: the click target is a DOM node; contains() accepts Node.
+        // SAFETY: the click target is a DOM node; contains() accepts Node.
         !containerRef.current.contains(event.target as Node)
       ) {
         setOpen(false);
@@ -139,7 +142,7 @@ export function VcsRepoSelector({
   // Keep the highlighted item visible in the scrollable list
   useEffect((): void => {
     if (highlightedIndex >= 0 && listRef.current !== null) {
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+      // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
       const item = listRef.current.children[highlightedIndex] as HTMLElement | undefined;
       item?.scrollIntoView({ block: "nearest" });
     }
@@ -178,16 +181,12 @@ export function VcsRepoSelector({
       switch (event.key) {
         case "ArrowDown": {
           event.preventDefault();
-          setHighlightedIndex((prev: number): number =>
-            prev < filteredRepos.length - 1 ? prev + 1 : 0,
-          );
+          setHighlightedIndex((prev: number): number => (prev < filteredRepos.length - 1 ? prev + 1 : 0));
           break;
         }
         case "ArrowUp": {
           event.preventDefault();
-          setHighlightedIndex((prev: number): number =>
-            prev > 0 ? prev - 1 : filteredRepos.length - 1,
-          );
+          setHighlightedIndex((prev: number): number => (prev > 0 ? prev - 1 : filteredRepos.length - 1));
           break;
         }
         case "Enter": {
@@ -212,7 +211,12 @@ export function VcsRepoSelector({
     [open, filteredRepos, highlightedIndex, handleSelect],
   );
 
-  const { showDropdown, hasRepoList, showNoMatch } = dropdownVisibility(open, loading, repositories.length, filteredRepos.length);
+  const { showDropdown, hasRepoList, showNoMatch } = dropdownVisibility(
+    open,
+    loading,
+    repositories.length,
+    filteredRepos.length,
+  );
 
   return (
     <div className="relative" ref={containerRef}>
@@ -233,21 +237,15 @@ export function VcsRepoSelector({
             if (!disabled && !loading && hasRepoList) setOpen(true);
           }}
           onKeyDown={handleKeyDown}
-          placeholder={
-            loading ? "Fetching accessible repositories…" : placeholder
-          }
+          placeholder={loading ? "Fetching accessible repositories…" : placeholder}
           disabled={disabled || loading}
           className={cn("pr-8")}
           role="combobox"
           aria-autocomplete="list"
           aria-expanded={showDropdown}
-          aria-controls={
-            showDropdown ? `${inputId}-listbox` : undefined
-          }
+          aria-controls={showDropdown ? `${inputId}-listbox` : undefined}
           aria-activedescendant={
-            highlightedIndex >= 0 && showDropdown
-              ? `${inputId}-option-${highlightedIndex}`
-              : undefined
+            highlightedIndex >= 0 && showDropdown ? `${inputId}-option-${highlightedIndex}` : undefined
           }
           data-slot="vcs-repo-combobox"
         />
@@ -274,15 +272,15 @@ export function VcsRepoSelector({
                 aria-selected={highlightedIndex === index}
                 className={cn(
                   "flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none select-none",
-                  highlightedIndex === index
-                    ? "bg-accent text-accent-foreground"
-                    : "text-popover-foreground",
+                  highlightedIndex === index ? "bg-accent text-accent-foreground" : "text-popover-foreground",
                 )}
                 onMouseDown={(event: React.MouseEvent): void => {
                   event.preventDefault();
                   handleSelect(repo);
                 }}
-                onMouseEnter={(): void => { setHighlightedIndex(index); }}
+                onMouseEnter={(): void => {
+                  setHighlightedIndex(index);
+                }}
               >
                 <span className="min-w-0 truncate">
                   <span className="block truncate font-medium">{repo.identifier}</span>

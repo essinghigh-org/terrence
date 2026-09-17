@@ -37,7 +37,16 @@ function setStatus(set: ParamCtx["set"], status: number): void {
 
 function errorBody(set: ParamCtx["set"], status: number, detail: string, code?: string): Record<string, unknown> {
   setStatus(set, status);
-  return { errors: [{ status: String(status), title: status === 404 ? "Not Found" : status === 409 ? "Conflict" : "Unprocessable Entity", detail, ...(code === undefined ? {} : { code }) }] };
+  return {
+    errors: [
+      {
+        status: String(status),
+        title: status === 404 ? "Not Found" : status === 409 ? "Conflict" : "Unprocessable Entity",
+        detail,
+        ...(code === undefined ? {} : { code }),
+      },
+    ],
+  };
 }
 
 function requireAdmin(user: ParamCtx["user"], set: ParamCtx["set"]): boolean {
@@ -51,7 +60,7 @@ function attrsOf(body: unknown): Readonly<Record<string, unknown>> {
   const data = (body as { data?: unknown }).data;
   if (data === null || typeof data !== "object") return {};
   const attrs = (data as { attributes?: unknown }).attributes;
-  return attrs !== null && typeof attrs === "object" && !Array.isArray(attrs) ? attrs as Record<string, unknown> : {};
+  return attrs !== null && typeof attrs === "object" && !Array.isArray(attrs) ? (attrs as Record<string, unknown>) : {};
 }
 
 function sourceFromAttributes(attrs: Readonly<Record<string, unknown>>): BackupSourceOptions | null {
@@ -59,8 +68,12 @@ function sourceFromAttributes(attrs: Readonly<Record<string, unknown>>): BackupS
   if (typeof raw !== "string" || raw.trim() === "") return null;
   const source: BackupSourceOptions = {
     sourcePath: raw,
-    ...(typeof attrs["storage-path"] === "string" && attrs["storage-path"].trim() !== "" ? { storagePath: attrs["storage-path"] } : {}),
-    ...(typeof attrs["database-path"] === "string" && attrs["database-path"].trim() !== "" ? { databasePath: attrs["database-path"] } : {}),
+    ...(typeof attrs["storage-path"] === "string" && attrs["storage-path"].trim() !== ""
+      ? { storagePath: attrs["storage-path"] }
+      : {}),
+    ...(typeof attrs["database-path"] === "string" && attrs["database-path"].trim() !== ""
+      ? { databasePath: attrs["database-path"] }
+      : {}),
   };
   return source;
 }
@@ -91,7 +104,8 @@ function serializeError(error: unknown): { code?: string; detail: string } {
 function startRehearsal(attrs: Readonly<Record<string, unknown>>, set: ParamCtx["set"]): Record<string, unknown> {
   const source = sourceFromAttributes(attrs);
   if (source === null) return errorBody(set, 422, "backup-path is required");
-  if ([...rehearsalJobs.values()].some((job): boolean => job.status === "running")) return errorBody(set, 409, "A restore rehearsal is already running");
+  if ([...rehearsalJobs.values()].some((job): boolean => job.status === "running"))
+    return errorBody(set, 409, "A restore rehearsal is already running");
   const id = crypto.randomUUID();
   const startedAt = new Date().toISOString();
   rehearsalJobs.set(id, { id, status: "running", startedAt });
@@ -101,16 +115,26 @@ function startRehearsal(attrs: Readonly<Record<string, unknown>>, set: ParamCtx[
       const result = await runRestoreRehearsal({
         source,
         id,
-        ...(typeof attrs["cli-path"] === "string" && attrs["cli-path"].trim() !== "" ? { cliPath: attrs["cli-path"] } : {}),
+        ...(typeof attrs["cli-path"] === "string" && attrs["cli-path"].trim() !== ""
+          ? { cliPath: attrs["cli-path"] }
+          : {}),
         ...(attrs["require-cli"] === true ? { requireCli: true } : {}),
       });
       rehearsalJobs.set(id, { id, status: "done", startedAt, finishedAt: new Date().toISOString(), result });
     } catch (error) {
-      rehearsalJobs.set(id, { id, status: "failed", startedAt, finishedAt: new Date().toISOString(), error: serializeError(error) });
+      rehearsalJobs.set(id, {
+        id,
+        status: "failed",
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        error: serializeError(error),
+      });
     }
   })();
   setStatus(set, 202);
-  return { data: { type: "backup-restore-rehearsals", id, attributes: { status: "running", "started-at": startedAt } } };
+  return {
+    data: { type: "backup-restore-rehearsals", id, attributes: { status: "running", "started-at": startedAt } },
+  };
 }
 
 export const backupRoutes = new Elysia({ name: "admin-backups" })
@@ -120,19 +144,34 @@ export const backupRoutes = new Elysia({ name: "admin-backups" })
     const attrs = attrsOf(body);
     try {
       const source = sourceFromAttributes(attrs);
-      const result = source === null
-        ? await createBackupManifest({
-            ...(attrs["persist"] === false ? { persist: false } : {}),
-            ...(typeof attrs["storage-path"] === "string" && attrs["storage-path"].trim() !== "" ? { storagePath: attrs["storage-path"] } : {}),
-            ...(typeof attrs["database-path"] === "string" && attrs["database-path"].trim() !== "" ? { databasePath: attrs["database-path"] } : {}),
-            ...(typeof attrs["output-directory"] === "string" && attrs["output-directory"].trim() !== "" ? { outputDirectory: attrs["output-directory"] } : {}),
-          })
-        : await createBackupManifestForSource(source, {
-            ...(attrs["persist"] === false ? { persist: false } : {}),
-            ...(typeof attrs["output-directory"] === "string" && attrs["output-directory"].trim() !== "" ? { outputDirectory: attrs["output-directory"] } : {}),
-          });
+      const result =
+        source === null
+          ? await createBackupManifest({
+              ...(attrs["persist"] === false ? { persist: false } : {}),
+              ...(typeof attrs["storage-path"] === "string" && attrs["storage-path"].trim() !== ""
+                ? { storagePath: attrs["storage-path"] }
+                : {}),
+              ...(typeof attrs["database-path"] === "string" && attrs["database-path"].trim() !== ""
+                ? { databasePath: attrs["database-path"] }
+                : {}),
+              ...(typeof attrs["output-directory"] === "string" && attrs["output-directory"].trim() !== ""
+                ? { outputDirectory: attrs["output-directory"] }
+                : {}),
+            })
+          : await createBackupManifestForSource(source, {
+              ...(attrs["persist"] === false ? { persist: false } : {}),
+              ...(typeof attrs["output-directory"] === "string" && attrs["output-directory"].trim() !== ""
+                ? { outputDirectory: attrs["output-directory"] }
+                : {}),
+            });
       setStatus(set, 201);
-      return { data: { type: "backup-manifests", id: result.manifest.manifestSha256, attributes: { manifest: result.manifest, "manifest-path": result.path } } };
+      return {
+        data: {
+          type: "backup-manifests",
+          id: result.manifest.manifestSha256,
+          attributes: { manifest: result.manifest, "manifest-path": result.path },
+        },
+      };
     } catch (error) {
       return errorBody(set, 422, serializeError(error).detail, serializeError(error).code);
     }
@@ -140,7 +179,17 @@ export const backupRoutes = new Elysia({ name: "admin-backups" })
   .get("/api/v2/admin/backups/status", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (!requireAdmin(user, set)) return errorBody(set, 404, "Not Found");
     const status = await readBackupStatus();
-    return { data: { type: "backup-status", id: "current", attributes: { "last-verified-restore-at": status.lastVerifiedRestoreAt, "last-verified-manifest-sha256": status.lastVerifiedManifestSha256, "last-rehearsal-id": status.lastRehearsalId } } };
+    return {
+      data: {
+        type: "backup-status",
+        id: "current",
+        attributes: {
+          "last-verified-restore-at": status.lastVerifiedRestoreAt,
+          "last-verified-manifest-sha256": status.lastVerifiedManifestSha256,
+          "last-rehearsal-id": status.lastRehearsalId,
+        },
+      },
+    };
   })
   .post("/api/v2/admin/backups/integrity-checks", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (!requireAdmin(user, set)) return errorBody(set, 404, "Not Found");
@@ -148,7 +197,13 @@ export const backupRoutes = new Elysia({ name: "admin-backups" })
     if (source === null) return errorBody(set, 422, "backup-path is required");
     try {
       const report = await verifyBackupIntegrity(source);
-      return { data: { type: "backup-integrity-checks", id: report.manifest?.manifestSha256 ?? crypto.randomUUID(), attributes: reportResource(report) } };
+      return {
+        data: {
+          type: "backup-integrity-checks",
+          id: report.manifest?.manifestSha256 ?? crypto.randomUUID(),
+          attributes: reportResource(report),
+        },
+      };
     } catch (error) {
       const serialized = serializeError(error);
       return errorBody(set, 422, serialized.detail, serialized.code);
@@ -160,7 +215,13 @@ export const backupRoutes = new Elysia({ name: "admin-backups" })
     if (source === null) return errorBody(set, 422, "backup-path is required");
     try {
       const report = await verifyBackupIntegrity(source);
-      return { data: { type: "backup-integrity-checks", id: report.manifest?.manifestSha256 ?? crypto.randomUUID(), attributes: reportResource(report) } };
+      return {
+        data: {
+          type: "backup-integrity-checks",
+          id: report.manifest?.manifestSha256 ?? crypto.randomUUID(),
+          attributes: reportResource(report),
+        },
+      };
     } catch (error) {
       const serialized = serializeError(error);
       return errorBody(set, 422, serialized.detail, serialized.code);
@@ -178,5 +239,17 @@ export const backupRoutes = new Elysia({ name: "admin-backups" })
     if (!requireAdmin(user, set)) return errorBody(set, 404, "Not Found");
     const job = rehearsalJobs.get(params["rehearsal_id"] ?? "");
     if (job === undefined) return errorBody(set, 404, "No such restore rehearsal");
-    return { data: { type: "backup-restore-rehearsals", id: job.id, attributes: { status: job.status, "started-at": job.startedAt, ...(job.finishedAt === undefined ? {} : { "finished-at": job.finishedAt }), ...(job.result === undefined ? {} : { result: job.result }), ...(job.error === undefined ? {} : { error: job.error }) } } };
+    return {
+      data: {
+        type: "backup-restore-rehearsals",
+        id: job.id,
+        attributes: {
+          status: job.status,
+          "started-at": job.startedAt,
+          ...(job.finishedAt === undefined ? {} : { "finished-at": job.finishedAt }),
+          ...(job.result === undefined ? {} : { result: job.result }),
+          ...(job.error === undefined ? {} : { error: job.error }),
+        },
+      },
+    };
   });

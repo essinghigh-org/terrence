@@ -67,7 +67,10 @@ function supervisorMarkerPath(directory: string): string {
 async function processStartTime(pid: number): Promise<string | null> {
   try {
     const stat = await readFile(`/proc/${pid}/stat`, "utf8");
-    const fields = stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/);
+    const fields = stat
+      .slice(stat.lastIndexOf(")") + 1)
+      .trim()
+      .split(/\s+/);
     return fields[19] ?? null;
   } catch {
     return null;
@@ -97,7 +100,7 @@ async function readSupervisorMarker(directory: string): Promise<SupervisorMarker
 async function processOwned(marker: SupervisorMarker): Promise<boolean> {
   if (!processAlive(marker.pid)) return false;
   if (marker.startTime === null) return true;
-  return await processStartTime(marker.pid) === marker.startTime;
+  return (await processStartTime(marker.pid)) === marker.startTime;
 }
 
 async function resultAt(path: string): Promise<ModuleTestResult | undefined> {
@@ -126,7 +129,11 @@ async function startSupervisor(input: DeepReadonly<SupervisorInput>): Promise<nu
     child.unref();
     const pid = child.pid;
     if (!Number.isInteger(pid) || pid <= 0) throw new Error("Unable to start the module test supervisor");
-    await writeFile(supervisorMarkerPath(dirname(inputPath)), JSON.stringify({ pid, startTime: await processStartTime(pid) }), { mode: 0o600 });
+    await writeFile(
+      supervisorMarkerPath(dirname(inputPath)),
+      JSON.stringify({ pid, startTime: await processStartTime(pid) }),
+      { mode: 0o600 },
+    );
     return pid;
   } finally {
     await logFile.close();
@@ -135,14 +142,26 @@ async function startSupervisor(input: DeepReadonly<SupervisorInput>): Promise<nu
 
 async function stopSupervisor(marker: SupervisorMarker): Promise<void> {
   if (!(await processOwned(marker))) return;
-  try { process.kill(-marker.pid, "SIGTERM"); } catch {
-    try { process.kill(marker.pid, "SIGTERM"); } catch { /* already exited */ }
+  try {
+    process.kill(-marker.pid, "SIGTERM");
+  } catch {
+    try {
+      process.kill(marker.pid, "SIGTERM");
+    } catch {
+      /* already exited */
+    }
   }
   // Escalate to SIGKILL if the process group is still alive after 5s
   await Bun.sleep(5000);
   if (!(await processOwned(marker))) return;
-  try { process.kill(-marker.pid, "SIGKILL"); } catch {
-    try { process.kill(marker.pid, "SIGKILL"); } catch { /* already exited */ }
+  try {
+    process.kill(-marker.pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(marker.pid, "SIGKILL");
+    } catch {
+      /* already exited */
+    }
   }
 }
 
@@ -161,7 +180,8 @@ async function waitForSupervisor(
   if (pid === null || resultPath === null) throw new Error("Module test execution checkpoint is incomplete");
   const directory = run.executionDirectory ?? dirname(resultPath);
   const marker = await readSupervisorMarker(directory);
-  if (marker === undefined || marker.pid !== pid) throw new Error("Module test supervisor ownership checkpoint is missing");
+  if (marker === undefined || marker.pid !== pid)
+    throw new Error("Module test supervisor ownership checkpoint is missing");
   const deadline = (run.executionStartedAt ?? Date.now()) + MODULE_TEST_EXECUTION_TIMEOUT_MS;
   for (;;) {
     if (await context.canceled()) {
@@ -178,15 +198,21 @@ async function waitForSupervisor(
     if (!(await processOwned(marker))) {
       return resultAfterSupervisorExit(resultPath);
     }
-    if (!await context.heartbeat()) return undefined;
-    await new Promise<void>((resolve): void => { setTimeout(resolve, jitteredPollDelay(500)); });
+    if (!(await context.heartbeat())) return undefined;
+    await new Promise<void>((resolve): void => {
+      setTimeout(resolve, jitteredPollDelay(500));
+    });
   }
 }
 
 function oidcInput(
   configuration: DeepReadonly<typeof moduleTestConfigurations.$inferSelect> | undefined,
 ): Readonly<{ provider: CredentialProvider | null; values: Record<string, unknown> }> {
-  if (configuration?.oidcEnabled !== true || configuration.oidcProvider === null || !["aws", "gcp", "azure", "vault"].includes(configuration.oidcProvider)) {
+  if (
+    configuration?.oidcEnabled !== true ||
+    configuration.oidcProvider === null ||
+    !["aws", "gcp", "azure", "vault"].includes(configuration.oidcProvider)
+  ) {
     return { provider: null, values: {} };
   }
   const rawValues = configuration.oidcConfiguration;
@@ -206,48 +232,89 @@ type ModuleTestInputs = Readonly<{
 
 async function markLostModuleTestCheckpoint(run: DeepReadonly<ModuleTestRun>): Promise<boolean> {
   if (run.status !== "running" || run.executionPid !== null || run.executionResultPath !== null) return false;
-  await db.update(moduleTestRuns).set({
-    status: "errored",
-    error: "The module test worker restarted after its subprocess checkpoint was lost",
-    updatedAt: Date.now(),
-  }).where(eq(moduleTestRuns.id, run.id));
+  await db
+    .update(moduleTestRuns)
+    .set({
+      status: "errored",
+      error: "The module test worker restarted after its subprocess checkpoint was lost",
+      updatedAt: Date.now(),
+    })
+    .where(eq(moduleTestRuns.id, run.id));
   return true;
 }
 
 async function markStalledModuleTestSupervisor(run: DeepReadonly<ModuleTestRun>): Promise<boolean> {
-  if (run.status !== "running" || run.executionPid !== null || run.executionStage !== "starting"
-    || (run.executionStartedAt ?? 0) >= Date.now() - SUPERVISOR_START_TIMEOUT_MS) return false;
+  if (
+    run.status !== "running" ||
+    run.executionPid !== null ||
+    run.executionStage !== "starting" ||
+    (run.executionStartedAt ?? 0) >= Date.now() - SUPERVISOR_START_TIMEOUT_MS
+  )
+    return false;
   const marker = run.executionDirectory === null ? undefined : await readSupervisorMarker(run.executionDirectory);
   if (marker !== undefined) await stopSupervisor(marker);
-  await db.update(moduleTestRuns).set({ status: "errored", error: "The module test supervisor did not checkpoint its process", executionStage: "failed", updatedAt: Date.now() }).where(eq(moduleTestRuns.id, run.id));
+  await db
+    .update(moduleTestRuns)
+    .set({
+      status: "errored",
+      error: "The module test supervisor did not checkpoint its process",
+      executionStage: "failed",
+      updatedAt: Date.now(),
+    })
+    .where(eq(moduleTestRuns.id, run.id));
   return true;
 }
 
 async function requeueStartingModuleTest(run: DeepReadonly<ModuleTestRun>): Promise<boolean> {
   if (run.status !== "running" || run.executionPid !== null || run.executionStage !== "starting") return false;
-  await enqueueDurableJob("module-test", { runId: run.id }, { dedupeKey: run.id, runAfter: Date.now() + SUPERVISOR_START_TIMEOUT_MS, rescheduleRunning: true });
+  await enqueueDurableJob(
+    "module-test",
+    { runId: run.id },
+    { dedupeKey: run.id, runAfter: Date.now() + SUPERVISOR_START_TIMEOUT_MS, rescheduleRunning: true },
+  );
   return true;
 }
 
-async function loadModuleTestInputs(run: DeepReadonly<ModuleTestRun>, context: DeepReadonly<DurableJobContext>): Promise<ModuleTestInputs> {
+async function loadModuleTestInputs(
+  run: DeepReadonly<ModuleTestRun>,
+  context: DeepReadonly<DurableJobContext>,
+): Promise<ModuleTestInputs> {
   try {
     const [module, version, oidcConfiguration] = await Promise.all([
       db.query.registryModules.findFirst({ where: eq(registryModules.id, run.moduleId) }),
       db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, run.versionId) }),
       db.query.moduleTestConfigurations.findFirst({ where: eq(moduleTestConfigurations.moduleId, run.moduleId) }),
     ]);
-    const organization = module === undefined ? undefined : await db.query.organizations.findFirst({ where: eq(organizations.id, module.orgId) });
-    if (module === undefined || version === undefined || organization === undefined) throw new Error("Module test inputs are no longer available");
+    const organization =
+      module === undefined
+        ? undefined
+        : await db.query.organizations.findFirst({ where: eq(organizations.id, module.orgId) });
+    if (module === undefined || version === undefined || organization === undefined)
+      throw new Error("Module test inputs are no longer available");
     let archivePath = version.archivePath;
     if (run.configurationVersionId !== null) {
-      const configurationVersion = await db.query.moduleTestConfigurationVersions.findFirst({ where: and(eq(moduleTestConfigurationVersions.id, run.configurationVersionId), eq(moduleTestConfigurationVersions.moduleId, run.moduleId)) });
-      if (configurationVersion?.status === "uploaded" && configurationVersion.archivePath !== null) archivePath = configurationVersion.archivePath;
+      const configurationVersion = await db.query.moduleTestConfigurationVersions.findFirst({
+        where: and(
+          eq(moduleTestConfigurationVersions.id, run.configurationVersionId),
+          eq(moduleTestConfigurationVersions.moduleId, run.moduleId),
+        ),
+      });
+      if (configurationVersion?.status === "uploaded" && configurationVersion.archivePath !== null)
+        archivePath = configurationVersion.archivePath;
     }
-    if (archivePath === null || !(await Bun.file(archivePath).exists())) throw new Error("The module test archive is no longer available");
+    if (archivePath === null || !(await Bun.file(archivePath).exists()))
+      throw new Error("The module test archive is no longer available");
     return { module, version, organization, oidcConfiguration, archivePath };
   } catch (error: unknown) {
     if (!(await context.canceled())) {
-      await db.update(moduleTestRuns).set({ status: "errored", error: error instanceof Error ? error.message : "Unable to load module test inputs", updatedAt: Date.now() }).where(eq(moduleTestRuns.id, run.id));
+      await db
+        .update(moduleTestRuns)
+        .set({
+          status: "errored",
+          error: error instanceof Error ? error.message : "Unable to load module test inputs",
+          updatedAt: Date.now(),
+        })
+        .where(eq(moduleTestRuns.id, run.id));
     }
     throw error;
   }
@@ -269,30 +336,47 @@ async function prepareModuleTestSupervisor(
 ): Promise<DeepReadonly<ModuleTestRun> | undefined> {
   if (run.executionPid !== null) return run;
   if (run.executionStage === "starting") return undefined;
-  if (!await context.heartbeat()) return undefined;
-  const executionClaim = await db.update(moduleTestRuns).set({
-    executionStartedAt: Date.now(),
-    executionStage: "starting",
-    executionDirectory,
-    executionResultPath: resultPath,
-    updatedAt: Date.now(),
-  }).where(and(
-    eq(moduleTestRuns.id, run.id),
-    eq(moduleTestRuns.status, "running"),
-    isNull(moduleTestRuns.executionPid),
-    or(isNull(moduleTestRuns.executionStage), inArray(moduleTestRuns.executionStage, ["queued", "preparing"])),
-  )).returning({ id: moduleTestRuns.id });
+  if (!(await context.heartbeat())) return undefined;
+  const executionClaim = await db
+    .update(moduleTestRuns)
+    .set({
+      executionStartedAt: Date.now(),
+      executionStage: "starting",
+      executionDirectory,
+      executionResultPath: resultPath,
+      updatedAt: Date.now(),
+    })
+    .where(
+      and(
+        eq(moduleTestRuns.id, run.id),
+        eq(moduleTestRuns.status, "running"),
+        isNull(moduleTestRuns.executionPid),
+        or(isNull(moduleTestRuns.executionStage), inArray(moduleTestRuns.executionStage, ["queued", "preparing"])),
+      ),
+    )
+    .returning({ id: moduleTestRuns.id });
   if (executionClaim.length === 0) return undefined;
   const pid = await startSupervisor(input);
-  if (!await context.heartbeat()) {
+  if (!(await context.heartbeat())) {
     await stopCanceledModuleTestSupervisor(run.id, executionDirectory);
     return undefined;
   }
-  const claimed = await db.update(moduleTestRuns).set({
-    executionPid: pid,
-    executionStage: "subprocess",
-    updatedAt: Date.now(),
-  }).where(and(eq(moduleTestRuns.id, run.id), eq(moduleTestRuns.status, "running"), isNull(moduleTestRuns.executionPid), eq(moduleTestRuns.executionStage, "starting"))).returning({ id: moduleTestRuns.id });
+  const claimed = await db
+    .update(moduleTestRuns)
+    .set({
+      executionPid: pid,
+      executionStage: "subprocess",
+      updatedAt: Date.now(),
+    })
+    .where(
+      and(
+        eq(moduleTestRuns.id, run.id),
+        eq(moduleTestRuns.status, "running"),
+        isNull(moduleTestRuns.executionPid),
+        eq(moduleTestRuns.executionStage, "starting"),
+      ),
+    )
+    .returning({ id: moduleTestRuns.id });
   if (claimed.length === 0) {
     const owner = await db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, run.id) });
     if (owner?.executionPid !== pid) {
@@ -304,38 +388,58 @@ async function prepareModuleTestSupervisor(
   return db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, run.id) });
 }
 
-async function persistFinishedModuleTestRun(runId: string, executionPid: number, result: ModuleTestResult): Promise<void> {
-  await db.update(moduleTestRuns).set({
-    status: result.status === "errored" ? "errored" : "finished",
-    testStatus: result.status === "passed" ? "pass" : result.status === "failed" ? "fail" : null,
-    testsPassed: result.testsPassed,
-    testsFailed: result.testsFailed,
-    testsErrored: result.testsErrored,
-    testsSkipped: result.testsSkipped,
-    output: result.output,
-    error: result.error,
-    executionPid: null,
-    executionStage: "finished",
-    updatedAt: Date.now(),
-  }).where(and(eq(moduleTestRuns.id, runId), eq(moduleTestRuns.executionPid, executionPid), inArray(moduleTestRuns.status, ["running", "queued"])));
+async function persistFinishedModuleTestRun(
+  runId: string,
+  executionPid: number,
+  result: ModuleTestResult,
+): Promise<void> {
+  await db
+    .update(moduleTestRuns)
+    .set({
+      status: result.status === "errored" ? "errored" : "finished",
+      testStatus: result.status === "passed" ? "pass" : result.status === "failed" ? "fail" : null,
+      testsPassed: result.testsPassed,
+      testsFailed: result.testsFailed,
+      testsErrored: result.testsErrored,
+      testsSkipped: result.testsSkipped,
+      output: result.output,
+      error: result.error,
+      executionPid: null,
+      executionStage: "finished",
+      updatedAt: Date.now(),
+    })
+    .where(
+      and(
+        eq(moduleTestRuns.id, runId),
+        eq(moduleTestRuns.executionPid, executionPid),
+        inArray(moduleTestRuns.status, ["running", "queued"]),
+      ),
+    );
 }
 
-async function markModuleTestRunFailed(runId: string, context: DeepReadonly<DurableJobContext>, error: unknown): Promise<void> {
+async function markModuleTestRunFailed(
+  runId: string,
+  context: DeepReadonly<DurableJobContext>,
+  error: unknown,
+): Promise<void> {
   const latest = await db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, runId) });
   if (latest?.status !== "canceled" && !(await context.canceled())) {
-    await db.update(moduleTestRuns).set({
-      status: "errored",
-      error: error instanceof Error ? error.message : "Unable to run module test",
-      executionPid: null,
-      executionStage: "failed",
-      updatedAt: Date.now(),
-    }).where(eq(moduleTestRuns.id, runId));
+    await db
+      .update(moduleTestRuns)
+      .set({
+        status: "errored",
+        error: error instanceof Error ? error.message : "Unable to run module test",
+        executionPid: null,
+        executionStage: "failed",
+        updatedAt: Date.now(),
+      })
+      .where(eq(moduleTestRuns.id, runId));
   }
 }
 
 async function cleanupModuleTestTokens(runId: string, context: DeepReadonly<DurableJobContext>): Promise<void> {
   const latest = await db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, runId) });
-  const ownershipLost = latest?.status === "running" && await context.canceled();
+  const ownershipLost = latest?.status === "running" && (await context.canceled());
   if (!ownershipLost) {
     await revokeWorkloadIdentityTokens(runId).catch((error: unknown): void => {
       log.error("Failed to revoke workload identity tokens", { runId, error: String(error) });
@@ -354,7 +458,7 @@ async function finishModuleTestRun(
     const executionPid = run.executionPid;
     if (executionPid === null) throw new Error("Module test execution checkpoint is incomplete");
     const latest = await db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, run.id) });
-    if (latest?.status === "canceled" || await context.canceled()) return;
+    if (latest?.status === "canceled" || (await context.canceled())) return;
     await persistFinishedModuleTestRun(run.id, executionPid, result);
     await rm(supervisorMarkerPath(run.executionDirectory ?? dirname(resultPath)), { force: true });
     await rm(join(run.executionDirectory ?? dirname(resultPath), "input.json"), { force: true });
@@ -363,22 +467,28 @@ async function finishModuleTestRun(
     throw error;
   } finally {
     await cleanupModuleTestTokens(run.id, context);
-    try { await rm(join(run.executionDirectory ?? dirname(resultPath), "input.json"), { force: true }); } catch {}
+    try {
+      await rm(join(run.executionDirectory ?? dirname(resultPath), "input.json"), { force: true });
+    } catch {}
   }
 }
 
-export async function runModuleTestJob(job: DeepReadonly<Job>, context: DeepReadonly<DurableJobContext>): Promise<void> {
+export async function runModuleTestJob(
+  job: DeepReadonly<Job>,
+  context: DeepReadonly<DurableJobContext>,
+): Promise<void> {
   const runId = runIdFromJob(job);
   if (runId === undefined) throw new Error("module-test job is missing runId");
   const initial = await db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, runId) });
-  if (initial === undefined || await context.canceled()) return;
+  if (initial === undefined || (await context.canceled())) return;
   if (await markLostModuleTestCheckpoint(initial)) return;
   if (await markStalledModuleTestSupervisor(initial)) return;
   if (await requeueStartingModuleTest(initial)) return;
-  const started = await db.update(moduleTestRuns).set({ status: "running", updatedAt: Date.now() }).where(and(
-    eq(moduleTestRuns.id, initial.id),
-    inArray(moduleTestRuns.status, ["queued", "pending", "running"]),
-  )).returning({ id: moduleTestRuns.id });
+  const started = await db
+    .update(moduleTestRuns)
+    .set({ status: "running", updatedAt: Date.now() })
+    .where(and(eq(moduleTestRuns.id, initial.id), inArray(moduleTestRuns.status, ["queued", "pending", "running"])))
+    .returning({ id: moduleTestRuns.id });
   if (started.length === 0) return;
 
   const inputs = await loadModuleTestInputs(initial, context);

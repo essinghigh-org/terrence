@@ -53,13 +53,12 @@ function validateVersion(version: string): boolean {
 
 async function calculateSha256(buffer: Readonly<ArrayBuffer>): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return Array.from(new Uint8Array(digest)).map((b: number): string => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(new Uint8Array(digest))
+    .map((b: number): string => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
-type IntegrityRead =
-  | { status: "ok"; integrity: OpaIntegrity }
-  | { status: "missing" }
-  | { status: "invalid" };
+type IntegrityRead = { status: "ok"; integrity: OpaIntegrity } | { status: "missing" } | { status: "invalid" };
 
 async function readIntegrity(targetDir: string): Promise<IntegrityRead> {
   let raw: string;
@@ -75,10 +74,10 @@ async function readIntegrity(targetDir: string): Promise<IntegrityRead> {
     return { status: "invalid" };
   }
   if (
-    parsed.tool === "opa"
-    && typeof parsed.version === "string"
-    && typeof parsed.binarySha256 === "string"
-    && /^[0-9a-f]{64}$/.test(parsed.binarySha256)
+    parsed.tool === "opa" &&
+    typeof parsed.version === "string" &&
+    typeof parsed.binarySha256 === "string" &&
+    /^[0-9a-f]{64}$/.test(parsed.binarySha256)
   ) {
     return { status: "ok", integrity: { tool: "opa", version: parsed.version, binarySha256: parsed.binarySha256 } };
   }
@@ -128,11 +127,7 @@ function parseSidecar(sidecarText: string, asset: string): string | null {
  * only then write the binary to disk inside stagingDir. Throws on any
  * upstream/verify failure; the caller tiers that into an unreachable (never
  * failed) policy check with install guidance. */
-async function downloadAndVerify(
-  version: string,
-  asset: string,
-  stagingDir: string,
-): Promise<void> {
+async function downloadAndVerify(version: string, asset: string, stagingDir: string): Promise<void> {
   const binaryUrl = `https://github.com/open-policy-agent/opa/releases/download/v${version}/${asset}`;
   const sumUrl = `${binaryUrl}.sha256`;
 
@@ -272,7 +267,13 @@ export async function resolveManagedOpaBinary(): Promise<{ binaryPath: string; v
   const binaryPath = join(targetDir, "opa");
 
   // Fast path: a valid, fully-published install already exists. Read-only.
-  if (await validCachedOpaBinary(binaryPath, targetDir, `[terrence] Cached OPA v${version} failed integrity check; reinstalling`)) {
+  if (
+    await validCachedOpaBinary(
+      binaryPath,
+      targetDir,
+      `[terrence] Cached OPA v${version} failed integrity check; reinstalling`,
+    )
+  ) {
     return { binaryPath, version };
   }
 
@@ -286,7 +287,13 @@ export async function resolveManagedOpaBinary(): Promise<{ binaryPath: string; v
   try {
     // Recheck after acquiring the lock: a worker that finished while we were
     // waiting has already published a valid install we can reuse.
-    if (await validCachedOpaBinary(binaryPath, targetDir, `[terrence] Cached OPA v${version} failed integrity check under lock; reinstalling`)) {
+    if (
+      await validCachedOpaBinary(
+        binaryPath,
+        targetDir,
+        `[terrence] Cached OPA v${version} failed integrity check under lock; reinstalling`,
+      )
+    ) {
       return { binaryPath, version };
     }
     if (await exists(targetDir)) {

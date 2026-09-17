@@ -13,7 +13,16 @@ import { join } from "node:path";
 import { desc, eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { apiTokens, configurationVersions, organizations, runs, runTokens, stateVersions, users, workspaces } from "../../src/db/schema";
+import {
+  apiTokens,
+  configurationVersions,
+  organizations,
+  runs,
+  runTokens,
+  stateVersions,
+  users,
+  workspaces,
+} from "../../src/db/schema";
 import { hashRunToken, mintRunToken, revokeRunTokens, writeRunCliConfig } from "../../src/lib/run-token";
 import { makeRegistryModuleArchive } from "../registry-module-helpers";
 
@@ -42,14 +51,14 @@ function request(path: string, method = "GET", token?: string, body?: unknown): 
 }
 
 async function seedRegistryModule(orgName: string, name: string): Promise<string> {
-  const res = await app.handle(request(`/api/v2/organizations/${orgName}/registry-modules`, "POST", adminToken, {
-    data: { attributes: { name, provider: "aws", namespace: orgName } },
-  }));
+  const res = await app.handle(
+    request(`/api/v2/organizations/${orgName}/registry-modules`, "POST", adminToken, {
+      data: { attributes: { name, provider: "aws", namespace: orgName } },
+    }),
+  );
   expect(res.status).toBe(201);
   const id = (await res.json()).data.id as string;
-  await db.insert(
-    await import("../../src/db/schema").then((m) => m.registryModuleVersions),
-  ).values({
+  await db.insert(await import("../../src/db/schema").then((m) => m.registryModuleVersions)).values({
     id: `modver-${crypto.randomUUID()}`,
     moduleId: id,
     version: "1.0.0",
@@ -95,9 +104,11 @@ beforeAll(async () => {
   wsA = `ws-a-${suffix}`;
   wsB = `ws-b-${suffix}`;
 
-  const runRes = await app.handle(request(`/api/v2/workspaces/${wsA}/runs`, "POST", adminToken, {
-    data: { type: "runs", attributes: { message: "run token test" } },
-  }));
+  const runRes = await app.handle(
+    request(`/api/v2/workspaces/${wsA}/runs`, "POST", adminToken, {
+      data: { type: "runs", attributes: { message: "run token test" } },
+    }),
+  );
   expect(runRes.status).toBe(201);
   runA = (await runRes.json()).data.id as string;
 
@@ -109,7 +120,13 @@ beforeAll(async () => {
     id: stateVersionId,
     workspaceId: wsA,
     serial: 1,
-    statePayload: JSON.stringify({ version: 4, serial: 1, terraform_version: "1.0.0", lineage: `run-token-lineage-${suffix}`, resources: [] }),
+    statePayload: JSON.stringify({
+      version: 4,
+      serial: 1,
+      terraform_version: "1.0.0",
+      lineage: `run-token-lineage-${suffix}`,
+      resources: [],
+    }),
     status: "finalized",
     createdAt: Date.now(),
   });
@@ -206,16 +223,34 @@ describe("run token authorization", () => {
 
   test("writes state for its own workspace", async () => {
     const token = await mintRunToken(runA, wsA, orgA);
-    const res = await app.handle(request(`/api/v2/workspaces/${wsA}/state-versions`, "POST", token, {
-      data: {
-        type: "state-versions",
-        attributes: {
-          serial: 2,
-          state: JSON.stringify({ version: 4, serial: 2, terraform_version: "1.0.0", lineage: `run-token-lineage-${suffix}`, resources: [] }),
-          md5: createHash("md5").update(JSON.stringify({ version: 4, serial: 2, terraform_version: "1.0.0", lineage: `run-token-lineage-${suffix}`, resources: [] })).digest("base64"),
+    const res = await app.handle(
+      request(`/api/v2/workspaces/${wsA}/state-versions`, "POST", token, {
+        data: {
+          type: "state-versions",
+          attributes: {
+            serial: 2,
+            state: JSON.stringify({
+              version: 4,
+              serial: 2,
+              terraform_version: "1.0.0",
+              lineage: `run-token-lineage-${suffix}`,
+              resources: [],
+            }),
+            md5: createHash("md5")
+              .update(
+                JSON.stringify({
+                  version: 4,
+                  serial: 2,
+                  terraform_version: "1.0.0",
+                  lineage: `run-token-lineage-${suffix}`,
+                  resources: [],
+                }),
+              )
+              .digest("base64"),
+          },
         },
-      },
-    }));
+      }),
+    );
     expect(res.status).toBe(201);
     await db.delete(runTokens).where(eq(runTokens.tokenHash, hashRunToken(token)));
   });
@@ -228,17 +263,25 @@ describe("run token authorization", () => {
       columns: { serial: true },
     });
     const serial = (latest?.serial ?? 0) + 1;
-    const state = JSON.stringify({ version: 4, serial, terraform_version: "1.0.0", lineage: `run-token-lineage-${suffix}`, resources: [] });
-    const res = await app.handle(new Request(`http://terrence.test/api/v2/workspaces/${wsA}/state-versions/upload`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/vnd.api+json",
-      },
-      body: state,
-    }));
+    const state = JSON.stringify({
+      version: 4,
+      serial,
+      terraform_version: "1.0.0",
+      lineage: `run-token-lineage-${suffix}`,
+      resources: [],
+    });
+    const res = await app.handle(
+      new Request(`http://terrence.test/api/v2/workspaces/${wsA}/state-versions/upload`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: state,
+      }),
+    );
     expect(res.status).toBe(201);
-    const body = await res.json() as { data: { id: string } };
+    const body = (await res.json()) as { data: { id: string } };
     const stored = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, body.data.id) });
     expect(stored?.runId).toBe(runA);
     await db.delete(stateVersions).where(eq(stateVersions.id, body.data.id));
@@ -247,15 +290,17 @@ describe("run token authorization", () => {
 
   test("cannot attribute a state version to a different run in the same workspace", async () => {
     const token = await mintRunToken(runA, wsA, orgA);
-    const res = await app.handle(request(`/api/v2/workspaces/${wsA}/state-versions`, "POST", token, {
-      data: {
-        type: "state-versions",
-        attributes: { serial: 2 },
-        relationships: { run: { data: { id: `run-other-${suffix}`, type: "runs" } } },
-      },
-    }));
+    const res = await app.handle(
+      request(`/api/v2/workspaces/${wsA}/state-versions`, "POST", token, {
+        data: {
+          type: "state-versions",
+          attributes: { serial: 2 },
+          relationships: { run: { data: { id: `run-other-${suffix}`, type: "runs" } } },
+        },
+      }),
+    );
     expect(res.status).toBe(422);
-    const body = await res.json() as { errors: { detail?: string }[] };
+    const body = (await res.json()) as { errors: { detail?: string }[] };
     expect(body.errors[0]?.detail).toBe("run must match the run-scoped credential");
     await db.delete(runTokens).where(eq(runTokens.tokenHash, hashRunToken(token)));
   });
@@ -269,14 +314,19 @@ describe("run token authorization", () => {
 
   test("rejects expired tokens", async () => {
     const token = await mintRunToken(runA, wsA, orgA);
-    await db.update(runTokens).set({ expiresAt: Date.now() - 1000 }).where(eq(runTokens.runId, runA));
+    await db
+      .update(runTokens)
+      .set({ expiresAt: Date.now() - 1000 })
+      .where(eq(runTokens.runId, runA));
     const res = await app.handle(request("/api/v2/account/details", "GET", token));
     expect(res.status).toBe(401);
     await db.delete(runTokens).where(eq(runTokens.runId, runA));
   });
 
   test("rejects unknown tokens with a revoked-like error", async () => {
-    const res = await app.handle(request("/api/v2/account/details", "GET", `trun_${randomBytes(16).toString("base64url")}`));
+    const res = await app.handle(
+      request("/api/v2/account/details", "GET", `trun_${randomBytes(16).toString("base64url")}`),
+    );
     expect(res.status).toBe(401);
   });
 });

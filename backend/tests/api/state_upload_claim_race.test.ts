@@ -27,24 +27,27 @@ describe("state-version deferred-upload claim race", () => {
   const workspaceId = `ws-svrace-${suffix}`;
 
   const request = (path: string, method = "GET", body?: BodyInit, headers: Record<string, string> = {}) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-        ...headers,
-      },
-      body: body ?? null,
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+          ...headers,
+        },
+        body: body ?? null,
+      }),
+    );
 
-  const statePayload = (tag: string, serial: number): string => JSON.stringify({
-    version: 4,
-    terraform_version: "1.9.0",
-    serial,
-    lineage: `lineage-${suffix}`,
-    outputs: { [`out_${tag}`]: { value: tag, type: "string" } },
-    resources: [],
-  });
+  const statePayload = (tag: string, serial: number): string =>
+    JSON.stringify({
+      version: 4,
+      terraform_version: "1.9.0",
+      serial,
+      lineage: `lineage-${suffix}`,
+      outputs: { [`out_${tag}`]: { value: tag, type: "string" } },
+      resources: [],
+    });
 
   const createPending = async (serial: number): Promise<string> => {
     const id = `sv-${suffix}-${serial}-${crypto.randomUUID().slice(0, 8)}`;
@@ -108,7 +111,11 @@ describe("state-version deferred-upload claim race", () => {
     const svId = await createPending(14);
     const uploaded = await request(`/api/v2/state-versions/${svId}/upload`, "PUT", statePayload("final", 14));
     expect(uploaded.status).toBe(200);
-    const outputs = await request(`/api/v2/state-versions/${svId}/json-outputs-upload`, "PUT", JSON.stringify({ x: 1 }));
+    const outputs = await request(
+      `/api/v2/state-versions/${svId}/json-outputs-upload`,
+      "PUT",
+      JSON.stringify({ x: 1 }),
+    );
     expect(outputs.status).toBe(409);
   });
 });

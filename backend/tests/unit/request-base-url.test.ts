@@ -35,19 +35,42 @@ describe("request base URL resolution (#576, #648)", () => {
   it("uses X-Forwarded-Host and Proto from a trusted proxy peer", async () => {
     if (publicUrlSet) return;
     await withTrustedProxyCidrs("127.0.0.0/8", (): void => {
-      expect(requestBaseUrl(req("http://terrence:3000/x", {
-        "x-forwarded-host": "terraform.example.com",
-        "x-forwarded-proto": "https",
-      }, "127.0.0.1"))).toBe("https://terraform.example.com");
-      expect(requestBaseUrl(req("http://terrence:3000/x", {
-        "x-forwarded-host": "terraform.example.com",
-        "x-forwarded-proto": "https",
-      }, "::ffff:127.0.0.1"))).toBe("https://terraform.example.com");
-      expect(requestBaseUrl(req("http://terrence:3000/x", {
-        "x-forwarded-host": "terraform.example.com",
-        "x-forwarded-proto": "https",
-      }, "::ffff:192.0.2.1"))).toBe("http://terrence:3000");
-
+      expect(
+        requestBaseUrl(
+          req(
+            "http://terrence:3000/x",
+            {
+              "x-forwarded-host": "terraform.example.com",
+              "x-forwarded-proto": "https",
+            },
+            "127.0.0.1",
+          ),
+        ),
+      ).toBe("https://terraform.example.com");
+      expect(
+        requestBaseUrl(
+          req(
+            "http://terrence:3000/x",
+            {
+              "x-forwarded-host": "terraform.example.com",
+              "x-forwarded-proto": "https",
+            },
+            "::ffff:127.0.0.1",
+          ),
+        ),
+      ).toBe("https://terraform.example.com");
+      expect(
+        requestBaseUrl(
+          req(
+            "http://terrence:3000/x",
+            {
+              "x-forwarded-host": "terraform.example.com",
+              "x-forwarded-proto": "https",
+            },
+            "::ffff:192.0.2.1",
+          ),
+        ),
+      ).toBe("http://terrence:3000");
     });
   });
 
@@ -55,15 +78,27 @@ describe("request base URL resolution (#576, #648)", () => {
     if (publicUrlSet) return;
     await withTrustedProxyCidrs("10.0.0.0/8", (): void => {
       // Peer is outside the trusted range: fall back to the origin.
-      expect(requestBaseUrl(req("http://terrence:3000/x", {
-        "x-forwarded-host": "terraform.example.com",
-        "x-forwarded-proto": "https",
-      }, "192.0.2.1"))).toBe("http://terrence:3000");
+      expect(
+        requestBaseUrl(
+          req(
+            "http://terrence:3000/x",
+            {
+              "x-forwarded-host": "terraform.example.com",
+              "x-forwarded-proto": "https",
+            },
+            "192.0.2.1",
+          ),
+        ),
+      ).toBe("http://terrence:3000");
       // No peer known (background callers, tests): same fallback.
-      expect(requestBaseUrl(req("http://terrence:3000/x", {
-        "x-forwarded-host": "terraform.example.com",
-        "x-forwarded-proto": "https",
-      }))).toBe("http://terrence:3000");
+      expect(
+        requestBaseUrl(
+          req("http://terrence:3000/x", {
+            "x-forwarded-host": "terraform.example.com",
+            "x-forwarded-proto": "https",
+          }),
+        ),
+      ).toBe("http://terrence:3000");
     });
   });
 
@@ -77,15 +112,31 @@ describe("request base URL resolution (#576, #648)", () => {
   it("honors a valid forwarded proto with Host from a trusted peer", async () => {
     if (publicUrlSet) return;
     await withTrustedProxyCidrs("127.0.0.0/8", (): void => {
-      expect(requestBaseUrl(req("http://127.0.0.1:3000/x", {
-        host: "terraform.example.com",
-        "x-forwarded-proto": "https",
-      }, "127.0.0.1"))).toBe("https://terraform.example.com");
+      expect(
+        requestBaseUrl(
+          req(
+            "http://127.0.0.1:3000/x",
+            {
+              host: "terraform.example.com",
+              "x-forwarded-proto": "https",
+            },
+            "127.0.0.1",
+          ),
+        ),
+      ).toBe("https://terraform.example.com");
       // Garbage proto never overrides the connection scheme.
-      expect(requestBaseUrl(req("http://127.0.0.1:3000/x", {
-        host: "terraform.example.com",
-        "x-forwarded-proto": "gopher",
-      }, "127.0.0.1"))).toBe("http://terraform.example.com");
+      expect(
+        requestBaseUrl(
+          req(
+            "http://127.0.0.1:3000/x",
+            {
+              host: "terraform.example.com",
+              "x-forwarded-proto": "gopher",
+            },
+            "127.0.0.1",
+          ),
+        ),
+      ).toBe("http://terraform.example.com");
     });
   });
 
@@ -97,10 +148,18 @@ describe("request base URL resolution (#576, #648)", () => {
   it("rejects header-injection garbage", async () => {
     if (publicUrlSet) return;
     await withTrustedProxyCidrs("127.0.0.0/8", (): void => {
-      expect(requestBaseUrl(req("http://terrence:3000/x", {
-        "x-forwarded-host": "evil.example.com\r\nX-Injected: 1",
-        "x-forwarded-proto": "https",
-      }, "127.0.0.1"))).toBe("http://terrence:3000");
+      expect(
+        requestBaseUrl(
+          req(
+            "http://terrence:3000/x",
+            {
+              "x-forwarded-host": "evil.example.com\r\nX-Injected: 1",
+              "x-forwarded-proto": "https",
+            },
+            "127.0.0.1",
+          ),
+        ),
+      ).toBe("http://terrence:3000");
     });
   });
 });

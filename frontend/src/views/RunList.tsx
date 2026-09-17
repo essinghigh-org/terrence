@@ -1,12 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import {
-  ArrowDown,
-  ArrowUp,
-  ArrowUpRight,
-  Copy,
-  Search,
-} from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpRight, Copy, Search } from "lucide-react";
 import { Avatar, AvatarImage } from "../components/ui/avatar";
 import { DegradedBanner } from "../components/DegradedBanner";
 import { EmptyState } from "../components/EmptyState";
@@ -40,7 +34,7 @@ type RunItem = {
     source?: string;
     status: string;
     "trigger-reason"?: string;
-    "branch"?: string | null;
+    branch?: string | null;
     "commit-sha"?: string | null;
     "commit-url"?: string | null;
     "triggered-by"?: string | null;
@@ -116,27 +110,35 @@ function RunSourceLine({
   return (
     <>
       {externalSource && run.attributes.branch !== null && run.attributes.branch !== undefined && (
-        <><span aria-hidden="true">·</span><span>{`branch ${run.attributes.branch}`}</span></>
-      )}
-      {externalSource && run.attributes["commit-sha"] !== null && run.attributes["commit-sha"] !== undefined && run.attributes["commit-sha"] !== "" && (
         <>
           <span aria-hidden="true">·</span>
-          {isString(run.attributes["commit-url"]) && safeHttpUrl(run.attributes["commit-url"]) !== null ? (
-            <a
-              href={safeHttpUrl(run.attributes["commit-url"]) ?? undefined}
-              target="_blank"
-              rel="noreferrer"
-              title={run.attributes["commit-sha"]}
-              className="inline-flex items-center gap-0.5 font-mono text-2xs text-primary hover:underline"
-            >
-              {run.attributes["commit-sha"].slice(0, 7)}
-              <ArrowUpRight className="size-3" aria-hidden="true" />
-            </a>
-          ) : (
-            <span className="font-mono text-2xs" title={run.attributes["commit-sha"]}>{run.attributes["commit-sha"].slice(0, 7)}</span>
-          )}
+          <span>{`branch ${run.attributes.branch}`}</span>
         </>
       )}
+      {externalSource &&
+        run.attributes["commit-sha"] !== null &&
+        run.attributes["commit-sha"] !== undefined &&
+        run.attributes["commit-sha"] !== "" && (
+          <>
+            <span aria-hidden="true">·</span>
+            {isString(run.attributes["commit-url"]) && safeHttpUrl(run.attributes["commit-url"]) !== null ? (
+              <a
+                href={safeHttpUrl(run.attributes["commit-url"]) ?? undefined}
+                target="_blank"
+                rel="noreferrer"
+                title={run.attributes["commit-sha"]}
+                className="inline-flex items-center gap-0.5 font-mono text-2xs text-primary hover:underline"
+              >
+                {run.attributes["commit-sha"].slice(0, 7)}
+                <ArrowUpRight className="size-3" aria-hidden="true" />
+              </a>
+            ) : (
+              <span className="font-mono text-2xs" title={run.attributes["commit-sha"]}>
+                {run.attributes["commit-sha"].slice(0, 7)}
+              </span>
+            )}
+          </>
+        )}
     </>
   );
 }
@@ -171,12 +173,10 @@ function RunRow({
   const { username, avatarUrl } = runCreator(run, usersMap);
   const isVcsSource = isVcsRunSource(run.attributes.source, run.attributes["trigger-reason"]);
   const sourceLabel = formatRunSource(run.attributes.source, run.attributes["trigger-reason"]);
-// SAFETY: the fixed source list matches the VCS source union the UI renders.
+  // SAFETY: the fixed source list matches the VCS source union the UI renders.
   const externalSource = isVcsSource;
   return (
-    <article
-      className="flex flex-col md:flex-row md:items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-muted/30"
-    >
+    <article className="flex flex-col md:flex-row md:items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-muted/30">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <Link
@@ -187,9 +187,14 @@ function RunRow({
           </Link>
         </div>
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
-          <span className="font-mono text-2xs text-muted-foreground/90" title={run.id}>{shortRunId(run.id)}</span>
+          <span className="font-mono text-2xs text-muted-foreground/90" title={run.id}>
+            {shortRunId(run.id)}
+          </span>
           {run.attributes.operation !== undefined && run.attributes.operation !== "plan_and_apply" && (
-            <><span aria-hidden="true">·</span><span className="text-foreground/80">{run.attributes.operation.replace(/_/g, " ")}</span></>
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="text-foreground/80">{run.attributes.operation.replace(/_/g, " ")}</span>
+            </>
           )}
           <span aria-hidden="true">·</span>
           <span className="flex items-center gap-1">
@@ -208,7 +213,7 @@ function RunRow({
       <div className="flex shrink-0 items-center gap-4">
         <span aria-live="polite" aria-atomic="true" className="flex flex-col items-end gap-0.5">
           <span className="sr-only">
-            Run {shortRunId(run.id)} ({run.attributes.message ?? "Triggered via UI"}): {" "}
+            Run {shortRunId(run.id)} ({run.attributes.message ?? "Triggered via UI"}):{" "}
           </span>
           <StatusBadge status={run.attributes.status} />
         </span>
@@ -220,7 +225,9 @@ function RunRow({
             type="button"
             variant="ghost"
             size="icon-sm"
-            onClick={(): void => { onClone(run); }}
+            onClick={(): void => {
+              onClone(run);
+            }}
             aria-label="Clone run"
             title="Clone this run's settings"
           >
@@ -254,9 +261,11 @@ function RunEmptyState({
     <EmptyState
       illustration="guide"
       title="No runs yet"
-      description={canStartRun
-        ? "There is no run history for this workspace."
-        : "There is no run history for this workspace, and you do not have permission to start one."}
+      description={
+        canStartRun
+          ? "There is no run history for this workspace."
+          : "There is no run history for this workspace, and you do not have permission to start one."
+      }
       {...(canStartRun ? { actionLabel: "Start new run", onAction: onNewRun } : {})}
       docsHref="/app/docs/runs"
     />
@@ -306,11 +315,7 @@ function RunHistoryList({
   return (
     <>
       {error !== "" && runs.length > 0 && (
-        <DegradedBanner
-          title="Run history may be out of date."
-          actionLabel="Try again"
-          onAction={onRetry}
-        />
+        <DegradedBanner title="Run history may be out of date." actionLabel="Try again" onAction={onRetry} />
       )}
 
       <div className="overflow-hidden rounded-lg border border-border bg-card">
@@ -330,7 +335,9 @@ function RunHistoryList({
                 <span>Sort by</span>
                 <button
                   type="button"
-                  onClick={(): void => { onToggleSort("status"); }}
+                  onClick={(): void => {
+                    onToggleSort("status");
+                  }}
                   className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   aria-label={`Sort runs by status, currently ${sort === "status" ? "ascending" : sort === "-status" ? "descending" : "not sorted"}`}
                 >
@@ -339,7 +346,9 @@ function RunHistoryList({
                 </button>
                 <button
                   type="button"
-                  onClick={(): void => { onToggleSort("created-at"); }}
+                  onClick={(): void => {
+                    onToggleSort("created-at");
+                  }}
                   className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   aria-label={`Sort runs by created date, currently ${sort === "created-at" ? "ascending" : sort === "-created-at" ? "descending" : "not sorted"}`}
                 >
@@ -349,17 +358,19 @@ function RunHistoryList({
               </div>
             </div>
             <div className="divide-y divide-border">
-              {runs.map((run: RunItem): React.JSX.Element => (
-                <RunRow
-                  key={run.id}
-                  run={run}
-                  orgName={orgName}
-                  workspaceName={workspaceName}
-                  usersMap={usersMap}
-                  canStartRun={canStartRun}
-                  onClone={onClone}
-                />
-              ))}
+              {runs.map(
+                (run: RunItem): React.JSX.Element => (
+                  <RunRow
+                    key={run.id}
+                    run={run}
+                    orgName={orgName}
+                    workspaceName={workspaceName}
+                    usersMap={usersMap}
+                    canStartRun={canStartRun}
+                    onClone={onClone}
+                  />
+                ),
+              )}
             </div>
             {nextPage !== null && (
               <div className="flex justify-center border-t border-border p-3">
@@ -367,7 +378,9 @@ function RunHistoryList({
                   type="button"
                   variant="outline"
                   disabled={loadingMore}
-                  onClick={(): void => { void onLoadMore(); }}
+                  onClick={(): void => {
+                    void onLoadMore();
+                  }}
                 >
                   {loadingMore ? "Loading…" : `Load more (${runs.length} of ${totalCount ?? runs.length} shown)`}
                 </Button>
@@ -446,35 +459,41 @@ export function RunList({
     };
   };
 
-  const loadRuns = useCallback(async (signal: AbortSignal, search: string): Promise<void> => {
-    try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(runHistoryPageUrl(workspaceId, null, sort, search), signal === undefined ? {} : { signal }) as {
-        data?: RunItem[];
-        included?: IncludedUser[];
-        meta?: { pagination?: JsonObject };
-      };
-      if (!signal.aborted) {
-        const page = parseRunPage(response);
-        setRuns(page.items);
-        setUsersMap(page.userMap);
-        setTotalCount(page.total);
-        setNextPage(page.next);
-        setError("");
+  const loadRuns = useCallback(
+    async (signal: AbortSignal, search: string): Promise<void> => {
+      try {
+        // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+        const response = (await fetchApi(
+          runHistoryPageUrl(workspaceId, null, sort, search),
+          signal === undefined ? {} : { signal },
+        )) as {
+          data?: RunItem[];
+          included?: IncludedUser[];
+          meta?: { pagination?: JsonObject };
+        };
+        if (!signal.aborted) {
+          const page = parseRunPage(response);
+          setRuns(page.items);
+          setUsersMap(page.userMap);
+          setTotalCount(page.total);
+          setNextPage(page.next);
+          setError("");
+        }
+      } catch (error: unknown) {
+        if (!signal.aborted) setError(error instanceof Error ? error.message : "Could not load runs");
+      } finally {
+        if (!signal.aborted) setLoading(false);
       }
-    } catch (error: unknown) {
-      if (!signal.aborted) setError(error instanceof Error ? error.message : "Could not load runs");
-    } finally {
-      if (!signal.aborted) setLoading(false);
-    }
-  }, [workspaceId, sort]);
+    },
+    [workspaceId, sort],
+  );
 
   const loadMoreRuns = useCallback(async (): Promise<void> => {
     if (nextPage === null || loadingMore) return;
     setLoadingMore(true);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(runHistoryPageUrl(workspaceId, nextPage, sort, debouncedFilter)) as {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(runHistoryPageUrl(workspaceId, nextPage, sort, debouncedFilter))) as {
         data?: RunItem[];
         included?: IncludedUser[];
         meta?: { pagination?: JsonObject };
@@ -499,8 +518,12 @@ export function RunList({
 
   // Debounce the filter box into the server-side search query.
   useEffect((): (() => void) => {
-    const timer = window.setTimeout((): void => { setDebouncedFilter(filter); }, 300);
-    return (): void => { window.clearTimeout(timer); };
+    const timer = window.setTimeout((): void => {
+      setDebouncedFilter(filter);
+    }, 300);
+    return (): void => {
+      window.clearTimeout(timer);
+    };
   }, [filter]);
 
   useEffect((): (() => void) => {
@@ -513,7 +536,9 @@ export function RunList({
       if (!stopped && !controller.signal.aborted) {
         // Fast updates arrive over the SSE stream; this timer is a slow
         // safety net for streams that fail (10.20).
-        timer = window.setTimeout((): void => { void refresh(); }, 30000);
+        timer = window.setTimeout((): void => {
+          void refresh();
+        }, 30000);
       }
     };
     void refresh();
@@ -550,9 +575,13 @@ export function RunList({
 
   // App-global SSE (EventProvider): any status transition in this workspace
   // reloads the list through the effect's debounced dispatcher.
-  useTerrenceEvent("run.status", (data): boolean => data["workspace-id"] === workspaceId, (): void => {
-    runStatusDispatchRef.current();
-  });
+  useTerrenceEvent(
+    "run.status",
+    (data): boolean => data["workspace-id"] === workspaceId,
+    (): void => {
+      runStatusDispatchRef.current();
+    },
+  );
 
   useEffect((): void => {
     if (canStartRun && searchParams.get("new-run") === "true") {
@@ -575,7 +604,9 @@ export function RunList({
     setDialogOpen(true);
   };
 
-  const retryRuns = (): void => { setRefreshVersion((value: number): number => value + 1); };
+  const retryRuns = (): void => {
+    setRefreshVersion((value: number): number => value + 1);
+  };
 
   /**
    * Cycle a sortable column: first click sorts descending (newest/highest
@@ -603,8 +634,8 @@ export function RunList({
     if (!canStartRun) return;
     setCreating(true);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi("/api/v2/runs", {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi("/api/v2/runs", {
         method: "POST",
         body: JSON.stringify({
           data: {
@@ -624,7 +655,7 @@ export function RunList({
             },
           },
         }),
-      }) as { data?: { id?: unknown } };
+      })) as { data?: { id?: unknown } };
       handleDialogOpenChange(false);
       setRunMessage("");
       setRunType("standard");
@@ -655,13 +686,15 @@ export function RunList({
    */
   const cloneRunSettings = (run: RunItem): void => {
     setRunMessage(run.attributes.message ?? "");
-    setRunType(run.attributes["plan-only"] === true
-      ? "plan"
-      : run.attributes["refresh-only"] === true
-        ? "refresh"
-        : run.attributes["allow-empty-apply"] === true
-          ? "empty"
-          : "standard");
+    setRunType(
+      run.attributes["plan-only"] === true
+        ? "plan"
+        : run.attributes["refresh-only"] === true
+          ? "refresh"
+          : run.attributes["allow-empty-apply"] === true
+            ? "empty"
+            : "standard",
+    );
     setRunDestroy(run.attributes["is-destroy"] === true);
     setRunTargets((run.attributes["target-addrs"] ?? []).join(", "));
     setRunReplace((run.attributes["replace-addrs"] ?? []).join(", "));
@@ -678,13 +711,27 @@ export function RunList({
     }
   };
 
-  if (loading) return <div role="status" className="py-8 text-center text-muted-foreground">Loading runs…</div>;
+  if (loading)
+    return (
+      <div role="status" className="py-8 text-center text-muted-foreground">
+        Loading runs…
+      </div>
+    );
   if (error !== "" && runs.length === 0) {
     return (
-      <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-5 text-sm text-destructive">
+      <div
+        role="alert"
+        className="rounded-md border border-destructive/30 bg-destructive/10 p-5 text-sm text-destructive"
+      >
         <p className="font-medium">Could not load runs</p>
         <p className="mt-1">{error}</p>
-        <Button className="mt-3" variant="outline" onClick={(): void => { setRefreshVersion((value): number => value + 1); }}>
+        <Button
+          className="mt-3"
+          variant="outline"
+          onClick={(): void => {
+            setRefreshVersion((value): number => value + 1);
+          }}
+        >
           Try again
         </Button>
       </div>
@@ -695,26 +742,27 @@ export function RunList({
     <div>
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative w-full sm:max-w-xs">
-          <label htmlFor="run-filter" className="sr-only">Filter runs</label>
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+          <label htmlFor="run-filter" className="sr-only">
+            Filter runs
+          </label>
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
           <Input
             id="run-filter"
             name="run-filter"
             autoComplete="off"
             type="search"
             value={filter}
-            onChange={(event): void => { setFilter(event.target.value); }}
+            onChange={(event): void => {
+              setFilter(event.target.value);
+            }}
             placeholder="Search by ID, message, status, source, or creator…"
             className="h-9 pl-9"
           />
         </div>
-        {canStartRun && (
-          <Button
-            onClick={openNewRunDialog}
-          >
-            Start new run
-          </Button>
-        )}
+        {canStartRun && <Button onClick={openNewRunDialog}>Start new run</Button>}
       </div>
 
       <RunHistoryList
@@ -737,124 +785,162 @@ export function RunList({
         onNewRun={openNewRunDialog}
       />
 
-      {canStartRun && <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[520px]">
-          <DialogHeader>
-            <DialogTitle>Start new run</DialogTitle>
-            <DialogDescription>
-              Configure and start a new run for this workspace.
-            </DialogDescription>
-          </DialogHeader>
-          <form
-            onSubmit={(event): void => {
-              event.preventDefault();
-              if (runDestroy && !destroyConfirmOpen) {
-                setDestroyConfirmOpen(true);
-                return;
-              }
-              void handleStartRun();
-            }}
-          >
-            <div className="flex flex-col gap-4 py-2">
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="run-message" className="text-sm font-medium">Run name</label>
-                <Input
-                  id="run-message"
-                  name="run-message"
-                  autoComplete="off"
-                  placeholder="Triggered via UI"
-                  value={runMessage}
-                  onChange={(event): void => { setRunMessage(event.target.value); }}
-                />
-              </div>
-              <fieldset className="flex flex-col gap-2">
-                <legend className="mb-1 text-sm font-medium">Run type</legend>
-                {/* SAFETY: the value matches the fixture's declared contract. */}
-                {// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
-(Object.keys(RUN_TYPE_LABELS) as RunType[]).map((type): React.JSX.Element => (
-                  <label
-                    key={type}
-                    className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${
-                      runType === type
-                        ? "border-primary bg-primary/10"
-                        : "border-border hover:border-input hover:bg-background"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="run-type"
-                      value={type}
-                      checked={runType === type}
-                      onChange={(): void => { setRunType(type); }}
-                      aria-label={RUN_TYPE_LABELS[type]}
-                      className="mt-0.5 size-4 accent-primary"
-                    />
-                    <span>
-                      <span className="block text-sm font-medium text-foreground">{RUN_TYPE_LABELS[type]}</span>
-                      <span className="mt-0.5 block text-xs text-muted-foreground">{RUN_TYPE_DESCRIPTIONS[type]}</span>
-                    </span>
+      {canStartRun && (
+        <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
+          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[520px]">
+            <DialogHeader>
+              <DialogTitle>Start new run</DialogTitle>
+              <DialogDescription>Configure and start a new run for this workspace.</DialogDescription>
+            </DialogHeader>
+            <form
+              onSubmit={(event): void => {
+                event.preventDefault();
+                if (runDestroy && !destroyConfirmOpen) {
+                  setDestroyConfirmOpen(true);
+                  return;
+                }
+                void handleStartRun();
+              }}
+            >
+              <div className="flex flex-col gap-4 py-2">
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="run-message" className="text-sm font-medium">
+                    Run name
                   </label>
-                ))}
-              </fieldset>
-              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border p-3 transition-colors hover:border-input hover:bg-background">
-                <input
-                      type="checkbox"
-                      name="run-destroy"
-                      checked={runDestroy}
-                  onChange={(event): void => { setRunDestroy(event.target.checked); }}
-                  disabled={!canStartRun}
-                  aria-label="Destroy infrastructure"
-                  className="mt-0.5 size-4 accent-primary"
-                />
-                <span>
-                  <span className="block text-sm font-medium text-foreground">Destroy infrastructure</span>
-                  <span className="mt-0.5 block text-xs text-muted-foreground">
-                    Plan a destroy of all managed resources and apply it. Target and replace addresses still apply.
-                    {runDestroy && runType === "plan" && (
-                      <span className="mt-0.5 block text-warning">A speculative plan-only destroy will not apply changes.</span>
-                    )}
+                  <Input
+                    id="run-message"
+                    name="run-message"
+                    autoComplete="off"
+                    placeholder="Triggered via UI"
+                    value={runMessage}
+                    onChange={(event): void => {
+                      setRunMessage(event.target.value);
+                    }}
+                  />
+                </div>
+                <fieldset className="flex flex-col gap-2">
+                  <legend className="mb-1 text-sm font-medium">Run type</legend>
+                  {/* SAFETY: the value matches the fixture's declared contract. */}
+                  {
+                    // SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+                    (Object.keys(RUN_TYPE_LABELS) as RunType[]).map(
+                      (type): React.JSX.Element => (
+                        <label
+                          key={type}
+                          className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${
+                            runType === type
+                              ? "border-primary bg-primary/10"
+                              : "border-border hover:border-input hover:bg-background"
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="run-type"
+                            value={type}
+                            checked={runType === type}
+                            onChange={(): void => {
+                              setRunType(type);
+                            }}
+                            aria-label={RUN_TYPE_LABELS[type]}
+                            className="mt-0.5 size-4 accent-primary"
+                          />
+                          <span>
+                            <span className="block text-sm font-medium text-foreground">{RUN_TYPE_LABELS[type]}</span>
+                            <span className="mt-0.5 block text-xs text-muted-foreground">
+                              {RUN_TYPE_DESCRIPTIONS[type]}
+                            </span>
+                          </span>
+                        </label>
+                      ),
+                    )
+                  }
+                </fieldset>
+                <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border p-3 transition-colors hover:border-input hover:bg-background">
+                  <input
+                    type="checkbox"
+                    name="run-destroy"
+                    checked={runDestroy}
+                    onChange={(event): void => {
+                      setRunDestroy(event.target.checked);
+                    }}
+                    disabled={!canStartRun}
+                    aria-label="Destroy infrastructure"
+                    className="mt-0.5 size-4 accent-primary"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-foreground">Destroy infrastructure</span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      Plan a destroy of all managed resources and apply it. Target and replace addresses still apply.
+                      {runDestroy && runType === "plan" && (
+                        <span className="mt-0.5 block text-warning">
+                          A speculative plan-only destroy will not apply changes.
+                        </span>
+                      )}
+                    </span>
                   </span>
-                </span>
-              </label>
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="run-targets" className="text-sm font-medium">Target addresses</label>
-                <Input
-                  id="run-targets"
-                  name="run-targets"
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder="aws_instance.web, aws_instance.db"
-                  value={runTargets}
-                  onChange={(event): void => { setRunTargets(event.target.value); }}
-                />
-                <p className="text-xs text-muted-foreground">Comma-separated resource addresses to limit this run to.</p>
+                </label>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="run-targets" className="text-sm font-medium">
+                    Target addresses
+                  </label>
+                  <Input
+                    id="run-targets"
+                    name="run-targets"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="aws_instance.web, aws_instance.db"
+                    value={runTargets}
+                    onChange={(event): void => {
+                      setRunTargets(event.target.value);
+                    }}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Comma-separated resource addresses to limit this run to.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="run-replace" className="text-sm font-medium">
+                    Replace addresses
+                  </label>
+                  <Input
+                    id="run-replace"
+                    name="run-replace"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="aws_instance.web"
+                    value={runReplace}
+                    onChange={(event): void => {
+                      setRunReplace(event.target.value);
+                    }}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Comma-separated resource addresses to force replacement of.
+                  </p>
+                </div>
               </div>
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="run-replace" className="text-sm font-medium">Replace addresses</label>
-                <Input
-                  id="run-replace"
-                  name="run-replace"
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder="aws_instance.web"
-                  value={runReplace}
-                  onChange={(event): void => { setRunReplace(event.target.value); }}
-                />
-                <p className="text-xs text-muted-foreground">Comma-separated resource addresses to force replacement of.</p>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={(): void => { handleDialogOpenChange(false); }}>Cancel</Button>
-              <Button type="submit" disabled={creating}>
-                {creating ? "Starting…" : "Start run"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>}
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={(): void => {
+                    handleDialogOpenChange(false);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={creating}>
+                  {creating ? "Starting…" : "Start run"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      )}
       <ConfirmDialog
         open={destroyConfirmOpen}
-        onOpenChange={(open): void => { setDestroyConfirmOpen(open); }}
+        onOpenChange={(open): void => {
+          setDestroyConfirmOpen(open);
+        }}
         title="Destroy infrastructure?"
         description="This run will plan the destruction of all managed resources in this workspace. It never applies automatically: a destroy run from this dialog always needs a separate apply confirmation. Destroyed infrastructure usually cannot be recovered."
         confirmText="Start destroy run"

@@ -2,7 +2,15 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
-  agentJobs, agentPools, agents, apiTokens, organizationMemberships, organizations, runs, users, workspaces,
+  agentJobs,
+  agentPools,
+  agents,
+  apiTokens,
+  organizationMemberships,
+  organizations,
+  runs,
+  users,
+  workspaces,
 } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
@@ -22,14 +30,16 @@ describe("workspace lock metadata and force-unlock (#568)", () => {
   const wsId = `ws-lockmeta-${suffix}`;
 
   const request = (token: string, path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   const attributesOf = async (token: string): Promise<Record<string, unknown>> => {
     const res = await request(token, `/api/v2/workspaces/${wsId}`);
@@ -51,19 +61,38 @@ describe("workspace lock metadata and force-unlock (#568)", () => {
       { id: `tok-a-${suffix}`, token: hashAuthenticationToken(ownerToken), userId: ownerId },
       { id: `tok-b-${suffix}`, token: hashAuthenticationToken(otherToken), userId: otherId },
     ]);
-    await db.insert(workspaces).values([
-      { id: wsId, name: `lockmeta-ws-${suffix}`, orgId, executionMode: "remote" },
-    ]);
+    await db.insert(workspaces).values([{ id: wsId, name: `lockmeta-ws-${suffix}`, orgId, executionMode: "remote" }]);
   });
 
   afterAll(async () => {
-    await db.delete(workspaces).where(eq(workspaces.id, wsId)).catch((): void => undefined);
-    await db.delete(apiTokens).where(eq(apiTokens.userId, ownerId)).catch((): void => undefined);
-    await db.delete(apiTokens).where(eq(apiTokens.userId, otherId)).catch((): void => undefined);
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId)).catch((): void => undefined);
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
-    await db.delete(users).where(eq(users.id, ownerId)).catch((): void => undefined);
-    await db.delete(users).where(eq(users.id, otherId)).catch((): void => undefined);
+    await db
+      .delete(workspaces)
+      .where(eq(workspaces.id, wsId))
+      .catch((): void => undefined);
+    await db
+      .delete(apiTokens)
+      .where(eq(apiTokens.userId, ownerId))
+      .catch((): void => undefined);
+    await db
+      .delete(apiTokens)
+      .where(eq(apiTokens.userId, otherId))
+      .catch((): void => undefined);
+    await db
+      .delete(organizationMemberships)
+      .where(eq(organizationMemberships.orgId, orgId))
+      .catch((): void => undefined);
+    await db
+      .delete(organizations)
+      .where(eq(organizations.id, orgId))
+      .catch((): void => undefined);
+    await db
+      .delete(users)
+      .where(eq(users.id, ownerId))
+      .catch((): void => undefined);
+    await db
+      .delete(users)
+      .where(eq(users.id, otherId))
+      .catch((): void => undefined);
   });
 
   it("exposes lock owner, reason, and timestamp on lock", async () => {
@@ -129,9 +158,15 @@ describe("workspace lock metadata and force-unlock (#568)", () => {
   it("422s force-unlock on a live-run lock without force, allows it with force (#617)", async () => {
     const runId = `run-live-${suffix}`;
     await db.insert(runs).values({ id: runId, workspaceId: wsId, status: "applying", createdAt: Date.now() });
-    await db.update(workspaces).set({
-      locked: true, lockedReason: "Run is applying", lockOwnerType: "agent-run", lockOwnerId: runId,
-    }).where(eq(workspaces.id, wsId));
+    await db
+      .update(workspaces)
+      .set({
+        locked: true,
+        lockedReason: "Run is applying",
+        lockOwnerType: "agent-run",
+        lockOwnerId: runId,
+      })
+      .where(eq(workspaces.id, wsId));
 
     const refused = await request(otherToken, `/api/v2/workspaces/${wsId}/actions/force-unlock`, "POST");
     expect(refused.status).toBe(422);
@@ -149,9 +184,15 @@ describe("workspace lock metadata and force-unlock (#568)", () => {
   it("allows force-unlock on a terminal-run lock without force (#617)", async () => {
     const runId = `run-done-${suffix}`;
     await db.insert(runs).values({ id: runId, workspaceId: wsId, status: "applied", createdAt: Date.now() });
-    await db.update(workspaces).set({
-      locked: true, lockedReason: "stale lock", lockOwnerType: "run", lockOwnerId: runId,
-    }).where(eq(workspaces.id, wsId));
+    await db
+      .update(workspaces)
+      .set({
+        locked: true,
+        lockedReason: "stale lock",
+        lockOwnerType: "run",
+        lockOwnerId: runId,
+      })
+      .where(eq(workspaces.id, wsId));
 
     const res = await request(otherToken, `/api/v2/workspaces/${wsId}/actions/force-unlock`, "POST");
     expect(res.status).toBe(200);
@@ -163,15 +204,32 @@ describe("workspace lock metadata and force-unlock (#568)", () => {
     const runId = `run-held-${suffix}`;
     const now = Date.now();
     await db.insert(agentPools).values({ id: `pool-${suffix}`, orgId, name: `pool-${suffix}` });
-    await db.insert(agents).values({ id: `agent-${suffix}`, agentPoolId: `pool-${suffix}`, name: `agent-${suffix}`, status: "busy", lastPingAt: now });
+    await db.insert(agents).values({
+      id: `agent-${suffix}`,
+      agentPoolId: `pool-${suffix}`,
+      name: `agent-${suffix}`,
+      status: "busy",
+      lastPingAt: now,
+    });
     await db.insert(runs).values({ id: runId, workspaceId: wsId, status: "force_canceled", createdAt: now });
     await db.insert(agentJobs).values({
-      id: `job-${suffix}`, runId, agentPoolId: `pool-${suffix}`, agentId: `agent-${suffix}`,
-      phase: "apply", status: "canceled", createdAt: now,
+      id: `job-${suffix}`,
+      runId,
+      agentPoolId: `pool-${suffix}`,
+      agentId: `agent-${suffix}`,
+      phase: "apply",
+      status: "canceled",
+      createdAt: now,
     });
-    await db.update(workspaces).set({
-      locked: true, lockedReason: "Run is applying", lockOwnerType: "agent-run", lockOwnerId: runId,
-    }).where(eq(workspaces.id, wsId));
+    await db
+      .update(workspaces)
+      .set({
+        locked: true,
+        lockedReason: "Run is applying",
+        lockOwnerType: "agent-run",
+        lockOwnerId: runId,
+      })
+      .where(eq(workspaces.id, wsId));
 
     const refused = await request(otherToken, `/api/v2/workspaces/${wsId}/actions/force-unlock`, "POST");
     expect(refused.status).toBe(422);

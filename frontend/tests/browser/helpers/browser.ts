@@ -96,9 +96,10 @@ export class BrowserPage {
     // GitHub-hosted Linux runners expose a small /dev/shm. Without this
     // switch Chrome can leave the first navigation pending, which then poisons
     // every later WebView operation with "already pending" errors.
-    const backend = this.backend === "chrome" && process.env["CI"] === "true"
-      ? { type: "chrome" as const, url: false as const, argv: ["--disable-dev-shm-usage"] }
-      : this.backend;
+    const backend =
+      this.backend === "chrome" && process.env["CI"] === "true"
+        ? { type: "chrome" as const, url: false as const, argv: ["--disable-dev-shm-usage"] }
+        : this.backend;
     this.webview = new Bun.WebView({
       backend,
       width: options.width ?? 1440,
@@ -156,19 +157,24 @@ export class BrowserPage {
     if (this.backend !== "chrome" || this.runtimeCaptureEnabled) return;
     await this.webview.cdp("Runtime.enable");
     this.webview.addEventListener("Runtime.exceptionThrown", (event: Event): void => {
-      const details = (event as MessageEvent<{
-        exceptionDetails?: { text?: string; exception?: { description?: string } };
-      }>).data.exceptionDetails;
+      const details = (
+        event as MessageEvent<{
+          exceptionDetails?: { text?: string; exception?: { description?: string } };
+        }>
+      ).data.exceptionDetails;
       this.pageErrors.push(details?.exception?.description ?? details?.text ?? "Unknown page exception");
     });
     this.webview.addEventListener("Runtime.consoleAPICalled", (event: Event): void => {
-      const data = (event as MessageEvent<{
-        type?: string;
-        args?: { description?: string; value?: unknown }[];
-      }>).data;
+      const data = (
+        event as MessageEvent<{
+          type?: string;
+          args?: { description?: string; value?: unknown }[];
+        }>
+      ).data;
       if (data.type !== "error") return;
-      this.consoleErrors.push((data.args ?? []).map((arg): string =>
-        arg.description ?? describeConsoleArg(arg.value)).join(" "));
+      this.consoleErrors.push(
+        (data.args ?? []).map((arg): string => arg.description ?? describeConsoleArg(arg.value)).join(" "),
+      );
     });
     this.runtimeCaptureEnabled = true;
   }
@@ -187,8 +193,7 @@ export class BrowserPage {
       } catch (error) {
         const code = (error as { code?: unknown }).code;
         const message = error instanceof Error ? error.message : String(error);
-        const pendingNavigation = code === "ERR_INVALID_STATE"
-          || message.includes("navigation is already pending");
+        const pendingNavigation = code === "ERR_INVALID_STATE" || message.includes("navigation is already pending");
         if (!pendingNavigation || attempt >= 19) throw error;
         await Bun.sleep(100);
       }
@@ -300,7 +305,9 @@ export class BrowserPage {
       await Bun.sleep(50);
     }
     await this.collectErrors();
-    throw new Error(`Timeout waiting for React application to mount at "${selector}" (pageErrors: ${JSON.stringify(this.pageErrors)}, consoleErrors: ${JSON.stringify(this.consoleErrors)})`);
+    throw new Error(
+      `Timeout waiting for React application to mount at "${selector}" (pageErrors: ${JSON.stringify(this.pageErrors)}, consoleErrors: ${JSON.stringify(this.consoleErrors)})`,
+    );
   }
 
   async evaluate<T = unknown>(fnOrScript: string | ((...args: unknown[]) => unknown), ...args: unknown[]): Promise<T> {

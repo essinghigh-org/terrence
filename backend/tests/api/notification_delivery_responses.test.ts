@@ -4,8 +4,13 @@ import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
-  apiTokens, notificationConfigurations, organizationMemberships,
-  organizations, runs, users, workspaces,
+  apiTokens,
+  notificationConfigurations,
+  organizationMemberships,
+  organizations,
+  runs,
+  users,
+  workspaces,
 } from "../../src/db/schema";
 import { deliverRunNotifications } from "../../src/lib/notifications";
 
@@ -36,20 +41,26 @@ describe("Notification configuration delivery-responses (NOT-011)", () => {
   const runId = `run-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({
-      id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
+      id: `mem-${suffix}`,
+      userId,
+      orgId,
+      role: "owner",
+      status: "active",
     });
     await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
     await db.insert(workspaces).values({ id: workspaceId, orgId, name: "notif-ws", executionMode: "remote" });

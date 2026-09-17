@@ -17,12 +17,18 @@ import { apiTokens, users } from "../../src/db/schema";
 import { storageDir } from "../../src/db/driver";
 import { defaultOutputName, sanitizeOutputName } from "../../src/lib/db-export";
 import { makeTestDbName } from "../setup";
-const isPostgresEnv = process.env["PG_TEST_ADMIN_URL"] !== undefined || process.env["PG_ADMIN_URL"] !== undefined || (process.env["DATABASE_URL"]?.startsWith("postgres") ?? false);
-
+const isPostgresEnv =
+  process.env["PG_TEST_ADMIN_URL"] !== undefined ||
+  process.env["PG_ADMIN_URL"] !== undefined ||
+  (process.env["DATABASE_URL"]?.startsWith("postgres") ?? false);
 
 process.env["TERRENCE_DISABLE_RESTART"] ??= "1";
 
-const PG_ADMIN_URL = process.env["PG_TEST_ADMIN_URL"] ?? process.env["PG_ADMIN_URL"] ?? (process.env["DATABASE_URL"]?.startsWith("postgres") === true ? process.env["DATABASE_URL"] : undefined) ?? "postgres://terrence:terrence@127.0.0.1:5432/terrence_test";
+const PG_ADMIN_URL =
+  process.env["PG_TEST_ADMIN_URL"] ??
+  process.env["PG_ADMIN_URL"] ??
+  (process.env["DATABASE_URL"]?.startsWith("postgres") === true ? process.env["DATABASE_URL"] : undefined) ??
+  "postgres://terrence:terrence@127.0.0.1:5432/terrence_test";
 
 let adminToken = "";
 let adminId = "";
@@ -69,17 +75,28 @@ async function startExport(body: unknown): Promise<{ id: string }> {
 async function waitForJob(
   id: string,
   timeoutMs = 90_000,
-): Promise<{ status: string; error?: { code?: string; detail?: string }; result?: { "file-name"?: string; verification?: unknown } }> {
+): Promise<{
+  status: string;
+  error?: { code?: string; detail?: string };
+  result?: { "file-name"?: string; verification?: unknown };
+}> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const response = await app.handle(adminRequest(`/api/v2/admin/db-export/jobs/${id}`));
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
-      data: { attributes: { status: string; error?: { code?: string; detail?: string }; result?: { "file-name"?: string; verification?: unknown } } };
+      data: {
+        attributes: {
+          status: string;
+          error?: { code?: string; detail?: string };
+          result?: { "file-name"?: string; verification?: unknown };
+        };
+      };
     };
     const attributes = body.data.attributes;
     if (attributes.status === "done" || attributes.status === "failed") return attributes;
-    if (Date.now() > deadline) throw new Error(`Export job did not finish within ${timeoutMs}ms (status: ${attributes.status})`);
+    if (Date.now() > deadline)
+      throw new Error(`Export job did not finish within ${timeoutMs}ms (status: ${attributes.status})`);
     await Bun.sleep(200);
   }
 }
@@ -126,7 +143,9 @@ beforeAll(async (): Promise<void> => {
           payload TEXT NOT NULL
         )
       `);
-      await client.unsafe("CREATE INDEX IF NOT EXISTS oauth_handshake_states_expires_idx ON oauth_handshake_states (expires_at)");
+      await client.unsafe(
+        "CREATE INDEX IF NOT EXISTS oauth_handshake_states_expires_idx ON oauth_handshake_states (expires_at)",
+      );
       await client.unsafe(`
         CREATE TABLE IF NOT EXISTS registry_sync_leases (
           key TEXT PRIMARY KEY NOT NULL,
@@ -134,7 +153,9 @@ beforeAll(async (): Promise<void> => {
           expires_at BIGINT NOT NULL
         )
       `);
-      await client.unsafe("CREATE INDEX IF NOT EXISTS registry_sync_leases_expires_idx ON registry_sync_leases (expires_at)");
+      await client.unsafe(
+        "CREATE INDEX IF NOT EXISTS registry_sync_leases_expires_idx ON registry_sync_leases (expires_at)",
+      );
 
       orgId = `exp-org-${crypto.randomUUID()}`;
       workspaceId = `ws-exp-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
@@ -216,9 +237,11 @@ afterAll(async (): Promise<void> => {
 describe.skipIf(!isPostgresEnv)("Postgres -> SQLite database export", (): void => {
   test("test-connection accepts a seeded Terrence database", async (): Promise<void> => {
     if (!postgresAvailable) return;
-    const response = await app.handle(adminRequest("/api/v2/admin/db-export/test-connection", "POST", {
-      data: { attributes: { "postgres-url": sourceUrl } },
-    }));
+    const response = await app.handle(
+      adminRequest("/api/v2/admin/db-export/test-connection", "POST", {
+        data: { attributes: { "postgres-url": sourceUrl } },
+      }),
+    );
     expect(response.status).toBe(200);
     const body = (await response.json()) as { data: { attributes: { ok: boolean } } };
     expect(body.data.attributes.ok).toBe(true);
@@ -237,16 +260,20 @@ describe.skipIf(!isPostgresEnv)("Postgres -> SQLite database export", (): void =
     const url = new URL(PG_ADMIN_URL);
     url.pathname = `/${emptyName}`;
     try {
-      const response = await app.handle(adminRequest("/api/v2/admin/db-export/test-connection", "POST", {
-        data: { attributes: { "postgres-url": url.toString() } },
-      }));
+      const response = await app.handle(
+        adminRequest("/api/v2/admin/db-export/test-connection", "POST", {
+          data: { attributes: { "postgres-url": url.toString() } },
+        }),
+      );
       expect(response.status).toBe(422);
       const body = (await response.json()) as { errors: { title: string }[] };
       expect(body.errors[0]?.title).toBe("Incompatible database");
     } finally {
       const cleanup = new SQL(PG_ADMIN_URL);
       try {
-        await cleanup.unsafe(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${emptyName}' AND pid <> pg_backend_pid()`);
+        await cleanup.unsafe(
+          `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${emptyName}' AND pid <> pg_backend_pid()`,
+        );
         await cleanup.unsafe(`DROP DATABASE IF EXISTS "${emptyName}"`);
       } finally {
         await cleanup.close();
@@ -255,9 +282,11 @@ describe.skipIf(!isPostgresEnv)("Postgres -> SQLite database export", (): void =
   }, 30_000);
 
   test("test-connection requires a postgres-url", async (): Promise<void> => {
-    const response = await app.handle(adminRequest("/api/v2/admin/db-export/test-connection", "POST", {
-      data: { attributes: {} },
-    }));
+    const response = await app.handle(
+      adminRequest("/api/v2/admin/db-export/test-connection", "POST", {
+        data: { attributes: {} },
+      }),
+    );
     expect(response.status).toBe(422);
   });
 
@@ -289,9 +318,10 @@ describe.skipIf(!isPostgresEnv)("Postgres -> SQLite database export", (): void =
       expect(count("workspaces")).toBe(1);
       expect(count("runs")).toBe(1);
 
-      const run = exported.query(`SELECT id, status FROM "runs" WHERE id = ?`).get(runId) as
-        | { id: string; status: string }
-        | null;
+      const run = exported.query(`SELECT id, status FROM "runs" WHERE id = ?`).get(runId) as {
+        id: string;
+        status: string;
+      } | null;
       expect(run?.status).toBe("applied");
     } finally {
       exported.close();
@@ -313,11 +343,24 @@ describe.skipIf(!isPostgresEnv)("Postgres -> SQLite database export", (): void =
     const bytes = new Uint8Array(await download.arrayBuffer());
     expect(bytes.length).toBe(entry?.attributes["size-bytes"] ?? 0);
     // SQLite header magic ("SQLite format 3\0").
-    expect(String.fromCharCode(bytes[0] ?? 0, bytes[1] ?? 0, bytes[2] ?? 0, bytes[3] ?? 0, bytes[4] ?? 0, bytes[5] ?? 0, bytes[6] ?? 0, bytes[7] ?? 0)).toBe("SQLite f");
+    expect(
+      String.fromCharCode(
+        bytes[0] ?? 0,
+        bytes[1] ?? 0,
+        bytes[2] ?? 0,
+        bytes[3] ?? 0,
+        bytes[4] ?? 0,
+        bytes[5] ?? 0,
+        bytes[6] ?? 0,
+        bytes[7] ?? 0,
+      ),
+    ).toBe("SQLite f");
 
     const deleted = await app.handle(adminRequest("/api/v2/admin/db-export/files/export-main.db", "DELETE"));
     expect(deleted.status).toBe(204);
-    const after = (await (await app.handle(adminRequest("/api/v2/admin/db-export"))).json()) as { data: { id: string }[] };
+    const after = (await (await app.handle(adminRequest("/api/v2/admin/db-export"))).json()) as {
+      data: { id: string }[];
+    };
     expect(after.data.some((file): boolean => file.id === "export-main.db")).toBe(false);
   }, 30_000);
 
@@ -392,10 +435,18 @@ describe.skipIf(!isPostgresEnv)("Postgres -> SQLite database export", (): void =
     expect(sanitizeOutputName("a\\..\\b.db")).toBe("b.db");
     expect(sanitizeOutputName("dir/export-1.db")).toBe("export-1.db");
     // Non-.db extensions and characters outside the safe set are rejected.
-    expect((): void => { sanitizeOutputName("notes.txt"); }).toThrow();
-    expect((): void => { sanitizeOutputName("has space.db"); }).toThrow();
-    expect((): void => { sanitizeOutputName("quote\".db"); }).toThrow();
-    expect((): void => { sanitizeOutputName(""); }).toThrow();
+    expect((): void => {
+      sanitizeOutputName("notes.txt");
+    }).toThrow();
+    expect((): void => {
+      sanitizeOutputName("has space.db");
+    }).toThrow();
+    expect((): void => {
+      sanitizeOutputName('quote".db');
+    }).toThrow();
+    expect((): void => {
+      sanitizeOutputName("");
+    }).toThrow();
   });
 
   test("defaultOutputName is a timestamped bare file name", (): void => {
@@ -421,9 +472,13 @@ describe("db-export verification bounds", (): void => {
   });
 
   test("accepts valid verification bounds and starts the job", async (): Promise<void> => {
-    const started = await app.handle(adminRequest("/api/v2/admin/db-export", "POST", {
-      data: { attributes: { "postgres-url": "postgres://127.0.0.1:1/nope", "sample-limit": 10, "full-digest-limit": 50 } },
-    }));
+    const started = await app.handle(
+      adminRequest("/api/v2/admin/db-export", "POST", {
+        data: {
+          attributes: { "postgres-url": "postgres://127.0.0.1:1/nope", "sample-limit": 10, "full-digest-limit": 50 },
+        },
+      }),
+    );
     expect(started.status).toBe(202);
     const id = ((await started.json()) as { data: { id: string } }).data.id;
     // The unreachable source fails the job; the point is that validation

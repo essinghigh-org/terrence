@@ -1,11 +1,4 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  type ReactNode,
-} from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { subscribeEvents, type EventStreamHandle, type SseEvent } from "./events";
 import type { JsonObject } from "@/lib/json";
 
@@ -57,14 +50,17 @@ export function EventProvider({
     };
   }, [streamFactory]);
 
-  const contextValue = useMemo<EventContextValue>((): EventContextValue => ({
-    subscribe: (listener: EventListener): (() => void) => {
-      listenersRef.current.add(listener);
-      return (): void => {
-        listenersRef.current.delete(listener);
-      };
-    },
-  }), []);
+  const contextValue = useMemo<EventContextValue>(
+    (): EventContextValue => ({
+      subscribe: (listener: EventListener): (() => void) => {
+        listenersRef.current.add(listener);
+        return (): void => {
+          listenersRef.current.delete(listener);
+        };
+      },
+    }),
+    [],
+  );
 
   return <EventContext.Provider value={contextValue}>{children}</EventContext.Provider>;
 }

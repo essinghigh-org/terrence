@@ -10,7 +10,8 @@ describe("the reference format API v2 - Variables", () => {
 
   beforeAll(async () => {
     // Need to clean up everything that references orgs/users to avoid FK constraint errors
-    const { stateVersions, runs, organizationMemberships, configurationVersions, logs, workspaceTags, organizations } = await import("../../src/db/schema");
+    const { stateVersions, runs, organizationMemberships, configurationVersions, logs, workspaceTags, organizations } =
+      await import("../../src/db/schema");
     await db.delete(logs);
     await db.delete(runs);
     await db.delete(configurationVersions);
@@ -30,7 +31,7 @@ describe("the reference format API v2 - Variables", () => {
         body: JSON.stringify({
           data: { type: "users", attributes: { username: "var-owner", password: "securepassword" } },
         }),
-      })
+      }),
     );
     expect(res.status).toBe(201);
 
@@ -41,7 +42,7 @@ describe("the reference format API v2 - Variables", () => {
         body: JSON.stringify({
           data: { attributes: { username: "var-owner", password: "securepassword" } },
         }),
-      })
+      }),
     );
     userToken = (await loginRes.json()).data.attributes.token;
 
@@ -51,21 +52,21 @@ describe("the reference format API v2 - Variables", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
-          data: { type: "organizations", attributes: { name: orgName } }
-        })
-      })
+          data: { type: "organizations", attributes: { name: orgName } },
+        }),
+      }),
     );
     expect(orgRes.status).toBe(201);
     const orgId = (await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) }))?.id ?? "";
 
     workspaceId = crypto.randomUUID();
     await db.insert(workspaces).values({
-        id: workspaceId,
-        name: "var-workspace",
-        orgId: orgId
+      id: workspaceId,
+      name: "var-workspace",
+      orgId: orgId,
     });
   });
 
@@ -75,7 +76,7 @@ describe("the reference format API v2 - Variables", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: {
@@ -84,11 +85,11 @@ describe("the reference format API v2 - Variables", () => {
               key: "AWS_REGION",
               value: "us-east-1",
               category: "env",
-              sensitive: false
-            }
-          }
-        })
-      })
+              sensitive: false,
+            },
+          },
+        }),
+      }),
     );
     expect(res.status).toBe(201);
     const data = await res.json();
@@ -101,8 +102,8 @@ describe("the reference format API v2 - Variables", () => {
     const res = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/vars`, {
         method: "GET",
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     expect(res.status).toBe(200);
     const data = await res.json();
@@ -116,7 +117,7 @@ describe("the reference format API v2 - Variables", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: {
@@ -125,11 +126,11 @@ describe("the reference format API v2 - Variables", () => {
               key: "SECRET_KEY",
               value: "supersecret",
               category: "terraform",
-              sensitive: true
-            }
-          }
-        })
-      })
+              sensitive: true,
+            },
+          },
+        }),
+      }),
     );
     expect(createRes.status).toBe(201);
     const createData = await createRes.json();
@@ -138,8 +139,8 @@ describe("the reference format API v2 - Variables", () => {
     const getRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/vars`, {
         method: "GET",
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     const getData = await getRes.json();
     const sensitiveVar = getData.data.find((v: any) => v.attributes.key === "SECRET_KEY");
@@ -154,15 +155,15 @@ describe("the reference format API v2 - Variables", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: {
             type: "vars",
-            attributes: { key: "REGION", value: "us-east-1", category: "terraform", sensitive: false }
-          }
-        })
-      })
+            attributes: { key: "REGION", value: "us-east-1", category: "terraform", sensitive: false },
+          },
+        }),
+      }),
     );
     expect(createRes.status).toBe(201);
     const varId = (await createRes.json()).data.id;
@@ -173,15 +174,15 @@ describe("the reference format API v2 - Variables", () => {
         method: "PATCH",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: {
             type: "vars",
-            attributes: { hcl: true, description: "primary region variable", value: "us-west-2" }
-          }
-        })
-      })
+            attributes: { hcl: true, description: "primary region variable", value: "us-west-2" },
+          },
+        }),
+      }),
     );
     expect(patchRes.status).toBe(200);
     const body: { data: { attributes: { hcl: boolean; description: string; value: string } } } = await patchRes.json();
@@ -200,14 +201,14 @@ describe("the reference format API v2 - Variables", () => {
     const createRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/vars`, {
         method: "POST",
-        headers: { "Content-Type": "application/vnd.api+json", "Authorization": `Bearer ${userToken}` },
+        headers: { "Content-Type": "application/vnd.api+json", Authorization: `Bearer ${userToken}` },
         body: JSON.stringify({
           data: {
             type: "vars",
-            attributes: { key: "KEEP_ME", value: "secret-val", category: "terraform", sensitive: true }
-          }
-        })
-      })
+            attributes: { key: "KEEP_ME", value: "secret-val", category: "terraform", sensitive: true },
+          },
+        }),
+      }),
     );
     expect(createRes.status).toBe(201);
     const varId = (await createRes.json()).data.id;
@@ -215,9 +216,9 @@ describe("the reference format API v2 - Variables", () => {
     const patchRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/vars/${varId}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/vnd.api+json", "Authorization": `Bearer ${userToken}` },
-        body: JSON.stringify({ data: { type: "vars", attributes: { sensitive: false } } })
-      })
+        headers: { "Content-Type": "application/vnd.api+json", Authorization: `Bearer ${userToken}` },
+        body: JSON.stringify({ data: { type: "vars", attributes: { sensitive: false } } }),
+      }),
     );
     expect(patchRes.status).toBe(200);
     const body: { data: { attributes: { sensitive: boolean; value: unknown } } } = await patchRes.json();

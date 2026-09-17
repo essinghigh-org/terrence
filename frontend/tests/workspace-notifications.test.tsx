@@ -59,7 +59,7 @@ test("shows a discord option and failed last deliveries", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(<WorkspaceNotifications workspaceId="ws-1" />);
   await waitFor((): void => {

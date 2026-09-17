@@ -144,20 +144,37 @@ async function main(): Promise<void> {
   t0 = performance.now();
   const [wsCount, varCount, projCount] = await Promise.all([
     db.select({ n: workspaces.id }).from(workspaces).where(eq(workspaces.orgId, orgId)),
-    db.select({ n: workspaceVariables.id }).from(workspaceVariables).where(inArray(workspaceVariables.workspaceId, workspaceRows.map((r) => r.id))),
+    db
+      .select({ n: workspaceVariables.id })
+      .from(workspaceVariables)
+      .where(
+        inArray(
+          workspaceVariables.workspaceId,
+          workspaceRows.map((r) => r.id),
+        ),
+      ),
     db.select({ n: projects.id }).from(projects).where(eq(projects.orgId, orgId)),
   ]);
-  const ok = wsCount.length === workspaceCount && varCount.length === variableRows.length && projCount.length === projectCount;
-  phases.push({ name: "verify", ms: performance.now() - t0, count: wsCount.length + varCount.length + projCount.length });
+  const ok =
+    wsCount.length === workspaceCount && varCount.length === variableRows.length && projCount.length === projectCount;
+  phases.push({
+    name: "verify",
+    ms: performance.now() - t0,
+    count: wsCount.length + varCount.length + projCount.length,
+  });
 
   console.log(`org:  ${orgName} (${orgId})`);
   console.log(`user: ${userName} (${userId}, owner)`);
   for (const phase of phases) {
-    console.log(`  ${phase.name.padEnd(10)} ${phase.count.toString().padStart(7)} rows  ${phase.ms.toFixed(1).padStart(8)} ms`);
+    console.log(
+      `  ${phase.name.padEnd(10)} ${phase.count.toString().padStart(7)} rows  ${phase.ms.toFixed(1).padStart(8)} ms`,
+    );
   }
   console.log(`total: ${(performance.now() - start).toFixed(1)} ms`);
   if (!ok) {
-    console.error(`COUNT MISMATCH: expected ${workspaceCount} workspaces / ${variableRows.length} variables / ${projectCount} projects`);
+    console.error(
+      `COUNT MISMATCH: expected ${workspaceCount} workspaces / ${variableRows.length} variables / ${projectCount} projects`,
+    );
     process.exit(1);
   }
   console.log("verification: OK");

@@ -10,16 +10,27 @@ async function api(
   path: string,
   body?: unknown,
   token?: string,
-): Promise<{ status: number; json: { data?: { attributes?: Record<string, unknown> }; errors?: { status: string; title: string; detail?: string }[] } }> {
+): Promise<{
+  status: number;
+  json: {
+    data?: { attributes?: Record<string, unknown> };
+    errors?: { status: string; title: string; detail?: string }[];
+  };
+}> {
   const headers: Record<string, string> = {};
   if (token !== undefined && token !== "") headers["Authorization"] = `Bearer ${token}`;
   if (body !== undefined) headers["Content-Type"] = "application/vnd.api+json";
-  const res = await app.handle(new Request(`http://localhost${path}`, {
-    method,
-    headers,
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
-  let json: { data?: { attributes?: Record<string, unknown> }; errors?: { status: string; title: string; detail?: string }[] } = {};
+  const res = await app.handle(
+    new Request(`http://localhost${path}`, {
+      method,
+      headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
+  let json: {
+    data?: { attributes?: Record<string, unknown> };
+    errors?: { status: string; title: string; detail?: string }[];
+  } = {};
   try {
     json = (await res.json()) as typeof json;
   } catch {
@@ -133,7 +144,12 @@ describe("mfa api", () => {
   });
 
   test("POST /account/mfa/verify rejects reuse of an accepted TOTP code", async () => {
-    const res = await api("POST", "/api/v2/account/mfa/verify", { data: { attributes: { code: acceptedEnrollmentCode } } }, apiToken);
+    const res = await api(
+      "POST",
+      "/api/v2/account/mfa/verify",
+      { data: { attributes: { code: acceptedEnrollmentCode } } },
+      apiToken,
+    );
     expect(res.status).toBe(401);
   });
 

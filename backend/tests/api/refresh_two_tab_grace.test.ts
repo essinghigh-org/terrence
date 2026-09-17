@@ -15,17 +15,21 @@ describe("refresh token two-tab concurrency grace", () => {
   const password = "grace-password-123";
 
   const login = (): Promise<Response> =>
-    app.handle(new Request("http://terrence.test/api/v2/users/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({ data: { attributes: { username: userId, password, "browser-session": true } } }),
-    }));
+    app.handle(
+      new Request("http://terrence.test/api/v2/users/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({ data: { attributes: { username: userId, password, "browser-session": true } } }),
+      }),
+    );
 
   const refresh = (cookie: string): Promise<Response> =>
-    app.handle(new Request("http://terrence.test/api/v2/users/refresh", {
-      method: "POST",
-      headers: { Cookie: cookie },
-    }));
+    app.handle(
+      new Request("http://terrence.test/api/v2/users/refresh", {
+        method: "POST",
+        headers: { Cookie: cookie },
+      }),
+    );
 
   const cookieFrom = (res: Response, name = "terrence_refresh"): string => {
     const setCookie = res.headers.get("set-cookie") ?? "";
@@ -53,10 +57,7 @@ describe("refresh token two-tab concurrency grace", () => {
     expect(originalCookie).not.toBe("");
 
     // Both tabs fire concurrently with the SAME old cookie.
-    const [tabA, tabB] = await Promise.all([
-      refresh(originalCookie),
-      refresh(originalCookie),
-    ]);
+    const [tabA, tabB] = await Promise.all([refresh(originalCookie), refresh(originalCookie)]);
     expect(tabA.status).toBe(200);
     expect(tabB.status).toBe(200);
 
@@ -88,11 +89,15 @@ describe("refresh token two-tab concurrency grace", () => {
       username: replayUserId,
       passwordHash: await Bun.password.hash(replayPassword, { algorithm: "bcrypt", cost: 4 }),
     });
-    const loginRes = await app.handle(new Request("http://terrence.test/api/v2/users/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({ data: { attributes: { username: replayUserId, password: replayPassword, "browser-session": true } } }),
-    }));
+    const loginRes = await app.handle(
+      new Request("http://terrence.test/api/v2/users/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { attributes: { username: replayUserId, password: replayPassword, "browser-session": true } },
+        }),
+      }),
+    );
     expect(loginRes.status).toBe(200);
     const originalCookie = cookieFrom(loginRes);
 
@@ -102,7 +107,8 @@ describe("refresh token two-tab concurrency grace", () => {
     // Simulate the grace window expiring: backdate rotatedAtMs on the
     // presented (now rotated) session.
     const presentedHash = hashAuthenticationToken(originalCookie.split("=")[1] ?? "");
-    await db.update(refreshSessions)
+    await db
+      .update(refreshSessions)
       .set({ rotatedAtMs: Date.now() - 10 * 60 * 1000 })
       .where(eq(refreshSessions.tokenHash, presentedHash));
 
@@ -119,21 +125,30 @@ describe("refresh token two-tab concurrency grace", () => {
   });
 
   it("logout revokes both concurrent access tokens and preserves unrelated API tokens", async () => {
-    const personal = await app.handle(new Request("http://terrence.test/api/v2/users/login", {
-      method: "POST", headers: { "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({ data: { attributes: { username: userId, password } } }),
-    }));
+    const personal = await app.handle(
+      new Request("http://terrence.test/api/v2/users/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({ data: { attributes: { username: userId, password } } }),
+      }),
+    );
     const personalToken = (await personal.json()).data.attributes.token;
     const initial = await login();
     const cookie = cookieFrom(initial);
     const tabs = await Promise.all([refresh(cookie), refresh(cookie)]);
-    const tokens = await Promise.all(tabs.map(async (response) => (await response.json()).data.attributes.token as string));
-    const account = (token: string) => app.handle(new Request("http://terrence.test/api/v2/account/details", { headers: { Authorization: `Bearer ${token}` } }));
+    const tokens = await Promise.all(
+      tabs.map(async (response) => (await response.json()).data.attributes.token as string),
+    );
+    const account = (token: string) =>
+      app.handle(
+        new Request("http://terrence.test/api/v2/account/details", { headers: { Authorization: `Bearer ${token}` } }),
+      );
     for (const token of tokens) expect((await account(token)).status).toBe(200);
-    const logout = await app.handle(new Request("http://terrence.test/api/v2/users/logout", { method: "POST", headers: { Cookie: cookie } }));
+    const logout = await app.handle(
+      new Request("http://terrence.test/api/v2/users/logout", { method: "POST", headers: { Cookie: cookie } }),
+    );
     expect(logout.status).toBe(204);
     for (const token of tokens) expect((await account(token)).status).toBe(401);
     expect((await account(personalToken)).status).toBe(200);
   });
-
 });

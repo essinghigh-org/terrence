@@ -2,8 +2,14 @@ import { describe, expect, it, beforeEach } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
-  users, organizations, organizationMemberships, teams,
-  workspaces, runs, planExports, apiTokens,
+  users,
+  organizations,
+  organizationMemberships,
+  teams,
+  workspaces,
+  runs,
+  planExports,
+  apiTokens,
 } from "../../src/db/schema";
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -94,9 +100,7 @@ describe("the reference format API v2 - Plan Exports Download", () => {
 
   describe("GET /api/v2/plan-exports/:export_id/download", () => {
     it("returns 401 when unauthenticated", async () => {
-      const res = await app.handle(
-        new Request(`http://localhost/api/v2/plan-exports/${exportId}/download`),
-      );
+      const res = await app.handle(new Request(`http://localhost/api/v2/plan-exports/${exportId}/download`));
       expect(res.status).toBe(401);
     });
 

@@ -25,14 +25,16 @@ describe("OAuth client agent-pool relationship", () => {
   let clientId = "";
 
   const request = (method: string, path: string, body?: unknown): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/vnd.api+json",
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
@@ -84,7 +86,9 @@ describe("OAuth client agent-pool relationship", () => {
     clientId = created.data.id;
     expect(created.data.attributes["organization-scoped"]).toBe(true);
     for (const scoped of [false, true]) {
-      const updated = await request("PATCH", `/api/v2/oauth-clients/${clientId}`, { data: { attributes: { "organization-scoped": scoped } } });
+      const updated = await request("PATCH", `/api/v2/oauth-clients/${clientId}`, {
+        data: { attributes: { "organization-scoped": scoped } },
+      });
       expect(updated.status).toBe(200);
       const refreshed = await request("GET", `/api/v2/oauth-clients/${clientId}`);
       expect((await refreshed.json()).data.attributes["organization-scoped"]).toBe(scoped);
@@ -93,9 +97,13 @@ describe("OAuth client agent-pool relationship", () => {
       data: { id: firstPoolId, type: "agent-pools" },
       links: { related: `/api/v2/agent-pools/${firstPoolId}` },
     });
-    expect((await db.query.oauthClients.findFirst({
-      where: eq(oauthClients.id, clientId),
-    }))?.agentPoolId).toBe(firstPoolId);
+    expect(
+      (
+        await db.query.oauthClients.findFirst({
+          where: eq(oauthClients.id, clientId),
+        })
+      )?.agentPoolId,
+    ).toBe(firstPoolId);
 
     const replaced = await request("PATCH", `/api/v2/oauth-clients/${clientId}`, {
       data: {
@@ -118,9 +126,13 @@ describe("OAuth client agent-pool relationship", () => {
     });
     expect(cleared.status).toBe(200);
     expect((await cleared.json()).data.relationships["agent-pool"]).toEqual({ data: null, links: {} });
-    expect((await db.query.oauthClients.findFirst({
-      where: eq(oauthClients.id, clientId),
-    }))?.agentPoolId).toBeNull();
+    expect(
+      (
+        await db.query.oauthClients.findFirst({
+          where: eq(oauthClients.id, clientId),
+        })
+      )?.agentPoolId,
+    ).toBeNull();
   });
 
   test("rejects malformed and cross-organization agent-pool references without partial updates", async () => {
@@ -146,8 +158,10 @@ describe("OAuth client agent-pool relationship", () => {
       },
     });
     expect(crossOrganization.status).toBe(422);
-    expect(await db.query.oauthClients.findFirst({
-      where: eq(oauthClients.id, clientId),
-    })).toMatchObject({ name: "Private GitLab", agentPoolId: null });
+    expect(
+      await db.query.oauthClients.findFirst({
+        where: eq(oauthClients.id, clientId),
+      }),
+    ).toMatchObject({ name: "Private GitLab", agentPoolId: null });
   });
 });

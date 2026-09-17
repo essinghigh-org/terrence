@@ -28,7 +28,12 @@ import { Spinner } from "../components/ui/spinner";
 import { RelativeTime } from "../components/ui/time";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { fetchApi } from "../lib/api";
-import { registryModuleFromResource, highestUsableRegistryVersion, registryModulePath, type RegistryModule } from "../lib/registry";
+import {
+  registryModuleFromResource,
+  highestUsableRegistryVersion,
+  registryModulePath,
+  type RegistryModule,
+} from "../lib/registry";
 import { cn } from "../lib/utils";
 import { isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
@@ -62,9 +67,9 @@ type ProviderListResponse = Readonly<{
 
 function providerFromResource(resource: unknown): RegistryProvider {
   // SAFETY: the fixture object is read as a record; each field is typed below.
-  const raw = isRecord(resource) ? resource as JsonObject : {};
+  const raw = isRecord(resource) ? (resource as JsonObject) : {};
   // SAFETY: the fixture object is read as a record; each field is typed below.
-  const attributes = isRecord(raw["attributes"]) ? raw["attributes"] as JsonObject : {};
+  const attributes = isRecord(raw["attributes"]) ? (raw["attributes"] as JsonObject) : {};
   return {
     id: isString(raw["id"]) ? raw["id"] : "",
     name: isString(attributes["name"]) ? attributes["name"] : "",
@@ -109,10 +114,7 @@ function relativeDateLabel(value: string): string {
     ["minute", 60],
   ];
   const unit = units.find(([, size]): boolean => absoluteSeconds >= size) ?? ["minute", 60];
-  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(
-    Math.round(seconds / unit[1]),
-    unit[0],
-  );
+  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(Math.round(seconds / unit[1]), unit[0]);
 }
 
 function sourceLabel(module: RegistryModule): string {
@@ -135,9 +137,11 @@ function moduleStatusLabel(module: RegistryModule): string {
 }
 
 function moduleRepositoryLabel(module: RegistryModule): string {
-  return module.vcsRepo?.displayIdentifier
-    ?? module.vcsRepo?.identifier
-    ?? (module.publishingMechanism === "manual" ? "Terrence API" : "Repository pending");
+  return (
+    module.vcsRepo?.displayIdentifier ??
+    module.vcsRepo?.identifier ??
+    (module.publishingMechanism === "manual" ? "Terrence API" : "Repository pending")
+  );
 }
 
 function ModuleCard({ orgName, module }: Readonly<{ orgName: string; module: RegistryModule }>): React.JSX.Element {
@@ -165,9 +169,13 @@ function ModuleCard({ orgName, module }: Readonly<{ orgName: string; module: Reg
                 />
               </div>
               <div className="min-w-0">
-                <p className="truncate font-mono text-base font-semibold tracking-tight text-foreground">{module.name}</p>
+                <p className="truncate font-mono text-base font-semibold tracking-tight text-foreground">
+                  {module.name}
+                </p>
                 <p className="mt-1 truncate text-xs text-muted-foreground">
-                  <code>{module.namespace}/{module.name}</code>
+                  <code>
+                    {module.namespace}/{module.name}
+                  </code>
                 </p>
               </div>
             </div>
@@ -183,7 +191,11 @@ function ModuleCard({ orgName, module }: Readonly<{ orgName: string; module: Reg
           <div className="mt-auto flex flex-col gap-4">
             <div className="flex flex-wrap gap-x-4 gap-y-2 border-t pt-4 text-xs text-muted-foreground">
               <span className="inline-flex min-w-0 items-center gap-1.5 [&_svg]:size-3" title={repositoryUrl}>
-                {module.publishingMechanism === "vcs" ? <GitBranch aria-hidden="true" /> : <Upload aria-hidden="true" />}
+                {module.publishingMechanism === "vcs" ? (
+                  <GitBranch aria-hidden="true" />
+                ) : (
+                  <Upload aria-hidden="true" />
+                )}
                 <span className="truncate">{repositoryLabel}</span>
               </span>
               <span className="inline-flex items-center gap-1.5 [&_svg]:size-3">
@@ -197,15 +209,25 @@ function ModuleCard({ orgName, module }: Readonly<{ orgName: string; module: Reg
             </div>
 
             <div className="flex items-center justify-between gap-4">
-              <div className={cn(
-                "flex min-w-0 items-center gap-1.5 text-xs [&_svg]:size-3.5",
-                syncIsHealthy ? "text-success" : "text-destructive",
-              )} title={module.lastSyncError ?? (module.lastSuccessfulSyncAt === null ? undefined : dateLabel(module.lastSuccessfulSyncAt))}>
+              <div
+                className={cn(
+                  "flex min-w-0 items-center gap-1.5 text-xs [&_svg]:size-3.5",
+                  syncIsHealthy ? "text-success" : "text-destructive",
+                )}
+                title={
+                  module.lastSyncError ??
+                  (module.lastSuccessfulSyncAt === null ? undefined : dateLabel(module.lastSuccessfulSyncAt))
+                }
+              >
                 {syncIsHealthy ? <CheckCircle2 aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}
-                <span className="truncate">{moduleStatusLabel(module)} · {syncLabel(module)}</span>
+                <span className="truncate">
+                  {moduleStatusLabel(module)} · {syncLabel(module)}
+                </span>
               </div>
               <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                <span>Updated <RelativeTime value={module.updatedAt} /></span>
+                <span>
+                  Updated <RelativeTime value={module.updatedAt} />
+                </span>
                 <ArrowUpRight aria-hidden="true" className="size-4 shrink-0" />
               </div>
             </div>
@@ -216,7 +238,10 @@ function ModuleCard({ orgName, module }: Readonly<{ orgName: string; module: Reg
   );
 }
 
-function ProviderCard({ registryPath, provider }: Readonly<{ registryPath: string; provider: RegistryProvider }>): React.JSX.Element {
+function ProviderCard({
+  registryPath,
+  provider,
+}: Readonly<{ registryPath: string; provider: RegistryProvider }>): React.JSX.Element {
   return (
     <Link
       aria-label={`Open ${provider.name} provider details`}
@@ -236,13 +261,20 @@ function ProviderCard({ registryPath, provider }: Readonly<{ registryPath: strin
                 />
               </div>
               <div className="min-w-0">
-                <p className="truncate font-mono text-base font-semibold tracking-tight text-foreground">{provider.name}</p>
+                <p className="truncate font-mono text-base font-semibold tracking-tight text-foreground">
+                  {provider.name}
+                </p>
                 <p className="mt-1 truncate text-xs text-muted-foreground">
-                  <code>{provider.registryName}/{provider.namespace}/{provider.name}</code>
+                  <code>
+                    {provider.registryName}/{provider.namespace}/{provider.name}
+                  </code>
                 </p>
               </div>
             </div>
-            <ArrowUpRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
+            <ArrowUpRight
+              aria-hidden="true"
+              className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground"
+            />
           </div>
 
           <div className="mt-auto flex items-center justify-between gap-4 border-t pt-4 text-xs text-muted-foreground">
@@ -250,7 +282,9 @@ function ProviderCard({ registryPath, provider }: Readonly<{ registryPath: strin
               <Globe2 aria-hidden="true" className="size-3" />
               Private provider
             </span>
-            <span>Added <RelativeTime value={provider.createdAt} /></span>
+            <span>
+              Added <RelativeTime value={provider.createdAt} />
+            </span>
           </div>
         </CardContent>
       </Card>
@@ -284,19 +318,26 @@ function SearchControl({
     const timeout = window.setTimeout((): void => {
       if (draft !== value) onChangeRef.current(draft);
     }, 250);
-    return (): void => { window.clearTimeout(timeout); };
+    return (): void => {
+      window.clearTimeout(timeout);
+    };
   }, [draft, value]);
 
   return (
     <div className="relative min-w-0 flex-1">
-      <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+      <Search
+        aria-hidden="true"
+        className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+      />
       <Input
         aria-label="Search registry"
         className="h-10 pl-10 pr-10"
         placeholder={activeTab === "modules" ? "Search modules, providers, or namespaces" : "Search providers"}
         type="search"
         value={draft}
-        onInput={(event): void => { setDraft(event.currentTarget.value); }}
+        onInput={(event): void => {
+          setDraft(event.currentTarget.value);
+        }}
       />
       {draft !== "" && (
         <Button
@@ -305,7 +346,10 @@ function SearchControl({
           size="icon-xs"
           type="button"
           variant="ghost"
-          onClick={(): void => { setDraft(""); onClear(); }}
+          onClick={(): void => {
+            setDraft("");
+            onClear();
+          }}
         >
           <X aria-hidden="true" />
         </Button>
@@ -332,13 +376,18 @@ function RegistryTabs({
         aria-label="Modules"
         className={cn(
           "-mb-px flex cursor-pointer items-center gap-2 border-b-2 px-1 pb-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          activeTab === "modules" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+          activeTab === "modules"
+            ? "border-primary text-foreground"
+            : "border-transparent text-muted-foreground hover:text-foreground",
         )}
         to={registryPath}
       >
         <Package aria-hidden="true" />
         <span>Modules</span>
-        <span aria-hidden="true" className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[0.7rem] text-muted-foreground">
+        <span
+          aria-hidden="true"
+          className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[0.7rem] text-muted-foreground"
+        >
           {moduleCount ?? "…"}
         </span>
       </Link>
@@ -347,13 +396,18 @@ function RegistryTabs({
         aria-label="Providers"
         className={cn(
           "-mb-px flex cursor-pointer items-center gap-2 border-b-2 px-1 pb-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          activeTab === "providers" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+          activeTab === "providers"
+            ? "border-primary text-foreground"
+            : "border-transparent text-muted-foreground hover:text-foreground",
         )}
         to={`${registryPath}?tab=providers`}
       >
         <Globe2 aria-hidden="true" />
         <span>Providers</span>
-        <span aria-hidden="true" className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[0.7rem] text-muted-foreground">
+        <span
+          aria-hidden="true"
+          className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[0.7rem] text-muted-foreground"
+        >
           {providerCount ?? "…"}
         </span>
       </Link>
@@ -379,12 +433,19 @@ function RegistryToolbar({
   onBrowseParam: (key: string, value: string) => void;
 }>): React.JSX.Element {
   return (
-    <section aria-label="Registry browse controls" className="flex flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm xl:flex-row xl:items-center">
+    <section
+      aria-label="Registry browse controls"
+      className="flex flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm xl:flex-row xl:items-center"
+    >
       <SearchControl
         activeTab={activeTab}
         value={search}
-        onChange={(value): void => { onBrowseParam("q", value); }}
-        onClear={(): void => { onBrowseParam("q", ""); }}
+        onChange={(value): void => {
+          onBrowseParam("q", value);
+        }}
+        onClear={(): void => {
+          onBrowseParam("q", "");
+        }}
       />
       <div className="grid gap-2 sm:grid-cols-2 lg:flex lg:shrink-0">
         {activeTab === "modules" && (
@@ -393,16 +454,26 @@ function RegistryToolbar({
               aria-label="Filter by provider"
               className="h-10 lg:w-44"
               value={providerFilter}
-              onValueChange={(value): void => { onBrowseParam("provider", value); }}
+              onValueChange={(value): void => {
+                onBrowseParam("provider", value);
+              }}
             >
               <SelectItem value="">All providers</SelectItem>
-              {providerOptions.map((provider): React.JSX.Element => <SelectItem key={provider} value={provider}>{provider}</SelectItem>)}
+              {providerOptions.map(
+                (provider): React.JSX.Element => (
+                  <SelectItem key={provider} value={provider}>
+                    {provider}
+                  </SelectItem>
+                ),
+              )}
             </Select>
             <Select
               aria-label="Filter by publishing type"
               className="h-10 lg:w-44"
               value={publishingFilter}
-              onValueChange={(value): void => { onBrowseParam("publishing", value); }}
+              onValueChange={(value): void => {
+                onBrowseParam("publishing", value);
+              }}
             >
               <SelectItem value="">All sources</SelectItem>
               <SelectItem value="vcs">VCS</SelectItem>
@@ -414,7 +485,9 @@ function RegistryToolbar({
           aria-label={activeTab === "modules" ? "Sort registry" : "Sort providers"}
           className="h-10 lg:w-44"
           value={activeTab === "providers" && sort === "provider" ? "name" : sort}
-          onValueChange={(value): void => { onBrowseParam("sort", value === "updated" ? "" : value); }}
+          onValueChange={(value): void => {
+            onBrowseParam("sort", value === "updated" ? "" : value);
+          }}
         >
           <SelectItem value="updated">Recently updated</SelectItem>
           <SelectItem value="name">Name</SelectItem>
@@ -438,7 +511,9 @@ function RegistryResultSummary({
 }>): React.JSX.Element {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-      <p>Showing {modulesLength} of {moduleCount ?? modulesLength} modules</p>
+      <p>
+        Showing {modulesLength} of {moduleCount ?? modulesLength} modules
+      </p>
       {activeFilters && (
         <Button size="sm" type="button" variant="ghost" onClick={onClearFilters}>
           Clear filters
@@ -464,17 +539,23 @@ function RegistryPagination({
         disabled={page <= 1}
         type="button"
         variant="outline"
-        onClick={(): void => { onPage(Math.max(1, page - 1)); }}
+        onClick={(): void => {
+          onPage(Math.max(1, page - 1));
+        }}
       >
         <ChevronLeft aria-hidden="true" data-icon="inline-start" />
         Previous
       </Button>
-      <span className="font-mono text-xs text-muted-foreground">Page {page} of {totalPages}</span>
+      <span className="font-mono text-xs text-muted-foreground">
+        Page {page} of {totalPages}
+      </span>
       <Button
         disabled={page >= totalPages}
         type="button"
         variant="outline"
-        onClick={(): void => { onPage(page + 1); }}
+        onClick={(): void => {
+          onPage(page + 1);
+        }}
       >
         Next
         <ChevronRight aria-hidden="true" data-icon="inline-end" />
@@ -500,7 +581,9 @@ function RegistryLoadError({
         <EmptyDescription>{error}</EmptyDescription>
       </EmptyHeader>
       <EmptyContent>
-        <Button type="button" onClick={onRetry}>Try again</Button>
+        <Button type="button" onClick={onRetry}>
+          Try again
+        </Button>
       </EmptyContent>
     </Empty>
   );
@@ -525,7 +608,13 @@ function RegistryEmptyState({
   return (
     <Empty className="min-h-64 border">
       <EmptyHeader>
-        {!activeFilters && !pageHasNoResults ? <Terrence pose="empty" className="w-40" /> : <EmptyMedia variant="icon"><SearchX aria-hidden="true" /></EmptyMedia>}
+        {!activeFilters && !pageHasNoResults ? (
+          <Terrence pose="empty" className="w-40" />
+        ) : (
+          <EmptyMedia variant="icon">
+            <SearchX aria-hidden="true" />
+          </EmptyMedia>
+        )}
         <EmptyTitle>
           {pageHasNoResults
             ? "No modules on this page"
@@ -608,18 +697,30 @@ function RegistryResults({
   if (activeTab === "modules") {
     return (
       <div className="grid gap-4 xl:grid-cols-2">
-        {modules.map((module): React.JSX.Element => <ModuleCard key={module.id} module={module} orgName={orgName} />)}
+        {modules.map(
+          (module): React.JSX.Element => (
+            <ModuleCard key={module.id} module={module} orgName={orgName} />
+          ),
+        )}
       </div>
     );
   }
   return (
     <div className="grid gap-4 xl:grid-cols-2">
-      {visibleProviders.map((provider): React.JSX.Element => <ProviderCard key={provider.id} provider={provider} registryPath={registryPath} />)}
+      {visibleProviders.map(
+        (provider): React.JSX.Element => (
+          <ProviderCard key={provider.id} provider={provider} registryPath={registryPath} />
+        ),
+      )}
     </div>
   );
 }
 
-function renderRegistryPublishAction(activeTab: RegistryTab, canPublish: boolean, onPublish: () => void): React.JSX.Element | undefined {
+function renderRegistryPublishAction(
+  activeTab: RegistryTab,
+  canPublish: boolean,
+  onPublish: () => void,
+): React.JSX.Element | undefined {
   if (activeTab !== "modules" || !canPublish) return undefined;
   return (
     <Button type="button" onClick={onPublish}>
@@ -711,19 +812,28 @@ export function Registry(): React.JSX.Element {
       if (providerFilter !== "") query.set("filter[provider]", providerFilter);
       if (publishingFilter !== "") query.set("filter[publishing_mechanism]", publishingFilter);
 
-      void fetchApi(`/organizations/${encodeURIComponent(orgName)}/registry-modules?${query.toString()}`, { signal: controller.signal })
+      void fetchApi(`/organizations/${encodeURIComponent(orgName)}/registry-modules?${query.toString()}`, {
+        signal: controller.signal,
+      })
         .then((response): void => {
           if (controller.signal.aborted) return;
           const body = response as ModuleListResponse;
           const loadedModules = Array.isArray(body.data) ? body.data.map(registryModuleFromResource) : [];
           const pagination = body.meta?.pagination;
           setModules(loadedModules);
-          setProviderOptions(Array.isArray(body.meta?.providers) ? body.meta.providers.filter((value): value is string => isString(value)) : []);
-          setModuleCount(typeof pagination?.["total-count"] === "number" ? pagination["total-count"] : loadedModules.length);
+          setProviderOptions(
+            Array.isArray(body.meta?.providers)
+              ? body.meta.providers.filter((value): value is string => isString(value))
+              : [],
+          );
+          setModuleCount(
+            typeof pagination?.["total-count"] === "number" ? pagination["total-count"] : loadedModules.length,
+          );
           setTotalPages(Math.max(1, pagination?.["total-pages"] ?? 1));
         })
         .catch((caught: unknown): void => {
-          if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Registry could not be loaded.");
+          if (!controller.signal.aborted)
+            setError(caught instanceof Error ? caught.message : "Registry could not be loaded.");
         })
         .finally((): void => {
           if (!controller.signal.aborted) setLoading(false);
@@ -736,25 +846,33 @@ export function Registry(): React.JSX.Element {
           const body = response as ProviderListResponse;
           const loadedProviders = Array.isArray(body.data) ? body.data.map(providerFromResource) : [];
           setProviders(loadedProviders);
-          setProviderCount(typeof body.meta?.["total-count"] === "number" ? body.meta["total-count"] : loadedProviders.length);
+          setProviderCount(
+            typeof body.meta?.["total-count"] === "number" ? body.meta["total-count"] : loadedProviders.length,
+          );
         })
         .catch((caught: unknown): void => {
-          if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Registry could not be loaded.");
+          if (!controller.signal.aborted)
+            setError(caught instanceof Error ? caught.message : "Registry could not be loaded.");
         })
         .finally((): void => {
           if (!controller.signal.aborted) setLoading(false);
         });
     }
-    return (): void => { controller.abort(); };
+    return (): void => {
+      controller.abort();
+    };
   }, [activeTab, normalizedSearch, orgName, page, providerFilter, publishingFilter, reload, sort]);
 
-  const updateBrowseParam = useCallback((key: string, value: string, resetPage = true): void => {
-    const next = new URLSearchParams(searchParams);
-    if (value === "") next.delete(key);
-    else next.set(key, value);
-    if (resetPage) next.delete("page");
-    setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
+  const updateBrowseParam = useCallback(
+    (key: string, value: string, resetPage = true): void => {
+      const next = new URLSearchParams(searchParams);
+      if (value === "") next.delete(key);
+      else next.set(key, value);
+      if (resetPage) next.delete("page");
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
 
   const clearFilters = (): void => {
     const next = new URLSearchParams(searchParams);
@@ -774,7 +892,13 @@ export function Registry(): React.JSX.Element {
       if (sort === "updated") return Date.parse(right.createdAt) - Date.parse(left.createdAt);
       return left.name.localeCompare(right.name) || left.namespace.localeCompare(right.namespace);
     });
-  const collectionHasItems = registryCollectionHasItems(activeTab, moduleCount, providerCount, modules.length, providers.length);
+  const collectionHasItems = registryCollectionHasItems(
+    activeTab,
+    moduleCount,
+    providerCount,
+    modules.length,
+    providers.length,
+  );
   const canPublish = permissions.loaded && permissions.has("can-manage-modules");
   const visibleItems = activeTab === "modules" ? modules : visibleProviders;
   const { showToolbar, showSummary, showPagination, activeFilters } = resolveRegistryVisibility({
@@ -791,14 +915,21 @@ export function Registry(): React.JSX.Element {
   return (
     <PageShell>
       <PageHeader
-        action={renderRegistryPublishAction(activeTab, canPublish, (): void => { setPublishOpen(true); })}
+        action={renderRegistryPublishAction(activeTab, canPublish, (): void => {
+          setPublishOpen(true);
+        })}
         description="Discover and publish trusted Terraform and OpenTofu building blocks."
         eyebrow="Private infrastructure / catalog"
         title="Private registry"
       />
       {canPublish && <PublishModuleDialog open={publishOpen} orgName={orgName} onOpenChange={setPublishOpen} />}
 
-      <RegistryTabs activeTab={activeTab} registryPath={registryPath} moduleCount={moduleCount} providerCount={providerCount} />
+      <RegistryTabs
+        activeTab={activeTab}
+        registryPath={registryPath}
+        moduleCount={moduleCount}
+        providerCount={providerCount}
+      />
 
       {showToolbar && (
         <RegistryToolbar
@@ -833,12 +964,22 @@ export function Registry(): React.JSX.Element {
         activeFilters={activeFilters}
         moduleCount={moduleCount}
         page={page}
-        onRetry={(): void => { setReload((value): number => value + 1); }}
-        onPreviousPage={(): void => { updateBrowseParam("page", String(Math.max(1, page - 1)), false); }}
+        onRetry={(): void => {
+          setReload((value): number => value + 1);
+        }}
+        onPreviousPage={(): void => {
+          updateBrowseParam("page", String(Math.max(1, page - 1)), false);
+        }}
       />
 
       {showPagination && (
-        <RegistryPagination page={page} totalPages={totalPages} onPage={(next): void => { updateBrowseParam("page", String(next), false); }} />
+        <RegistryPagination
+          page={page}
+          totalPages={totalPages}
+          onPage={(next): void => {
+            updateBrowseParam("page", String(next), false);
+          }}
+        />
       )}
     </PageShell>
   );

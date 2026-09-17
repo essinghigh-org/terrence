@@ -1,7 +1,26 @@
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db, isPostgres, rawQueryAll } from "../db";
-import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, runs, configurationVersions, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, variableSets, variableSetWorkspaces, sshKeys, type users } from "../db/schema";
+import {
+  agentPools,
+  projects,
+  workspaces,
+  workspaceTags,
+  projectTags,
+  workspaceVariables,
+  runs,
+  configurationVersions,
+  remoteStateConsumers,
+  dataRetentionPolicies,
+  githubAppInstallations,
+  oauthClients,
+  oauthTokens,
+  stateVersions,
+  variableSets,
+  variableSetWorkspaces,
+  sshKeys,
+  type users,
+} from "../db/schema";
 import { eq, and, asc, desc, count, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import {
   workspaceResource,
@@ -12,13 +31,53 @@ import {
   tagBindingResource,
   type WorkspaceResourcePermissions,
 } from "../lib/response";
-import { CLIENT_ENCRYPTED_STATE_ERROR, decodeStatePayload, isClientEncryptedState, isUniqueConstraintError, validVariableAttributes } from "../lib/validation";
+import {
+  CLIENT_ENCRYPTED_STATE_ERROR,
+  decodeStatePayload,
+  isClientEncryptedState,
+  isUniqueConstraintError,
+  validVariableAttributes,
+} from "../lib/validation";
 import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
-import { validateVersion, caseInsensitiveLike, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, parseTagBindings, parseStatePayload, auditLog, strictAuditEnabled, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly, type LockPrincipal } from "../lib/utils";
+import {
+  validateVersion,
+  caseInsensitiveLike,
+  checkOrgPermission,
+  checkOrganizationPermission,
+  checkWorkspacePermission,
+  workspacePermissionSets,
+  workspaceAllows,
+  findAuthorizedWorkspace,
+  findWorkspaceByName,
+  findLockedInheritedTagKey,
+  parseTagBindings,
+  parseStatePayload,
+  auditLog,
+  strictAuditEnabled,
+  lockPrincipal,
+  ownsWorkspaceLock,
+  ifMatchSatisfied,
+  type DeepReadonly,
+  type LockPrincipal,
+} from "../lib/utils";
 import { pageRequest, pagination } from "../lib/pagination";
-import { applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspace } from "../lib/lifecycle";
+import {
+  applyDataRetentionGarbageCollection,
+  promoteIntermediateStateVersion,
+  safeDeleteWorkspace,
+  deleteWorkspace,
+} from "../lib/lifecycle";
 
-import { archiveContainsWorkingDir, invalidTriggerPatternIndexes, invalidTriggerPrefixIndexes, listArchiveMembers, MAX_ARCHIVE_METADATA_BYTES, normalizeWorkingDirectory, readBoundedProcessOutput, summarizeTopLevelEntries } from "../workspace";
+import {
+  archiveContainsWorkingDir,
+  invalidTriggerPatternIndexes,
+  invalidTriggerPrefixIndexes,
+  listArchiveMembers,
+  MAX_ARCHIVE_METADATA_BYTES,
+  normalizeWorkingDirectory,
+  readBoundedProcessOutput,
+  summarizeTopLevelEntries,
+} from "../workspace";
 import { authPlugin } from "../auth";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { ensureDefaultProject, isAutoDestroyDuration, parseSettingOverwrites } from "./projects";
@@ -27,7 +86,6 @@ import { isExecutionMode } from "../lib/constants";
 import { scheduleExplorerInventory } from "../lib/explorer-inventory";
 import { isValidTagsRegex } from "../lib/vcs-repo";
 import { effectiveWorkspaceVariables } from "../lib/effective-variables";
-
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -79,10 +137,15 @@ function dependencyGraphFromState(statePayload: string | null): readonly Depende
     const address = stateResourceAddress(value);
     if (address === null) continue;
     const dependencies = resources.get(address) ?? new Set<string>();
-    stringValues(value["dependencies"]).forEach((dependency): void => { dependencies.add(dependency); });
+    stringValues(value["dependencies"]).forEach((dependency): void => {
+      dependencies.add(dependency);
+    });
     if (Array.isArray(value["instances"])) {
       for (const instance of value["instances"]) {
-        if (isRecord(instance)) stringValues(instance["dependencies"]).forEach((dependency): void => { dependencies.add(dependency); });
+        if (isRecord(instance))
+          stringValues(instance["dependencies"]).forEach((dependency): void => {
+            dependencies.add(dependency);
+          });
       }
     }
     resources.set(address, dependencies);
@@ -95,12 +158,18 @@ function dependencyGraphFromState(statePayload: string | null): readonly Depende
       .filter((address): boolean => reference.startsWith(`${address}.`) || reference.startsWith(`${address}[`))
       .sort((left, right): number => right.length - left.length)[0];
   };
-  return addresses.map((address): DependencyGraphNode => ({
-    address,
-    dependencies: [...new Set([...resources.get(address) ?? []]
-      .map(resolve)
-      .filter((dependency): dependency is string => dependency !== undefined && dependency !== address))],
-  }));
+  return addresses.map(
+    (address): DependencyGraphNode => ({
+      address,
+      dependencies: [
+        ...new Set(
+          [...(resources.get(address) ?? [])]
+            .map(resolve)
+            .filter((dependency): dependency is string => dependency !== undefined && dependency !== address),
+        ),
+      ],
+    }),
+  );
 }
 
 function resourceProviderName(rObj: Readonly<Record<string, unknown>>): string {
@@ -151,12 +220,12 @@ function resourceListFromState(latestState: {
   const jsonStateSource = latestState.jsonState ?? latestState.statePayload ?? null;
   if (jsonStateSource === null) return [];
   try {
-    const parsed: unknown = typeof jsonStateSource === "string"
-      ? JSON.parse(decodeStatePayload(jsonStateSource)) as unknown
-      : jsonStateSource;
-    const rawResources = parsed !== null && typeof parsed === "object"
-      ? (parsed as Record<string, unknown>)["resources"]
-      : undefined;
+    const parsed: unknown =
+      typeof jsonStateSource === "string"
+        ? (JSON.parse(decodeStatePayload(jsonStateSource)) as unknown)
+        : jsonStateSource;
+    const rawResources =
+      parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>)["resources"] : undefined;
     return Array.isArray(rawResources) ? rawResources : [];
   } catch {
     return [];
@@ -167,11 +236,14 @@ const MAX_README_BYTES = 256 * 1024;
 const README_ARCHIVE_TIMEOUT_MS = 5_000;
 
 // Bound tar output so malformed archives cannot make the API buffer unbounded data.
-async function readProcessOutput(process: Readonly<{
-  exited: Promise<number>;
-  stdout: Readonly<ReadableStream<Uint8Array>>;
-  kill: (exitCode?: number | NodeJS.Signals) => void;
-}>, maxBytes: number): Promise<string | null> {
+async function readProcessOutput(
+  process: Readonly<{
+    exited: Promise<number>;
+    stdout: Readonly<ReadableStream<Uint8Array>>;
+    kill: (exitCode?: number | NodeJS.Signals) => void;
+  }>,
+  maxBytes: number,
+): Promise<string | null> {
   return readBoundedProcessOutput(process, maxBytes, README_ARCHIVE_TIMEOUT_MS);
 }
 
@@ -210,7 +282,13 @@ async function resourcePermissions(
   // One access-base load for the whole permission matrix instead of one per
   // level (the per-level derivation is pure in-memory afterwards).
   const sets = await workspacePermissionSets(workspace.orgId, userId, principalOrgId, teamId);
-  const canManageOrgRunTasks = await checkOrganizationPermission(workspace.orgId, userId, principalOrgId, teamId, "manage-run-tasks");
+  const canManageOrgRunTasks = await checkOrganizationPermission(
+    workspace.orgId,
+    userId,
+    principalOrgId,
+    teamId,
+    "manage-run-tasks",
+  );
   return {
     canPlan: workspaceAllows(sets.plan, workspace.id),
     canApply: workspaceAllows(sets.apply, workspace.id),
@@ -227,7 +305,10 @@ async function resourcePermissions(
 /** Audit finding 9: single-workspace GETs must honor include=current_run
  * like the list endpoint does. Bounded to one row (newest run for this
  * workspace); undefined when not requested so the relationship stays out. */
-async function currentRunForWorkspace(workspaceId: string, include: string): Promise<{ id: string } | null | undefined> {
+async function currentRunForWorkspace(
+  workspaceId: string,
+  include: string,
+): Promise<{ id: string } | null | undefined> {
   const wantsCurrentRun = include
     .split(",")
     .map((value: string): string => value.trim())
@@ -258,9 +339,12 @@ function resolveVcsIdentifier(
   existing: DeepReadonly<WorkspaceVcsRepo> | undefined,
 ): { identifier: string } | { error: string } {
   const identifierValue = raw["identifier"];
-  const identifier = identifierValue === undefined
-    ? existing?.identifier ?? ""
-    : typeof identifierValue === "string" ? identifierValue.trim() : "";
+  const identifier =
+    identifierValue === undefined
+      ? (existing?.identifier ?? "")
+      : typeof identifierValue === "string"
+        ? identifierValue.trim()
+        : "";
   if (identifier === "") return { error: "Repository identifier is required" };
   return { identifier };
 }
@@ -278,11 +362,8 @@ function resolveVcsCredential(
   return { id: value === null ? undefined : typeof value === "string" ? value.trim() : existing?.[field] };
 }
 
-function checkVcsCredentialPair(
-  installationId: string | undefined,
-  oauthTokenId: string | undefined,
-): string | null {
-  if ((installationId !== undefined && installationId !== "") && (oauthTokenId !== undefined && oauthTokenId !== "")) {
+function checkVcsCredentialPair(installationId: string | undefined, oauthTokenId: string | undefined): string | null {
+  if (installationId !== undefined && installationId !== "" && oauthTokenId !== undefined && oauthTokenId !== "") {
     return "A vcs-repo may contain either a GitHub App installation or an OAuth token, not both";
   }
   if ((installationId === undefined || installationId === "") && (oauthTokenId === undefined || oauthTokenId === "")) {
@@ -319,11 +400,12 @@ async function checkVcsOauthToken(
     await execute(sql`SELECT id FROM oauth_tokens WHERE id = ${oauthTokenId} FOR KEY SHARE`);
     token = await database.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId) });
   }
-  const client = token === undefined
-    ? undefined
-    : await database.query.oauthClients.findFirst({
-        where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
-      });
+  const client =
+    token === undefined
+      ? undefined
+      : await database.query.oauthClients.findFirst({
+          where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
+        });
   if (client === undefined) return "OAuth token is not registered in this organization";
   return null;
 }
@@ -336,9 +418,8 @@ function resolveVcsTagsRegex(
   if (tagsRegexValue !== undefined && tagsRegexValue !== null && typeof tagsRegexValue !== "string") {
     return { error: "tags-regex must be a string or null" };
   }
-  const tagsRegex = tagsRegexValue === null
-    ? undefined
-    : typeof tagsRegexValue === "string" ? tagsRegexValue : existing?.tagsRegex;
+  const tagsRegex =
+    tagsRegexValue === null ? undefined : typeof tagsRegexValue === "string" ? tagsRegexValue : existing?.tagsRegex;
   if (tagsRegex === undefined) return { tagsRegex };
   if (tagsRegex.length > 256) return { error: "tags-regex must be at most 256 characters" };
   if (!isValidTagsRegex(tagsRegex)) return { error: "tags-regex must be a valid, non-pathological regular expression" };
@@ -359,23 +440,30 @@ function validateVcsIngressField(ingressValue: unknown): string | null {
   return null;
 }
 
-function assembleVcsRepoValue(args: Readonly<{
-  identifier: string;
-  branchValue: unknown;
-  ingressValue: unknown;
-  oauthTokenId: string | undefined;
-  installationId: string | undefined;
-  tagsRegex: string | undefined;
-  existing: DeepReadonly<WorkspaceVcsRepo> | undefined;
-}>): WorkspaceVcsRepo {
+function assembleVcsRepoValue(
+  args: Readonly<{
+    identifier: string;
+    branchValue: unknown;
+    ingressValue: unknown;
+    oauthTokenId: string | undefined;
+    installationId: string | undefined;
+    tagsRegex: string | undefined;
+    existing: DeepReadonly<WorkspaceVcsRepo> | undefined;
+  }>,
+): WorkspaceVcsRepo {
   const value: WorkspaceVcsRepo = { identifier: args.identifier };
-  const branch = args.branchValue === null
-    ? undefined
-    : typeof args.branchValue === "string" ? args.branchValue : args.existing?.branch;
-  const ingressSubmodules = typeof args.ingressValue === "boolean" ? args.ingressValue : args.existing?.ingressSubmodules;
+  const branch =
+    args.branchValue === null
+      ? undefined
+      : typeof args.branchValue === "string"
+        ? args.branchValue
+        : args.existing?.branch;
+  const ingressSubmodules =
+    typeof args.ingressValue === "boolean" ? args.ingressValue : args.existing?.ingressSubmodules;
   if (branch !== undefined) value.branch = branch;
   if (args.oauthTokenId !== undefined && args.oauthTokenId !== "") value.oauthTokenId = args.oauthTokenId;
-  if (args.installationId !== undefined && args.installationId !== "") value.githubAppInstallationId = args.installationId;
+  if (args.installationId !== undefined && args.installationId !== "")
+    value.githubAppInstallationId = args.installationId;
   if (ingressSubmodules !== undefined) value.ingressSubmodules = ingressSubmodules;
   if (args.tagsRegex !== undefined) value.tagsRegex = args.tagsRegex;
   const cloneUrl: unknown = args.existing?.cloneUrl;
@@ -451,17 +539,24 @@ async function maybeAttachOutputs(
   });
   if (sv === undefined) return { data };
   if (isClientEncryptedState(sv.statePayload)) {
-    return { data: { ...data, relationships: {
-      ...(data["relationships"] as Record<string, unknown>),
-      outputs: { data: null, meta: { "unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR } },
-    } } };
+    return {
+      data: {
+        ...data,
+        relationships: {
+          ...(data["relationships"] as Record<string, unknown>),
+          outputs: { data: null, meta: { "unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR } },
+        },
+      },
+    };
   }
   const outputs = workspaceOutputResources(sv);
   const dataWithRels = data as { relationships?: Record<string, unknown> };
   dataWithRels.relationships = {
     ...(dataWithRels.relationships ?? {}),
     outputs: {
-      data: outputs.map((o: Record<string, unknown>): Record<string, string> => ({ id: String(o["id"]), type: "workspace-outputs" })),
+      data: outputs.map(
+        (o: Record<string, unknown>): Record<string, string> => ({ id: String(o["id"]), type: "workspace-outputs" }),
+      ),
       links: { related: `/api/v2/workspaces/${workspace.id}/current-state-version-outputs` },
     },
   };
@@ -469,11 +564,13 @@ async function maybeAttachOutputs(
 }
 
 function isRelationshipIdentifier(value: unknown, expectedType: string): value is { id: string; type: string } {
-  return value !== null
-    && typeof value === "object"
-    && typeof (value as Record<string, unknown>)["id"] === "string"
-    && (value as Record<string, unknown>)["id"] !== ""
-    && (value as Record<string, unknown>)["type"] === expectedType;
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    typeof (value as Record<string, unknown>)["id"] === "string" &&
+    (value as Record<string, unknown>)["id"] !== "" &&
+    (value as Record<string, unknown>)["type"] === expectedType
+  );
 }
 
 async function validatedRemoteStateConsumerIds(
@@ -492,7 +589,9 @@ async function validatedRemoteStateConsumerIds(
     where: inArray(workspaces.id, uniqueIds),
     columns: { id: true, orgId: true },
   });
-  const byId = new Map(candidates.map((candidate): [string, Readonly<{ id: string; orgId: string }>] => [candidate.id, candidate]));
+  const byId = new Map(
+    candidates.map((candidate): [string, Readonly<{ id: string; orgId: string }>] => [candidate.id, candidate]),
+  );
   return uniqueIds.every((id): boolean => id !== workspaceId && byId.get(id)?.orgId === orgId) ? uniqueIds : null;
 }
 type LatestRunRow = Readonly<{
@@ -511,7 +610,9 @@ function csvParam(searchParams: URLSearchParams, name: string): string[] {
   return [...new Set(searchParams.get(name)?.split(",").filter(Boolean) ?? [])];
 }
 
-function resolveListSortAndLocked(searchParams: URLSearchParams): { sort: string; locked: string | null } | { error: string } {
+function resolveListSortAndLocked(
+  searchParams: URLSearchParams,
+): { sort: string; locked: string | null } | { error: string } {
   const sort = searchParams.get("sort") ?? "name";
   const locked = searchParams.get("filter[locked]");
   if (!["name", "-name"].includes(sort) || (locked !== null && locked !== "true" && locked !== "false")) {
@@ -563,17 +664,21 @@ async function collectListTagFilters(searchParams: URLSearchParams): Promise<unk
     }
     for (const tag of tags) {
       const workspaceIds = idsByTag.get(tag) ?? [];
-      found.push(workspaceIds.length > 0
-        ? inArray(workspaces.id, [...new Set(workspaceIds)])
-        : eq(workspaces.id, "__no_matching_workspace__"));
+      found.push(
+        workspaceIds.length > 0
+          ? inArray(workspaces.id, [...new Set(workspaceIds)])
+          : eq(workspaces.id, "__no_matching_workspace__"),
+      );
     }
   }
   const excludeTags = csvParam(searchParams, "search[exclude-tags]");
   if (excludeTags.length > 0) {
-    const excludedIds = (await db.query.workspaceTags.findMany({
-      where: inArray(workspaceTags.key, excludeTags),
-      columns: { workspaceId: true },
-    })).map((t: Readonly<{ workspaceId: string }>): string => t.workspaceId);
+    const excludedIds = (
+      await db.query.workspaceTags.findMany({
+        where: inArray(workspaceTags.key, excludeTags),
+        columns: { workspaceId: true },
+      })
+    ).map((t: Readonly<{ workspaceId: string }>): string => t.workspaceId);
     found.push(notInArray(workspaces.id, [...new Set(excludedIds)]));
   }
   const projectIds = csvParam(searchParams, "filter[project][id]");
@@ -593,19 +698,20 @@ async function collectListTaggedBindingFilters(searchParams: URLSearchParams): P
   }
   const tagBindings = [...tagged.values()].filter(
     (binding): binding is { key: string; value: string } =>
-      typeof binding.key === "string" && binding.key !== ""
-      && typeof binding.value === "string",
+      typeof binding.key === "string" && binding.key !== "" && typeof binding.value === "string",
   );
   const bindingKeys = [...new Set(tagBindings.map((binding: Readonly<{ key: string }>): string => binding.key))];
   const singleBinding = tagBindings.length === 1 ? tagBindings[0] : undefined;
-  const taggedWorkspaceTagRows = bindingKeys.length === 0
-    ? []
-    : (await db.query.workspaceTags.findMany({
-      where: singleBinding === undefined
-        ? inArray(workspaceTags.key, bindingKeys)
-        : and(eq(workspaceTags.key, singleBinding.key), eq(workspaceTags.value, singleBinding.value)),
-      columns: { workspaceId: true, key: true, value: true },
-    }));
+  const taggedWorkspaceTagRows =
+    bindingKeys.length === 0
+      ? []
+      : await db.query.workspaceTags.findMany({
+          where:
+            singleBinding === undefined
+              ? inArray(workspaceTags.key, bindingKeys)
+              : and(eq(workspaceTags.key, singleBinding.key), eq(workspaceTags.value, singleBinding.value)),
+          columns: { workspaceId: true, key: true, value: true },
+        });
   // Index rows by "key\0value" so we need exactly one query regardless of
   // how many tag bindings the caller supplied.
   const workspaceIdsByTag = new Map<string, string[]>();
@@ -615,14 +721,17 @@ async function collectListTaggedBindingFilters(searchParams: URLSearchParams): P
     list.push(row.workspaceId);
     workspaceIdsByTag.set(tag, list);
   }
-  const matchingTagIds = tagBindings.map((binding: Readonly<{ key: string; value: string }>): string[] =>
-    workspaceIdsByTag.get(`${binding.key}\u0000${binding.value}`) ?? [],
+  const matchingTagIds = tagBindings.map(
+    (binding: Readonly<{ key: string; value: string }>): string[] =>
+      workspaceIdsByTag.get(`${binding.key}\u0000${binding.value}`) ?? [],
   );
   const found: unknown[] = [];
   for (const workspaceIds of matchingTagIds) {
-    found.push(workspaceIds.length > 0
-      ? inArray(workspaces.id, [...new Set(workspaceIds)])
-      : eq(workspaces.id, "__no_matching_workspace__"));
+    found.push(
+      workspaceIds.length > 0
+        ? inArray(workspaces.id, [...new Set(workspaceIds)])
+        : eq(workspaces.id, "__no_matching_workspace__"),
+    );
   }
   return found;
 }
@@ -634,25 +743,27 @@ type WorkspaceListPageData = Readonly<{
   tagsByWorkspace: ReadonlyMap<string, DeepReadonly<typeof workspaceTags.$inferSelect>[]>;
 }>;
 
-async function loadWorkspaceListPageData(
-  wsList: WsItem[],
-  includeCurrentRun: boolean,
-): Promise<WorkspaceListPageData> {
+async function loadWorkspaceListPageData(wsList: WsItem[], includeCurrentRun: boolean): Promise<WorkspaceListPageData> {
   // Batch the per-row N+1 (workspace_tags + org name): one query for the
   // whole page instead of two per workspace.
-  const tagRows = wsList.length === 0
-    ? []
-    : await db.query.workspaceTags.findMany({
-      where: inArray(workspaceTags.workspaceId, wsList.map((w: WsItem): string => w.id)),
-      orderBy: [asc(workspaceTags.key)],
-    });
+  const tagRows =
+    wsList.length === 0
+      ? []
+      : await db.query.workspaceTags.findMany({
+          where: inArray(
+            workspaceTags.workspaceId,
+            wsList.map((w: WsItem): string => w.id),
+          ),
+          orderBy: [asc(workspaceTags.key)],
+        });
   // Server-side latest-run aggregation (10.1/10.4): when the caller asks
   // for include=current_run, resolve the newest run per workspace of the
   // current page IN SQL (ROW_NUMBER window over runs(workspace_id,
   // created_at), rowid ASC tie-break) instead of transferring org-wide run
   // history. The same query shape as the current-run status filter above.
-  const latestRunRows: LatestRunRow[] = includeCurrentRun && wsList.length > 0
-    ? await rawQueryAll<LatestRunRow>(sql`
+  const latestRunRows: LatestRunRow[] =
+    includeCurrentRun && wsList.length > 0
+      ? await rawQueryAll<LatestRunRow>(sql`
         SELECT id, workspace_id AS "workspaceId", status, message,
                is_destroy AS "isDestroy", created_at AS "createdAt",
                auto_apply AS "autoApply"
@@ -663,11 +774,14 @@ async function loadWorkspaceListPageData(
                    PARTITION BY workspace_id ORDER BY created_at DESC, id ASC
                  ) AS rn
           FROM runs
-          WHERE ${inArray(runs.workspaceId, wsList.map((w: WsItem): string => w.id))}
+          WHERE ${inArray(
+            runs.workspaceId,
+            wsList.map((w: WsItem): string => w.id),
+          )}
         )
         WHERE rn = 1
       `)
-    : [];
+      : [];
   const currentRunsByWorkspace = new Map(latestRunRows.map((row): [string, LatestRunRow] => [row.workspaceId, row]));
   const tagsByWorkspace = new Map<string, DeepReadonly<typeof workspaceTags.$inferSelect>[]>();
   for (const tag of tagRows) {
@@ -694,968 +808,1558 @@ function summarizeWorkspaceList(
 export const workspaceRoutes = new Elysia({ name: "workspaces" })
   .use(authPlugin)
   // --- Organization Workspaces ---
-  .get("/api/v2/organizations/:org_name/workspaces", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const actor = actorScope(user, principalOrgId, teamId);
-    if (!(await checkOrgPermission(actor.actorId, org.id, "member", actor.actorOrgId, actor.actorTeamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const { number, size } = pageRequest(request);
-    const searchParams = new URL(request.url).searchParams;
-    const conditions: unknown[] = [eq(workspaces.orgId, org.id)];
-    const permSets = await workspacePermissionSets(org.id, actor.actorId, actor.actorOrgId, actor.actorTeamId);
-    const allowedWorkspaceIds = permSets.read;
-    const allowedCondition = allowedWorkspaceCondition(allowedWorkspaceIds);
-    if (allowedCondition !== null) conditions.push(allowedCondition);
-    const sortAndLocked = resolveListSortAndLocked(searchParams);
-    if ("error" in sortAndLocked) return failWorkspaceUpdate(set, 400, sortAndLocked.error);
-    const authorizedWhere = and(...(conditions as Parameters<typeof and>));
-    const latestRunStatus = sql<string | null>`(
+  .get(
+    "/api/v2/organizations/:org_name/workspaces",
+    async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (org === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const actor = actorScope(user, principalOrgId, teamId);
+      if (!(await checkOrgPermission(actor.actorId, org.id, "member", actor.actorOrgId, actor.actorTeamId))) {
+        (set as { status: number }).status = 403;
+        return { errors: [{ status: "403", title: "Forbidden" }] };
+      }
+      const { number, size } = pageRequest(request);
+      const searchParams = new URL(request.url).searchParams;
+      const conditions: unknown[] = [eq(workspaces.orgId, org.id)];
+      const permSets = await workspacePermissionSets(org.id, actor.actorId, actor.actorOrgId, actor.actorTeamId);
+      const allowedWorkspaceIds = permSets.read;
+      const allowedCondition = allowedWorkspaceCondition(allowedWorkspaceIds);
+      if (allowedCondition !== null) conditions.push(allowedCondition);
+      const sortAndLocked = resolveListSortAndLocked(searchParams);
+      if ("error" in sortAndLocked) return failWorkspaceUpdate(set, 400, sortAndLocked.error);
+      const authorizedWhere = and(...(conditions as Parameters<typeof and>));
+      const latestRunStatus = sql<string | null>`(
       SELECT status FROM runs WHERE workspace_id = ${workspaces.id}
       ORDER BY created_at DESC, id ASC LIMIT 1
     )`;
-    if (sortAndLocked.locked !== null) conditions.push(eq(workspaces.locked, sortAndLocked.locked === "true"));
-    conditions.push(...collectListTextFilters(searchParams));
-    conditions.push(...(await collectListTagFilters(searchParams)));
-    conditions.push(...(await collectListTaggedBindingFilters(searchParams)));
-    const currentRunStatuses = csvParam(searchParams, "filter[current-run][status]");
-    if (currentRunStatuses.length > 0) conditions.push(inArray(latestRunStatus, currentRunStatuses));
-    const includeSummary = (searchParams.get("include") ?? "").split(",").includes("workspace_summary");
-    const where = and(...(conditions as Parameters<typeof and>));
-    const [wsList, countRows, summaryRows] = await Promise.all([
-      db.query.workspaces.findMany({ where, orderBy: [sortAndLocked.sort === "-name" ? desc(workspaces.name) : asc(workspaces.name), asc(workspaces.id)], limit: size, offset: (number - 1) * size }),
-      db.select({ total: count() }).from(workspaces).where(where),
-      includeSummary
-        ? rawQueryAll<{ locked: boolean | number; status: string | null; total: number | string }>(sql`
+      if (sortAndLocked.locked !== null) conditions.push(eq(workspaces.locked, sortAndLocked.locked === "true"));
+      conditions.push(...collectListTextFilters(searchParams));
+      conditions.push(...(await collectListTagFilters(searchParams)));
+      conditions.push(...(await collectListTaggedBindingFilters(searchParams)));
+      const currentRunStatuses = csvParam(searchParams, "filter[current-run][status]");
+      if (currentRunStatuses.length > 0) conditions.push(inArray(latestRunStatus, currentRunStatuses));
+      const includeSummary = (searchParams.get("include") ?? "").split(",").includes("workspace_summary");
+      const where = and(...(conditions as Parameters<typeof and>));
+      const [wsList, countRows, summaryRows] = await Promise.all([
+        db.query.workspaces.findMany({
+          where,
+          orderBy: [sortAndLocked.sort === "-name" ? desc(workspaces.name) : asc(workspaces.name), asc(workspaces.id)],
+          limit: size,
+          offset: (number - 1) * size,
+        }),
+        db.select({ total: count() }).from(workspaces).where(where),
+        includeSummary
+          ? rawQueryAll<{ locked: boolean | number; status: string | null; total: number | string }>(sql`
             SELECT locked, status, COUNT(*) AS total FROM (
               SELECT ${workspaces.locked} AS locked, ${latestRunStatus} AS status
               FROM workspaces WHERE ${authorizedWhere}
             ) AS visible_workspaces GROUP BY locked, status
           `)
-        : Promise.resolve([]),
-    ]);
-    const totalCount = pageTotal(countRows);
-    const canManageOrgRunTasks = await checkOrganizationPermission(org.id, actor.actorId, actor.actorOrgId, actor.actorTeamId, "manage-run-tasks");
-    const includeCurrentRun = (searchParams.get("include") ?? "")
-      .split(",")
-      .map((value: string): string => value.trim())
-      .includes("current_run");
-    const pageData = await loadWorkspaceListPageData(wsList, includeCurrentRun);
-    const { latestRunRows, currentRunsByWorkspace, tagsByWorkspace } = pageData;
-    const data = await Promise.all(wsList.map(async (w: WsItem): Promise<Record<string, unknown>> => {
-      const baseOptions = {
-        orgName: org.name,
-        tags: tagsByWorkspace.get(w.id) ?? [],
+          : Promise.resolve([]),
+      ]);
+      const totalCount = pageTotal(countRows);
+      const canManageOrgRunTasks = await checkOrganizationPermission(
+        org.id,
+        actor.actorId,
+        actor.actorOrgId,
+        actor.actorTeamId,
+        "manage-run-tasks",
+      );
+      const includeCurrentRun = (searchParams.get("include") ?? "")
+        .split(",")
+        .map((value: string): string => value.trim())
+        .includes("current_run");
+      const pageData = await loadWorkspaceListPageData(wsList, includeCurrentRun);
+      const { latestRunRows, currentRunsByWorkspace, tagsByWorkspace } = pageData;
+      const data = await Promise.all(
+        wsList.map(async (w: WsItem): Promise<Record<string, unknown>> => {
+          const baseOptions = {
+            orgName: org.name,
+            tags: tagsByWorkspace.get(w.id) ?? [],
+          };
+          const resourceOptions = includeCurrentRun
+            ? { ...baseOptions, currentRun: currentRunsByWorkspace.get(w.id) ?? null }
+            : baseOptions;
+          return workspaceResource(
+            w,
+            org.defaultIacBinary,
+            {
+              canAdmin: workspaceAllows(permSets.admin, w.id),
+              canApply: workspaceAllows(permSets.apply, w.id),
+              canLock: workspaceAllows(permSets.lock, w.id),
+              canManageRunTasks: canManageOrgRunTasks && workspaceAllows(permSets.runTasks, w.id),
+              canPlan: workspaceAllows(permSets.plan, w.id),
+              canReadStateVersions: workspaceAllows(permSets.stateRead, w.id),
+              canWriteStateVersions: workspaceAllows(permSets.stateWrite, w.id),
+              canReadVariables: workspaceAllows(permSets.variablesRead, w.id),
+              canWriteVariables: workspaceAllows(permSets.variablesWrite, w.id),
+            },
+            resourceOptions,
+          );
+        }),
+      );
+      const included = includeCurrentRun
+        ? latestRunRows.map(
+            (run: LatestRunRow): Record<string, unknown> => ({
+              id: run.id,
+              type: "runs",
+              attributes: {
+                status: run.status,
+                message: run.message,
+                "created-at": new Date(Number(run.createdAt)).toISOString(),
+                // Normalize the raw SQLite 0/1 integers (and postgres.js bigint
+                // strings) to booleans.
+                "is-destroy": Number(run.isDestroy) === 1,
+                "auto-apply": Number(run.autoApply) === 1,
+              },
+              relationships: {
+                workspace: { data: { id: run.workspaceId, type: "workspaces" } },
+              },
+            }),
+          )
+        : undefined;
+      const page = pagination(request, number, size, totalCount);
+      const summary = summarizeWorkspaceList(summaryRows);
+      return {
+        data,
+        ...(included === undefined ? {} : { included }),
+        ...page,
+        meta: { ...page.meta, ...(includeSummary ? { "workspace-summary": summary } : {}) },
       };
-      const resourceOptions = includeCurrentRun
-        ? { ...baseOptions, currentRun: currentRunsByWorkspace.get(w.id) ?? null }
-        : baseOptions;
-      return workspaceResource(w, org.defaultIacBinary, {
-        canAdmin: workspaceAllows(permSets.admin, w.id),
-        canApply: workspaceAllows(permSets.apply, w.id),
-        canLock: workspaceAllows(permSets.lock, w.id),
-        canManageRunTasks: canManageOrgRunTasks && workspaceAllows(permSets.runTasks, w.id),
-        canPlan: workspaceAllows(permSets.plan, w.id),
-        canReadStateVersions: workspaceAllows(permSets.stateRead, w.id),
-        canWriteStateVersions: workspaceAllows(permSets.stateWrite, w.id),
-        canReadVariables: workspaceAllows(permSets.variablesRead, w.id),
-        canWriteVariables: workspaceAllows(permSets.variablesWrite, w.id),
-      }, resourceOptions);
-    }));
-    const included = includeCurrentRun
-      ? latestRunRows.map((run: LatestRunRow): Record<string, unknown> => ({
-          id: run.id,
-          type: "runs",
-          attributes: {
-            status: run.status,
-            message: run.message,
-            "created-at": new Date(Number(run.createdAt)).toISOString(),
-            // Normalize the raw SQLite 0/1 integers (and postgres.js bigint
-            // strings) to booleans.
-            "is-destroy": Number(run.isDestroy) === 1,
-            "auto-apply": Number(run.autoApply) === 1,
-          },
-          relationships: {
-            workspace: { data: { id: run.workspaceId, type: "workspaces" } },
-          },
-        }))
-      : undefined;
-    const page = pagination(request, number, size, totalCount);
-    const summary = summarizeWorkspaceList(summaryRows);
-    return {
-      data, ...(included === undefined ? {} : { included }), ...page,
-      meta: { ...page.meta, ...(includeSummary ? { "workspace-summary": summary } : {}) },
-    };
-  })
-  .post("/api/v2/organizations/:org_name/workspaces", async ({ params, body, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const actor = actorScope(user, principalOrgId, teamId);
-    if (!(await checkOrganizationPermission(org.id, actor.actorId, actor.actorOrgId, actor.actorTeamId, "manage-workspaces"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const parsed = parseWorkspaceUpdateBody(body);
-    const attributes = parsed.attributes;
-    const preambleError = validateCreatePreamble(attributes);
-    if (preambleError !== null) return failWorkspaceUpdate(set, 422, preambleError);
-    const nameResult = await resolveCreateNameAndDup(parsed, org.id);
-    if ("error" in nameResult) return failWorkspaceUpdate(set, nameResult.status, nameResult.error);
-    const fieldTypesError = validateCreateFieldTypes(attributes, parsed.executionMode);
-    if (fieldTypesError !== null) return failWorkspaceUpdate(set, 422, fieldTypesError);
-    const workingDirAndTags = await resolveCreateWorkingDirAndTags(attributes, parsed.rels);
-    if ("error" in workingDirAndTags) return failWorkspaceUpdate(set, 422, workingDirAndTags.error);
-    const id = newResourceId("ws");
-    const execution = await resolveCreateExecutionChain({
-      rels: parsed.rels,
-      orgId: org.id,
-      rawSettingOverwrites: attributes["setting-overwrites"],
-      executionMode: parsed.executionMode,
-      rawAgentPoolId: parsed.rawAgentPoolId,
-      workspaceId: id,
-    });
-    if ("error" in execution) return failWorkspaceUpdate(set, 422, execution.error);
-    const durationError = validateCreateDuration(attributes);
-    if (durationError !== null) return failWorkspaceUpdate(set, 422, durationError);
-    // Boundary narrowing: validateCreatePreamble/validateCreateDuration
-    // already rejected non-string ownership and duration values.
-    const autoDestroyDuration = attributes["auto-destroy-activity-duration"] as string | null | undefined;
-    const ownedById = attributes["owned-by-id"] as string | null | undefined;
-    const contactEmail = attributes["contact-email"] as string | null | undefined;
-    const inheritsProjectAutoDestroy = autoDestroyDuration === undefined;
-    const lockedTagKey = await findLockedInheritedTagKey(org.id, execution.project.id, tagBindingKeys(workingDirAndTags.tagBindings));
-    if (lockedTagKey !== undefined) return failWorkspaceUpdate(set, 422, `Tag key "${lockedTagKey}" cannot override its inherited project tag`);
-    const row = buildWorkspaceCreateRow({
-      attributes,
-      id,
-      orgId: org.id,
-      name: nameResult.name,
-      project: execution.project,
-      mode: execution.mode,
-      poolId: execution.poolId,
-      settingOverwrites: execution.settingOverwrites,
-      dir: workingDirAndTags.dir,
-      inheritsProjectAutoDestroy,
-      autoDestroyDuration,
-      ownedById,
-      contactEmail,
-      terraformVersionHeader: request.headers.get("terraform-version"),
-      orgDefaultIacBinary: org.defaultIacBinary,
-    });
-    const vcsError = await db.transaction(async (tx): Promise<string | null> => insertWorkspaceTx(tx, {
-      row,
-      vcsRepo: attributes["vcs-repo"],
-      orgId: org.id,
-      workspaceId: id,
-      tagBindings: workingDirAndTags.tagBindings,
-    }));
-    if (vcsError !== null) return failWorkspaceUpdate(set, 422, vcsError);
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, id) });
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    scheduleExplorerInventory(ws.id);
-    await auditLog("create", "workspaces", id, actor.actorId ?? null, org.id, {
-      name: ws.name,
-      projectId: ws.projectId,
-    });
-    (set as { status: number }).status = 201;
-    return {
-      data: await workspaceResource(
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/workspaces",
+    async ({ params, body, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (org === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const actor = actorScope(user, principalOrgId, teamId);
+      if (
+        !(await checkOrganizationPermission(
+          org.id,
+          actor.actorId,
+          actor.actorOrgId,
+          actor.actorTeamId,
+          "manage-workspaces",
+        ))
+      ) {
+        (set as { status: number }).status = 403;
+        return { errors: [{ status: "403", title: "Forbidden" }] };
+      }
+      const parsed = parseWorkspaceUpdateBody(body);
+      const attributes = parsed.attributes;
+      const preambleError = validateCreatePreamble(attributes);
+      if (preambleError !== null) return failWorkspaceUpdate(set, 422, preambleError);
+      const nameResult = await resolveCreateNameAndDup(parsed, org.id);
+      if ("error" in nameResult) return failWorkspaceUpdate(set, nameResult.status, nameResult.error);
+      const fieldTypesError = validateCreateFieldTypes(attributes, parsed.executionMode);
+      if (fieldTypesError !== null) return failWorkspaceUpdate(set, 422, fieldTypesError);
+      const workingDirAndTags = await resolveCreateWorkingDirAndTags(attributes, parsed.rels);
+      if ("error" in workingDirAndTags) return failWorkspaceUpdate(set, 422, workingDirAndTags.error);
+      const id = newResourceId("ws");
+      const execution = await resolveCreateExecutionChain({
+        rels: parsed.rels,
+        orgId: org.id,
+        rawSettingOverwrites: attributes["setting-overwrites"],
+        executionMode: parsed.executionMode,
+        rawAgentPoolId: parsed.rawAgentPoolId,
+        workspaceId: id,
+      });
+      if ("error" in execution) return failWorkspaceUpdate(set, 422, execution.error);
+      const durationError = validateCreateDuration(attributes);
+      if (durationError !== null) return failWorkspaceUpdate(set, 422, durationError);
+      // Boundary narrowing: validateCreatePreamble/validateCreateDuration
+      // already rejected non-string ownership and duration values.
+      const autoDestroyDuration = attributes["auto-destroy-activity-duration"] as string | null | undefined;
+      const ownedById = attributes["owned-by-id"] as string | null | undefined;
+      const contactEmail = attributes["contact-email"] as string | null | undefined;
+      const inheritsProjectAutoDestroy = autoDestroyDuration === undefined;
+      const lockedTagKey = await findLockedInheritedTagKey(
+        org.id,
+        execution.project.id,
+        tagBindingKeys(workingDirAndTags.tagBindings),
+      );
+      if (lockedTagKey !== undefined)
+        return failWorkspaceUpdate(set, 422, `Tag key "${lockedTagKey}" cannot override its inherited project tag`);
+      const row = buildWorkspaceCreateRow({
+        attributes,
+        id,
+        orgId: org.id,
+        name: nameResult.name,
+        project: execution.project,
+        mode: execution.mode,
+        poolId: execution.poolId,
+        settingOverwrites: execution.settingOverwrites,
+        dir: workingDirAndTags.dir,
+        inheritsProjectAutoDestroy,
+        autoDestroyDuration,
+        ownedById,
+        contactEmail,
+        terraformVersionHeader: request.headers.get("terraform-version"),
+        orgDefaultIacBinary: org.defaultIacBinary,
+      });
+      const vcsError = await db.transaction(
+        async (tx): Promise<string | null> =>
+          insertWorkspaceTx(tx, {
+            row,
+            vcsRepo: attributes["vcs-repo"],
+            orgId: org.id,
+            workspaceId: id,
+            tagBindings: workingDirAndTags.tagBindings,
+          }),
+      );
+      if (vcsError !== null) return failWorkspaceUpdate(set, 422, vcsError);
+      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, id) });
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      scheduleExplorerInventory(ws.id);
+      await auditLog("create", "workspaces", id, actor.actorId ?? null, org.id, {
+        name: ws.name,
+        projectId: ws.projectId,
+      });
+      (set as { status: number }).status = 201;
+      return {
+        data: await workspaceResource(
+          ws,
+          org.defaultIacBinary,
+          await resourcePermissions(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId),
+          { orgName: org.name },
+        ),
+      };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/workspaces/:workspace_name",
+    async ({ params, user, orgId: principalOrgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const workspaceName = params["workspace_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (org === undefined) return failWorkspaceUpdate(set, 404);
+      const actor = actorScope(user, principalOrgId, teamId);
+      const ws = await db.query.workspaces.findFirst({
+        where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)),
+      });
+      if (ws === undefined) return failWorkspaceUpdate(set, 404);
+      const runScoped = run !== undefined && run !== null && run.workspaceId === ws.id;
+      if (
+        !runScoped &&
+        !(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "read"))
+      )
+        return failWorkspaceUpdate(set, 404);
+      const include = new URL(request.url).searchParams.get("include") ?? "";
+      const currentRunByName = await currentRunForWorkspace(ws.id, include);
+      const data = await workspaceResource(
         ws,
         org.defaultIacBinary,
         await resourcePermissions(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId),
-        { orgName: org.name },
-      ),
-    };
-  })
-  .get("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const workspaceName = params["workspace_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined) return failWorkspaceUpdate(set, 404);
-    const actor = actorScope(user, principalOrgId, teamId);
-    const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
-    if (ws === undefined) return failWorkspaceUpdate(set, 404);
-    const runScoped = run !== undefined && run !== null && run.workspaceId === ws.id;
-    if (!runScoped && !(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "read"))) return failWorkspaceUpdate(set, 404);
-    const include = new URL(request.url).searchParams.get("include") ?? "";
-    const currentRunByName = await currentRunForWorkspace(ws.id, include);
-    const data = await workspaceResource(
-      ws,
-      org.defaultIacBinary,
-      await resourcePermissions(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId),
-      { orgName: org.name, ...(currentRunByName === undefined ? {} : { currentRun: currentRunByName }) },
-    );
-    return maybeAttachOutputs(data, ws, include);
-  })
-  .patch("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, body, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const workspaceName = params["workspace_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined) return failWorkspaceUpdate(set, 404);
-    const actor = actorScope(user, principalOrgId, teamId);
-    const ws = await findNamedWorkspace(org.id, workspaceName, actor);
-    if (ws === undefined) return failWorkspaceUpdate(set, 404);
-    if (!(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "admin"))) return failWorkspaceUpdate(set, 403);
-    const ifMatchFailure = await workspaceIfMatchFailure(request, ws, org, actor, set);
-    if (ifMatchFailure !== null) return ifMatchFailure;
-    return updateWorkspaceResponse(
-      ws,
-      org.defaultIacBinary,
-      { userId: actor.actorId, principalOrgId: actor.actorOrgId, teamId: actor.actorTeamId },
-      body,
-      set,
-      org.name,
-    );
-  })
-  .delete("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const workspaceName = params["workspace_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
-    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    await deleteWorkspace(ws.id);
-    (set as { status: number }).status = 204;
-    return new Response(null, { status: 204 });
-  })
-  .post("/api/v2/organizations/:org_name/workspaces/:workspace_name/actions/safe-delete", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const workspaceName = params["workspace_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
-    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const ok = await safeDeleteWorkspace(ws.id);
-    if (!ok) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace contains managed resources" }] }; }
-    (set as { status: number }).status = 204;
-    return new Response(null, { status: 204 });
-  })
-  .get("/api/v2/workspaces/:workspace_id", async ({ params, user, orgId: principalOrgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const actor = actorScope(user, principalOrgId, teamId);
-    const runScoped = run !== undefined && run !== null && run.workspaceId === workspaceId;
-    const ws = runScoped
-      ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
-      : await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId);
-    if (ws === undefined) return failWorkspaceUpdate(set, 404);
-    const org = await cachedOrgById(ws.orgId);
-    const include = new URL(request.url).searchParams.get("include") ?? "";
-    const currentRunById = await currentRunForWorkspace(ws.id, include);
-    const data = await workspaceResource(
-      ws,
-      org?.defaultIacBinary,
-      await resourcePermissions(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId),
-      { orgName: org?.name ?? null, ...(currentRunById === undefined ? {} : { currentRun: currentRunById }) },
-    );
-    return maybeAttachOutputs(data, ws, include);
-  })
-  .get("/api/v2/workspaces/:workspace_id/resources", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const actor = actorScope(user, principalOrgId, teamId);
-    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId, "state-read");
-    if (ws === undefined) return failWorkspaceUpdate(set, 404);
-    const latestState = await db.query.stateVersions.findFirst({
-      where: and(
-        eq(stateVersions.workspaceId, ws.id),
-        eq(stateVersions.status, "finalized"),
-        eq(stateVersions.intermediate, false),
-      ),
-      orderBy: [desc(stateVersions.serial)],
-    });
+        { orgName: org.name, ...(currentRunByName === undefined ? {} : { currentRun: currentRunByName }) },
+      );
+      return maybeAttachOutputs(data, ws, include);
+    },
+  )
+  .patch(
+    "/api/v2/organizations/:org_name/workspaces/:workspace_name",
+    async ({ params, body, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const workspaceName = params["workspace_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (org === undefined) return failWorkspaceUpdate(set, 404);
+      const actor = actorScope(user, principalOrgId, teamId);
+      const ws = await findNamedWorkspace(org.id, workspaceName, actor);
+      if (ws === undefined) return failWorkspaceUpdate(set, 404);
+      if (!(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "admin")))
+        return failWorkspaceUpdate(set, 403);
+      const ifMatchFailure = await workspaceIfMatchFailure(request, ws, org, actor, set);
+      if (ifMatchFailure !== null) return ifMatchFailure;
+      return updateWorkspaceResponse(
+        ws,
+        org.defaultIacBinary,
+        { userId: actor.actorId, principalOrgId: actor.actorOrgId, teamId: actor.actorTeamId },
+        body,
+        set,
+        org.name,
+      );
+    },
+  )
+  .delete(
+    "/api/v2/organizations/:org_name/workspaces/:workspace_name",
+    async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const workspaceName = params["workspace_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (org === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ws = await db.query.workspaces.findFirst({
+        where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)),
+      });
+      if (
+        ws === undefined ||
+        !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) {
+        (set as { status: number }).status = 403;
+        return { errors: [{ status: "403", title: "Forbidden" }] };
+      }
+      await deleteWorkspace(ws.id);
+      (set as { status: number }).status = 204;
+      return new Response(null, { status: 204 });
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/workspaces/:workspace_name/actions/safe-delete",
+    async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const workspaceName = params["workspace_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (org === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ws = await db.query.workspaces.findFirst({
+        where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)),
+      });
+      if (
+        ws === undefined ||
+        !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) {
+        (set as { status: number }).status = 403;
+        return { errors: [{ status: "403", title: "Forbidden" }] };
+      }
+      const ok = await safeDeleteWorkspace(ws.id);
+      if (!ok) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Workspace contains managed resources" }] };
+      }
+      (set as { status: number }).status = 204;
+      return new Response(null, { status: 204 });
+    },
+  )
+  .get(
+    "/api/v2/workspaces/:workspace_id",
+    async ({ params, user, orgId: principalOrgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const actor = actorScope(user, principalOrgId, teamId);
+      const runScoped = run !== undefined && run !== null && run.workspaceId === workspaceId;
+      const ws = runScoped
+        ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
+        : await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId);
+      if (ws === undefined) return failWorkspaceUpdate(set, 404);
+      const org = await cachedOrgById(ws.orgId);
+      const include = new URL(request.url).searchParams.get("include") ?? "";
+      const currentRunById = await currentRunForWorkspace(ws.id, include);
+      const data = await workspaceResource(
+        ws,
+        org?.defaultIacBinary,
+        await resourcePermissions(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId),
+        { orgName: org?.name ?? null, ...(currentRunById === undefined ? {} : { currentRun: currentRunById }) },
+      );
+      return maybeAttachOutputs(data, ws, include);
+    },
+  )
+  .get(
+    "/api/v2/workspaces/:workspace_id/resources",
+    async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const actor = actorScope(user, principalOrgId, teamId);
+      const ws = await findAuthorizedWorkspace(
+        workspaceId,
+        actor.actorId,
+        actor.actorOrgId,
+        actor.actorTeamId,
+        "state-read",
+      );
+      if (ws === undefined) return failWorkspaceUpdate(set, 404);
+      const latestState = await db.query.stateVersions.findFirst({
+        where: and(
+          eq(stateVersions.workspaceId, ws.id),
+          eq(stateVersions.status, "finalized"),
+          eq(stateVersions.intermediate, false),
+        ),
+        orderBy: [desc(stateVersions.serial)],
+      });
 
-    const resources: Record<string, unknown>[] = [];
-    if (latestState !== undefined) {
-      if (isClientEncryptedState(latestState.statePayload)) {
+      const resources: Record<string, unknown>[] = [];
+      if (latestState !== undefined) {
+        if (isClientEncryptedState(latestState.statePayload)) {
+          (set as { status: number }).status = 422;
+          return {
+            errors: [
+              { status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR },
+            ],
+          };
+        }
+        const dateStr = new Date(latestState.createdAt).toISOString().split("T")[0] ?? "";
+        const ctx = { workspaceId: ws.id, stateVersionId: latestState.id, dateStr };
+        for (const r of resourceListFromState(latestState)) {
+          const item = buildWorkspaceResourceItem(r, ctx);
+          if (item !== null) resources.push(item);
+        }
+      }
+
+      const { number, size } = pageRequest(request);
+      const total = resources.length;
+      const paginated = resources.slice((number - 1) * size, number * size);
+      return { data: paginated, ...pagination(request, number, size, total) };
+    },
+  )
+  .get(
+    "/api/v2/workspaces/:workspace_id/dependency-graph",
+    async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(
+        workspaceId,
+        user?.id,
+        principalOrgId ?? null,
+        teamId ?? null,
+        "state-read",
+      );
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const state = await db.query.stateVersions.findFirst({
+        where: and(
+          eq(stateVersions.workspaceId, workspaceId),
+          eq(stateVersions.status, "finalized"),
+          eq(stateVersions.intermediate, false),
+        ),
+        orderBy: [desc(stateVersions.serial)],
+      });
+      if (state === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (isClientEncryptedState(state.statePayload)) {
         (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR }] };
+        return {
+          errors: [{ status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR }],
+        };
       }
-      const dateStr = new Date(latestState.createdAt).toISOString().split("T")[0] ?? "";
-      const ctx = { workspaceId: ws.id, stateVersionId: latestState.id, dateStr };
-      for (const r of resourceListFromState(latestState)) {
-        const item = buildWorkspaceResourceItem(r, ctx);
-        if (item !== null) resources.push(item);
+      const nodes = dependencyGraphFromState(state.jsonState ?? state.statePayload);
+      const addresses = new Set(nodes.map((node): string => node.address));
+      const edges = nodes.flatMap((node): readonly { from: string; to: string }[] =>
+        node.dependencies
+          .filter((dependency): boolean => addresses.has(dependency))
+          .map((dependency): { from: string; to: string } => ({ from: dependency, to: node.address })),
+      );
+      return {
+        data: {
+          id: `dependency-graph-${state.id}`,
+          type: "dependency-graphs",
+          attributes: {
+            nodes,
+            edges,
+            "state-version-id": state.id,
+            serial: state.serial,
+            "created-at": new Date(state.createdAt).toISOString(),
+          },
+        },
+      };
+    },
+  )
+  .get(
+    "/api/v2/workspaces/:workspace_id/readme",
+    async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const actor = actorScope(user, principalOrgId, teamId);
+      const ws = await findAuthorizedWorkspace(
+        workspaceId,
+        actor.actorId,
+        actor.actorOrgId,
+        actor.actorTeamId,
+        "state-read",
+      );
+      if (ws === undefined) return failWorkspaceUpdate(set, 404);
+      const latestRun = await db.query.runs.findFirst({
+        where: eq(runs.workspaceId, workspaceId),
+        orderBy: [desc(runs.createdAt), asc(runs.id)],
+      });
+      const configurationVersionId = latestRun?.configurationVersionId;
+      if (latestRun === undefined || configurationVersionId === null || configurationVersionId === undefined) {
+        return failWorkspaceUpdate(set, 404);
       }
-    }
-
-    const { number, size } = pageRequest(request);
-    const total = resources.length;
-    const paginated = resources.slice((number - 1) * size, number * size);
-    return { data: paginated, ...pagination(request, number, size, total) };
-  })
-  .get("/api/v2/workspaces/:workspace_id/dependency-graph", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "state-read");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const state = await db.query.stateVersions.findFirst({
-      where: and(
-        eq(stateVersions.workspaceId, workspaceId),
-        eq(stateVersions.status, "finalized"),
-        eq(stateVersions.intermediate, false),
-      ),
-      orderBy: [desc(stateVersions.serial)],
-    });
-    if (state === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (isClientEncryptedState(state.statePayload)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR }] };
-    }
-    const nodes = dependencyGraphFromState(state.jsonState ?? state.statePayload);
-    const addresses = new Set(nodes.map((node): string => node.address));
-    const edges = nodes.flatMap((node): readonly { from: string; to: string }[] => node.dependencies
-      .filter((dependency): boolean => addresses.has(dependency))
-      .map((dependency): { from: string; to: string } => ({ from: dependency, to: node.address })));
-    return {
-      data: {
-        id: `dependency-graph-${state.id}`,
-        type: "dependency-graphs",
-        attributes: {
-          nodes,
-          edges,
-          "state-version-id": state.id,
-          serial: state.serial,
-          "created-at": new Date(state.createdAt).toISOString(),
+      const archivePath = await readmeArchivePath(configurationVersionId);
+      if (archivePath === null) return failWorkspaceUpdate(set, 404);
+      const content = await readmeFromArchive(archivePath);
+      if (content === null) return failWorkspaceUpdate(set, 404);
+      return {
+        data: {
+          id: `readme-${latestRun.id}`,
+          type: "readmes",
+          attributes: {
+            content,
+            "run-id": latestRun.id,
+            "created-at": new Date(latestRun.createdAt).toISOString(),
+          },
         },
-      },
-    };
-  })
-  .get("/api/v2/workspaces/:workspace_id/readme", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const actor = actorScope(user, principalOrgId, teamId);
-    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId, "state-read");
-    if (ws === undefined) return failWorkspaceUpdate(set, 404);
-    const latestRun = await db.query.runs.findFirst({
-      where: eq(runs.workspaceId, workspaceId),
-      orderBy: [desc(runs.createdAt), asc(runs.id)],
-    });
-    const configurationVersionId = latestRun?.configurationVersionId;
-    if (latestRun === undefined || configurationVersionId === null || configurationVersionId === undefined) {
-      return failWorkspaceUpdate(set, 404);
-    }
-    const archivePath = await readmeArchivePath(configurationVersionId);
-    if (archivePath === null) return failWorkspaceUpdate(set, 404);
-    const content = await readmeFromArchive(archivePath);
-    if (content === null) return failWorkspaceUpdate(set, 404);
-    return {
-      data: {
-        id: `readme-${latestRun.id}`,
-        type: "readmes",
-        attributes: {
-          content,
-          "run-id": latestRun.id,
-          "created-at": new Date(latestRun.createdAt).toISOString(),
-        },
-      },
-    };
-  })
-  .patch("/api/v2/workspaces/:workspace_id", async ({ params, body, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const actor = actorScope(user, principalOrgId, teamId);
-    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId);
-    if (ws === undefined) return failWorkspaceUpdate(set, 404);
-    if (!(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "admin"))) return failWorkspaceUpdate(set, 403);
-    const org = await cachedOrgById(ws.orgId);
-    const ifMatchFailure = await workspaceIfMatchFailure(request, ws, org, actor, set);
-    if (ifMatchFailure !== null) return ifMatchFailure;
-    return updateWorkspaceResponse(
-      ws,
-      org?.defaultIacBinary,
-      { userId: actor.actorId, principalOrgId: actor.actorOrgId, teamId: actor.actorTeamId },
-      body,
-      set,
-      org?.name ?? null,
-    );
-  })
-  .delete("/api/v2/workspaces/:workspace_id", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    await deleteWorkspace(ws.id);
-    (set as { status: number }).status = 204;
-    return new Response(null, { status: 204 });
-  })
-  .post("/api/v2/workspaces/:workspace_id/actions/safe-delete", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const ok = await safeDeleteWorkspace(ws.id);
-    if (!ok) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace contains managed resources" }] }; }
-    (set as { status: number }).status = 204;
-    return new Response(null, { status: 204 });
-  })
+      };
+    },
+  )
+  .patch(
+    "/api/v2/workspaces/:workspace_id",
+    async ({ params, body, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const actor = actorScope(user, principalOrgId, teamId);
+      const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId);
+      if (ws === undefined) return failWorkspaceUpdate(set, 404);
+      if (!(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "admin")))
+        return failWorkspaceUpdate(set, 403);
+      const org = await cachedOrgById(ws.orgId);
+      const ifMatchFailure = await workspaceIfMatchFailure(request, ws, org, actor, set);
+      if (ifMatchFailure !== null) return ifMatchFailure;
+      return updateWorkspaceResponse(
+        ws,
+        org?.defaultIacBinary,
+        { userId: actor.actorId, principalOrgId: actor.actorOrgId, teamId: actor.actorTeamId },
+        body,
+        set,
+        org?.name ?? null,
+      );
+    },
+  )
+  .delete(
+    "/api/v2/workspaces/:workspace_id",
+    async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) {
+        (set as { status: number }).status = 403;
+        return { errors: [{ status: "403", title: "Forbidden" }] };
+      }
+      await deleteWorkspace(ws.id);
+      (set as { status: number }).status = 204;
+      return new Response(null, { status: 204 });
+    },
+  )
+  .post(
+    "/api/v2/workspaces/:workspace_id/actions/safe-delete",
+    async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) {
+        (set as { status: number }).status = 403;
+        return { errors: [{ status: "403", title: "Forbidden" }] };
+      }
+      const ok = await safeDeleteWorkspace(ws.id);
+      if (!ok) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Workspace contains managed resources" }] };
+      }
+      (set as { status: number }).status = 204;
+      return new Response(null, { status: 204 });
+    },
+  )
   // --- Tags ---
-  .get("/api/v2/workspaces/:workspace_id/tag-bindings", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const tags = await db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspaceId), orderBy: [asc(workspaceTags.key)] });
-    return { data: tags.map((t: TagItem): Record<string, unknown> => tagBindingResource(t)) };
-  })
-  .get("/api/v2/workspaces/:workspace_id/effective-tag-bindings", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const [tags, inheritedTags] = await Promise.all([
-      db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspaceId) }),
-      ws.projectId === null
-        ? Promise.resolve([])
-        : db.query.projectTags.findMany({ where: eq(projectTags.projectId, ws.projectId) }),
-    ]);
-    const effective = new Map<string, TagItem>();
-    for (const tag of inheritedTags) {
-      effective.set(tag.key, { id: tag.id, workspaceId, key: tag.key, value: tag.value });
-    }
-    for (const tag of tags) effective.set(tag.key, tag);
-    return {
-      data: [...effective.values()]
-        .sort((a: TagItem, b: TagItem): number => a.key.localeCompare(b.key))
-        .map((tag: TagItem): Record<string, unknown> => tagBindingResource(tag, true)),
-    };
-  })
-  .patch("/api/v2/workspaces/:workspace_id/tag-bindings", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "admin");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"];
-    const tags = Array.isArray(data) ? data : (data !== null && data !== undefined ? [data] : []);
-    const entries = tags.map((t: unknown): { key: string; value: string } => {
-      const item = t !== null && typeof t === "object" ? (t as Record<string, unknown>) : {};
-      const attrs = typeof item["attributes"] === "object" && item["attributes"] !== null ? (item["attributes"] as Record<string, unknown>) : {};
-      const key = typeof attrs["key"] === "string" ? attrs["key"] : "";
-      const value = typeof attrs["value"] === "string" ? attrs["value"] : "";
-      return { key, value };
-    }).filter((e: Readonly<{ readonly key: string; readonly value: string }>): boolean => e.key !== "");
-    const lockedTagKey = await findLockedInheritedTagKey(ws.orgId, ws.projectId, entries.map((entry): string => entry.key));
-    if (lockedTagKey !== undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Tag key "${lockedTagKey}" cannot override its inherited project tag` }] };
-    }
-    // Single upsert: insert new tag keys and update values for existing ones
-    // in one statement, replacing the per-entry INSERT/UPDATE loop.
-    await db.insert(workspaceTags).values(
-      entries.map((entry: Readonly<{ readonly key: string; readonly value: string }>): typeof workspaceTags.$inferInsert => ({
-        id: crypto.randomUUID(),
-        workspaceId,
-        key: entry.key,
-        value: entry.value,
-      })),
-    ).onConflictDoUpdate({
-      target: [workspaceTags.workspaceId, workspaceTags.key],
-      set: { value: sql`excluded.value` },
-    });
-
-    const updatedTags = await db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspaceId), orderBy: [asc(workspaceTags.key)] });
-    return { data: updatedTags.map((t: TagItem): Record<string, unknown> => tagBindingResource(t)) };
-  })
-  .get("/api/v2/workspaces/:workspace_id/relationships/tags", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const tags = await db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspaceId) });
-    return { data: tags.map((t: TagItem): Record<string, string> => ({ id: t.key, type: "tags" })) };
-  })
-  .post("/api/v2/workspaces/:workspace_id/relationships/tags", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const actor = actorScope(user, principalOrgId, teamId);
-    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId, "admin");
-    if (ws === undefined) return failWorkspaceUpdate(set, 404);
-    const entries = parseTagEntries(body);
-    const lockedRefusal = await rejectLockedInheritedTag(ws, entries, set);
-    if (lockedRefusal !== null) return lockedRefusal;
-    if (entries.size > 0) {
-      await db.insert(workspaceTags).values([...entries].map(([key, value]): typeof workspaceTags.$inferInsert => ({
-        id: crypto.randomUUID(),
-        workspaceId,
-        key,
-        value,
-      }))).onConflictDoNothing();
-    }
-    const keys = [...entries.keys()];
-    const tags = keys.length === 0
-      ? []
-      : await db.query.workspaceTags.findMany({
-        where: and(eq(workspaceTags.workspaceId, workspaceId), inArray(workspaceTags.key, keys)),
+  .get(
+    "/api/v2/workspaces/:workspace_id/tag-bindings",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const tags = await db.query.workspaceTags.findMany({
+        where: eq(workspaceTags.workspaceId, workspaceId),
         orderBy: [asc(workspaceTags.key)],
       });
-    (set as { status: number }).status = 201;
-    return { data: tags.map((tag: TagItem): Record<string, string> => ({ id: tag.key, type: "tags" })) };
-  })
-  .delete("/api/v2/workspaces/:workspace_id/relationships/tags", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "admin");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload["data"];
-    if (Array.isArray(items)) {
-      const keys = items.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>)["id"] === "string") ? (i as Record<string, unknown>)["id"] as string : "").filter((s: string): boolean => s !== "");
-      if (keys.length > 0) await db.delete(workspaceTags).where(and(eq(workspaceTags.workspaceId, workspaceId), inArray(workspaceTags.key, keys)));
-    }
-    (set as { status: number }).status = 204;
-    return new Response(null, { status: 204 });
-  })
-  // --- Workspace Variables ---
-  .get("/api/v2/workspaces/:workspace_id/vars", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-read");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { number, size } = pageRequest(request);
-    const where = eq(workspaceVariables.workspaceId, workspaceId);
-    const [vars, countRows] = await Promise.all([
-      db.query.workspaceVariables.findMany({ where, orderBy: [asc(workspaceVariables.key)], limit: size, offset: (number - 1) * size }),
-      db.select({ total: count() }).from(workspaceVariables).where(where),
-    ]);
-    const totalCount = countRows[0]?.total ?? 0;
-    if (strictAuditEnabled()) {
-      const sensitiveCount = vars.filter((v: { readonly sensitive: boolean | null }): boolean => v.sensitive === true).length;
-      if (sensitiveCount > 0) {
-        await auditLog("read", "workspace-variable", workspaceId, user?.id ?? null, ws.orgId, {
-          workspaceId,
-          scope: "list",
-          "sensitive-count": sensitiveCount,
-        });
+      return { data: tags.map((t: TagItem): Record<string, unknown> => tagBindingResource(t)) };
+    },
+  )
+  .get(
+    "/api/v2/workspaces/:workspace_id/effective-tag-bindings",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-    }
-    return { data: vars.map((v: VarItem): Record<string, unknown> => workspaceVariableResource(v)), ...pagination(request, number, size, totalCount) };
-  })
+      const [tags, inheritedTags] = await Promise.all([
+        db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspaceId) }),
+        ws.projectId === null
+          ? Promise.resolve([])
+          : db.query.projectTags.findMany({ where: eq(projectTags.projectId, ws.projectId) }),
+      ]);
+      const effective = new Map<string, TagItem>();
+      for (const tag of inheritedTags) {
+        effective.set(tag.key, { id: tag.id, workspaceId, key: tag.key, value: tag.value });
+      }
+      for (const tag of tags) effective.set(tag.key, tag);
+      return {
+        data: [...effective.values()]
+          .sort((a: TagItem, b: TagItem): number => a.key.localeCompare(b.key))
+          .map((tag: TagItem): Record<string, unknown> => tagBindingResource(tag, true)),
+      };
+    },
+  )
+  .patch(
+    "/api/v2/workspaces/:workspace_id/tag-bindings",
+    async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "admin");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const data = payload["data"];
+      const tags = Array.isArray(data) ? data : data !== null && data !== undefined ? [data] : [];
+      const entries = tags
+        .map((t: unknown): { key: string; value: string } => {
+          const item = t !== null && typeof t === "object" ? (t as Record<string, unknown>) : {};
+          const attrs =
+            typeof item["attributes"] === "object" && item["attributes"] !== null
+              ? (item["attributes"] as Record<string, unknown>)
+              : {};
+          const key = typeof attrs["key"] === "string" ? attrs["key"] : "";
+          const value = typeof attrs["value"] === "string" ? attrs["value"] : "";
+          return { key, value };
+        })
+        .filter((e: Readonly<{ readonly key: string; readonly value: string }>): boolean => e.key !== "");
+      const lockedTagKey = await findLockedInheritedTagKey(
+        ws.orgId,
+        ws.projectId,
+        entries.map((entry): string => entry.key),
+      );
+      if (lockedTagKey !== undefined) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: `Tag key "${lockedTagKey}" cannot override its inherited project tag`,
+            },
+          ],
+        };
+      }
+      // Single upsert: insert new tag keys and update values for existing ones
+      // in one statement, replacing the per-entry INSERT/UPDATE loop.
+      await db
+        .insert(workspaceTags)
+        .values(
+          entries.map(
+            (entry: Readonly<{ readonly key: string; readonly value: string }>): typeof workspaceTags.$inferInsert => ({
+              id: crypto.randomUUID(),
+              workspaceId,
+              key: entry.key,
+              value: entry.value,
+            }),
+          ),
+        )
+        .onConflictDoUpdate({
+          target: [workspaceTags.workspaceId, workspaceTags.key],
+          set: { value: sql`excluded.value` },
+        });
+
+      const updatedTags = await db.query.workspaceTags.findMany({
+        where: eq(workspaceTags.workspaceId, workspaceId),
+        orderBy: [asc(workspaceTags.key)],
+      });
+      return { data: updatedTags.map((t: TagItem): Record<string, unknown> => tagBindingResource(t)) };
+    },
+  )
+  .get(
+    "/api/v2/workspaces/:workspace_id/relationships/tags",
+    async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const tags = await db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspaceId) });
+      return { data: tags.map((t: TagItem): Record<string, string> => ({ id: t.key, type: "tags" })) };
+    },
+  )
+  .post(
+    "/api/v2/workspaces/:workspace_id/relationships/tags",
+    async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const actor = actorScope(user, principalOrgId, teamId);
+      const ws = await findAuthorizedWorkspace(
+        workspaceId,
+        actor.actorId,
+        actor.actorOrgId,
+        actor.actorTeamId,
+        "admin",
+      );
+      if (ws === undefined) return failWorkspaceUpdate(set, 404);
+      const entries = parseTagEntries(body);
+      const lockedRefusal = await rejectLockedInheritedTag(ws, entries, set);
+      if (lockedRefusal !== null) return lockedRefusal;
+      if (entries.size > 0) {
+        await db
+          .insert(workspaceTags)
+          .values(
+            [...entries].map(([key, value]): typeof workspaceTags.$inferInsert => ({
+              id: crypto.randomUUID(),
+              workspaceId,
+              key,
+              value,
+            })),
+          )
+          .onConflictDoNothing();
+      }
+      const keys = [...entries.keys()];
+      const tags =
+        keys.length === 0
+          ? []
+          : await db.query.workspaceTags.findMany({
+              where: and(eq(workspaceTags.workspaceId, workspaceId), inArray(workspaceTags.key, keys)),
+              orderBy: [asc(workspaceTags.key)],
+            });
+      (set as { status: number }).status = 201;
+      return { data: tags.map((tag: TagItem): Record<string, string> => ({ id: tag.key, type: "tags" })) };
+    },
+  )
+  .delete(
+    "/api/v2/workspaces/:workspace_id/relationships/tags",
+    async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "admin");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const items = payload["data"];
+      if (Array.isArray(items)) {
+        const keys = items
+          .map((i: unknown): string =>
+            i !== null && typeof i === "object" && typeof (i as Record<string, unknown>)["id"] === "string"
+              ? ((i as Record<string, unknown>)["id"] as string)
+              : "",
+          )
+          .filter((s: string): boolean => s !== "");
+        if (keys.length > 0)
+          await db
+            .delete(workspaceTags)
+            .where(and(eq(workspaceTags.workspaceId, workspaceId), inArray(workspaceTags.key, keys)));
+      }
+      (set as { status: number }).status = 204;
+      return new Response(null, { status: 204 });
+    },
+  )
+  // --- Workspace Variables ---
+  .get(
+    "/api/v2/workspaces/:workspace_id/vars",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-read");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const { number, size } = pageRequest(request);
+      const where = eq(workspaceVariables.workspaceId, workspaceId);
+      const [vars, countRows] = await Promise.all([
+        db.query.workspaceVariables.findMany({
+          where,
+          orderBy: [asc(workspaceVariables.key)],
+          limit: size,
+          offset: (number - 1) * size,
+        }),
+        db.select({ total: count() }).from(workspaceVariables).where(where),
+      ]);
+      const totalCount = countRows[0]?.total ?? 0;
+      if (strictAuditEnabled()) {
+        const sensitiveCount = vars.filter(
+          (v: { readonly sensitive: boolean | null }): boolean => v.sensitive === true,
+        ).length;
+        if (sensitiveCount > 0) {
+          await auditLog("read", "workspace-variable", workspaceId, user?.id ?? null, ws.orgId, {
+            workspaceId,
+            scope: "list",
+            "sensitive-count": sensitiveCount,
+          });
+        }
+      }
+      return {
+        data: vars.map((v: VarItem): Record<string, unknown> => workspaceVariableResource(v)),
+        ...pagination(request, number, size, totalCount),
+      };
+    },
+  )
   // Effective variable list including variable-set inheritance (what the CLI
   // needs via Variables.ListAll). Same precedence as executionVariables, but
   // stored rows only: serializers null sensitive values, so no decryption
   // happens on the API path.
-  .get("/api/v2/workspaces/:workspace_id/all-vars", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-read");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { number, size } = pageRequest(request);
-    const effective = await effectiveWorkspaceVariables(workspaceId, ws.orgId, ws.projectId ?? null);
-    const totalCount = effective.length;
-    const page = effective.slice((number - 1) * size, number * size);
-    if (strictAuditEnabled()) {
-      const sensitiveCount = page.filter((entry): boolean => entry.variable.sensitive === true).length;
-      if (sensitiveCount > 0) {
-        await auditLog("read", "workspace-variable", workspaceId, user?.id ?? null, ws.orgId, {
-          workspaceId,
-          scope: "all-vars-list",
-          "sensitive-count": sensitiveCount,
-        });
+  .get(
+    "/api/v2/workspaces/:workspace_id/all-vars",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-read");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-    }
-    return {
-      data: page.map((entry): Record<string, unknown> => {
-        if (entry.source === "workspace") return workspaceVariableResource(entry.variable);
-        // Issue #627: name the winning set on inherited rows so clients can
-        // show which set won a duplicated key (additive attributes).
-        const base = variableSetVariableResource(entry.variable);
-        const baseAttributes = base["attributes"];
-        return {
-          ...base,
-          attributes: {
-            ...(typeof baseAttributes === "object" && baseAttributes !== null ? baseAttributes : {}),
-            "variable-set-id": entry.setId,
-            "variable-set-name": entry.setName,
-          },
-        };
-      }),
-      ...pagination(request, number, size, totalCount),
-    };
-  })
+      const { number, size } = pageRequest(request);
+      const effective = await effectiveWorkspaceVariables(workspaceId, ws.orgId, ws.projectId ?? null);
+      const totalCount = effective.length;
+      const page = effective.slice((number - 1) * size, number * size);
+      if (strictAuditEnabled()) {
+        const sensitiveCount = page.filter((entry): boolean => entry.variable.sensitive === true).length;
+        if (sensitiveCount > 0) {
+          await auditLog("read", "workspace-variable", workspaceId, user?.id ?? null, ws.orgId, {
+            workspaceId,
+            scope: "all-vars-list",
+            "sensitive-count": sensitiveCount,
+          });
+        }
+      }
+      return {
+        data: page.map((entry): Record<string, unknown> => {
+          if (entry.source === "workspace") return workspaceVariableResource(entry.variable);
+          // Issue #627: name the winning set on inherited rows so clients can
+          // show which set won a duplicated key (additive attributes).
+          const base = variableSetVariableResource(entry.variable);
+          const baseAttributes = base["attributes"];
+          return {
+            ...base,
+            attributes: {
+              ...(typeof baseAttributes === "object" && baseAttributes !== null ? baseAttributes : {}),
+              "variable-set-id": entry.setId,
+              "variable-set-name": entry.setName,
+            },
+          };
+        }),
+        ...pagination(request, number, size, totalCount),
+      };
+    },
+  )
   // Dry-run trigger-pattern preview (issue #628): match the saved patterns
   // against the latest uploaded configuration file list so authors see what
   // would (and would not) trigger a run before pushing. Same normalization
   // as the webhook matcher, so the preview agrees with live behavior.
-  .get("/api/v2/workspaces/:workspace_id/trigger-preview", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const latestCv = await db.query.configurationVersions.findFirst({
-      where: and(
-        eq(configurationVersions.workspaceId, workspaceId),
-        eq(configurationVersions.status, "uploaded"),
-      ),
-      orderBy: [desc(configurationVersions.createdAt)],
-      columns: { id: true, archivePath: true },
-    });
-    const cvArchivePath = latestCv?.archivePath;
-    if (latestCv === undefined || typeof cvArchivePath !== "string" || cvArchivePath === "" || !(await Bun.file(cvArchivePath).exists())) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Trigger preview needs an uploaded configuration version with a readable archive" }] };
-    }
-    const members = await listArchiveMembers(cvArchivePath);
-    if (members === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Trigger preview could not list the latest configuration archive" }] };
-    }
-    const files = [...members].map((member): string => member.replace(/^\.\//, "")).filter((file): boolean => file !== "" && !file.endsWith("/"));
-    const patterns = Array.isArray(ws.triggerPatterns) ? ws.triggerPatterns.filter((pattern): pattern is string => typeof pattern === "string" && pattern !== "") : [];
-    const previews = patterns.map((pattern): Record<string, unknown> => {
-      let matched: string[] = [];
-      try {
-        const glob = new Bun.Glob(pattern.replace(/^\/+/, ""));
-        matched = files.filter((file): boolean => {
-          try {
-            return glob.match(file);
-          } catch {
-            return false;
-          }
-        });
-      } catch {
-        matched = [];
+  .get(
+    "/api/v2/workspaces/:workspace_id/trigger-preview",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      return { pattern, matches: matched.length, "matched-files": matched.slice(0, 10), truncated: matched.length > 10 };
-    });
-    return {
-      data: {
-        id: workspaceId,
-        type: "trigger-preview",
-        attributes: {
-          "configuration-version-id": latestCv.id,
-          "files-checked": files.length,
-          patterns: previews,
-        },
-      },
-    };
-  })
-  .post("/api/v2/workspaces/:workspace_id/vars", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const actor = actorScope(user, orgId, teamId);
-    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId, "variables-write");
-    if (ws === undefined) return failWorkspaceUpdate(set, 404);
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const { attributes } = updateBodySections(body);
-    if (data?.["type"] !== "vars" || !validVariableAttributes(attributes)) {
-      return failWorkspaceUpdate(set, 422, "Invalid variable attributes");
-    }
-    const varId = newResourceId("wsvar");
-    const { key, value, category, sensitive, hcl, description } = resolveVariableCreateFields(attributes);
-    // Sensitive values are encrypted at rest (todo 167/168).
-    const stored = await variableValueForWrite(sensitive, value);
-    try {
-      await db.insert(workspaceVariables).values({ id: varId, workspaceId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description });
-    } catch (error: unknown) {
-      if (isUniqueConstraintError(error)) {
-        return failWorkspaceUpdate(set, 422, "Variable key already exists in this workspace");
-      }
-      throw error;
-    }
-    (set as { status: number }).status = 201;
-    return { data: workspaceVariableResource({ id: varId, workspaceId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description }) };
-  })
-  .get("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const varId = params["var_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-read");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const variable = await db.query.workspaceVariables.findFirst({ where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, workspaceId)) });
-    if (variable === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (strictAuditEnabled() && variable.sensitive === true) {
-      await auditLog("read", "workspace-variable", varId, user?.id ?? null, ws.orgId, {
-        workspaceId,
-        key: variable.key,
-        sensitive: true,
+      const latestCv = await db.query.configurationVersions.findFirst({
+        where: and(eq(configurationVersions.workspaceId, workspaceId), eq(configurationVersions.status, "uploaded")),
+        orderBy: [desc(configurationVersions.createdAt)],
+        columns: { id: true, archivePath: true },
       });
-    }
-    return { data: workspaceVariableResource(variable) };
-  })
-  .patch("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const varId = params["var_id"] ?? "";
-    const actor = actorScope(user, orgId, teamId);
-    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId, "variables-write");
-    if (ws === undefined) return failWorkspaceUpdate(set, 404);
-    const variable = await db.query.workspaceVariables.findFirst({ where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, workspaceId)) });
-    if (variable === undefined) return failWorkspaceUpdate(set, 404);
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const { attributes: attrs } = updateBodySections(body);
-    if (data?.["type"] !== "vars" || !validVariableAttributes(attrs, true)) {
-      return failWorkspaceUpdate(set, 422, "Invalid variable attributes");
-    }
-    const { sensitive, suppliedValue } = resolveVariableSensitive(attrs, variable);
-    const stored = await resolveVariableStored(sensitive, suppliedValue, variable);
-    const { key, category, hcl, description } = resolveVariableFields(attrs, variable);
-    const updated = { key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description };
-    try {
-      await db.update(workspaceVariables).set(updated).where(eq(workspaceVariables.id, varId));
-    } catch (error: unknown) {
-      if (isUniqueConstraintError(error)) {
-        return failWorkspaceUpdate(set, 422, "Variable key already exists in this workspace");
+      const cvArchivePath = latestCv?.archivePath;
+      if (
+        latestCv === undefined ||
+        typeof cvArchivePath !== "string" ||
+        cvArchivePath === "" ||
+        !(await Bun.file(cvArchivePath).exists())
+      ) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "Trigger preview needs an uploaded configuration version with a readable archive",
+            },
+          ],
+        };
       }
-      throw error;
-    }
-    return { data: workspaceVariableResource({ ...variable, ...updated }) };
-  })
-  .delete("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const varId = params["var_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-write");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const variable = await db.query.workspaceVariables.findFirst({ where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, workspaceId)) });
-    if (variable === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(workspaceVariables).where(eq(workspaceVariables.id, varId));
-    (set as { status: number }).status = 204;
-    return new Response(null, { status: 204 });
-  })
+      const members = await listArchiveMembers(cvArchivePath);
+      if (members === null) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "Trigger preview could not list the latest configuration archive",
+            },
+          ],
+        };
+      }
+      const files = [...members]
+        .map((member): string => member.replace(/^\.\//, ""))
+        .filter((file): boolean => file !== "" && !file.endsWith("/"));
+      const patterns = Array.isArray(ws.triggerPatterns)
+        ? ws.triggerPatterns.filter((pattern): pattern is string => typeof pattern === "string" && pattern !== "")
+        : [];
+      const previews = patterns.map((pattern): Record<string, unknown> => {
+        let matched: string[] = [];
+        try {
+          const glob = new Bun.Glob(pattern.replace(/^\/+/, ""));
+          matched = files.filter((file): boolean => {
+            try {
+              return glob.match(file);
+            } catch {
+              return false;
+            }
+          });
+        } catch {
+          matched = [];
+        }
+        return {
+          pattern,
+          matches: matched.length,
+          "matched-files": matched.slice(0, 10),
+          truncated: matched.length > 10,
+        };
+      });
+      return {
+        data: {
+          id: workspaceId,
+          type: "trigger-preview",
+          attributes: {
+            "configuration-version-id": latestCv.id,
+            "files-checked": files.length,
+            patterns: previews,
+          },
+        },
+      };
+    },
+  )
+  .post(
+    "/api/v2/workspaces/:workspace_id/vars",
+    async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const actor = actorScope(user, orgId, teamId);
+      const ws = await findAuthorizedWorkspace(
+        workspaceId,
+        actor.actorId,
+        actor.actorOrgId,
+        actor.actorTeamId,
+        "variables-write",
+      );
+      if (ws === undefined) return failWorkspaceUpdate(set, 404);
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const data = payload["data"] as Record<string, unknown> | undefined;
+      const { attributes } = updateBodySections(body);
+      if (data?.["type"] !== "vars" || !validVariableAttributes(attributes)) {
+        return failWorkspaceUpdate(set, 422, "Invalid variable attributes");
+      }
+      const varId = newResourceId("wsvar");
+      const { key, value, category, sensitive, hcl, description } = resolveVariableCreateFields(attributes);
+      // Sensitive values are encrypted at rest (todo 167/168).
+      const stored = await variableValueForWrite(sensitive, value);
+      try {
+        await db.insert(workspaceVariables).values({
+          id: varId,
+          workspaceId,
+          key,
+          value: stored.value,
+          valueEncrypted: stored.valueEncrypted,
+          category,
+          sensitive,
+          hcl,
+          description,
+        });
+      } catch (error: unknown) {
+        if (isUniqueConstraintError(error)) {
+          return failWorkspaceUpdate(set, 422, "Variable key already exists in this workspace");
+        }
+        throw error;
+      }
+      (set as { status: number }).status = 201;
+      return {
+        data: workspaceVariableResource({
+          id: varId,
+          workspaceId,
+          key,
+          value: stored.value,
+          valueEncrypted: stored.valueEncrypted,
+          category,
+          sensitive,
+          hcl,
+          description,
+        }),
+      };
+    },
+  )
+  .get(
+    "/api/v2/workspaces/:workspace_id/vars/:var_id",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const varId = params["var_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-read");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const variable = await db.query.workspaceVariables.findFirst({
+        where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, workspaceId)),
+      });
+      if (variable === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (strictAuditEnabled() && variable.sensitive === true) {
+        await auditLog("read", "workspace-variable", varId, user?.id ?? null, ws.orgId, {
+          workspaceId,
+          key: variable.key,
+          sensitive: true,
+        });
+      }
+      return { data: workspaceVariableResource(variable) };
+    },
+  )
+  .patch(
+    "/api/v2/workspaces/:workspace_id/vars/:var_id",
+    async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const varId = params["var_id"] ?? "";
+      const actor = actorScope(user, orgId, teamId);
+      const ws = await findAuthorizedWorkspace(
+        workspaceId,
+        actor.actorId,
+        actor.actorOrgId,
+        actor.actorTeamId,
+        "variables-write",
+      );
+      if (ws === undefined) return failWorkspaceUpdate(set, 404);
+      const variable = await db.query.workspaceVariables.findFirst({
+        where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, workspaceId)),
+      });
+      if (variable === undefined) return failWorkspaceUpdate(set, 404);
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const data = payload["data"] as Record<string, unknown> | undefined;
+      const { attributes: attrs } = updateBodySections(body);
+      if (data?.["type"] !== "vars" || !validVariableAttributes(attrs, true)) {
+        return failWorkspaceUpdate(set, 422, "Invalid variable attributes");
+      }
+      const { sensitive, suppliedValue } = resolveVariableSensitive(attrs, variable);
+      const stored = await resolveVariableStored(sensitive, suppliedValue, variable);
+      const { key, category, hcl, description } = resolveVariableFields(attrs, variable);
+      const updated = {
+        key,
+        value: stored.value,
+        valueEncrypted: stored.valueEncrypted,
+        category,
+        sensitive,
+        hcl,
+        description,
+      };
+      try {
+        await db.update(workspaceVariables).set(updated).where(eq(workspaceVariables.id, varId));
+      } catch (error: unknown) {
+        if (isUniqueConstraintError(error)) {
+          return failWorkspaceUpdate(set, 422, "Variable key already exists in this workspace");
+        }
+        throw error;
+      }
+      return { data: workspaceVariableResource({ ...variable, ...updated }) };
+    },
+  )
+  .delete(
+    "/api/v2/workspaces/:workspace_id/vars/:var_id",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const varId = params["var_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-write");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const variable = await db.query.workspaceVariables.findFirst({
+        where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, workspaceId)),
+      });
+      if (variable === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await db.delete(workspaceVariables).where(eq(workspaceVariables.id, varId));
+      (set as { status: number }).status = 204;
+      return new Response(null, { status: 204 });
+    },
+  )
   // Variable sets attached to this workspace (the reference format model: inherited variables
   // stay on their variable set — the workspace-variable list never flattens them).
-  .get("/api/v2/workspaces/:workspace_id/varsets", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-read");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { number, size } = pageRequest(request);
-    const links = await db.query.variableSetWorkspaces.findMany({ where: eq(variableSetWorkspaces.workspaceId, workspaceId) });
-    const setIds = links.map((link: { readonly variableSetId: string }): string => link.variableSetId);
-    const [sets, countRows] = await Promise.all([
-      setIds.length === 0
-        ? Promise.resolve([])
-        : db.query.variableSets.findMany({
-            where: inArray(variableSets.id, setIds),
-            orderBy: [asc(variableSets.name), asc(variableSets.id)],
-            limit: size,
-            offset: (number - 1) * size,
-          }),
-      setIds.length === 0
-        ? Promise.resolve([{ total: 0 }])
-        : db.select({ total: count() }).from(variableSets).where(inArray(variableSets.id, setIds)),
-    ]);
-    const totalCount = countRows[0]?.total ?? 0;
-    return {
-      data: await Promise.all(sets.map(async (vs: typeof variableSets.$inferSelect): Promise<Record<string, unknown>> => variableSetResource(vs))),
-      ...pagination(request, number, size, totalCount),
-    };
-  })
-  // --- Lock/Unlock ---
-  .post("/api/v2/workspaces/:workspace_id/actions/lock", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-
-    const workspaceId = params["workspace_id"] ?? "";
-    const actor = actorScope(user, principalOrgId, teamId);
-    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId);
-    if (ws === undefined) return failWorkspaceUpdate(set, 404);
-    if (!(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "lock"))) return failWorkspaceUpdate(set, 403);
-    if (ws.locked === true) return failWorkspaceUpdate(set, 409, "Workspace is already locked");
-    const lockReason = parseLockReason(body);
-    if (lockReason.error !== null) {
-      return failWorkspaceUpdate(set, 422, lockReason.error);
-    }
-
-    const principal = lockPrincipal(actor.actorId, actor.actorOrgId, actor.actorTeamId);
-    const lockedAt = Date.now();
-    const locked = await db.update(workspaces).set({
-      locked: true,
-      lockedReason: lockReason.reason,
-      lockOwnerType: principal.type,
-      lockOwnerId: principal.id,
-      lockedAt,
-    }).where(and(eq(workspaces.id, workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
-    if (locked.length === 0) return failWorkspaceUpdate(set, 409, "Workspace is already locked");
-    await auditLog("lock", "workspaces", workspaceId, actor.actorId ?? null, ws.orgId, actor.actorTeamId !== null ? { teamId: actor.actorTeamId } : undefined);
-    const org = await cachedOrgById(ws.orgId);
-    return {
-      data: await lockedWorkspaceResource(ws, org, actor, { locked: true, lockedReason: lockReason.reason, lockOwnerType: principal.type, lockOwnerId: principal.id, lockedAt }),
-    };
-  })
-
-  .post("/api/v2/workspaces/:workspace_id/actions/unlock", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const actor = actorScope(user, principalOrgId, teamId);
-    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId);
-    if (ws === undefined) return failWorkspaceUpdate(set, 404);
-    if (!(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "lock"))) return failWorkspaceUpdate(set, 403);
-    if (ws.locked !== true) return failWorkspaceUpdate(set, 409, "Workspace is not locked");
-    const principal = lockPrincipal(actor.actorId, actor.actorOrgId, actor.actorTeamId);
-    const owner = resolveUnlockOwner(ws, principal);
-    if ("error" in owner) return failWorkspaceUpdate(set, 403, owner.error);
-    const ownerPredicate = owner.ownerless
-      ? and(isNull(workspaces.lockOwnerType), isNull(workspaces.lockOwnerId))
-      : and(eq(workspaces.lockOwnerType, principal.type), eq(workspaces.lockOwnerId, principal.id));
-    const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true), ownerPredicate)).returning({ id: workspaces.id });
-    if (unlocked.length === 0) return failWorkspaceUpdate(set, 409, "Workspace lock changed while unlocking");
-    await promoteIntermediateStateVersion(workspaceId);
-    const org = await cachedOrgById(ws.orgId);
-    return {
-      data: await lockedWorkspaceResource(ws, org, actor, { locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null }),
-    };
-  })
-  .post("/api/v2/workspaces/:workspace_id/actions/force-unlock", async ({ params, user, orgId: principalOrgId, teamId, set, body }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const actor = actorScope(user, principalOrgId, teamId);
-    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId, "admin");
-    if (ws === undefined) return failWorkspaceUpdate(set, 404);
-    if (ws.locked !== true) return failWorkspaceUpdate(set, 409, "Workspace is not locked");
-    const refusal = await forceUnlockRefusal(body, ws, set);
-    if (refusal !== null) return refusal;
-    const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true))).returning({ id: workspaces.id });
-    if (unlocked.length === 0) return failWorkspaceUpdate(set, 409, "Workspace lock changed while unlocking");
-    await promoteIntermediateStateVersion(workspaceId);
-    const org = await cachedOrgById(ws.orgId);
-    return {
-      data: await lockedWorkspaceResource(ws, org, actor, { locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null }),
-    };
-  })
-  // --- Remote State Consumers ---
-  .get("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const consumers = await db.query.remoteStateConsumers.findMany({ where: eq(remoteStateConsumers.workspaceId, workspaceId) });
-    return { data: consumers.map((c: Readonly<{ consumerWorkspaceId: string }>): Record<string, string> => ({ id: c.consumerWorkspaceId, type: "workspaces" })) };
-  })
-  .post("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload["data"];
-    const list = Array.isArray(items) ? items : (items !== null && items !== undefined ? [items] : []);
-    const consumerWorkspaceIds = await validatedRemoteStateConsumerIds(workspaceId, ws.orgId, list);
-    if (consumerWorkspaceIds === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote state consumers must reference existing workspaces in the same organization" }] };
-    }
-    const batch = consumerWorkspaceIds.map((consumerWorkspaceId: string): { id: string; workspaceId: string; consumerWorkspaceId: string } => ({
-      id: newResourceId("rsc"),
-      workspaceId,
-      consumerWorkspaceId,
-    }));
-    if (batch.length > 0) await db.insert(remoteStateConsumers).values(batch).onConflictDoNothing();
-    (set as { status: number }).status = 204;
-    return new Response(null, { status: 204 });
-  })
-  .patch("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload["data"];
-    if (!Array.isArray(items)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote state consumers must be an array" }] };
-    }
-    const list = items;
-    const consumerWorkspaceIds = await validatedRemoteStateConsumerIds(workspaceId, ws.orgId, list);
-    if (consumerWorkspaceIds === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote state consumers must reference existing workspaces in the same organization" }] };
-    }
-    const batch = consumerWorkspaceIds.map((consumerWorkspaceId: string): { id: string; workspaceId: string; consumerWorkspaceId: string } => ({
-      id: newResourceId("rsc"),
-      workspaceId,
-      consumerWorkspaceId,
-    }));
-    await db.transaction(async (tx: unknown): Promise<void> => {
-      const t = tx as typeof db;
-      await t.delete(remoteStateConsumers).where(eq(remoteStateConsumers.workspaceId, workspaceId));
-      if (batch.length > 0) await t.insert(remoteStateConsumers).values(batch).onConflictDoNothing();
-    });
-    (set as { status: number }).status = 204;
-    return new Response(null, { status: 204 });
-  })
-  .delete("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload["data"];
-    const list = Array.isArray(items) ? items : (items !== null && items !== undefined ? [items] : []);
-    const consumerWorkspaceIds = await validatedRemoteStateConsumerIds(workspaceId, ws.orgId, list);
-    if (consumerWorkspaceIds === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote state consumers must reference existing workspaces in the same organization" }] };
-    }
-    if (consumerWorkspaceIds.length > 0) {
-      await db.delete(remoteStateConsumers).where(and(eq(remoteStateConsumers.workspaceId, workspaceId), inArray(remoteStateConsumers.consumerWorkspaceId, consumerWorkspaceIds)));
-    }
-    (set as { status: number }).status = 204;
-    return new Response(null, { status: 204 });
-  })
-  // --- Data Retention ---
-  .get("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const policy = await db.query.dataRetentionPolicies.findFirst({ where: eq(dataRetentionPolicies.workspaceId, workspaceId) });
-    if (policy === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return {
-      data: {
-        id: policy.id,
-        type: policy.deleteOlderThanNDays === null ? "data-retention-policy-dont-deletes" : "data-retention-policy-delete-olders",
-        attributes: {
-          "state-versions-count": policy.stateVersionsCount,
-          "delete-older-than-n-days": policy.deleteOlderThanNDays,
-          "auto-destroy-at": policy.autoDestroyAt,
-          "auto-destroy-activity-duration": policy.autoDestroyActivityDuration,
-        },
-      },
-    };
-  })
-  .post("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const actor = actorScope(user, tokenOrgId, teamId);
-    const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId, "admin");
-    if (ws === undefined) return failWorkspaceUpdate(set, 404);
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const { attributes: attrs } = updateBodySections(body);
-    const existing = await db.query.dataRetentionPolicies.findFirst({ where: eq(dataRetentionPolicies.workspaceId, workspaceId) });
-    const values = resolveRetentionValues(attrs, data, existing, workspaceId);
-    if (existing !== undefined) { await db.update(dataRetentionPolicies).set(values).where(eq(dataRetentionPolicies.id, values.id)); } else { await db.insert(dataRetentionPolicies).values(values); }
-    const gcSummary = await applyDataRetentionGarbageCollection(workspaceId);
-    (set as { status: number }).status = existing !== undefined ? 200 : 201;
-    return {
-      data: {
-        id: values.id,
-        type: values.deleteOlderThanNDays === null ? "data-retention-policy-dont-deletes" : "data-retention-policy-delete-olders",
-        attributes: {
-          "state-versions-count": values.stateVersionsCount,
-          "delete-older-than-n-days": values.deleteOlderThanNDays,
-          "auto-destroy-at": values.autoDestroyAt,
-          "auto-destroy-activity-duration": values.autoDestroyActivityDuration,
-        },
-        meta: { gc: gcSummary },
-      },
-    };
-  })
-  .post("/api/v2/workspaces/:workspace_id/actions/gc", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const gcSummary = await applyDataRetentionGarbageCollection(workspaceId);
-    return { data: { status: "ok", ...gcSummary } };
-  })
-  .delete("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(dataRetentionPolicies).where(eq(dataRetentionPolicies.workspaceId, workspaceId));
-    (set as { status: number }).status = 204;
-    return new Response(null, { status: 204 });
-  })
-  // --- SSH Key assignment ---
-  .patch("/api/v2/workspaces/:workspace_id/relationships/ssh-key", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const rawSshKeyData = payload["data"];
-    let sshKeyId: string | null = null;
-    if (rawSshKeyData !== null) {
-      if (!isRelationshipIdentifier(rawSshKeyData, "ssh-keys")) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SSH key must be a valid ssh-keys resource identifier" }] };
+  .get(
+    "/api/v2/workspaces/:workspace_id/varsets",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-read");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      const sshKey = await db.query.sshKeys.findFirst({
-        where: and(eq(sshKeys.id, rawSshKeyData.id), eq(sshKeys.orgId, ws.orgId)),
+      const { number, size } = pageRequest(request);
+      const links = await db.query.variableSetWorkspaces.findMany({
+        where: eq(variableSetWorkspaces.workspaceId, workspaceId),
       });
-      if (sshKey === undefined) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SSH key does not belong to the organization" }] };
+      const setIds = links.map((link: { readonly variableSetId: string }): string => link.variableSetId);
+      const [sets, countRows] = await Promise.all([
+        setIds.length === 0
+          ? Promise.resolve([])
+          : db.query.variableSets.findMany({
+              where: inArray(variableSets.id, setIds),
+              orderBy: [asc(variableSets.name), asc(variableSets.id)],
+              limit: size,
+              offset: (number - 1) * size,
+            }),
+        setIds.length === 0
+          ? Promise.resolve([{ total: 0 }])
+          : db.select({ total: count() }).from(variableSets).where(inArray(variableSets.id, setIds)),
+      ]);
+      const totalCount = countRows[0]?.total ?? 0;
+      return {
+        data: await Promise.all(
+          sets.map(
+            async (vs: typeof variableSets.$inferSelect): Promise<Record<string, unknown>> => variableSetResource(vs),
+          ),
+        ),
+        ...pagination(request, number, size, totalCount),
+      };
+    },
+  )
+  // --- Lock/Unlock ---
+  .post(
+    "/api/v2/workspaces/:workspace_id/actions/lock",
+    async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const actor = actorScope(user, principalOrgId, teamId);
+      const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId);
+      if (ws === undefined) return failWorkspaceUpdate(set, 404);
+      if (!(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "lock")))
+        return failWorkspaceUpdate(set, 403);
+      if (ws.locked === true) return failWorkspaceUpdate(set, 409, "Workspace is already locked");
+      const lockReason = parseLockReason(body);
+      if (lockReason.error !== null) {
+        return failWorkspaceUpdate(set, 422, lockReason.error);
       }
-      sshKeyId = rawSshKeyData.id;
-    }
-    await db.update(workspaces).set({ sshKeyId }).where(eq(workspaces.id, workspaceId));
-    return { data: { id: workspaceId, type: "workspaces", relationships: { "ssh-key": { data: sshKeyId !== null ? { id: sshKeyId, type: "ssh-keys" } : null } } } };
-  });
+
+      const principal = lockPrincipal(actor.actorId, actor.actorOrgId, actor.actorTeamId);
+      const lockedAt = Date.now();
+      const locked = await db
+        .update(workspaces)
+        .set({
+          locked: true,
+          lockedReason: lockReason.reason,
+          lockOwnerType: principal.type,
+          lockOwnerId: principal.id,
+          lockedAt,
+        })
+        .where(and(eq(workspaces.id, workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked))))
+        .returning({ id: workspaces.id });
+      if (locked.length === 0) return failWorkspaceUpdate(set, 409, "Workspace is already locked");
+      await auditLog(
+        "lock",
+        "workspaces",
+        workspaceId,
+        actor.actorId ?? null,
+        ws.orgId,
+        actor.actorTeamId !== null ? { teamId: actor.actorTeamId } : undefined,
+      );
+      const org = await cachedOrgById(ws.orgId);
+      return {
+        data: await lockedWorkspaceResource(ws, org, actor, {
+          locked: true,
+          lockedReason: lockReason.reason,
+          lockOwnerType: principal.type,
+          lockOwnerId: principal.id,
+          lockedAt,
+        }),
+      };
+    },
+  )
+
+  .post(
+    "/api/v2/workspaces/:workspace_id/actions/unlock",
+    async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const actor = actorScope(user, principalOrgId, teamId);
+      const ws = await findAuthorizedWorkspace(workspaceId, actor.actorId, actor.actorOrgId, actor.actorTeamId);
+      if (ws === undefined) return failWorkspaceUpdate(set, 404);
+      if (!(await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "lock")))
+        return failWorkspaceUpdate(set, 403);
+      if (ws.locked !== true) return failWorkspaceUpdate(set, 409, "Workspace is not locked");
+      const principal = lockPrincipal(actor.actorId, actor.actorOrgId, actor.actorTeamId);
+      const owner = resolveUnlockOwner(ws, principal);
+      if ("error" in owner) return failWorkspaceUpdate(set, 403, owner.error);
+      const ownerPredicate = owner.ownerless
+        ? and(isNull(workspaces.lockOwnerType), isNull(workspaces.lockOwnerId))
+        : and(eq(workspaces.lockOwnerType, principal.type), eq(workspaces.lockOwnerId, principal.id));
+      const unlocked = await db
+        .update(workspaces)
+        .set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null })
+        .where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true), ownerPredicate))
+        .returning({ id: workspaces.id });
+      if (unlocked.length === 0) return failWorkspaceUpdate(set, 409, "Workspace lock changed while unlocking");
+      await promoteIntermediateStateVersion(workspaceId);
+      const org = await cachedOrgById(ws.orgId);
+      return {
+        data: await lockedWorkspaceResource(ws, org, actor, {
+          locked: false,
+          lockedReason: null,
+          lockOwnerType: null,
+          lockOwnerId: null,
+          lockedAt: null,
+        }),
+      };
+    },
+  )
+  .post(
+    "/api/v2/workspaces/:workspace_id/actions/force-unlock",
+    async ({ params, user, orgId: principalOrgId, teamId, set, body }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const actor = actorScope(user, principalOrgId, teamId);
+      const ws = await findAuthorizedWorkspace(
+        workspaceId,
+        actor.actorId,
+        actor.actorOrgId,
+        actor.actorTeamId,
+        "admin",
+      );
+      if (ws === undefined) return failWorkspaceUpdate(set, 404);
+      if (ws.locked !== true) return failWorkspaceUpdate(set, 409, "Workspace is not locked");
+      const refusal = await forceUnlockRefusal(body, ws, set);
+      if (refusal !== null) return refusal;
+      const unlocked = await db
+        .update(workspaces)
+        .set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null })
+        .where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true)))
+        .returning({ id: workspaces.id });
+      if (unlocked.length === 0) return failWorkspaceUpdate(set, 409, "Workspace lock changed while unlocking");
+      await promoteIntermediateStateVersion(workspaceId);
+      const org = await cachedOrgById(ws.orgId);
+      return {
+        data: await lockedWorkspaceResource(ws, org, actor, {
+          locked: false,
+          lockedReason: null,
+          lockOwnerType: null,
+          lockOwnerId: null,
+          lockedAt: null,
+        }),
+      };
+    },
+  )
+  // --- Remote State Consumers ---
+  .get(
+    "/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const consumers = await db.query.remoteStateConsumers.findMany({
+        where: eq(remoteStateConsumers.workspaceId, workspaceId),
+      });
+      return {
+        data: consumers.map(
+          (c: Readonly<{ consumerWorkspaceId: string }>): Record<string, string> => ({
+            id: c.consumerWorkspaceId,
+            type: "workspaces",
+          }),
+        ),
+      };
+    },
+  )
+  .post(
+    "/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const items = payload["data"];
+      const list = Array.isArray(items) ? items : items !== null && items !== undefined ? [items] : [];
+      const consumerWorkspaceIds = await validatedRemoteStateConsumerIds(workspaceId, ws.orgId, list);
+      if (consumerWorkspaceIds === null) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "Remote state consumers must reference existing workspaces in the same organization",
+            },
+          ],
+        };
+      }
+      const batch = consumerWorkspaceIds.map(
+        (consumerWorkspaceId: string): { id: string; workspaceId: string; consumerWorkspaceId: string } => ({
+          id: newResourceId("rsc"),
+          workspaceId,
+          consumerWorkspaceId,
+        }),
+      );
+      if (batch.length > 0) await db.insert(remoteStateConsumers).values(batch).onConflictDoNothing();
+      (set as { status: number }).status = 204;
+      return new Response(null, { status: 204 });
+    },
+  )
+  .patch(
+    "/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const items = payload["data"];
+      if (!Array.isArray(items)) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote state consumers must be an array" }],
+        };
+      }
+      const list = items;
+      const consumerWorkspaceIds = await validatedRemoteStateConsumerIds(workspaceId, ws.orgId, list);
+      if (consumerWorkspaceIds === null) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "Remote state consumers must reference existing workspaces in the same organization",
+            },
+          ],
+        };
+      }
+      const batch = consumerWorkspaceIds.map(
+        (consumerWorkspaceId: string): { id: string; workspaceId: string; consumerWorkspaceId: string } => ({
+          id: newResourceId("rsc"),
+          workspaceId,
+          consumerWorkspaceId,
+        }),
+      );
+      await db.transaction(async (tx: unknown): Promise<void> => {
+        const t = tx as typeof db;
+        await t.delete(remoteStateConsumers).where(eq(remoteStateConsumers.workspaceId, workspaceId));
+        if (batch.length > 0) await t.insert(remoteStateConsumers).values(batch).onConflictDoNothing();
+      });
+      (set as { status: number }).status = 204;
+      return new Response(null, { status: 204 });
+    },
+  )
+  .delete(
+    "/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const items = payload["data"];
+      const list = Array.isArray(items) ? items : items !== null && items !== undefined ? [items] : [];
+      const consumerWorkspaceIds = await validatedRemoteStateConsumerIds(workspaceId, ws.orgId, list);
+      if (consumerWorkspaceIds === null) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "Remote state consumers must reference existing workspaces in the same organization",
+            },
+          ],
+        };
+      }
+      if (consumerWorkspaceIds.length > 0) {
+        await db
+          .delete(remoteStateConsumers)
+          .where(
+            and(
+              eq(remoteStateConsumers.workspaceId, workspaceId),
+              inArray(remoteStateConsumers.consumerWorkspaceId, consumerWorkspaceIds),
+            ),
+          );
+      }
+      (set as { status: number }).status = 204;
+      return new Response(null, { status: 204 });
+    },
+  )
+  // --- Data Retention ---
+  .get(
+    "/api/v2/workspaces/:workspace_id/relationships/data-retention-policy",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const policy = await db.query.dataRetentionPolicies.findFirst({
+        where: eq(dataRetentionPolicies.workspaceId, workspaceId),
+      });
+      if (policy === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return {
+        data: {
+          id: policy.id,
+          type:
+            policy.deleteOlderThanNDays === null
+              ? "data-retention-policy-dont-deletes"
+              : "data-retention-policy-delete-olders",
+          attributes: {
+            "state-versions-count": policy.stateVersionsCount,
+            "delete-older-than-n-days": policy.deleteOlderThanNDays,
+            "auto-destroy-at": policy.autoDestroyAt,
+            "auto-destroy-activity-duration": policy.autoDestroyActivityDuration,
+          },
+        },
+      };
+    },
+  )
+  .post(
+    "/api/v2/workspaces/:workspace_id/relationships/data-retention-policy",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const actor = actorScope(user, tokenOrgId, teamId);
+      const ws = await findAuthorizedWorkspace(
+        workspaceId,
+        actor.actorId,
+        actor.actorOrgId,
+        actor.actorTeamId,
+        "admin",
+      );
+      if (ws === undefined) return failWorkspaceUpdate(set, 404);
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const data = payload["data"] as Record<string, unknown> | undefined;
+      const { attributes: attrs } = updateBodySections(body);
+      const existing = await db.query.dataRetentionPolicies.findFirst({
+        where: eq(dataRetentionPolicies.workspaceId, workspaceId),
+      });
+      const values = resolveRetentionValues(attrs, data, existing, workspaceId);
+      if (existing !== undefined) {
+        await db.update(dataRetentionPolicies).set(values).where(eq(dataRetentionPolicies.id, values.id));
+      } else {
+        await db.insert(dataRetentionPolicies).values(values);
+      }
+      const gcSummary = await applyDataRetentionGarbageCollection(workspaceId);
+      (set as { status: number }).status = existing !== undefined ? 200 : 201;
+      return {
+        data: {
+          id: values.id,
+          type:
+            values.deleteOlderThanNDays === null
+              ? "data-retention-policy-dont-deletes"
+              : "data-retention-policy-delete-olders",
+          attributes: {
+            "state-versions-count": values.stateVersionsCount,
+            "delete-older-than-n-days": values.deleteOlderThanNDays,
+            "auto-destroy-at": values.autoDestroyAt,
+            "auto-destroy-activity-duration": values.autoDestroyActivityDuration,
+          },
+          meta: { gc: gcSummary },
+        },
+      };
+    },
+  )
+  .post(
+    "/api/v2/workspaces/:workspace_id/actions/gc",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const gcSummary = await applyDataRetentionGarbageCollection(workspaceId);
+      return { data: { status: "ok", ...gcSummary } };
+    },
+  )
+  .delete(
+    "/api/v2/workspaces/:workspace_id/relationships/data-retention-policy",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await db.delete(dataRetentionPolicies).where(eq(dataRetentionPolicies.workspaceId, workspaceId));
+      (set as { status: number }).status = 204;
+      return new Response(null, { status: 204 });
+    },
+  )
+  // --- SSH Key assignment ---
+  .patch(
+    "/api/v2/workspaces/:workspace_id/relationships/ssh-key",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const rawSshKeyData = payload["data"];
+      let sshKeyId: string | null = null;
+      if (rawSshKeyData !== null) {
+        if (!isRelationshipIdentifier(rawSshKeyData, "ssh-keys")) {
+          (set as { status: number }).status = 422;
+          return {
+            errors: [
+              {
+                status: "422",
+                title: "Unprocessable Entity",
+                detail: "SSH key must be a valid ssh-keys resource identifier",
+              },
+            ],
+          };
+        }
+        const sshKey = await db.query.sshKeys.findFirst({
+          where: and(eq(sshKeys.id, rawSshKeyData.id), eq(sshKeys.orgId, ws.orgId)),
+        });
+        if (sshKey === undefined) {
+          (set as { status: number }).status = 422;
+          return {
+            errors: [
+              { status: "422", title: "Unprocessable Entity", detail: "SSH key does not belong to the organization" },
+            ],
+          };
+        }
+        sshKeyId = rawSshKeyData.id;
+      }
+      await db.update(workspaces).set({ sshKeyId }).where(eq(workspaces.id, workspaceId));
+      return {
+        data: {
+          id: workspaceId,
+          type: "workspaces",
+          relationships: { "ssh-key": { data: sshKeyId !== null ? { id: sshKeyId, type: "ssh-keys" } : null } },
+        },
+      };
+    },
+  );
 
 function validateCreatePreamble(attributes: Readonly<Record<string, unknown>>): string | null {
   const globalRemoteState = attributes["global-remote-state"] === true;
@@ -1705,9 +2409,15 @@ function validateCreateVersionFields(
   if (terraformVersion !== undefined && (typeof terraformVersion !== "string" || !validateVersion(terraformVersion))) {
     return "Invalid terraformVersion format";
   }
-  if (executionMode !== undefined && !isExecutionMode(executionMode)) return "execution-mode must be remote, local, or agent";
+  if (executionMode !== undefined && !isExecutionMode(executionMode))
+    return "execution-mode must be remote, local, or agent";
   const iacBinary = attributes["iac-binary"];
-  if (iacBinary !== undefined && iacBinary !== null && typeof iacBinary === "string" && !["tofu", "terraform"].includes(iacBinary)) {
+  if (
+    iacBinary !== undefined &&
+    iacBinary !== null &&
+    typeof iacBinary === "string" &&
+    !["tofu", "terraform"].includes(iacBinary)
+  ) {
     return "iac-binary must be tofu or terraform";
   }
   return null;
@@ -1748,13 +2458,17 @@ async function resolveCreateProject(
 ): Promise<{ project: typeof projects.$inferSelect } | { error: string }> {
   const projectRel = rels["project"];
   if (
-    projectRel === undefined
-    || (typeof projectRel === "object" && projectRel !== null && (projectRel as Record<string, unknown>)["data"] === null)
+    projectRel === undefined ||
+    (typeof projectRel === "object" && projectRel !== null && (projectRel as Record<string, unknown>)["data"] === null)
   ) {
     return { project: await ensureDefaultProject(orgId) };
   }
-  const relationship = typeof projectRel === "object" && projectRel !== null ? projectRel as Record<string, unknown> : {};
-  const projectData = typeof relationship["data"] === "object" && relationship["data"] !== null ? relationship["data"] as Record<string, unknown> : {};
+  const relationship =
+    typeof projectRel === "object" && projectRel !== null ? (projectRel as Record<string, unknown>) : {};
+  const projectData =
+    typeof relationship["data"] === "object" && relationship["data"] !== null
+      ? (relationship["data"] as Record<string, unknown>)
+      : {};
   const projectId = typeof projectData["id"] === "string" ? projectData["id"] : "";
   const found = await db.query.projects.findFirst({
     where: and(eq(projects.id, projectId), eq(projects.orgId, orgId)),
@@ -1779,20 +2493,29 @@ function validateCreateExecutionRequirements(
   return null;
 }
 
-function resolveCreateExecutionState(args: Readonly<{
-  executionMode: unknown;
-  executionOverride: boolean;
-  projectDefaultMode: string | null;
-  agentPoolOverride: boolean;
-  rawAgentPoolId: unknown;
-  projectDefaultPoolId: string | null;
-}>): Readonly<{ mode: string; poolId: string | null }> {
+function resolveCreateExecutionState(
+  args: Readonly<{
+    executionMode: unknown;
+    executionOverride: boolean;
+    projectDefaultMode: string | null;
+    agentPoolOverride: boolean;
+    rawAgentPoolId: unknown;
+    projectDefaultPoolId: string | null;
+  }>,
+): Readonly<{ mode: string; poolId: string | null }> {
   const mode = args.executionOverride
-    ? typeof args.executionMode === "string" ? args.executionMode : "remote"
-    : args.projectDefaultMode ?? "remote";
-  const poolId = mode === "agent"
-    ? args.agentPoolOverride ? typeof args.rawAgentPoolId === "string" ? args.rawAgentPoolId : null : args.projectDefaultPoolId
-    : null;
+    ? typeof args.executionMode === "string"
+      ? args.executionMode
+      : "remote"
+    : (args.projectDefaultMode ?? "remote");
+  const poolId =
+    mode === "agent"
+      ? args.agentPoolOverride
+        ? typeof args.rawAgentPoolId === "string"
+          ? args.rawAgentPoolId
+          : null
+        : args.projectDefaultPoolId
+      : null;
   return { mode, poolId };
 }
 
@@ -1803,27 +2526,34 @@ type ResolvedCreateExecution = Readonly<{
   settingOverwrites: Record<string, boolean>;
 }>;
 
-async function resolveCreateExecutionChain(args: Readonly<{
-  rels: Readonly<Record<string, unknown>>;
-  orgId: string;
-  rawSettingOverwrites: unknown;
-  executionMode: unknown;
-  rawAgentPoolId: unknown;
-  workspaceId: string;
-}>): Promise<ResolvedCreateExecution | { error: string }> {
+async function resolveCreateExecutionChain(
+  args: Readonly<{
+    rels: Readonly<Record<string, unknown>>;
+    orgId: string;
+    rawSettingOverwrites: unknown;
+    executionMode: unknown;
+    rawAgentPoolId: unknown;
+    workspaceId: string;
+  }>,
+): Promise<ResolvedCreateExecution | { error: string }> {
   const project = await resolveCreateProject(args.rels, args.orgId);
   if ("error" in project) return project;
   const parsedOverwrites = parseSettingOverwrites(args.rawSettingOverwrites, undefined);
   if ("error" in parsedOverwrites) return { error: parsedOverwrites.error };
   const suppliedOverwrites = args.rawSettingOverwrites as Record<string, unknown> | undefined;
   const executionOverride = args.executionMode !== undefined || suppliedOverwrites?.["execution-mode"] === true;
-  const agentPoolOverride = suppliedOverwrites?.["agent-pool"] as boolean | undefined ?? args.rawAgentPoolId !== undefined;
+  const agentPoolOverride =
+    (suppliedOverwrites?.["agent-pool"] as boolean | undefined) ?? args.rawAgentPoolId !== undefined;
   const settingOverwrites = {
     ...parsedOverwrites.value,
     "execution-mode": executionOverride,
     "agent-pool": agentPoolOverride,
   };
-  const requirementsError = validateCreateExecutionRequirements(executionOverride, args.executionMode, args.rawAgentPoolId);
+  const requirementsError = validateCreateExecutionRequirements(
+    executionOverride,
+    args.executionMode,
+    args.rawAgentPoolId,
+  );
   if (requirementsError !== null) return { error: requirementsError };
   const execution = resolveCreateExecutionState({
     executionMode: args.executionMode,
@@ -1847,9 +2577,9 @@ async function resolveCreateExecutionChain(args: Readonly<{
 function validateCreateDuration(attributes: Readonly<Record<string, unknown>>): string | null {
   const rawAutoDestroyActivityDuration = attributes["auto-destroy-activity-duration"];
   if (
-    rawAutoDestroyActivityDuration !== undefined
-    && rawAutoDestroyActivityDuration !== null
-    && !isAutoDestroyDuration(rawAutoDestroyActivityDuration)
+    rawAutoDestroyActivityDuration !== undefined &&
+    rawAutoDestroyActivityDuration !== null &&
+    !isAutoDestroyDuration(rawAutoDestroyActivityDuration)
   ) {
     return "auto-destroy-activity-duration must be null or a duration such as 14d or 24h";
   }
@@ -1892,9 +2622,12 @@ function buildWorkspaceCreateRow(args: WorkspaceCreateRowArgs): typeof workspace
     sourceName: nullableStringUpdateField(attributes["source-name"], null),
     sourceUrl: nullableStringUpdateField(attributes["source-url"], null),
     source: typeof attributes["source"] === "string" ? attributes["source"] : "tfe-api",
-    iacBinary: typeof iacBinary === "string"
-      ? iacBinary
-      : args.terraformVersionHeader !== null ? "terraform" : (args.orgDefaultIacBinary ?? null),
+    iacBinary:
+      typeof iacBinary === "string"
+        ? iacBinary
+        : args.terraformVersionHeader !== null
+          ? "terraform"
+          : (args.orgDefaultIacBinary ?? null),
     vcsRepo: undefined,
     executionMode: args.mode,
     agentPoolId: args.poolId,
@@ -1903,20 +2636,24 @@ function buildWorkspaceCreateRow(args: WorkspaceCreateRowArgs): typeof workspace
       : args.autoDestroyDuration,
     inheritsProjectAutoDestroy: args.inheritsProjectAutoDestroy,
     settingOverwrites: args.settingOverwrites,
-    ownedByType: ownedByType === undefined || ownedByType === null ? null : ownedByType as "team" | "user" | "service",
+    ownedByType:
+      ownedByType === undefined || ownedByType === null ? null : (ownedByType as "team" | "user" | "service"),
     ownedById: args.ownedById ?? null,
     contactEmail: args.contactEmail ?? null,
     createdAt: Date.now(),
   };
 }
 
-async function insertWorkspaceTx(tx: unknown, args: Readonly<{
-  row: typeof workspaces.$inferInsert;
-  vcsRepo: unknown;
-  orgId: string;
-  workspaceId: string;
-  tagBindings: { key: string; value: string }[] | undefined;
-}>): Promise<string | null> {
+async function insertWorkspaceTx(
+  tx: unknown,
+  args: Readonly<{
+    row: typeof workspaces.$inferInsert;
+    vcsRepo: unknown;
+    orgId: string;
+    workspaceId: string;
+    tagBindings: { key: string; value: string }[] | undefined;
+  }>,
+): Promise<string | null> {
   const database = tx as typeof db;
   let vcsRepo: typeof workspaces.$inferInsert.vcsRepo;
   if (args.vcsRepo !== undefined && args.vcsRepo !== null) {
@@ -1926,12 +2663,14 @@ async function insertWorkspaceTx(tx: unknown, args: Readonly<{
   }
   await database.insert(workspaces).values({ ...args.row, vcsRepo });
   if (args.tagBindings !== undefined && args.tagBindings.length > 0) {
-    await database.insert(workspaceTags).values(args.tagBindings.map((binding): typeof workspaceTags.$inferInsert => ({
-      id: crypto.randomUUID(),
-      workspaceId: args.workspaceId,
-      key: binding.key,
-      value: binding.value,
-    })));
+    await database.insert(workspaceTags).values(
+      args.tagBindings.map((binding): typeof workspaceTags.$inferInsert => ({
+        id: crypto.randomUUID(),
+        workspaceId: args.workspaceId,
+        key: binding.key,
+        value: binding.value,
+      })),
+    );
   }
   return null;
 }
@@ -1942,9 +2681,22 @@ type WorkspaceUpdateFailure = Readonly<{
 
 function failWorkspaceUpdate(set: SetObj, status: 422 | 409, detail: string): WorkspaceUpdateFailure;
 function failWorkspaceUpdate(set: SetObj, status: 400 | 403 | 404, detail?: string): WorkspaceUpdateFailure;
-function failWorkspaceUpdate(set: SetObj, status: 400 | 403 | 404 | 409 | 422, detail?: string): WorkspaceUpdateFailure {
+function failWorkspaceUpdate(
+  set: SetObj,
+  status: 400 | 403 | 404 | 409 | 422,
+  detail?: string,
+): WorkspaceUpdateFailure {
   (set as { status: number }).status = status;
-  const title = status === 422 ? "Unprocessable Entity" : status === 409 ? "Conflict" : status === 403 ? "Forbidden" : status === 404 ? "Not Found" : "Bad Request";
+  const title =
+    status === 422
+      ? "Unprocessable Entity"
+      : status === 409
+        ? "Conflict"
+        : status === 403
+          ? "Forbidden"
+          : status === 404
+            ? "Not Found"
+            : "Bad Request";
   if (detail === undefined) return { errors: [{ status: String(status), title }] };
   return { errors: [{ status: String(status), title, detail }] };
 }
@@ -1965,14 +2717,25 @@ function updateBodySections(body: unknown): Readonly<{
 }> {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"] as Record<string, unknown> | undefined;
-  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-  const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+  const attributes =
+    typeof data?.["attributes"] === "object" && data["attributes"] !== null
+      ? (data["attributes"] as Record<string, unknown>)
+      : {};
+  const rels =
+    typeof data?.["relationships"] === "object" && data["relationships"] !== null
+      ? (data["relationships"] as Record<string, unknown>)
+      : {};
   return { attributes, rels };
 }
 
-function resolveVariableCreateFields(
-  attributes: Readonly<Record<string, unknown>>,
-): Readonly<{ key: string; value: string; category: string; sensitive: boolean; hcl: boolean; description: string | null }> {
+function resolveVariableCreateFields(attributes: Readonly<Record<string, unknown>>): Readonly<{
+  key: string;
+  value: string;
+  category: string;
+  sensitive: boolean;
+  hcl: boolean;
+  description: string | null;
+}> {
   const key = typeof attributes["key"] === "string" ? attributes["key"] : "";
   const value = typeof attributes["value"] === "string" ? attributes["value"] : "";
   const category = typeof attributes["category"] === "string" ? attributes["category"] : "terraform";
@@ -1997,12 +2760,16 @@ async function resolveVariableStored(
   suppliedValue: string | null,
   variable: VarItem,
 ): Promise<Readonly<{ value: string; valueEncrypted: string | null }>> {
-  const unchangedSensitive = suppliedValue === null && sensitive && variable.sensitive === true && variable.valueEncrypted !== null;
+  const unchangedSensitive =
+    suppliedValue === null && sensitive && variable.sensitive === true && variable.valueEncrypted !== null;
   if (unchangedSensitive) return { value: variable.value, valueEncrypted: variable.valueEncrypted };
   // A value supplied in the PATCH is authoritative; otherwise keep the
   // stored value (decrypting an encrypted one). Flipping sensitive on
   // encrypts the existing plaintext (todo 169).
-  return variableValueForWrite(sensitive, suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value));
+  return variableValueForWrite(
+    sensitive,
+    suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value),
+  );
 }
 
 function resolveVariableFields(
@@ -2023,15 +2790,19 @@ function resolveRetentionCounts(
   existing: RetentionPolicyRow | undefined,
   policyType: string | null,
 ): Readonly<{ stateVersionsCount: number | null; deleteOlderThanNDays: number | null }> {
-  const stateVersionsCount = typeof attrs["state-versions-count"] === "number"
-    ? attrs["state-versions-count"]
-    : existing?.stateVersionsCount ?? null;
+  const stateVersionsCount =
+    typeof attrs["state-versions-count"] === "number"
+      ? attrs["state-versions-count"]
+      : (existing?.stateVersionsCount ?? null);
   const rawDeleteOlderThanNDays = attrs["delete-older-than-n-days"] ?? attrs["deleteOlderThanNDays"];
-  const deleteOlderThanNDays = policyType === "data-retention-policy-dont-deletes"
-    ? null
-    : typeof rawDeleteOlderThanNDays === "number" && Number.isInteger(rawDeleteOlderThanNDays) && rawDeleteOlderThanNDays > 0
-      ? rawDeleteOlderThanNDays
-      : existing?.deleteOlderThanNDays ?? null;
+  const deleteOlderThanNDays =
+    policyType === "data-retention-policy-dont-deletes"
+      ? null
+      : typeof rawDeleteOlderThanNDays === "number" &&
+          Number.isInteger(rawDeleteOlderThanNDays) &&
+          rawDeleteOlderThanNDays > 0
+        ? rawDeleteOlderThanNDays
+        : (existing?.deleteOlderThanNDays ?? null);
   return { stateVersionsCount, deleteOlderThanNDays };
 }
 
@@ -2039,10 +2810,12 @@ function resolveRetentionAutoDestroy(
   attrs: Readonly<Record<string, unknown>>,
   existing: RetentionPolicyRow | undefined,
 ): Readonly<{ autoDestroyAt: string | null; autoDestroyActivityDuration: string | null }> {
-  const autoDestroyAt = typeof attrs["auto-destroy-at"] === "string" ? attrs["auto-destroy-at"] : existing?.autoDestroyAt ?? null;
-  const autoDestroyActivityDuration = typeof attrs["auto-destroy-activity-duration"] === "string"
-    ? attrs["auto-destroy-activity-duration"]
-    : existing?.autoDestroyActivityDuration ?? null;
+  const autoDestroyAt =
+    typeof attrs["auto-destroy-at"] === "string" ? attrs["auto-destroy-at"] : (existing?.autoDestroyAt ?? null);
+  const autoDestroyActivityDuration =
+    typeof attrs["auto-destroy-activity-duration"] === "string"
+      ? attrs["auto-destroy-activity-duration"]
+      : (existing?.autoDestroyActivityDuration ?? null);
   return { autoDestroyAt, autoDestroyActivityDuration };
 }
 
@@ -2095,9 +2868,16 @@ function validateRemoteStateFlags(
   attributes: Readonly<Record<string, unknown>>,
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
 ): string | null {
-  const newGlobal = typeof attributes["global-remote-state"] === "boolean" ? attributes["global-remote-state"] : workspace.globalRemoteState;
-  const newProject = typeof attributes["project-remote-state"] === "boolean" ? attributes["project-remote-state"] : workspace.projectRemoteState;
-  if (newGlobal === true && newProject === true) return "global-remote-state and project-remote-state cannot both be true";
+  const newGlobal =
+    typeof attributes["global-remote-state"] === "boolean"
+      ? attributes["global-remote-state"]
+      : workspace.globalRemoteState;
+  const newProject =
+    typeof attributes["project-remote-state"] === "boolean"
+      ? attributes["project-remote-state"]
+      : workspace.projectRemoteState;
+  if (newGlobal === true && newProject === true)
+    return "global-remote-state and project-remote-state cannot both be true";
   return null;
 }
 
@@ -2108,14 +2888,18 @@ function validateWorkspaceNameField(name: string | undefined): string | null {
 
 function validateDescriptionField(attributes: Readonly<Record<string, unknown>>): string | null {
   const description = attributes["description"];
-  if (description !== undefined && description !== null && typeof description !== "string") return "description must be a string or null";
+  if (description !== undefined && description !== null && typeof description !== "string")
+    return "description must be a string or null";
   return null;
 }
 
 function validateSourceFields(attributes: Readonly<Record<string, unknown>>): string | null {
   const sourceName = attributes["source-name"];
   const sourceUrl = attributes["source-url"];
-  if ((sourceName !== undefined && sourceName !== null && typeof sourceName !== "string") || (sourceUrl !== undefined && sourceUrl !== null && typeof sourceUrl !== "string")) {
+  if (
+    (sourceName !== undefined && sourceName !== null && typeof sourceName !== "string") ||
+    (sourceUrl !== undefined && sourceUrl !== null && typeof sourceUrl !== "string")
+  ) {
     return "source-name and source-url must be strings or null";
   }
   return null;
@@ -2126,11 +2910,18 @@ function validateVersionAndBinaries(
   rawAgentPoolId: unknown,
   executionMode: unknown,
 ): string | null {
-  const terraformVersion = typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : undefined;
+  const terraformVersion =
+    typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : undefined;
   if (terraformVersion !== undefined && !validateVersion(terraformVersion)) return "Invalid terraformVersion format";
-  if (executionMode !== undefined && !isExecutionMode(executionMode)) return "execution-mode must be remote, local, or agent";
+  if (executionMode !== undefined && !isExecutionMode(executionMode))
+    return "execution-mode must be remote, local, or agent";
   const iacBinary = attributes["iac-binary"];
-  if (iacBinary !== undefined && iacBinary !== null && typeof iacBinary === "string" && !["tofu", "terraform"].includes(iacBinary)) {
+  if (
+    iacBinary !== undefined &&
+    iacBinary !== null &&
+    typeof iacBinary === "string" &&
+    !["tofu", "terraform"].includes(iacBinary)
+  ) {
     return "iac-binary must be tofu or terraform";
   }
   if (rawAgentPoolId !== undefined && rawAgentPoolId !== null && typeof rawAgentPoolId !== "string") {
@@ -2141,7 +2932,11 @@ function validateVersionAndBinaries(
 
 function validateAutoDestroyFields(attributes: Readonly<Record<string, unknown>>): string | null {
   const rawAutoDestroyActivityDuration = attributes["auto-destroy-activity-duration"];
-  if (rawAutoDestroyActivityDuration !== undefined && rawAutoDestroyActivityDuration !== null && !isAutoDestroyDuration(rawAutoDestroyActivityDuration)) {
+  if (
+    rawAutoDestroyActivityDuration !== undefined &&
+    rawAutoDestroyActivityDuration !== null &&
+    !isAutoDestroyDuration(rawAutoDestroyActivityDuration)
+  ) {
     return "auto-destroy-activity-duration must be null or a duration such as 14d or 24h";
   }
   const rawInheritsProjectAutoDestroy = attributes["inherits-project-auto-destroy"];
@@ -2166,7 +2961,11 @@ function validateVersionExecutionAndDestroy(
 
 function validateOwnershipFields(attributes: Readonly<Record<string, unknown>>): string | null {
   const rawOwnedByType = attributes["owned-by-type"];
-  if (rawOwnedByType !== undefined && rawOwnedByType !== null && !["team", "user", "service"].includes(rawOwnedByType as string)) {
+  if (
+    rawOwnedByType !== undefined &&
+    rawOwnedByType !== null &&
+    !["team", "user", "service"].includes(rawOwnedByType as string)
+  ) {
     return "owned-by-type must be team, user, or service";
   }
   const rawOwnedById = attributes["owned-by-id"];
@@ -2174,7 +2973,11 @@ function validateOwnershipFields(attributes: Readonly<Record<string, unknown>>):
     return "owned-by-id must be a string or null";
   }
   const rawContactEmail = attributes["contact-email"];
-  if (rawContactEmail !== undefined && rawContactEmail !== null && (typeof rawContactEmail !== "string" || rawContactEmail.length > 254)) {
+  if (
+    rawContactEmail !== undefined &&
+    rawContactEmail !== null &&
+    (typeof rawContactEmail !== "string" || rawContactEmail.length > 254)
+  ) {
     return "contact-email must be a string under 255 characters";
   }
   return null;
@@ -2210,15 +3013,13 @@ async function resolveUpdateWorkingDirectory(
   }
   if (workingDirectory === undefined || dir === null) return { dir };
   const latestCv = await db.query.configurationVersions.findFirst({
-    where: and(
-      eq(configurationVersions.workspaceId, workspace.id),
-      eq(configurationVersions.status, "uploaded"),
-    ),
+    where: and(eq(configurationVersions.workspaceId, workspace.id), eq(configurationVersions.status, "uploaded")),
     orderBy: [desc(configurationVersions.createdAt)],
     columns: { archivePath: true },
   });
   const cvArchivePath = latestCv?.archivePath;
-  if (typeof cvArchivePath !== "string" || cvArchivePath === "" || !(await Bun.file(cvArchivePath).exists())) return { dir };
+  if (typeof cvArchivePath !== "string" || cvArchivePath === "" || !(await Bun.file(cvArchivePath).exists()))
+    return { dir };
   const members = await listArchiveMembers(cvArchivePath);
   if (members === null) {
     return { error: "working-directory could not be validated: the latest configuration archive cannot be listed" };
@@ -2229,7 +3030,13 @@ async function resolveUpdateWorkingDirectory(
   // still surfaces the worker error naming the directory.
   if (!archiveContainsWorkingDir(members, dir)) {
     const tops = summarizeTopLevelEntries(members);
-    return { error: "working-directory " + JSON.stringify(dir) + " matches no directory in the latest configuration version" + (tops.length === 0 ? "." : " (top-level entries: " + tops.join(", ") + ")") };
+    return {
+      error:
+        "working-directory " +
+        JSON.stringify(dir) +
+        " matches no directory in the latest configuration version" +
+        (tops.length === 0 ? "." : " (top-level entries: " + tops.join(", ") + ")"),
+    };
   }
   return { dir };
 }
@@ -2240,11 +3047,15 @@ async function checkDuplicateWorkspaceName(
 ): Promise<string | null> {
   if (name === undefined || name === workspace.name) return null;
   const duplicate = await findWorkspaceByName(workspace.orgId, name);
-  if (duplicate !== undefined && duplicate.id !== workspace.id) return "Workspace name already exists in this organization";
+  if (duplicate !== undefined && duplicate.id !== workspace.id)
+    return "Workspace name already exists in this organization";
   return null;
 }
 
-async function resolveCurrentProject(orgId: string, projectId: string): Promise<{ project: typeof projects.$inferSelect } | { error: string }> {
+async function resolveCurrentProject(
+  orgId: string,
+  projectId: string,
+): Promise<{ project: typeof projects.$inferSelect } | { error: string }> {
   const current = await db.query.projects.findFirst({
     where: and(eq(projects.id, projectId), eq(projects.orgId, orgId)),
   });
@@ -2253,8 +3064,12 @@ async function resolveCurrentProject(orgId: string, projectId: string): Promise<
 }
 
 function updateProjectIdFromRel(projectRel: unknown): { id: string } | { error: string } {
-  const relationship = typeof projectRel === "object" && projectRel !== null ? projectRel as Record<string, unknown> : {};
-  const projectData = typeof relationship["data"] === "object" && relationship["data"] !== null ? relationship["data"] as Record<string, unknown> : {};
+  const relationship =
+    typeof projectRel === "object" && projectRel !== null ? (projectRel as Record<string, unknown>) : {};
+  const projectData =
+    typeof relationship["data"] === "object" && relationship["data"] !== null
+      ? (relationship["data"] as Record<string, unknown>)
+      : {};
   if (projectData["type"] !== undefined && projectData["type"] !== "projects") {
     return { error: "Invalid project relationship" };
   }
@@ -2270,8 +3085,8 @@ async function resolveUpdateProject(
     return resolveCurrentProject(workspace.orgId, workspace.projectId);
   }
   if (
-    projectRel === undefined
-    || (typeof projectRel === "object" && projectRel !== null && (projectRel as Record<string, unknown>)["data"] === null)
+    projectRel === undefined ||
+    (typeof projectRel === "object" && projectRel !== null && (projectRel as Record<string, unknown>)["data"] === null)
   ) {
     return { project: await ensureDefaultProject(workspace.orgId) };
   }
@@ -2289,24 +3104,32 @@ type ResolvedEffectiveExecution = Readonly<{
   poolId: string | null;
 }>;
 
-function resolveEffectiveExecution(args: Readonly<{
-  executionMode: unknown;
-  rawAgentPoolId: string | null | undefined;
-  overwritesExecutionMode: boolean;
-  overwritesAgentPool: boolean;
-  workspace: DeepReadonly<typeof workspaces.$inferSelect>;
-  project: typeof projects.$inferSelect;
-}>): ResolvedEffectiveExecution | { error: string } {
+function resolveEffectiveExecution(
+  args: Readonly<{
+    executionMode: unknown;
+    rawAgentPoolId: string | null | undefined;
+    overwritesExecutionMode: boolean;
+    overwritesAgentPool: boolean;
+    workspace: DeepReadonly<typeof workspaces.$inferSelect>;
+    project: typeof projects.$inferSelect;
+  }>,
+): ResolvedEffectiveExecution | { error: string } {
   const mode = args.overwritesExecutionMode
-    ? typeof args.executionMode === "string" ? args.executionMode : args.workspace.executionMode
-    : args.project.defaultExecutionMode ?? "remote";
-  const poolId = mode === "agent"
-    ? args.overwritesAgentPool
-      ? args.rawAgentPoolId !== undefined ? args.rawAgentPoolId : args.workspace.agentPoolId
-      : args.project.defaultAgentPoolId
-    : null;
+    ? typeof args.executionMode === "string"
+      ? args.executionMode
+      : args.workspace.executionMode
+    : (args.project.defaultExecutionMode ?? "remote");
+  const poolId =
+    mode === "agent"
+      ? args.overwritesAgentPool
+        ? args.rawAgentPoolId !== undefined
+          ? args.rawAgentPoolId
+          : args.workspace.agentPoolId
+        : args.project.defaultAgentPoolId
+      : null;
   if (mode === "agent" && poolId === null) return { error: "An agent pool is required for agent execution mode" };
-  if (mode !== "agent" && typeof args.rawAgentPoolId === "string") return { error: "agent-pool-id is only valid for agent execution mode" };
+  if (mode !== "agent" && typeof args.rawAgentPoolId === "string")
+    return { error: "agent-pool-id is only valid for agent execution mode" };
   return { mode, poolId };
 }
 
@@ -2319,7 +3142,8 @@ async function checkAgentPoolAccess(
   if (poolId === null) return null;
   const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, poolId) });
   if (pool?.orgId !== orgId) return "Agent pool must belong to the workspace organization";
-  if (!(await agentPoolAllowsWorkspace(pool, workspaceId, projectId))) return "Agent pool is not allowed for this workspace or project";
+  if (!(await agentPoolAllowsWorkspace(pool, workspaceId, projectId)))
+    return "Agent pool is not allowed for this workspace or project";
   return null;
 }
 
@@ -2334,18 +3158,20 @@ function resolveAutoDestroyFields(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   project: typeof projects.$inferSelect,
 ): ResolvedAutoDestroy {
-  const inherits = rawDuration !== undefined
-    ? false
-    : rawInherits === true
-      ? true
-      : rawInherits === false
-        ? false
-        : workspace.inheritsProjectAutoDestroy;
-  const duration = rawDuration !== undefined
-    ? rawDuration
-    : inherits
-      ? project.autoDestroyActivityDuration
-      : workspace.autoDestroyActivityDuration;
+  const inherits =
+    rawDuration !== undefined
+      ? false
+      : rawInherits === true
+        ? true
+        : rawInherits === false
+          ? false
+          : workspace.inheritsProjectAutoDestroy;
+  const duration =
+    rawDuration !== undefined
+      ? rawDuration
+      : inherits
+        ? project.autoDestroyActivityDuration
+        : workspace.autoDestroyActivityDuration;
   return { inherits, duration };
 }
 
@@ -2354,14 +3180,17 @@ async function checkLockedInheritedTag(
   newProjectId: string,
   tagBindings: readonly { key: string; value: string }[] | undefined,
 ): Promise<string | null> {
-  const overrideKeys = tagBindings !== undefined
-    ? tagBindings.map((binding): string => binding.key)
-    : newProjectId !== workspace.projectId
-      ? (await db.query.workspaceTags.findMany({
-          where: eq(workspaceTags.workspaceId, workspace.id),
-          columns: { key: true },
-        })).map((tag: Readonly<{ key: string }>): string => tag.key)
-      : [];
+  const overrideKeys =
+    tagBindings !== undefined
+      ? tagBindings.map((binding): string => binding.key)
+      : newProjectId !== workspace.projectId
+        ? (
+            await db.query.workspaceTags.findMany({
+              where: eq(workspaceTags.workspaceId, workspace.id),
+              columns: { key: true },
+            })
+          ).map((tag: Readonly<{ key: string }>): string => tag.key)
+        : [];
   const lockedTagKey = await findLockedInheritedTagKey(workspace.orgId, newProjectId, overrideKeys);
   if (lockedTagKey !== undefined) return `Tag key "${lockedTagKey}" cannot override its inherited project tag`;
   return null;
@@ -2434,11 +3263,15 @@ function buildWorkspaceUpdateRow(args: WorkspaceUpdateRowArgs): Partial<typeof w
     executionMode: args.executionMode,
     agentPoolId: args.agentPoolId,
     assessmentsEnabled: booleanUpdateField(attributes["assessments-enabled"], workspace.assessmentsEnabled),
-    autoDestroyAt: typeof attributes["auto-destroy-at"] === "string" ? attributes["auto-destroy-at"] : workspace.autoDestroyAt,
+    autoDestroyAt:
+      typeof attributes["auto-destroy-at"] === "string" ? attributes["auto-destroy-at"] : workspace.autoDestroyAt,
     autoDestroyActivityDuration: args.autoDestroy.duration,
     inheritsProjectAutoDestroy: args.autoDestroy.inherits,
     settingOverwrites: args.workspaceSettingOverwrites,
-    terraformVersion: typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : workspace.terraformVersion,
+    terraformVersion:
+      typeof attributes["terraform-version"] === "string"
+        ? attributes["terraform-version"]
+        : workspace.terraformVersion,
     workingDirectory: args.normalizedWorkingDirectory,
     sourceName: nullableStringUpdateField(attributes["source-name"], workspace.sourceName),
     sourceUrl: nullableStringUpdateField(attributes["source-url"], workspace.sourceUrl),
@@ -2470,7 +3303,17 @@ async function applyWorkspaceUpdateTx(tx: unknown, args: WorkspaceUpdateTxArgs):
   if (args.tagBindings !== undefined) {
     await database.delete(workspaceTags).where(eq(workspaceTags.workspaceId, args.workspaceId));
     if (args.tagBindings.length > 0) {
-      await database.insert(workspaceTags).values(args.tagBindings.map((b: Readonly<{ key: string; value: string }>): { id: string; workspaceId: string; key: string; value: string } => ({ id: crypto.randomUUID(), workspaceId: args.workspaceId, ...b })));
+      await database.insert(workspaceTags).values(
+        args.tagBindings.map(
+          (
+            b: Readonly<{ key: string; value: string }>,
+          ): { id: string; workspaceId: string; key: string; value: string } => ({
+            id: crypto.randomUUID(),
+            workspaceId: args.workspaceId,
+            ...b,
+          }),
+        ),
+      );
     }
   }
   return null;
@@ -2506,7 +3349,10 @@ function workspaceOrgOption(orgName: string | null | undefined): Readonly<{ orgN
 function tagEntryFromItem(item: unknown): Readonly<{ key: string; value: string }> | null {
   if (item === null || typeof item !== "object") return null;
   const itemObj = item as Record<string, unknown>;
-  const attrs = typeof itemObj["attributes"] === "object" && itemObj["attributes"] !== null ? (itemObj["attributes"] as Record<string, unknown>) : {};
+  const attrs =
+    typeof itemObj["attributes"] === "object" && itemObj["attributes"] !== null
+      ? (itemObj["attributes"] as Record<string, unknown>)
+      : {};
   const keyVal = attrs["key"] ?? itemObj["id"];
   const key = typeof keyVal === "string" ? keyVal : "";
   if (key === "") return null;
@@ -2548,7 +3394,9 @@ async function findNamedWorkspace(
   workspaceName: string,
   actor: ActorScope,
 ): Promise<WsItem | undefined> {
-  const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, orgId), eq(workspaces.name, workspaceName)) });
+  const ws = await db.query.workspaces.findFirst({
+    where: and(eq(workspaces.orgId, orgId), eq(workspaces.name, workspaceName)),
+  });
   if (ws === undefined) return undefined;
   const hasRead = await checkWorkspacePermission(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId, "read");
   return hasRead ? ws : undefined;
@@ -2585,21 +3433,22 @@ function resolveUnlockOwner(
   return { ownerless: ownerlessLegacyLock };
 }
 
-async function forceUnlockRefusal(
-  body: unknown,
-  ws: WsItem,
-  set: SetObj,
-): Promise<WorkspaceUpdateFailure | null> {
+async function forceUnlockRefusal(body: unknown, ws: WsItem, set: SetObj): Promise<WorkspaceUpdateFailure | null> {
   // Issue #617: a lock held by a live run must not be swept away silently —
   // a second apply could be handed the workspace while the first is still
   // writing. Require an explicit force flag for those; stale and manual
   // locks unlock as before.
-  const payload = body !== null && typeof body === "object" ? (body as { data?: { attributes?: Record<string, unknown> } }) : {};
+  const payload =
+    body !== null && typeof body === "object" ? (body as { data?: { attributes?: Record<string, unknown> } }) : {};
   const force = payload.data?.attributes?.["force"] === true;
   if (force) return null;
   const { isLiveRunLock } = await import("../lib/agent-jobs");
   if (await isLiveRunLock(ws)) {
-    return failWorkspaceUpdate(set, 422, `Workspace lock is held by a live run (${ws.lockOwnerId ?? "unknown"}); cancel or discard the run first, or retry with force to override`);
+    return failWorkspaceUpdate(
+      set,
+      422,
+      `Workspace lock is held by a live run (${ws.lockOwnerId ?? "unknown"}); cancel or discard the run first, or retry with force to override`,
+    );
   }
   return null;
 }
@@ -2617,7 +3466,14 @@ async function lockedWorkspaceResource(
   }>,
 ): Promise<Record<string, unknown>> {
   return workspaceResource(
-    { ...ws, locked: lock.locked, lockedReason: lock.lockedReason, lockOwnerType: lock.lockOwnerType, lockOwnerId: lock.lockOwnerId, lockedAt: lock.lockedAt },
+    {
+      ...ws,
+      locked: lock.locked,
+      lockedReason: lock.lockedReason,
+      lockOwnerType: lock.lockOwnerType,
+      lockOwnerId: lock.lockOwnerId,
+      lockedAt: lock.lockedAt,
+    },
     org?.defaultIacBinary,
     await resourcePermissions(ws, actor.actorId, actor.actorOrgId, actor.actorTeamId),
     { orgName: org?.name ?? null },

@@ -122,10 +122,10 @@ function jsonDepth1Boundaries(message: string): number[] {
     if (inString) {
       if (escaped) escaped = false;
       else if (ch === "\\") escaped = true;
-      else if (ch === "\"") inString = false;
+      else if (ch === '"') inString = false;
       continue;
     }
-    if (ch === "\"") inString = true;
+    if (ch === '"') inString = true;
     else if (ch === "{" || ch === "[") {
       depth += 1;
       if (depth === 1) boundaries.push(index + 1);
@@ -174,13 +174,8 @@ function truncateSyslogFrame(frame: string, jsonBody: boolean): Buffer {
   const prefix =
     structuredDataEndIndex === null
       ? `${header}- `
-      : `${header}${
-          structuredDataEndIndex === 1 ? "-" : remainder.slice(0, structuredDataEndIndex + 1)
-        } `;
-  const messageStart =
-    structuredDataEndIndex === null || structuredDataEndIndex === 1
-      ? 2
-      : structuredDataEndIndex + 2;
+      : `${header}${structuredDataEndIndex === 1 ? "-" : remainder.slice(0, structuredDataEndIndex + 1)} `;
+  const messageStart = structuredDataEndIndex === null || structuredDataEndIndex === 1 ? 2 : structuredDataEndIndex + 2;
   const message = remainder.slice(messageStart);
   const safePrefix =
     structuredDataEndIndex !== null && Buffer.byteLength(prefix, "utf8") >= MAX_UDP_PAYLOAD_BYTES
@@ -191,15 +186,9 @@ function truncateSyslogFrame(frame: string, jsonBody: boolean): Buffer {
     return Buffer.from(truncateUtf8(safePrefix, MAX_UDP_PAYLOAD_BYTES), "utf8");
   }
   if (jsonBody) {
-    return Buffer.from(
-      safePrefix + truncateJsonMessage(message, MAX_UDP_PAYLOAD_BYTES - prefixBytes),
-      "utf8",
-    );
+    return Buffer.from(safePrefix + truncateJsonMessage(message, MAX_UDP_PAYLOAD_BYTES - prefixBytes), "utf8");
   }
-  return Buffer.from(
-    truncateUtf8(safePrefix + message, MAX_UDP_PAYLOAD_BYTES),
-    "utf8",
-  );
+  return Buffer.from(truncateUtf8(safePrefix + message, MAX_UDP_PAYLOAD_BYTES), "utf8");
 }
 
 function getUdpSocket(family: 4 | 6): Socket {
@@ -216,11 +205,7 @@ function getUdpSocket(family: 4 | 6): Socket {
 const tcpSockets = new Map<string, TcpSocket>();
 
 /** Send one already-framed datagram/segment. Never throws. */
-export function sendSyslogFrame(
-  target: SyslogTarget,
-  frame: string,
-  options?: Readonly<{ jsonBody?: boolean }>,
-): void {
+export function sendSyslogFrame(target: SyslogTarget, frame: string, options?: Readonly<{ jsonBody?: boolean }>): void {
   const payload = Buffer.from(frame, "utf8");
   try {
     if (target.transport === "udp") {
@@ -228,9 +213,7 @@ export function sendSyslogFrame(
       // truncating at 1024 bytes (the minimum every receiver must accept).
       // JSON bodies are repaired to parseable objects, not cut mid-value.
       const datagram =
-        payload.length > MAX_UDP_PAYLOAD_BYTES
-          ? truncateSyslogFrame(frame, options?.jsonBody === true)
-          : payload;
+        payload.length > MAX_UDP_PAYLOAD_BYTES ? truncateSyslogFrame(frame, options?.jsonBody === true) : payload;
       getUdpSocket(target.family ?? 4).send(datagram, target.port, target.host);
     } else {
       // Bare JSON goes newline-delimited so line-oriented collectors (Splunk

@@ -79,7 +79,7 @@ describe("remote-workflow runs contract", () => {
       "runs",
     );
     runId = resource.id;
-        // the reference format emits ids prefixed with "run-"; Terrence uses bare UUIDs (opaque to clients).
+    // the reference format emits ids prefixed with "run-"; Terrence uses bare UUIDs (opaque to clients).
     expect(runId).toBeTypeOf("string");
     expect(runId).not.toBe("");
     expect(resource.attributes["status"]).toBe("pending");
@@ -125,32 +125,47 @@ describe("remote-workflow runs contract", () => {
   it("exposes an immutable redacted provenance capsule", async () => {
     const first = await request(`/api/v2/runs/${runId}/provenance`, { headers });
     expect(first.status).toBe(200);
-    const firstBody = await first.json() as { data: { attributes: { manifest: Record<string, unknown>; sha256: string } } };
+    const firstBody = (await first.json()) as {
+      data: { attributes: { manifest: Record<string, unknown>; sha256: string } };
+    };
     expect(firstBody.data.attributes.manifest).toMatchObject({
       runId,
       schemaVersion: 1,
       configuration: { versionId: configurationVersionId, commitSha: "abc123", branch: "main" },
     });
     expect(firstBody.data.attributes.sha256).toMatch(/^[a-f0-9]{64}$/);
-    await db.update(configurationVersions).set({ ingressAttributes: { commitSha: "changed-after-run", branch: "rewritten" } }).where(eq(configurationVersions.id, configurationVersionId));
+    await db
+      .update(configurationVersions)
+      .set({ ingressAttributes: { commitSha: "changed-after-run", branch: "rewritten" } })
+      .where(eq(configurationVersions.id, configurationVersionId));
     const second = await request(`/api/v2/runs/${runId}/provenance`, { headers });
-    expect((await second.json() as typeof firstBody).data.attributes.manifest).toEqual(firstBody.data.attributes.manifest);
+    expect(((await second.json()) as typeof firstBody).data.attributes.manifest).toEqual(
+      firstBody.data.attributes.manifest,
+    );
     const download = await request(`/api/v2/runs/${runId}/provenance/download`, { headers });
     expect(download.status).toBe(200);
     expect(download.headers.get("content-disposition")).toContain("provenance.json");
     expect(await download.text()).not.toContain("executionMaterial");
-    await db.update(configurationVersions).set({ ingressAttributes: { commitSha: "abc123", branch: "main", senderUsername: "contract-user" } }).where(eq(configurationVersions.id, configurationVersionId));
+    await db
+      .update(configurationVersions)
+      .set({ ingressAttributes: { commitSha: "abc123", branch: "main", senderUsername: "contract-user" } })
+      .where(eq(configurationVersions.id, configurationVersionId));
   });
 
   it("reruns from current settings or the captured execution material", async () => {
-    await db.update(configurationVersions).set({ ingressAttributes: { commitSha: "new-after-run", branch: "feature" } }).where(eq(configurationVersions.id, configurationVersionId));
+    await db
+      .update(configurationVersions)
+      .set({ ingressAttributes: { commitSha: "new-after-run", branch: "feature" } })
+      .where(eq(configurationVersions.id, configurationVersionId));
     const current = await request(`/api/v2/runs/${runId}/actions/rerun`, {
       method: "POST",
       headers,
       body: JSON.stringify({ mode: "current" }),
     });
     expect(current.status).toBe(201);
-    const currentBody = await current.json() as { data: { id: string; attributes: { rerun: { mode: string; sourceRunId: string; changedSinceSource: string[] } } } };
+    const currentBody = (await current.json()) as {
+      data: { id: string; attributes: { rerun: { mode: string; sourceRunId: string; changedSinceSource: string[] } } };
+    };
     expect(currentBody.data.attributes.rerun).toMatchObject({ mode: "current", sourceRunId: runId });
     expect(currentBody.data.attributes.rerun.changedSinceSource).toContain("configuration");
 
@@ -160,9 +175,14 @@ describe("remote-workflow runs contract", () => {
       body: JSON.stringify({ mode: "original" }),
     });
     expect(original.status).toBe(201);
-    const originalBody = await original.json() as { data: { attributes: { rerun: { mode: string; sourceRunId: string } } } };
+    const originalBody = (await original.json()) as {
+      data: { attributes: { rerun: { mode: string; sourceRunId: string } } };
+    };
     expect(originalBody.data.attributes.rerun).toMatchObject({ mode: "original", sourceRunId: runId });
-    await db.update(configurationVersions).set({ ingressAttributes: { commitSha: "abc123", branch: "main", senderUsername: "contract-user" } }).where(eq(configurationVersions.id, configurationVersionId));
+    await db
+      .update(configurationVersions)
+      .set({ ingressAttributes: { commitSha: "abc123", branch: "main", senderUsername: "contract-user" } })
+      .where(eq(configurationVersions.id, configurationVersionId));
   });
 
   it("rejects organization-token run creation with an actionable 403 (issue #606)", async () => {
@@ -209,44 +229,48 @@ describe("remote-workflow runs contract", () => {
   });
 
   it("includes every requested run resource on detail reads", async () => {
-    const include = encodeURIComponent("plan,apply,workspace,cost_estimate,configuration_version,configuration_version.ingress_attributes");
+    const include = encodeURIComponent(
+      "plan,apply,workspace,cost_estimate,configuration_version,configuration_version.ingress_attributes",
+    );
     const response = await request(`/api/v2/runs/${includedRunId}?include=${include}`, { headers });
     expect(response.status).toBe(200);
-    const body = await response.json() as {
+    const body = (await response.json()) as {
       included?: { id: string; type: string; attributes?: Record<string, unknown> }[];
     };
-    expect(body.included).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: `plan-${includedRunId}`,
-        type: "plans",
-        attributes: expect.objectContaining({ status: "finished" }),
-      }),
-      expect.objectContaining({
-        id: `apply-${includedRunId}`,
-        type: "applies",
-        attributes: expect.objectContaining({ status: "pending" }),
-      }),
-      expect.objectContaining({
-        id: workspaceId,
-        type: "workspaces",
-        attributes: expect.objectContaining({ name: `runs-${seed.suffix}`, locked: false }),
-      }),
-      expect.objectContaining({
-        id: `ce-${includedRunId}`,
-        type: "cost-estimates",
-        attributes: expect.objectContaining({ status: "finished", "terrence:infracost-enabled": false }),
-      }),
-      expect.objectContaining({
-        id: configurationVersionId,
-        type: "configuration-versions",
-        attributes: expect.objectContaining({ status: "uploaded" }),
-      }),
-      expect.objectContaining({
-        id: configurationVersionId,
-        type: "ingress-attributes",
-        attributes: expect.objectContaining({ "commit-sha": "abc123", branch: "main" }),
-      }),
-    ]));
+    expect(body.included).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: `plan-${includedRunId}`,
+          type: "plans",
+          attributes: expect.objectContaining({ status: "finished" }),
+        }),
+        expect.objectContaining({
+          id: `apply-${includedRunId}`,
+          type: "applies",
+          attributes: expect.objectContaining({ status: "pending" }),
+        }),
+        expect.objectContaining({
+          id: workspaceId,
+          type: "workspaces",
+          attributes: expect.objectContaining({ name: `runs-${seed.suffix}`, locked: false }),
+        }),
+        expect.objectContaining({
+          id: `ce-${includedRunId}`,
+          type: "cost-estimates",
+          attributes: expect.objectContaining({ status: "finished", "terrence:infracost-enabled": false }),
+        }),
+        expect.objectContaining({
+          id: configurationVersionId,
+          type: "configuration-versions",
+          attributes: expect.objectContaining({ status: "uploaded" }),
+        }),
+        expect.objectContaining({
+          id: configurationVersionId,
+          type: "ingress-attributes",
+          attributes: expect.objectContaining({ "commit-sha": "abc123", branch: "main" }),
+        }),
+      ]),
+    );
     expect(body.included?.some((resource): boolean => resource.type === "users")).toBe(false);
   });
 
@@ -260,7 +284,9 @@ describe("remote-workflow runs contract", () => {
   });
 
   it("lists runs for an organization with pagination metadata", async () => {
-    const response = await request(`/api/v2/organizations/${seed.orgName}/runs?page[number]=1&page[size]=10`, { headers });
+    const response = await request(`/api/v2/organizations/${seed.orgName}/runs?page[number]=1&page[size]=10`, {
+      headers,
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     const items = expectCollection(body, "runs");
@@ -317,7 +343,9 @@ describe("remote-workflow runs contract", () => {
         await request(`/api/v2/runs/${policyRunId}/actions/override-policy`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ data: { type: "runs", attributes: { comment: "Accepted risk for this workspace." } } }),
+          body: JSON.stringify({
+            data: { type: "runs", attributes: { comment: "Accepted risk for this workspace." } },
+          }),
         }),
         200,
         "runs",
@@ -348,7 +376,7 @@ describe("remote-workflow runs contract", () => {
     for (const path of paths) {
       const response = await request(path, { headers });
       expect(response.status).toBe(200);
-      const body = await response.json() as {
+      const body = (await response.json()) as {
         data: { id: string }[];
         included?: { id: string; type: string }[];
       };
@@ -377,7 +405,11 @@ describe("remote-workflow runs contract", () => {
     expect(plan.attributes["status"]).toBeTypeOf("string");
     expectSelfLink(plan, "/api/v2/plans/");
 
-    const apply = await expectSuccessResponse(await request(`/api/v2/applies/apply-${runId}`, { headers }), 200, "applies");
+    const apply = await expectSuccessResponse(
+      await request(`/api/v2/applies/apply-${runId}`, { headers }),
+      200,
+      "applies",
+    );
     expect(apply.id).toBe(`apply-${runId}`);
     expect(apply.attributes["status"]).toBeTypeOf("string");
     expect(apply.attributes["status-timestamps"]).toBeTypeOf("object");
@@ -403,7 +435,9 @@ describe("remote-workflow runs contract", () => {
       const past = await request(`/api/v2/runs/${scheduledRunId}/actions/schedule-apply`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ data: { type: "runs", attributes: { "apply-at": new Date(Date.now() - 60_000).toISOString() } } }),
+        body: JSON.stringify({
+          data: { type: "runs", attributes: { "apply-at": new Date(Date.now() - 60_000).toISOString() } },
+        }),
       });
       expect(past.status).toBe(422);
 
@@ -425,7 +459,9 @@ describe("remote-workflow runs contract", () => {
       const again = await request(`/api/v2/runs/${scheduledRunId}/actions/schedule-apply`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ data: { type: "runs", attributes: { "apply-at": new Date(Date.now() + 3_600_000).toISOString() } } }),
+        body: JSON.stringify({
+          data: { type: "runs", attributes: { "apply-at": new Date(Date.now() + 3_600_000).toISOString() } },
+        }),
       });
       expect(again.status).toBe(409);
     } finally {
@@ -476,11 +512,13 @@ describe("remote-workflow runs contract", () => {
     });
     expect(discard.status).toBe(202);
     const comments = await request(`/api/v2/runs/${runId}/comments`, { headers });
-    expect((await comments.json()).data).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        attributes: expect.objectContaining({ body: "Discarded after review" }),
-      }),
-    ]));
+    expect((await comments.json()).data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          attributes: expect.objectContaining({ body: "Discarded after review" }),
+        }),
+      ]),
+    );
     await expectNoContent(await request(`/api/v2/runs/${runId}`, { method: "DELETE", headers }));
     await expectErrorResponse(await request(`/api/v2/runs/${runId}`, { headers }), 404);
   });

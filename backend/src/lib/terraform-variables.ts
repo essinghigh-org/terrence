@@ -68,7 +68,7 @@ function skipQuoted(input: string, start: number): number {
   for (let index = start + 1; index < input.length; index += 1) {
     if (input[index] === "\\") {
       index += 1;
-    } else if (input[index] === "\"") {
+    } else if (input[index] === '"') {
       return index + 1;
     }
   }
@@ -102,7 +102,7 @@ function skipHeredoc(input: string, start: number): number {
 
 function matchingBrace(input: string, openingBrace: number): number | undefined {
   let depth = 1;
-  for (let index = openingBrace + 1; index < input.length;) {
+  for (let index = openingBrace + 1; index < input.length; ) {
     if (input.startsWith("//", index) || input[index] === "#") {
       index = skipLineComment(input, index);
       continue;
@@ -115,7 +115,7 @@ function matchingBrace(input: string, openingBrace: number): number | undefined 
       index = skipHeredoc(input, index);
       continue;
     }
-    if (input[index] === "\"") {
+    if (input[index] === '"') {
       index = skipQuoted(input, index);
       continue;
     }
@@ -146,7 +146,7 @@ function attributeTokenStep(block: string, index: number, nesting: AttributeNest
   if (block.startsWith("<<", index)) {
     return { nextIndex: skipHeredoc(block, index), endsExpression: false };
   }
-  if (block[index] === "\"") {
+  if (block[index] === '"') {
     return { nextIndex: skipQuoted(block, index), endsExpression: false };
   }
   return undefined;
@@ -154,27 +154,31 @@ function attributeTokenStep(block: string, index: number, nesting: AttributeNest
 
 function advanceAttributeNesting(nesting: AttributeNesting, char: string | undefined): AttributeNesting {
   switch (char) {
-    case "(": return { ...nesting, round: nesting.round + 1 };
-    case ")": return { ...nesting, round: nesting.round - 1 };
-    case "[": return { ...nesting, square: nesting.square + 1 };
-    case "]": return { ...nesting, square: nesting.square - 1 };
-    case "{": return { ...nesting, curly: nesting.curly + 1 };
-    case "}": return { ...nesting, curly: nesting.curly - 1 };
+    case "(":
+      return { ...nesting, round: nesting.round + 1 };
+    case ")":
+      return { ...nesting, round: nesting.round - 1 };
+    case "[":
+      return { ...nesting, square: nesting.square + 1 };
+    case "]":
+      return { ...nesting, square: nesting.square - 1 };
+    case "{":
+      return { ...nesting, curly: nesting.curly + 1 };
+    case "}":
+      return { ...nesting, curly: nesting.curly - 1 };
     case undefined:
-    default: return nesting;
+    default:
+      return nesting;
   }
 }
 
 function isTopLevelAttributeTerminator(char: string | undefined, nesting: AttributeNesting): boolean {
-  return (char === "\n" || char === ";")
-    && nesting.round === 0
-    && nesting.square === 0
-    && nesting.curly === 0;
+  return (char === "\n" || char === ";") && nesting.round === 0 && nesting.square === 0 && nesting.curly === 0;
 }
 
 function scanAttributeExpression(block: string, start: number): string | undefined {
   let nesting: AttributeNesting = { round: 0, square: 0, curly: 0 };
-  for (let index = start; index < block.length;) {
+  for (let index = start; index < block.length; ) {
     const token = attributeTokenStep(block, index, nesting);
     if (token !== undefined) {
       if (token.endsExpression) return block.slice(start, index).trim();
@@ -195,11 +199,23 @@ function scanAttributeExpression(block: string, start: number): string | undefin
 function* topLevelMatches(input: string, pattern: Readonly<RegExp>): Generator<RegExpExecArray> {
   const matcher = new RegExp(pattern.source, pattern.flags);
   let nesting: AttributeNesting = { round: 0, square: 0, curly: 0 };
-  for (let index = 0; index < input.length;) {
-    if (input.startsWith("//", index) || input[index] === "#") { index = skipLineComment(input, index); continue; }
-    if (input.startsWith("/*", index)) { index = skipBlockComment(input, index); continue; }
-    if (input.startsWith("<<", index)) { index = skipHeredoc(input, index); continue; }
-    if (input[index] === '\"') { index = skipQuoted(input, index); continue; }
+  for (let index = 0; index < input.length; ) {
+    if (input.startsWith("//", index) || input[index] === "#") {
+      index = skipLineComment(input, index);
+      continue;
+    }
+    if (input.startsWith("/*", index)) {
+      index = skipBlockComment(input, index);
+      continue;
+    }
+    if (input.startsWith("<<", index)) {
+      index = skipHeredoc(input, index);
+      continue;
+    }
+    if (input[index] === '\"') {
+      index = skipQuoted(input, index);
+      continue;
+    }
     if (nesting.round === 0 && nesting.square === 0 && nesting.curly === 0) {
       matcher.lastIndex = index;
       const match = matcher.exec(input);
@@ -226,7 +242,10 @@ export type TerraformVariableSkip = Readonly<{
   reason: "invalid-name" | "unbalanced-braces";
 }>;
 
-function recordSkippedVariable(skipped: Readonly<Pick<TerraformVariableSkip[], "push" | "length">>, name: string | undefined): void {
+function recordSkippedVariable(
+  skipped: Readonly<Pick<TerraformVariableSkip[], "push" | "length">>,
+  name: string | undefined,
+): void {
   if (skipped.length >= TERRAFORM_VARIABLE_PARSER_LIMITS.maxDiagnostics) {
     throw new TerraformVariableParseError(
       "output-too-large",
@@ -244,7 +263,8 @@ function buildVariableMetadata(name: string, body: string): TerraformVariableMet
   return {
     name,
     type,
-    description: descriptionExpression === undefined ? null : quotedValue(descriptionExpression) ?? descriptionExpression,
+    description:
+      descriptionExpression === undefined ? null : (quotedValue(descriptionExpression) ?? descriptionExpression),
     hasDefault: rawDefault !== undefined,
     ...(rawDefault === undefined ? {} : { defaultValue: literalValue(rawDefault) }),
     sensitive: attributeExpression(body, "sensitive")?.trim() === "true",
@@ -318,33 +338,45 @@ export function parseTerraformVariablesJson(source: string): readonly TerraformV
     .flatMap(([name, rawConfig]): TerraformVariableMetadata[] => {
       if (rawConfig === null || typeof rawConfig !== "object" || Array.isArray(rawConfig)) return [];
       const config = rawConfig as Record<string, unknown>;
-      return [{
-        name,
-        type: config["type"] === undefined ? "any" : jsonType(config["type"]),
-        description: typeof config["description"] === "string" ? config["description"] : null,
-        hasDefault: Object.hasOwn(config, "default"),
-        ...(Object.hasOwn(config, "default") ? { defaultValue: config["default"] } : {}),
-        sensitive: config["sensitive"] === true,
-        nullable: config["nullable"] !== false,
-      }];
+      return [
+        {
+          name,
+          type: config["type"] === undefined ? "any" : jsonType(config["type"]),
+          description: typeof config["description"] === "string" ? config["description"] : null,
+          hasDefault: Object.hasOwn(config, "default"),
+          ...(Object.hasOwn(config, "default") ? { defaultValue: config["default"] } : {}),
+          sensitive: config["sensitive"] === true,
+          nullable: config["nullable"] !== false,
+        },
+      ];
     })
     .sort((left, right): number => left.name.localeCompare(right.name));
 }
 
 export type TerraformVariableFileSkip = TerraformVariableSkip & Readonly<{ file: string }>;
 
-export async function scanTerraformModuleVariablesWithDiagnostics(directory: string): Promise<Readonly<{
-  variables: readonly TerraformVariableMetadata[];
-  skipped: TerraformVariableFileSkip[];
-}>> {
+export async function scanTerraformModuleVariablesWithDiagnostics(directory: string): Promise<
+  Readonly<{
+    variables: readonly TerraformVariableMetadata[];
+    skipped: TerraformVariableFileSkip[];
+  }>
+> {
   const entries = await readdir(directory, { withFileTypes: true });
-  const files = entries.filter((entry): boolean => entry.isFile() && (entry.name.endsWith(".tf") || entry.name.endsWith(".tf.json")));
-  const parsed = await Promise.all(files.map(async (entry) => {
-    const source = await readFile(join(directory, entry.name), "utf8");
-    if (entry.name.endsWith(".tf.json")) return { variables: parseTerraformVariablesJson(source), skipped: [] as TerraformVariableFileSkip[] };
-    const result = parseTerraformVariablesWithDiagnostics(source);
-    return { variables: result.variables, skipped: result.skipped.map((skip): TerraformVariableFileSkip => ({ ...skip, file: entry.name })) };
-  }));
+  const files = entries.filter(
+    (entry): boolean => entry.isFile() && (entry.name.endsWith(".tf") || entry.name.endsWith(".tf.json")),
+  );
+  const parsed = await Promise.all(
+    files.map(async (entry) => {
+      const source = await readFile(join(directory, entry.name), "utf8");
+      if (entry.name.endsWith(".tf.json"))
+        return { variables: parseTerraformVariablesJson(source), skipped: [] as TerraformVariableFileSkip[] };
+      const result = parseTerraformVariablesWithDiagnostics(source);
+      return {
+        variables: result.variables,
+        skipped: result.skipped.map((skip): TerraformVariableFileSkip => ({ ...skip, file: entry.name })),
+      };
+    }),
+  );
   const variables = new Map<string, TerraformVariableMetadata>();
   const skipped = parsed.flatMap((entry) => entry.skipped);
   if (skipped.length > TERRAFORM_VARIABLE_PARSER_LIMITS.maxDiagnostics) {

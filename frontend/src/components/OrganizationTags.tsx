@@ -46,8 +46,8 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
     setLoading(true);
     setError("");
     try {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const response = await fetchApi(path) as { data?: ReservedTagKey[] };
+      // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+      const response = (await fetchApi(path)) as { data?: ReservedTagKey[] };
       setTags(Array.isArray(response.data) ? response.data : []);
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : "Could not load reserved tag keys");
@@ -82,19 +82,16 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
     setSaving(true);
     setFormError("");
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(
-        editing !== null ? `/reserved-tags/${editing.id}` : path,
-        {
-          method: editing !== null ? "PATCH" : "POST",
-          body: JSON.stringify({
-            data: {
-              type: "reserved-tag-keys",
-              attributes: { key: key.trim(), "disable-overrides": disableOverrides },
-            },
-          }),
-        },
-      ) as { data?: ReservedTagKey };
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(editing !== null ? `/reserved-tags/${editing.id}` : path, {
+        method: editing !== null ? "PATCH" : "POST",
+        body: JSON.stringify({
+          data: {
+            type: "reserved-tag-keys",
+            attributes: { key: key.trim(), "disable-overrides": disableOverrides },
+          },
+        }),
+      })) as { data?: ReservedTagKey };
       if (response.data !== undefined) {
         const saved = response.data;
         setTags((current: ReservedTagKey[]): ReservedTagKey[] =>
@@ -118,7 +115,8 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
     try {
       await fetchApi(`/reserved-tags/${toDelete.id}`, { method: "DELETE" });
       setTags((current: ReservedTagKey[]): ReservedTagKey[] =>
-        current.filter((tag): boolean => tag.id !== toDelete.id));
+        current.filter((tag): boolean => tag.id !== toDelete.id),
+      );
       setToDelete(null);
       toast.add({ title: "Reserved tag key deleted", type: "success" });
     } catch (caught: unknown) {
@@ -138,8 +136,8 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
         <div className="flex flex-col gap-1">
           <CardTitle>Tag management</CardTitle>
           <CardDescription>
-            Manage reserved keys to standardize common tag key–value pairs across your projects and
-            workspaces, and optionally prevent workspaces from overriding inherited tags.
+            Manage reserved keys to standardize common tag key–value pairs across your projects and workspaces, and
+            optionally prevent workspaces from overriding inherited tags.
           </CardDescription>
         </div>
         <Button type="button" onClick={openCreate}>
@@ -153,12 +151,19 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
         ) : error !== "" ? (
           <div role="alert" className="px-5 py-8 text-center text-sm text-destructive">
             Could not load reserved tag keys: {error}
-            <Button size="sm" variant="outline" className="ml-3" onClick={(): void => { void load(); }}>Try again</Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-3"
+              onClick={(): void => {
+                void load();
+              }}
+            >
+              Try again
+            </Button>
           </div>
         ) : tags.length === 0 ? (
-          <p className="px-5 py-8 text-center text-sm text-muted-foreground">
-            No reserved keys in this organization.
-          </p>
+          <p className="px-5 py-8 text-center text-sm text-muted-foreground">No reserved keys in this organization.</p>
         ) : (
           <Table>
             <TableHeader>
@@ -170,25 +175,39 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
               </TableRow>
             </TableHeader>
             <TableBody>
-              {tags.map((tag): React.JSX.Element => (
-                <TableRow key={tag.id}>
-                  <TableCell className="font-medium">{tag.attributes.key}</TableCell>
-                  <TableCell>{tag.attributes["disable-overrides"] ? "No" : "Yes"}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {formatDate(tag.attributes["created-at"])}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="icon-sm" aria-label={`Edit ${tag.attributes.key}`} onClick={(): void => { openEdit(tag); }}>
-                        <Pencil />
-                      </Button>
-                      <Button variant="ghost" size="icon-sm" aria-label={`Delete ${tag.attributes.key}`} onClick={(): void => { setToDelete(tag); }}>
-                        <Trash2 />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {tags.map(
+                (tag): React.JSX.Element => (
+                  <TableRow key={tag.id}>
+                    <TableCell className="font-medium">{tag.attributes.key}</TableCell>
+                    <TableCell>{tag.attributes["disable-overrides"] ? "No" : "Yes"}</TableCell>
+                    <TableCell className="text-muted-foreground">{formatDate(tag.attributes["created-at"])}</TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Edit ${tag.attributes.key}`}
+                          onClick={(): void => {
+                            openEdit(tag);
+                          }}
+                        >
+                          <Pencil />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Delete ${tag.attributes.key}`}
+                          onClick={(): void => {
+                            setToDelete(tag);
+                          }}
+                        >
+                          <Trash2 />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ),
+              )}
             </TableBody>
           </Table>
         )}
@@ -199,28 +218,61 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
           <DialogHeader>
             <DialogTitle>{editing !== null ? "Edit reserved tag key" : "Create reserved tag key"}</DialogTitle>
             <DialogDescription>
-              Must be unique and between 1-128 characters, and made up only of letters, numbers, spaces,
-              and the following special characters: .=+-@:_-
+              Must be unique and between 1-128 characters, and made up only of letters, numbers, spaces, and the
+              following special characters: .=+-@:_-
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={save}>
             <div className="space-y-4">
               <div className="space-y-1.5">
-                <label htmlFor="rtk-key" className="text-sm font-medium">Key</label>
-                <Input id="rtk-key" name="reserved-tag-key" autoComplete="off" spellCheck={false} value={key} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setKey(event.currentTarget.value); }} placeholder="environment" />
+                <label htmlFor="rtk-key" className="text-sm font-medium">
+                  Key
+                </label>
+                <Input
+                  id="rtk-key"
+                  name="reserved-tag-key"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={key}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                    setKey(event.currentTarget.value);
+                  }}
+                  placeholder="environment"
+                />
               </div>
               <label className="flex items-start gap-3 text-sm font-medium">
-                <Checkbox checked={disableOverrides} onCheckedChange={(checked: boolean): void => { setDisableOverrides(checked); }} />
+                <Checkbox
+                  checked={disableOverrides}
+                  onCheckedChange={(checked: boolean): void => {
+                    setDisableOverrides(checked);
+                  }}
+                />
                 <span>
                   Disable overrides
-                  <span className="block text-sm font-normal text-muted-foreground mt-0.5">Disables tag overrides for any tag matching this key.</span>
+                  <span className="block text-sm font-normal text-muted-foreground mt-0.5">
+                    Disables tag overrides for any tag matching this key.
+                  </span>
                 </span>
               </label>
-              {formError !== "" && <p role="alert" className="text-sm text-destructive">{formError}</p>}
+              {formError !== "" && (
+                <p role="alert" className="text-sm text-destructive">
+                  {formError}
+                </p>
+              )}
             </div>
             <DialogFooter className="mt-4">
-              <Button type="button" variant="outline" onClick={(): void => { setDialogOpen(false); }}>Cancel</Button>
-              <Button type="submit" disabled={saving || key.trim() === ""}>{saving ? "Saving…" : "Save"}</Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={(): void => {
+                  setDialogOpen(false);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={saving || key.trim() === ""}>
+                {saving ? "Saving…" : "Save"}
+              </Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -228,7 +280,9 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
 
       <ConfirmDialog
         open={toDelete !== null}
-        onOpenChange={(open: boolean): void => { if (!open) setToDelete(null); }}
+        onOpenChange={(open: boolean): void => {
+          if (!open) setToDelete(null);
+        }}
         title="Delete reserved tag key"
         description={`Delete the reserved key "${toDelete?.attributes.key ?? ""}"?`}
         confirmText={deleting ? "Deleting…" : "Delete key"}

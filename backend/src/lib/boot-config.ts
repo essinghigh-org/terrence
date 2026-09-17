@@ -88,33 +88,52 @@ export function validateSecretName(name: string, source: string): void {
 /** Parse and validate a raw boot configuration object. Unknown top-level
  * keys are preserved (the wizard writes only the database section). */
 function assertBootObject(raw: unknown, source: string): Record<string, unknown> {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new BootConfigError(`Invalid boot configuration in ${source}: expected a JSON object`);
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+    throw new BootConfigError(`Invalid boot configuration in ${source}: expected a JSON object`);
   return raw as Record<string, unknown>;
 }
 
 function assertDatabaseObject(db: unknown, source: string): Record<string, unknown> {
-  if (db === null || typeof db !== "object" || Array.isArray(db)) throw new BootConfigError(`Invalid boot configuration in ${source}: "database" must be an object`);
+  if (db === null || typeof db !== "object" || Array.isArray(db))
+    throw new BootConfigError(`Invalid boot configuration in ${source}: "database" must be an object`);
   return db as Record<string, unknown>;
 }
 
 function parseDatabaseDriver(db: Readonly<Record<string, unknown>>, source: string): DatabaseDriver {
   const driver = db["driver"];
-  if (driver !== "sqlite" && driver !== "postgres") throw new BootConfigError(`Invalid boot configuration in ${source}: "database.driver" must be "sqlite" or "postgres"`);
+  if (driver !== "sqlite" && driver !== "postgres")
+    throw new BootConfigError(
+      `Invalid boot configuration in ${source}: "database.driver" must be "sqlite" or "postgres"`,
+    );
   return driver;
 }
 
 function validateDatabaseUrlFields(url: string | undefined, urlSecret: string | undefined, source: string): void {
-  if (url !== undefined && urlSecret !== undefined) throw new BootConfigError(`Invalid boot configuration in ${source}: "database.url" and "database.urlSecret" are mutually exclusive`);
+  if (url !== undefined && urlSecret !== undefined)
+    throw new BootConfigError(
+      `Invalid boot configuration in ${source}: "database.url" and "database.urlSecret" are mutually exclusive`,
+    );
   if (urlSecret !== undefined) validateSecretName(urlSecret, source);
 }
 
-function validateDriverSpecificFields(driver: DatabaseDriver, url: string | undefined, urlSecret: string | undefined, source: string): void {
+function validateDriverSpecificFields(
+  driver: DatabaseDriver,
+  url: string | undefined,
+  urlSecret: string | undefined,
+  source: string,
+): void {
   if (driver === "postgres") {
-    if (url === undefined && urlSecret === undefined) throw new BootConfigError(`Invalid boot configuration in ${source}: postgres driver requires "database.url" or "database.urlSecret"`);
+    if (url === undefined && urlSecret === undefined)
+      throw new BootConfigError(
+        `Invalid boot configuration in ${source}: postgres driver requires "database.url" or "database.urlSecret"`,
+      );
     if (url !== undefined) validatePostgresUrl(url, source);
     return;
   }
-  if (urlSecret !== undefined) throw new BootConfigError(`Invalid boot configuration in ${source}: "database.urlSecret" is only valid for the postgres driver`);
+  if (urlSecret !== undefined)
+    throw new BootConfigError(
+      `Invalid boot configuration in ${source}: "database.urlSecret" is only valid for the postgres driver`,
+    );
   if (url !== undefined) validateSqliteUrl(url, source);
 }
 
@@ -136,7 +155,11 @@ export function parseBootConfig(raw: unknown, source: string): BootConfig {
   const urlSecret = typeof db["urlSecret"] === "string" ? db["urlSecret"] : undefined;
   validateDatabaseUrlFields(url, urlSecret, source);
   validateDriverSpecificFields(driver, url, urlSecret, source);
-  result["database"] = { driver, ...(url !== undefined ? { url } : {}), ...(urlSecret !== undefined ? { urlSecret } : {}) };
+  result["database"] = {
+    driver,
+    ...(url !== undefined ? { url } : {}),
+    ...(urlSecret !== undefined ? { urlSecret } : {}),
+  };
   return result;
 }
 
@@ -158,7 +181,8 @@ function validatePostgresUrl(url: string, source: string): void {
 }
 
 function validateSqliteUrl(url: string, source: string): void {
-  if (url.includes("\u0000") || url.trim() === "") throw new BootConfigError(`Invalid boot configuration in ${source}: invalid sqlite URL`);
+  if (url.includes("\u0000") || url.trim() === "")
+    throw new BootConfigError(`Invalid boot configuration in ${source}: invalid sqlite URL`);
   if (url === ":memory:") return;
   if (url.startsWith("file:") && url.length > 5) return;
   // A bare path is accepted and treated as a file URL (bun:sqlite accepts it).
@@ -180,7 +204,9 @@ export function readBootConfigFile(storageDir: string): BootConfig {
   try {
     parsed = JSON.parse(text);
   } catch (error: unknown) {
-    throw new BootConfigError(`Invalid boot configuration at ${path}: not valid JSON (${error instanceof Error ? error.message : String(error)})`);
+    throw new BootConfigError(
+      `Invalid boot configuration at ${path}: not valid JSON (${error instanceof Error ? error.message : String(error)})`,
+    );
   }
   return parseBootConfig(parsed, path);
 }
@@ -202,7 +228,7 @@ export function resolveStorageSecret(storageDir: string, name: string): string {
     if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       throw new BootConfigError(
         `Missing storage secret "${name}" referenced by the boot configuration (expected ${path}). ` +
-        "Write it with writeDatabaseUrlSecret() or add the file before booting.",
+          "Write it with writeDatabaseUrlSecret() or add the file before booting.",
       );
     }
     throw error;
@@ -262,7 +288,10 @@ export function resolveDatabaseConfigWithOrigin(
   return { configuration: { driver: "sqlite", url: defaultSqliteUrl(storageDir) }, origin: "default" };
 }
 
-export function resolveDatabaseConfig(env: Readonly<Record<string, string | undefined>>, storageDir: string): ResolvedDatabaseConfig {
+export function resolveDatabaseConfig(
+  env: Readonly<Record<string, string | undefined>>,
+  storageDir: string,
+): ResolvedDatabaseConfig {
   return resolveDatabaseConfigWithOrigin(env, storageDir).configuration;
 }
 

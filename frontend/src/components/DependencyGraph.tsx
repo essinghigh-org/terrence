@@ -86,11 +86,18 @@ const DEFAULT_PROVIDER_COLOR = "239 84% 60%";
 
 const ICON_RULES: readonly Readonly<{ pattern: RegExp; icon: LucideIcon }>[] = [
   { pattern: /(cloudfront|cdn|domain|dns|route53|zone|certificate|acm)/, icon: Globe },
-  { pattern: /(vpc|subnet|security_group|internet_gateway|nat_gateway|route_table|route|network|transit_gateway|peering|firewall|load_balancer|elb|listener|target_group|eni|eip)/, icon: Network },
+  {
+    pattern:
+      /(vpc|subnet|security_group|internet_gateway|nat_gateway|route_table|route|network|transit_gateway|peering|firewall|load_balancer|elb|listener|target_group|eni|eip)/,
+    icon: Network,
+  },
   { pattern: /(instance|launch_template|compute|virtual_machine|scale_set|worker|host)/, icon: Server },
   { pattern: /(s3|bucket|object|storage)/, icon: Boxes },
   { pattern: /(volume|disk|ebs|filesystem)/, icon: HardDrive },
-  { pattern: /(rds|database|dynamodb|elasticache|aurora|redshift|sql|bigquery|cosmos|documentdb|mongo|postgres|mysql)/, icon: Database },
+  {
+    pattern: /(rds|database|dynamodb|elasticache|aurora|redshift|sql|bigquery|cosmos|documentdb|mongo|postgres|mysql)/,
+    icon: Database,
+  },
   { pattern: /(lambda|function)/, icon: Zap },
   { pattern: /(iam|role|policy|kms|secret|key|vault|waf|guardduty)/, icon: Shield },
   { pattern: /(sqs|sns|queue|event|stream|kafka|pubsub|notification|topic)/, icon: Send },
@@ -129,21 +136,28 @@ function buildGraphModel(resources: readonly DependencyGraphResource[]): GraphMo
   const resourcesByAddress = new Map<string, DependencyGraphResource>();
   resources.forEach((resource): void => {
     const existing = resourcesByAddress.get(resource.address);
-    resourcesByAddress.set(resource.address, existing === undefined
-      ? resource
-      : {
-          address: resource.address,
-          dependencies: [...new Set([...existing.dependencies, ...resource.dependencies])],
-        });
+    resourcesByAddress.set(
+      resource.address,
+      existing === undefined
+        ? resource
+        : {
+            address: resource.address,
+            dependencies: [...new Set([...existing.dependencies, ...resource.dependencies])],
+          },
+    );
   });
-  const nodes = [...resourcesByAddress.values()].map((resource): DependencyGraphResource => ({
-    ...resource,
-    dependencies: resource.dependencies.filter((dependency): boolean => resourcesByAddress.has(dependency)),
-  }));
+  const nodes = [...resourcesByAddress.values()].map(
+    (resource): DependencyGraphResource => ({
+      ...resource,
+      dependencies: resource.dependencies.filter((dependency): boolean => resourcesByAddress.has(dependency)),
+    }),
+  );
   const nodeAddresses = new Set(nodes.map((node): string => node.address));
-  const edges = nodes.flatMap((node): readonly Readonly<{ from: string; to: string }>[] => node.dependencies
-    .filter((dependency): boolean => nodeAddresses.has(dependency))
-    .map((dependency): Readonly<{ from: string; to: string }> => ({ from: dependency, to: node.address })));
+  const edges = nodes.flatMap((node): readonly Readonly<{ from: string; to: string }>[] =>
+    node.dependencies
+      .filter((dependency): boolean => nodeAddresses.has(dependency))
+      .map((dependency): Readonly<{ from: string; to: string }> => ({ from: dependency, to: node.address })),
+  );
   if (nodes.length < 2 || edges.length === 0) return null;
 
   const levels = new Map<string, number>();
@@ -155,14 +169,15 @@ function buildGraphModel(resources: readonly DependencyGraphResource[]): GraphMo
     if (visiting.has(address)) return 0;
     visiting.add(address);
     const node = nodesByAddress.get(address);
-    const level = node === undefined
-      ? 0
-      : Math.max(0, ...node.dependencies.map((dependency): number => levelFor(dependency) + 1));
+    const level =
+      node === undefined ? 0 : Math.max(0, ...node.dependencies.map((dependency): number => levelFor(dependency) + 1));
     visiting.delete(address);
     levels.set(address, level);
     return level;
   };
-  nodes.forEach((node): void => { levelFor(node.address); });
+  nodes.forEach((node): void => {
+    levelFor(node.address);
+  });
 
   const byLevel = new Map<number, DependencyGraphResource[]>();
   nodes.forEach((node): void => {
@@ -276,29 +291,34 @@ function toFlowNodes(
 
 function toFlowEdges(model: GraphModel, dark: boolean): FlowEdge[] {
   const stroke = dark ? "hsl(220 10% 62%)" : "hsl(220 9% 45%)";
-  return model.edges.map((edge): FlowEdge => ({
-    id: `${edge.from}->${edge.to}`,
-    source: edge.from,
-    target: edge.to,
-    type: "default",
-    animated: true,
-    interactionWidth: 22,
-    data: { from: edge.from, to: edge.to },
-    style: { stroke, strokeWidth: 1.5, opacity: 0.6 },
-    markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: stroke },
-  }));
+  return model.edges.map(
+    (edge): FlowEdge => ({
+      id: `${edge.from}->${edge.to}`,
+      source: edge.from,
+      target: edge.to,
+      type: "default",
+      animated: true,
+      interactionWidth: 22,
+      data: { from: edge.from, to: edge.to },
+      style: { stroke, strokeWidth: 1.5, opacity: 0.6 },
+      markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: stroke },
+    }),
+  );
 }
 
 function useDarkMode(): boolean {
-  const [dark, setDark] = useState((): boolean =>
-    typeof document !== "undefined" && document.documentElement.classList.contains("dark"));
+  const [dark, setDark] = useState(
+    (): boolean => typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
+  );
   useEffect((): (() => void) => {
     const root = document.documentElement;
     const observer = new MutationObserver((): void => {
       setDark(root.classList.contains("dark"));
     });
     observer.observe(root, { attributes: true, attributeFilter: ["class"] });
-    return (): void => { observer.disconnect(); };
+    return (): void => {
+      observer.disconnect();
+    };
   }, []);
   return dark;
 }
@@ -334,11 +354,12 @@ function ResourceNodeComponent({ data, selected }: NodeProps<ResourceFlowNode>):
   );
 }
 
-function SectionLabel({ children, className }: Readonly<{ children: React.ReactNode; className?: string }>): React.JSX.Element {
+function SectionLabel({
+  children,
+  className,
+}: Readonly<{ children: React.ReactNode; className?: string }>): React.JSX.Element {
   return (
-    <p className={cn("text-2xs font-semibold uppercase tracking-wider text-muted-foreground", className)}>
-      {children}
-    </p>
+    <p className={cn("text-2xs font-semibold uppercase tracking-wider text-muted-foreground", className)}>{children}</p>
   );
 }
 
@@ -374,20 +395,30 @@ function RelationshipList({
   }
   return (
     <ul className="space-y-0.5">
-      {items.map((item): React.JSX.Element => (
-        <li key={item}>
-          <button
-            type="button"
-            onClick={(): void => { onPick(item); }}
-            className="group flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground group-hover:text-primary" title={item}>
-              {item}
-            </span>
-            <ChevronRight aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
-          </button>
-        </li>
-      ))}
+      {items.map(
+        (item): React.JSX.Element => (
+          <li key={item}>
+            <button
+              type="button"
+              onClick={(): void => {
+                onPick(item);
+              }}
+              className="group flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <span
+                className="min-w-0 flex-1 truncate font-mono text-xs text-foreground group-hover:text-primary"
+                title={item}
+              >
+                {item}
+              </span>
+              <ChevronRight
+                aria-hidden="true"
+                className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary"
+              />
+            </button>
+          </li>
+        ),
+      )}
     </ul>
   );
 }
@@ -434,13 +465,19 @@ function NodeDetailsPanel({
           className="flex size-9 shrink-0 items-center justify-center rounded-lg"
           style={{ backgroundColor: `hsl(${node.data.color} / 0.12)`, color: `hsl(${node.data.color})` }}
         >
-        {createElement(node.data.icon, { "aria-hidden": true, className: "size-4" })}
+          {createElement(node.data.icon, { "aria-hidden": true, className: "size-4" })}
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Resource</p>
           <p className="mt-0.5 break-all font-mono text-sm font-medium leading-snug text-foreground">{node.id}</p>
         </div>
-        <Button variant="ghost" size="icon-sm" aria-label="Copy address" onClick={copy} className="text-muted-foreground">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Copy address"
+          onClick={copy}
+          className="text-muted-foreground"
+        >
           {copied ? <Check className="text-success" aria-hidden="true" /> : <Copy aria-hidden="true" />}
         </Button>
         <Button variant="ghost" size="icon-sm" aria-label="Close details" onClick={onClose}>
@@ -500,7 +537,8 @@ function EdgeDetailsPanel({
         <div className="min-w-0 flex-1">
           <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Dependency</p>
           <p className="mt-0.5 truncate font-mono text-sm font-medium text-foreground">
-            {shortAddress(edge.from)} <ArrowRight className="inline size-3 text-muted-foreground" aria-hidden="true" /> {shortAddress(edge.to)}
+            {shortAddress(edge.from)} <ArrowRight className="inline size-3 text-muted-foreground" aria-hidden="true" />{" "}
+            {shortAddress(edge.to)}
           </p>
         </div>
         <Button variant="ghost" size="icon-sm" aria-label="Close details" onClick={onClose}>
@@ -522,10 +560,24 @@ function EdgeDetailsPanel({
           The target resource cannot be applied until the source resource has been applied first.
         </p>
         <div className="mt-4 flex gap-2">
-          <Button variant="outline" size="sm" className="flex-1" onClick={(): void => { onFocusNode(edge.from); }}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            onClick={(): void => {
+              onFocusNode(edge.from);
+            }}
+          >
             View source
           </Button>
-          <Button variant="outline" size="sm" className="flex-1" onClick={(): void => { onFocusNode(edge.to); }}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            onClick={(): void => {
+              onFocusNode(edge.to);
+            }}
+          >
             View target
           </Button>
         </div>
@@ -598,8 +650,9 @@ export function DependencyGraph({
 
   const focusNode = useCallback((address: string): void => {
     setSelection({ kind: "node", address });
-    setNodes((current): ResourceFlowNode[] => current.map((node): ResourceFlowNode =>
-      ({ ...node, selected: node.id === address })));
+    setNodes((current): ResourceFlowNode[] =>
+      current.map((node): ResourceFlowNode => ({ ...node, selected: node.id === address })),
+    );
     const instance = flowRef.current;
     const target = instance?.getNodes().find((node): boolean => node.id === address);
     if (instance !== null && target !== undefined) {
@@ -615,13 +668,18 @@ export function DependencyGraph({
       if (event.key === "Escape") setSelection(null);
     };
     window.addEventListener("keydown", onKeyDown);
-    return (): void => { window.removeEventListener("keydown", onKeyDown); };
+    return (): void => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
   }, []);
 
   if (graph === null) {
     return (
       <div className="flex min-h-48 flex-col items-center justify-center gap-2.5 px-6 py-10 text-center">
-        <span aria-hidden="true" className="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <span
+          aria-hidden="true"
+          className="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground"
+        >
           <Workflow className="size-5" />
         </span>
         <p className="text-sm text-muted-foreground">No dependency relationships are recorded in the current state.</p>
@@ -636,10 +694,14 @@ export function DependencyGraph({
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b px-4 py-2.5">
         <p className="text-xs text-muted-foreground">
           <span className="font-medium text-foreground">{graph.nodes.length} resources</span>
-          <span aria-hidden="true" className="mx-1.5">·</span>
+          <span aria-hidden="true" className="mx-1.5">
+            ·
+          </span>
           <span className="font-medium text-foreground">{graph.edges.length} dependencies</span>
         </p>
-        <p className="hidden text-xs text-muted-foreground sm:block">Scroll to zoom · Drag to pan · Click a resource for details</p>
+        <p className="hidden text-xs text-muted-foreground sm:block">
+          Scroll to zoom · Drag to pan · Click a resource for details
+        </p>
       </div>
       <div
         role="region"
@@ -664,12 +726,16 @@ export function DependencyGraph({
           proOptions={{ hideAttribution: true }}
           aria-label="Terraform resource dependency graph"
           onInit={onInit}
-          onNodeClick={(_event, node): void => { setSelection({ kind: "node", address: node.id }); }}
+          onNodeClick={(_event, node): void => {
+            setSelection({ kind: "node", address: node.id });
+          }}
           onEdgeClick={(_event, edge): void => {
             if (edge.data === undefined) return;
             setSelection({ kind: "edge", from: edge.data.from, to: edge.data.to });
           }}
-          onPaneClick={(): void => { setSelection(null); }}
+          onPaneClick={(): void => {
+            setSelection(null);
+          }}
         >
           <Background variant={BackgroundVariant.Dots} gap={22} size={1.6} color={backgroundColor} />
           <Controls position="bottom-left" showInteractive={false} />
@@ -677,14 +743,21 @@ export function DependencyGraph({
             position="bottom-right"
             pannable
             zoomable
-// SAFETY: node.data carries ResourceNodeData per the graph construction above.
+            // SAFETY: node.data carries ResourceNodeData per the graph construction above.
             nodeColor={(node): string => `hsl(${(node.data as ResourceNodeData).color} / 0.9)`}
             nodeStrokeWidth={2}
             maskColor={dark ? "rgba(0, 0, 0, 0.55)" : "rgba(255, 255, 255, 0.6)"}
           />
         </ReactFlow>
         {selection !== null && (
-          <DetailsPanel selection={selection} nodes={nodes} onClose={(): void => { setSelection(null); }} onFocusNode={focusNode} />
+          <DetailsPanel
+            selection={selection}
+            nodes={nodes}
+            onClose={(): void => {
+              setSelection(null);
+            }}
+            onFocusNode={focusNode}
+          />
         )}
       </div>
     </>

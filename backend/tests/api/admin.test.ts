@@ -35,14 +35,16 @@ describe("Admin Operations API contract", () => {
   const isolatedWorkspaceId = `isolated-workspace-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([
@@ -53,17 +55,21 @@ describe("Admin Operations API contract", () => {
       { id: orgId, name: orgName },
       { id: isolatedOrgId, name: isolatedOrgName, defaultIacBinary: "tofu" },
     ]);
-    await db.insert(organizationMemberships).values([
-      { id: crypto.randomUUID(), userId, orgId, role: "owner" },
-    ]);
+    await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId, role: "owner" }]);
     // Token stored as hash
     const tokenHash = createHash("sha256").update(token).digest("hex");
     await db.insert(apiTokens).values([
       { id: crypto.randomUUID(), token: tokenHash, userId },
-      { id: crypto.randomUUID(), token: createHash("sha256").update(unscopedAdminToken).digest("hex"), userId: unscopedAdminId },
+      {
+        id: crypto.randomUUID(),
+        token: createHash("sha256").update(unscopedAdminToken).digest("hex"),
+        userId: unscopedAdminId,
+      },
     ]);
     await db.insert(workspaces).values([{ id: workspaceId, name: `ws-${suffix}`, orgId }]);
-    await db.insert(workspaces).values([{ id: isolatedWorkspaceId, name: `isolated-ws-${suffix}`, orgId: isolatedOrgId }]);
+    await db
+      .insert(workspaces)
+      .values([{ id: isolatedWorkspaceId, name: `isolated-ws-${suffix}`, orgId: isolatedOrgId }]);
     await db.insert(runs).values([
       {
         id: activeRunId,
@@ -89,7 +95,9 @@ describe("Admin Operations API contract", () => {
     await db.delete(workspaces).where(eq(workspaces.id, isolatedWorkspaceId));
     const tokenHash = createHash("sha256").update(token).digest("hex");
     await db.delete(apiTokens).where(eq(apiTokens.token, tokenHash));
-    await db.delete(apiTokens).where(eq(apiTokens.token, createHash("sha256").update(unscopedAdminToken).digest("hex")));
+    await db
+      .delete(apiTokens)
+      .where(eq(apiTokens.token, createHash("sha256").update(unscopedAdminToken).digest("hex")));
     await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(organizations).where(eq(organizations.id, isolatedOrgId));
@@ -100,7 +108,9 @@ describe("Admin Operations API contract", () => {
   it("lists site admin resources and active runs", async () => {
     const budgets = await request("/api/v2/admin/resource-budgets");
     expect(budgets.status).toBe(200);
-    const budgetsBody = await budgets.json() as { data: { type: string; attributes: { snapshot: { queued: number; running: number } } } };
+    const budgetsBody = (await budgets.json()) as {
+      data: { type: string; attributes: { snapshot: { queued: number; running: number } } };
+    };
     expect(budgetsBody.data.type).toBe("resource-budgets");
     expect(typeof budgetsBody.data.attributes.snapshot.queued).toBe("number");
     expect(JSON.stringify(budgetsBody)).not.toContain(orgId);
@@ -153,7 +163,13 @@ describe("Admin Operations API contract", () => {
 
     // 6. Admin Terraform versions - create, list, show, update, delete
     const createTfRes = await request("/api/v2/admin/terraform-versions", "POST", {
-      data: { attributes: { version: "1.10.5", url: "https://releases.hashicorp.com/terraform/1.10.5/terraform_1.10.5_linux_amd64.zip", deprecated: false } },
+      data: {
+        attributes: {
+          version: "1.10.5",
+          url: "https://releases.hashicorp.com/terraform/1.10.5/terraform_1.10.5_linux_amd64.zip",
+          deprecated: false,
+        },
+      },
     });
     expect(createTfRes.status).toBe(201);
     const tfVersionId = (await createTfRes.json()).data.id;
@@ -209,7 +225,6 @@ describe("Admin Operations API contract", () => {
     // Clean up
     await request(`/api/v2/admin/opa-versions/${opaId}`, "DELETE");
   });
-
 
   it("supports admin user management: create, promote, suspend, delete", async () => {
     const newUserId = `admin-created-${crypto.randomUUID()}`;
@@ -303,17 +318,39 @@ describe("Admin Operations API contract", () => {
       process.env["LOG_LEVEL"] = "warn";
       process.env["TERRENCE_SYSLOG_TARGETS"] = "udp://collector.example:514";
       delete process.env["TERRENCE_SYSLOG_TARGET"];
-      await db.insert(adminSettings).values({ id: "logging", values: {}, updatedAt: Date.now() }).onConflictDoUpdate({ target: adminSettings.id, set: { values: {} } });
+      await db
+        .insert(adminSettings)
+        .values({ id: "logging", values: {}, updatedAt: Date.now() })
+        .onConflictDoUpdate({ target: adminSettings.id, set: { values: {} } });
       let report = await persistedConfigurationReport();
-      expect(report.find((entry): boolean => entry.name === "logging.log-level")).toMatchObject({ value: "warn", origin: "environment", restartRequired: true });
-      expect(report.find((entry): boolean => entry.name === "logging.enabled")).toMatchObject({ value: true, origin: "environment" });
+      expect(report.find((entry): boolean => entry.name === "logging.log-level")).toMatchObject({
+        value: "warn",
+        origin: "environment",
+        restartRequired: true,
+      });
+      expect(report.find((entry): boolean => entry.name === "logging.enabled")).toMatchObject({
+        value: true,
+        origin: "environment",
+      });
       expect(JSON.stringify(report)).not.toContain("collector.example");
-      await db.update(adminSettings).set({ values: { "syslog-targets": [] } }).where(eq(adminSettings.id, "logging"));
+      await db
+        .update(adminSettings)
+        .set({ values: { "syslog-targets": [] } })
+        .where(eq(adminSettings.id, "logging"));
       report = await persistedConfigurationReport();
-      expect(report.find((entry): boolean => entry.name === "logging.enabled")).toMatchObject({ value: false, origin: "persisted", restartRequired: false });
+      expect(report.find((entry): boolean => entry.name === "logging.enabled")).toMatchObject({
+        value: false,
+        origin: "persisted",
+        restartRequired: false,
+      });
     } finally {
-      for (const [name, value] of [["LOG_LEVEL", oldLevel], ["TERRENCE_SYSLOG_TARGETS", oldTargets], ["TERRENCE_SYSLOG_TARGET", oldTarget]] as const) {
-        if (value === undefined) Reflect.deleteProperty(process.env, name); else process.env[name] = value;
+      for (const [name, value] of [
+        ["LOG_LEVEL", oldLevel],
+        ["TERRENCE_SYSLOG_TARGETS", oldTargets],
+        ["TERRENCE_SYSLOG_TARGET", oldTarget],
+      ] as const) {
+        if (value === undefined) Reflect.deleteProperty(process.env, name);
+        else process.env[name] = value;
       }
       if (original === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "logging"));
       else await db.update(adminSettings).set({ values: original.values }).where(eq(adminSettings.id, "logging"));
@@ -323,7 +360,11 @@ describe("Admin Operations API contract", () => {
 
   it("rejects invalid settings without persisting or reflecting supplied values", async () => {
     const before = await getSettings("general");
-    for (const attributes of [{ "plan-timeout": -1 }, { "api-rate-limit": "private-marker" }, { "private-marker": true }]) {
+    for (const attributes of [
+      { "plan-timeout": -1 },
+      { "api-rate-limit": "private-marker" },
+      { "private-marker": true },
+    ]) {
       const response = await request("/api/v2/admin/general-settings", "PATCH", { data: { attributes } });
       expect(response.status).toBe(422);
       expect(await response.text()).not.toContain("private-marker");
@@ -334,11 +375,16 @@ describe("Admin Operations API contract", () => {
   it("fails closed on invalid persisted settings and permits a corrective update", async () => {
     const before = await getSettings("general");
     try {
-      await db.update(adminSettings).set({ values: { ...before, "plan-timeout": -1 } }).where(eq(adminSettings.id, "general"));
+      await db
+        .update(adminSettings)
+        .set({ values: { ...before, "plan-timeout": -1 } })
+        .where(eq(adminSettings.id, "general"));
       invalidateSettingsCache();
       const invalid = await request("/api/v2/admin/general-settings");
       expect(invalid.status).toBe(503);
-      const repaired = await request("/api/v2/admin/general-settings", "PATCH", { data: { attributes: { "plan-timeout": 3600 } } });
+      const repaired = await request("/api/v2/admin/general-settings", "PATCH", {
+        data: { attributes: { "plan-timeout": 3600 } },
+      });
       expect(repaired.status).toBe(200);
       expect((await getSettings("general"))["plan-timeout"]).toBe(3600);
     } finally {
@@ -355,7 +401,9 @@ describe("Admin Operations API contract", () => {
     const originalFindFirst = settingsQuery.findFirst;
     let siteReads = 0;
     let releaseSecondRead!: () => void;
-    const secondRead = new Promise<void>((resolve): void => { releaseSecondRead = resolve; });
+    const secondRead = new Promise<void>((resolve): void => {
+      releaseSecondRead = resolve;
+    });
     settingsQuery.findFirst = async (config?: unknown): Promise<typeof original> => {
       const row = await originalFindFirst.call(settingsQuery, config);
       if (row?.id !== "site") return row;
@@ -366,7 +414,9 @@ describe("Admin Operations API contract", () => {
     };
     try {
       const initialValues = { ...(original?.values ?? {}), "agent-enabled": true };
-      await db.insert(adminSettings).values({ id: "site", values: initialValues, updatedAt: Date.now() })
+      await db
+        .insert(adminSettings)
+        .values({ id: "site", values: initialValues, updatedAt: Date.now() })
         .onConflictDoUpdate({ target: adminSettings.id, set: { values: initialValues, updatedAt: Date.now() } });
       invalidateSettingsCache();
       const [left, right] = await Promise.all([
@@ -385,7 +435,9 @@ describe("Admin Operations API contract", () => {
       if (original === undefined) {
         await db.delete(adminSettings).where(eq(adminSettings.id, "site"));
       } else {
-        await db.update(adminSettings).set({ values: original.values, updatedAt: original.updatedAt })
+        await db
+          .update(adminSettings)
+          .set({ values: original.values, updatedAt: original.updatedAt })
           .where(eq(adminSettings.id, "site"));
       }
       invalidateSettingsCache();
@@ -396,7 +448,9 @@ describe("Admin Operations API contract", () => {
     const original = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "site") });
     try {
       const initialValues = { ...(original?.values ?? {}), "agent-enabled": true };
-      await db.insert(adminSettings).values({ id: "site", values: initialValues, updatedAt: Date.now() })
+      await db
+        .insert(adminSettings)
+        .values({ id: "site", values: initialValues, updatedAt: Date.now() })
         .onConflictDoUpdate({ target: adminSettings.id, set: { values: initialValues, updatedAt: Date.now() } });
       invalidateSettingsCache();
       await getSettings("site");
@@ -404,7 +458,9 @@ describe("Admin Operations API contract", () => {
       // Simulate another backend replica committing a change after this
       // process populated its one-second settings cache.
       const externalValues = { ...initialValues, "sentinel-enabled": false };
-      await db.update(adminSettings).set({ values: externalValues, updatedAt: Date.now() })
+      await db
+        .update(adminSettings)
+        .set({ values: externalValues, updatedAt: Date.now() })
         .where(eq(adminSettings.id, "site"));
 
       const response = await request("/api/v2/admin/settings", "PATCH", {
@@ -419,7 +475,9 @@ describe("Admin Operations API contract", () => {
       if (original === undefined) {
         await db.delete(adminSettings).where(eq(adminSettings.id, "site"));
       } else {
-        await db.update(adminSettings).set({ values: original.values, updatedAt: original.updatedAt })
+        await db
+          .update(adminSettings)
+          .set({ values: original.values, updatedAt: original.updatedAt })
           .where(eq(adminSettings.id, "site"));
       }
       invalidateSettingsCache();
@@ -429,14 +487,19 @@ describe("Admin Operations API contract", () => {
   it("does not let prototype keys alter merged settings", async () => {
     const original = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "site") });
     try {
-      const attributes = JSON.parse("{\"__proto__\":{\"polluted\":true},\"concurrency-safe\":\"safe\"}") as Record<string, unknown>;
+      const attributes = JSON.parse('{"__proto__":{"polluted":true},"concurrency-safe":"safe"}') as Record<
+        string,
+        unknown
+      >;
       await rejects(updateSettings("site", attributes), /Unsupported setting/);
-      expect("polluted" in await getSettings("site")).toBeFalse();
+      expect("polluted" in (await getSettings("site"))).toBeFalse();
     } finally {
       if (original === undefined) {
         await db.delete(adminSettings).where(eq(adminSettings.id, "site"));
       } else {
-        await db.update(adminSettings).set({ values: original.values, updatedAt: original.updatedAt })
+        await db
+          .update(adminSettings)
+          .set({ values: original.values, updatedAt: original.updatedAt })
           .where(eq(adminSettings.id, "site"));
       }
       invalidateSettingsCache();
@@ -517,11 +580,23 @@ describe("Admin Operations API contract", () => {
       expect(storedSmtp?.values["sender-email"]).toBe("provider@example.com");
     } finally {
       if (originalCost === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "cost"));
-      else await db.update(adminSettings).set({ values: originalCost.values, updatedAt: originalCost.updatedAt }).where(eq(adminSettings.id, "cost"));
+      else
+        await db
+          .update(adminSettings)
+          .set({ values: originalCost.values, updatedAt: originalCost.updatedAt })
+          .where(eq(adminSettings.id, "cost"));
       if (originalTwilio === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "twilio"));
-      else await db.update(adminSettings).set({ values: originalTwilio.values, updatedAt: originalTwilio.updatedAt }).where(eq(adminSettings.id, "twilio"));
+      else
+        await db
+          .update(adminSettings)
+          .set({ values: originalTwilio.values, updatedAt: originalTwilio.updatedAt })
+          .where(eq(adminSettings.id, "twilio"));
       if (originalSmtp === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "smtp"));
-      else await db.update(adminSettings).set({ values: originalSmtp.values, updatedAt: originalSmtp.updatedAt }).where(eq(adminSettings.id, "smtp"));
+      else
+        await db
+          .update(adminSettings)
+          .set({ values: originalSmtp.values, updatedAt: originalSmtp.updatedAt })
+          .where(eq(adminSettings.id, "smtp"));
       invalidateSettingsCache();
     }
   });
@@ -547,14 +622,21 @@ describe("Admin Operations API contract", () => {
       expect(plaintext.status).toBe(200);
       expect((await plaintext.json()).data.attributes.encryption).toBe("plain");
 
-      await db.update(adminSettings).set({ values: { port: 465 }, updatedAt: Date.now() }).where(eq(adminSettings.id, "smtp"));
+      await db
+        .update(adminSettings)
+        .set({ values: { port: 465 }, updatedAt: Date.now() })
+        .where(eq(adminSettings.id, "smtp"));
       invalidateSettingsCache();
       const legacyPort465 = await request("/api/v2/admin/smtp-settings");
       expect(legacyPort465.status).toBe(200);
       expect((await legacyPort465.json()).data.attributes.encryption).toBe("tls");
     } finally {
       if (originalSmtp === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "smtp"));
-      else await db.update(adminSettings).set({ values: originalSmtp.values, updatedAt: originalSmtp.updatedAt }).where(eq(adminSettings.id, "smtp"));
+      else
+        await db
+          .update(adminSettings)
+          .set({ values: originalSmtp.values, updatedAt: originalSmtp.updatedAt })
+          .where(eq(adminSettings.id, "smtp"));
       invalidateSettingsCache();
     }
   });
@@ -562,23 +644,47 @@ describe("Admin Operations API contract", () => {
   it("gives a site admin full access without an organization membership", async () => {
     const list = await request("/api/v2/organizations", "GET", undefined, unscopedAdminToken);
     expect(list.status).toBe(200);
-    expect((await list.json()).data.some((organization: { id: string }) => organization.id === isolatedOrgName)).toBeTrue();
+    expect(
+      (await list.json()).data.some((organization: { id: string }) => organization.id === isolatedOrgName),
+    ).toBeTrue();
 
     const show = await request(`/api/v2/organizations/${isolatedOrgName}`, "GET", undefined, unscopedAdminToken);
     expect(show.status).toBe(200);
 
-    const deleteWorkspace = await request(`/api/v2/organizations/${isolatedOrgName}/workspaces/isolated-ws-${suffix}`, "DELETE", undefined, unscopedAdminToken);
+    const deleteWorkspace = await request(
+      `/api/v2/organizations/${isolatedOrgName}/workspaces/isolated-ws-${suffix}`,
+      "DELETE",
+      undefined,
+      unscopedAdminToken,
+    );
     expect(deleteWorkspace.status).toBe(204);
 
-    const deleteOrganization = await request(`/api/v2/organizations/${isolatedOrgName}`, "DELETE", undefined, unscopedAdminToken);
+    const deleteOrganization = await request(
+      `/api/v2/organizations/${isolatedOrgName}`,
+      "DELETE",
+      undefined,
+      unscopedAdminToken,
+    );
     expect(deleteOrganization.status).toBe(204);
 
-    const deleteAdminWorkspace = await request(`/api/v2/admin/workspaces/${workspaceId}`, "DELETE", undefined, unscopedAdminToken);
+    const deleteAdminWorkspace = await request(
+      `/api/v2/admin/workspaces/${workspaceId}`,
+      "DELETE",
+      undefined,
+      unscopedAdminToken,
+    );
     expect(deleteAdminWorkspace.status).toBe(204);
     expect(await db.query.runs.findFirst({ where: eq(runs.id, activeRunId) })).toBeUndefined();
 
-    const deleteAdminOrganization = await request(`/api/v2/admin/organizations/${orgName}`, "DELETE", undefined, unscopedAdminToken);
+    const deleteAdminOrganization = await request(
+      `/api/v2/admin/organizations/${orgName}`,
+      "DELETE",
+      undefined,
+      unscopedAdminToken,
+    );
     expect(deleteAdminOrganization.status).toBe(204);
-    expect((await request(`/api/v2/admin/organizations/${orgName}`, "GET", undefined, unscopedAdminToken)).status).toBe(404);
+    expect((await request(`/api/v2/admin/organizations/${orgName}`, "GET", undefined, unscopedAdminToken)).status).toBe(
+      404,
+    );
   });
 });

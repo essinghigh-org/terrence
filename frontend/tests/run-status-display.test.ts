@@ -47,14 +47,18 @@ test("queue display names workspace, agent and scheduled blockers", () => {
   expect(resolveRunDisplay({ status: "pending" }).waitingLabel).toBe("Waiting for workspace capacity");
   expect(resolveRunDisplay({ status: "fetching" }).outcome).toBe("running");
   expect(resolveRunDisplay({ status: "fetching" }).waitingReason).toBeNull();
-  expect(resolveRunDisplay({ status: "plan_queued", "execution-mode": "remote", "position-in-queue": 3 }).waitingLabel)
-    .toBe("Waiting for workspace capacity · position 3");
-  expect(resolveRunDisplay({ status: "plan_queued", "execution-mode": "agent" }).waitingLabel)
-    .toBe("Waiting for an available agent");
-  expect(resolveRunDisplay({
-    status: "confirmed",
-    "status-timestamps": { "scheduled-at": "2030-01-01T12:00:00.000Z" },
-  }).waitingLabel).toBe("Scheduled to start");
+  expect(
+    resolveRunDisplay({ status: "plan_queued", "execution-mode": "remote", "position-in-queue": 3 }).waitingLabel,
+  ).toBe("Waiting for workspace capacity · position 3");
+  expect(resolveRunDisplay({ status: "plan_queued", "execution-mode": "agent" }).waitingLabel).toBe(
+    "Waiting for an available agent",
+  );
+  expect(
+    resolveRunDisplay({
+      status: "confirmed",
+      "status-timestamps": { "scheduled-at": "2030-01-01T12:00:00.000Z" },
+    }).waitingLabel,
+  ).toBe("Scheduled to start");
 });
 
 test("policy rejection and execution failure remain distinct", () => {

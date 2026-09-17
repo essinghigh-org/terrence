@@ -33,7 +33,7 @@ describe("remote-workflow state versions contract", () => {
         md5: stateMd5(1),
         lineage: "test-lineage",
         state: stateJson(1),
-        "json-state-outputs": "{\"outputs\":{}}",
+        "json-state-outputs": '{"outputs":{}}',
       },
     },
   };
@@ -67,9 +67,7 @@ describe("remote-workflow state versions contract", () => {
     expect(stateVersionId).not.toBe("");
     expect(resource.attributes["serial"]).toBe(1);
     // the reference format returns the MD5 digest of the state payload.
-    expect(resource.attributes["md5"]).toBe(
-      createHash("md5").update(stateJson(1)).digest("hex"),
-    );
+    expect(resource.attributes["md5"]).toBe(createHash("md5").update(stateJson(1)).digest("hex"));
     expect(resource.attributes["lineage"]).toBe("test-lineage");
     expect(resource.attributes["status"]).toBe("finalized");
     expect(resource.attributes["created-at"]).toBeTypeOf("string");
@@ -96,10 +94,9 @@ describe("remote-workflow state versions contract", () => {
   });
 
   it("lists state versions for a workspace with pagination metadata", async () => {
-    const response = await request(
-      `/api/v2/workspaces/${workspaceId}/state-versions?page[number]=1&page[size]=10`,
-      { headers },
-    );
+    const response = await request(`/api/v2/workspaces/${workspaceId}/state-versions?page[number]=1&page[size]=10`, {
+      headers,
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     const items = expectCollection(body, "state-versions");
@@ -155,7 +152,7 @@ describe("remote-workflow state versions contract", () => {
               md5: stateMd5(2),
               lineage: "test-lineage",
               state: stateJson(2),
-              "json-state-outputs": "{\"outputs\":{}}",
+              "json-state-outputs": '{"outputs":{}}',
             },
           },
         }),

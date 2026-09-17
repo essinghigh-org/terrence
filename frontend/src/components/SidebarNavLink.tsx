@@ -91,12 +91,7 @@ export function SidebarNavLink({
         className: cn("size-4 shrink-0", collapsed && "lg:mx-auto"),
       })}
       <span className={cn("truncate", collapsed && "lg:sr-only")}>{label}</span>
-      {trailing && (
-        <ChevronRight
-          aria-hidden="true"
-          className={cn("ml-auto size-4", collapsed && "lg:hidden")}
-        />
-      )}
+      {trailing && <ChevronRight aria-hidden="true" className={cn("ml-auto size-4", collapsed && "lg:hidden")} />}
     </Link>
   );
 }

@@ -2,13 +2,15 @@ import { useEffect, useState } from "react";
 import { fetchApi } from "../../lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
-import { type DataItem, type SecuritySummary, } from "./types";
+import { type DataItem, type SecuritySummary } from "./types";
 function ProviderStatusRow(props: Readonly<{ label: string; enabled: boolean }>): React.JSX.Element {
   const { label, enabled } = props;
   return (
     <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
       <span>{label}</span>
-      <span className={enabled ? "font-medium text-success" : "text-muted-foreground"}>{enabled ? "Enabled" : "Disabled"}</span>
+      <span className={enabled ? "font-medium text-success" : "text-muted-foreground"}>
+        {enabled ? "Enabled" : "Disabled"}
+      </span>
     </div>
   );
 }
@@ -95,16 +97,27 @@ function ExecutionIsolationCard({ summary }: Readonly<{ summary: SecuritySummary
         </div>
         <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
           <span>Run network policy</span>
-          <span className={summary.sandboxNetPolicy === "invalid" ? "font-medium text-destructive" : summary.sandboxNetPolicy === "deny" ? "font-medium text-success" : "text-muted-foreground"}>
-            {summary.sandboxNetPolicy === "deny" ? "Deny (TCP bind/connect only)" : summary.sandboxNetPolicy === "invalid" ? "Invalid" : "Allow"}
+          <span
+            className={
+              summary.sandboxNetPolicy === "invalid"
+                ? "font-medium text-destructive"
+                : summary.sandboxNetPolicy === "deny"
+                  ? "font-medium text-success"
+                  : "text-muted-foreground"
+            }
+          >
+            {summary.sandboxNetPolicy === "deny"
+              ? "Deny (TCP bind/connect only)"
+              : summary.sandboxNetPolicy === "invalid"
+                ? "Invalid"
+                : "Allow"}
           </span>
         </div>
-        {summary.sandboxReason !== null && (
-          <p className="text-xs text-muted-foreground">{summary.sandboxReason}</p>
-        )}
+        {summary.sandboxReason !== null && <p className="text-xs text-muted-foreground">{summary.sandboxReason}</p>}
         {summary.sandboxExtraRwAllowed && (
           <div className="rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-sm text-warning">
-            Warning: extra sandbox read-write paths are enabled (TERRENCE_SANDBOX_EXTRA_RW_ALLOWED). The sandbox allow-list is widened beyond the default.
+            Warning: extra sandbox read-write paths are enabled (TERRENCE_SANDBOX_EXTRA_RW_ALLOWED). The sandbox
+            allow-list is widened beyond the default.
           </div>
         )}
       </CardContent>
@@ -128,7 +141,9 @@ function AuditEventsCard({
       <CardContent className="space-y-3">
         <p className="text-2xl font-semibold text-foreground">{auditLogs.length}</p>
         <p className="text-sm text-muted-foreground">
-          {auditLogs.length === 0 ? "No recent events returned" : `Showing ${auditLogs.length} latest event${auditLogs.length === 1 ? "" : "s"}`}
+          {auditLogs.length === 0
+            ? "No recent events returned"
+            : `Showing ${auditLogs.length} latest event${auditLogs.length === 1 ? "" : "s"}`}
         </p>
         {auditLogs[0]?.attributes.action !== undefined && (
           <p className="truncate text-sm text-foreground/85">Latest: {auditLogs[0].attributes.action}</p>
@@ -141,21 +156,25 @@ function AuditEventsCard({
   );
 }
 
-export function SecurityOverview(props: Readonly<{
-  navigate: (path: string) => void;
-  samlEnabled: boolean;
-  oidcEnabled: boolean;
-  ldapEnabled: boolean;
-  securitySummary: SecuritySummary;
-  users: DataItem[];
-  auditLogs: DataItem[];
-}>): React.JSX.Element {
+export function SecurityOverview(
+  props: Readonly<{
+    navigate: (path: string) => void;
+    samlEnabled: boolean;
+    oidcEnabled: boolean;
+    ldapEnabled: boolean;
+    securitySummary: SecuritySummary;
+    users: DataItem[];
+    auditLogs: DataItem[];
+  }>,
+): React.JSX.Element {
   const { navigate, samlEnabled, oidcEnabled, ldapEnabled, securitySummary, users, auditLogs } = props;
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-lg font-semibold text-foreground">Site overview</h2>
-        <p className="text-sm text-muted-foreground">A quick read of the instance-wide controls that protect access and runs.</p>
+        <p className="text-sm text-muted-foreground">
+          A quick read of the instance-wide controls that protect access and runs.
+        </p>
       </div>
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
@@ -167,7 +186,13 @@ export function SecurityOverview(props: Readonly<{
             <ProviderStatusRow label="SAML SSO" enabled={samlEnabled} />
             <ProviderStatusRow label="OpenID Connect" enabled={oidcEnabled} />
             <ProviderStatusRow label="LDAP" enabled={ldapEnabled} />
-            <Button variant="outline" size="sm" onClick={(): void => { navigate("/app/admin/auth"); }}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={(): void => {
+                navigate("/app/admin/auth");
+              }}
+            >
               Open authentication settings
             </Button>
           </CardContent>
@@ -187,17 +212,26 @@ export function SecurityOverview(props: Readonly<{
             </div>
             <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
               <span>Site administrators</span>
-              <span className="font-medium text-foreground">{users.filter((item): boolean => item.attributes["is-site-admin"] === true).length}</span>
+              <span className="font-medium text-foreground">
+                {users.filter((item): boolean => item.attributes["is-site-admin"] === true).length}
+              </span>
             </div>
             <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
               <span>Suspended users</span>
-              <span className="font-medium text-foreground">{users.filter((item): boolean => item.attributes["is-suspended"] === true).length}</span>
+              <span className="font-medium text-foreground">
+                {users.filter((item): boolean => item.attributes["is-suspended"] === true).length}
+              </span>
             </div>
           </CardContent>
         </Card>
         <ExecutionIsolationCard summary={securitySummary} />
-        <AuditEventsCard auditLogs={auditLogs} onOpenAuditLog={(): void => { navigate("/app/admin/audit"); }} />
+        <AuditEventsCard
+          auditLogs={auditLogs}
+          onOpenAuditLog={(): void => {
+            navigate("/app/admin/audit");
+          }}
+        />
       </div>
     </div>
   );
-};
+}

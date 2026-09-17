@@ -1,24 +1,17 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "../db";
-import {
-  agentPoolAllowedProjects,
-  agentPoolAllowedWorkspaces,
-} from "../db/schema";
+import { agentPoolAllowedProjects, agentPoolAllowedWorkspaces } from "../db/schema";
 import type { agentPools } from "../db/schema";
 
 type AgentPool = Readonly<typeof agentPools.$inferSelect>;
 
-export async function agentPoolAllowsProject(
-  pool: AgentPool,
-  projectId: string,
-): Promise<boolean> {
+export async function agentPoolAllowsProject(pool: AgentPool, projectId: string): Promise<boolean> {
   if (pool.organizationScoped !== false) return true;
-  return (await db.query.agentPoolAllowedProjects.findFirst({
-    where: and(
-      eq(agentPoolAllowedProjects.agentPoolId, pool.id),
-      eq(agentPoolAllowedProjects.projectId, projectId),
-    ),
-  })) !== undefined;
+  return (
+    (await db.query.agentPoolAllowedProjects.findFirst({
+      where: and(eq(agentPoolAllowedProjects.agentPoolId, pool.id), eq(agentPoolAllowedProjects.projectId, projectId)),
+    })) !== undefined
+  );
 }
 
 export async function agentPoolAllowsWorkspace(
@@ -32,8 +25,7 @@ export async function agentPoolAllowsWorkspace(
 ): Promise<boolean> {
   if (pool.organizationScoped !== false) return true;
   if (allowedWorkspaceIds !== undefined && allowedProjectIds !== undefined) {
-    return allowedWorkspaceIds.has(workspaceId)
-      || (projectId !== null && allowedProjectIds.has(projectId));
+    return allowedWorkspaceIds.has(workspaceId) || (projectId !== null && allowedProjectIds.has(projectId));
   }
   const [workspaceGrant, projectGrant] = await Promise.all([
     db.query.agentPoolAllowedWorkspaces.findFirst({

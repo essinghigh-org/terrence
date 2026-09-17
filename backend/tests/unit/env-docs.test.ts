@@ -45,7 +45,8 @@ function sourceFiles(): string[] {
 }
 
 function referencedEnvVars(): Set<string> {
-  const pattern = /(?:process\.env|Bun\.env)\.([A-Z][A-Z0-9_]+)|(?:process\.env|Bun\.env)\[["']([A-Z][A-Z0-9_]+)["']\]|(?:readEnv|envFlag)\(["']([A-Z][A-Z0-9_]+)["']\)/g;
+  const pattern =
+    /(?:process\.env|Bun\.env)\.([A-Z][A-Z0-9_]+)|(?:process\.env|Bun\.env)\[["']([A-Z][A-Z0-9_]+)["']\]|(?:readEnv|envFlag)\(["']([A-Z][A-Z0-9_]+)["']\)/g;
   const vars = new Set<string>();
   for (const file of sourceFiles()) {
     let source: string;
@@ -58,7 +59,7 @@ function referencedEnvVars(): Set<string> {
     // static configuration names; they are covered by the INFRACOST_* family
     // documentation instead.
     for (const line of source.split("\n")) {
-      if (/Object\.(keys|entries)\(process\.env\)/.test(line) || line.includes('Reflect.get(process.env')) continue;
+      if (/Object\.(keys|entries)\(process\.env\)/.test(line) || line.includes("Reflect.get(process.env")) continue;
       pattern.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = pattern.exec(line)) !== null) {

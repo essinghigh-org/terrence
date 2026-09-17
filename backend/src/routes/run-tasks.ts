@@ -2,14 +2,7 @@ import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { envFlag } from "../lib/env";
-import {
-  runTasks,
-  workspaceRunTasks,
-  runTaskResults,
-  taskStages,
-  type users,
-  type workspaces,
-} from "../db/schema";
+import { runTasks, workspaceRunTasks, runTaskResults, taskStages, type users, type workspaces } from "../db/schema";
 import { eq, and, inArray, or, asc, count } from "drizzle-orm";
 import { checkOrganizationPermission } from "../lib/authorization";
 import { findAuthorizedRun, findAuthorizedWorkspace } from "../lib/authorized-resources";
@@ -49,21 +42,11 @@ async function findManageableWorkspace(
   tokenOrgId: string | null,
   tokenTeamId: string | null,
 ): Promise<typeof workspaces.$inferSelect | undefined> {
-  const workspace = await findAuthorizedWorkspace(
-    workspaceId,
-    userId,
-    tokenOrgId,
-    tokenTeamId,
-    "run-tasks",
-  );
+  const workspace = await findAuthorizedWorkspace(workspaceId, userId, tokenOrgId, tokenTeamId, "run-tasks");
   if (workspace === undefined) return undefined;
-  return await checkOrganizationPermission(
-    workspace.orgId,
-    userId,
-    tokenOrgId,
-    tokenTeamId,
-    "manage-run-tasks",
-  ) ? workspace : undefined;
+  return (await checkOrganizationPermission(workspace.orgId, userId, tokenOrgId, tokenTeamId, "manage-run-tasks"))
+    ? workspace
+    : undefined;
 }
 
 type CallbackCtx = Readonly<{
@@ -110,9 +93,12 @@ function parseGlobalConfig(value: unknown): GlobalConfig | null {
   return {
     enabled: typeof o["enabled"] === "boolean" ? o["enabled"] : true,
     stages: Array.isArray(o["stages"]) ? o["stages"].filter((s: unknown): s is string => typeof s === "string") : [],
-    enforcementLevel: typeof o["enforcement-level"] === "string"
-      ? o["enforcement-level"]
-      : (typeof o["enforcementLevel"] === "string" ? o["enforcementLevel"] : "advisory"),
+    enforcementLevel:
+      typeof o["enforcement-level"] === "string"
+        ? o["enforcement-level"]
+        : typeof o["enforcementLevel"] === "string"
+          ? o["enforcementLevel"]
+          : "advisory",
   };
 }
 
@@ -128,10 +114,15 @@ function runTaskUrlError(url: string): string | undefined {
   return reason === null ? undefined : `Run task URL is unsafe: ${reason}`;
 }
 
-function globalRunTaskUrlError(url: string, configuration: GlobalConfig | null | undefined, taskEnabled = true): string | undefined {
+function globalRunTaskUrlError(
+  url: string,
+  configuration: GlobalConfig | null | undefined,
+  taskEnabled = true,
+): string | undefined {
   const urlError = runTaskUrlError(url);
   if (urlError !== undefined) return urlError;
-  if (configuration?.enabled !== true || taskEnabled !== true || envFlag("TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS")) return undefined;
+  if (configuration?.enabled !== true || taskEnabled !== true || envFlag("TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS"))
+    return undefined;
   try {
     return new URL(url).protocol === "https:"
       ? undefined
@@ -170,10 +161,23 @@ const runTaskResource = async (t: RunTaskRow, orgNameOverride?: string | null): 
 // go-tfe's RunTasks service (used by the framework tfe_organization_run_task /
 // tfe_workspace_run_task resources) calls /organizations/:org/tasks and
 // /workspaces/:ws/tasks.
-const listOrgRunTasks = async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+const listOrgRunTasks = async ({
+  params,
+  request,
+  user,
+  orgId: tokenOrgId,
+  teamId: tokenTeamId,
+  set,
+}: ParamCtx): Promise<unknown> => {
   const orgName = params["org_name"] ?? "";
   const org = await cachedOrgByName(orgName);
-  if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (
+    org === undefined ||
+    !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-run-tasks"))
+  ) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
   const page = pageRequest(request);
   const offset = (page.number - 1) * page.size;
   const [tasks, total] = await Promise.all([
@@ -183,7 +187,11 @@ const listOrgRunTasks = async ({ params, request, user, orgId: tokenOrgId, teamI
       limit: page.size,
       offset,
     }),
-    db.select({ total: count() }).from(runTasks).where(eq(runTasks.orgId, org.id)).then((rows) => rows[0]?.total ?? 0),
+    db
+      .select({ total: count() })
+      .from(runTasks)
+      .where(eq(runTasks.orgId, org.id))
+      .then((rows) => rows[0]?.total ?? 0),
   ]);
   return {
     data: await Promise.all(tasks.map(async (t): Promise<Record<string, unknown>> => runTaskResource(t, org.name))),
@@ -194,7 +202,9 @@ const listOrgRunTasks = async ({ params, request, user, orgId: tokenOrgId, teamI
 function runTaskAttrs(body: unknown): Record<string, unknown> {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"] as Record<string, unknown> | undefined;
-  return typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  return typeof data?.["attributes"] === "object" && data["attributes"] !== null
+    ? (data["attributes"] as Record<string, unknown>)
+    : {};
 }
 
 async function resolveHmacKey(attrs: Record<string, unknown>): Promise<string | null> {
@@ -203,7 +213,12 @@ async function resolveHmacKey(attrs: Record<string, unknown>): Promise<string | 
     : null;
 }
 
-function checkGlobalTaskUrl(url: string, globalConfiguration: GlobalConfig | null, enabled: boolean, set: SetObj): { error: unknown } | null {
+function checkGlobalTaskUrl(
+  url: string,
+  globalConfiguration: GlobalConfig | null,
+  enabled: boolean,
+  set: SetObj,
+): { error: unknown } | null {
   const globalUrlError = globalRunTaskUrlError(url, globalConfiguration, enabled);
   if (globalUrlError === undefined) return null;
   (set as { status: number }).status = 422;
@@ -233,7 +248,10 @@ function parseOrgTaskFields(attrs: Record<string, unknown>): OrgTaskFields | { e
   };
 }
 
-async function parseOrgTaskUpdates(attrs: Record<string, unknown>, set: SetObj): Promise<{ updates: Partial<typeof runTasks.$inferInsert> } | { error: unknown }> {
+async function parseOrgTaskUpdates(
+  attrs: Record<string, unknown>,
+  set: SetObj,
+): Promise<{ updates: Partial<typeof runTasks.$inferInsert> } | { error: unknown }> {
   const updates: Partial<typeof runTasks.$inferInsert> = {};
   if (typeof attrs["name"] === "string") {
     if (attrs["name"].trim() === "") {
@@ -242,7 +260,8 @@ async function parseOrgTaskUpdates(attrs: Record<string, unknown>, set: SetObj):
     }
     updates.name = attrs["name"].trim();
   }
-  if (attrs["description"] !== undefined) updates.description = typeof attrs["description"] === "string" ? attrs["description"] : null;
+  if (attrs["description"] !== undefined)
+    updates.description = typeof attrs["description"] === "string" ? attrs["description"] : null;
   if (attrs["url"] !== undefined) {
     if (typeof attrs["url"] !== "string" || attrs["url"].trim() === "") {
       (set as { status: number }).status = 422;
@@ -259,10 +278,23 @@ async function parseOrgTaskUpdates(attrs: Record<string, unknown>, set: SetObj):
   return { updates };
 }
 
-const createOrgRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+const createOrgRunTask = async ({
+  params,
+  body,
+  user,
+  orgId: tokenOrgId,
+  teamId: tokenTeamId,
+  set,
+}: ParamCtx): Promise<unknown> => {
   const orgName = params["org_name"] ?? "";
   const org = await cachedOrgByName(orgName);
-  if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (
+    org === undefined ||
+    !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))
+  ) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
   const attrs = runTaskAttrs(body);
   const fields = parseOrgTaskFields(attrs);
   if ("error" in fields) {
@@ -274,50 +306,112 @@ const createOrgRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId:
   const globalConfiguration = parseGlobalConfig(attrs["global-configuration"]);
   const urlError = checkGlobalTaskUrl(fields.url, globalConfiguration, fields.enabled, set);
   if (urlError !== null) return urlError.error;
-  const rowData = { id, orgId: org.id, name: fields.name, description: fields.description, url: fields.url, category: fields.category, enabled: fields.enabled, hmacKey, globalConfiguration, createdAt: Date.now() };
+  const rowData = {
+    id,
+    orgId: org.id,
+    name: fields.name,
+    description: fields.description,
+    url: fields.url,
+    category: fields.category,
+    enabled: fields.enabled,
+    hmacKey,
+    globalConfiguration,
+    createdAt: Date.now(),
+  };
   await db.insert(runTasks).values(rowData);
   (set as { status: number }).status = 201;
   return { data: await runTaskResource(rowData) };
 };
 
-const getRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+const getRunTask = async ({
+  params,
+  user,
+  orgId: tokenOrgId,
+  teamId: tokenTeamId,
+  set,
+}: ParamCtx): Promise<unknown> => {
   const taskId = params["task_id"] ?? "";
   const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
-  if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (
+    task === undefined ||
+    !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))
+  ) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
   return { data: await runTaskResource(task) };
 };
 
-const updateRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+const updateRunTask = async ({
+  params,
+  body,
+  user,
+  orgId: tokenOrgId,
+  teamId: tokenTeamId,
+  set,
+}: ParamCtx): Promise<unknown> => {
   const taskId = params["task_id"] ?? "";
   const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
-  if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (
+    task === undefined ||
+    !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))
+  ) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
   const attrs = runTaskAttrs(body);
   const parsed = await parseOrgTaskUpdates(attrs, set);
   if ("error" in parsed) return parsed.error;
   const updates = parsed.updates;
-  const nextGlobalConfiguration = updates.globalConfiguration !== undefined ? updates.globalConfiguration : task.globalConfiguration;
+  const nextGlobalConfiguration =
+    updates.globalConfiguration !== undefined ? updates.globalConfiguration : task.globalConfiguration;
   const nextEnabled = updates.enabled !== undefined ? updates.enabled === true : task.enabled === true;
   const urlError = checkGlobalTaskUrl(updates.url ?? task.url, nextGlobalConfiguration, nextEnabled, set);
   if (urlError !== null) return urlError.error;
   if (Object.keys(updates).length > 0) await db.update(runTasks).set(updates).where(eq(runTasks.id, taskId));
   const updated = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
-  if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (updated === undefined) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
   return { data: await runTaskResource(updated) };
 };
 
-const deleteRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+const deleteRunTask = async ({
+  params,
+  user,
+  orgId: tokenOrgId,
+  teamId: tokenTeamId,
+  set,
+}: ParamCtx): Promise<unknown> => {
   const taskId = params["task_id"] ?? "";
   const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
-  if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (
+    task === undefined ||
+    !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))
+  ) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
   await db.delete(runTasks).where(eq(runTasks.id, taskId));
   (set as { status: number }).status = 204;
   return new Response(null, { status: 204 });
 };
 
-const listWorkspaceRunTasks = async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+const listWorkspaceRunTasks = async ({
+  params,
+  request,
+  user,
+  orgId: tokenOrgId,
+  teamId: tokenTeamId,
+  set,
+}: ParamCtx): Promise<unknown> => {
   const workspaceId = params["workspace_id"] ?? "";
   const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
-  if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (ws === undefined) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
   const page = pageRequest(request);
   const offset = (page.number - 1) * page.size;
   const [bindings, total] = await Promise.all([
@@ -327,13 +421,21 @@ const listWorkspaceRunTasks = async ({ params, request, user, orgId: tokenOrgId,
       limit: page.size,
       offset,
     }),
-    db.select({ total: count() }).from(workspaceRunTasks).where(eq(workspaceRunTasks.workspaceId, workspaceId)).then((rows) => rows[0]?.total ?? 0),
+    db
+      .select({ total: count() })
+      .from(workspaceRunTasks)
+      .where(eq(workspaceRunTasks.workspaceId, workspaceId))
+      .then((rows) => rows[0]?.total ?? 0),
   ]);
-  const attachedTasks = bindings.length === 0
-    ? []
-    : await db.query.runTasks.findMany({
-        where: inArray(runTasks.id, bindings.map((binding: BindingItem): string => binding.runTaskId)),
-      });
+  const attachedTasks =
+    bindings.length === 0
+      ? []
+      : await db.query.runTasks.findMany({
+          where: inArray(
+            runTasks.id,
+            bindings.map((binding: BindingItem): string => binding.runTaskId),
+          ),
+        });
   const tasksById = new Map(attachedTasks.map((task): [string, typeof task] => [task.id, task]));
   return {
     data: bindings.map((binding: BindingItem): Record<string, unknown> => {
@@ -350,7 +452,7 @@ const listWorkspaceRunTasks = async ({ params, request, user, orgId: tokenOrgId,
           "run-task-enabled": task?.enabled ?? false,
         },
         relationships: {
-          "task": { data: { id: binding.runTaskId, type: "tasks" } },
+          task: { data: { id: binding.runTaskId, type: "tasks" } },
           workspace: { data: { id: workspaceId, type: "workspaces" } },
         },
       };
@@ -359,53 +461,80 @@ const listWorkspaceRunTasks = async ({ params, request, user, orgId: tokenOrgId,
   };
 };
 
-const getWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+const getWorkspaceRunTask = async ({
+  params,
+  user,
+  orgId: tokenOrgId,
+  teamId: tokenTeamId,
+  set,
+}: ParamCtx): Promise<unknown> => {
   const workspaceId = params["workspace_id"] ?? "";
   const taskId = params["task_id"] ?? "";
   const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
-  if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (ws === undefined) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
   const binding = await db.query.workspaceRunTasks.findFirst({
     where: and(
       eq(workspaceRunTasks.workspaceId, workspaceId),
       or(eq(workspaceRunTasks.id, taskId), eq(workspaceRunTasks.runTaskId, taskId)),
     ),
   });
-  if (binding === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (binding === undefined) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
   const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, binding.runTaskId) });
   return {
     data: {
       id: binding.id,
       type: "workspace-tasks",
       attributes: {
-                stage: binding.stage,
-                stages: [binding.stage],
-                "enforcement-level": binding.enforcementLevel,
-                "run-task-name": task?.name ?? binding.runTaskId,
-                "run-task-description": task?.description ?? null,
-                "run-task-enabled": task?.enabled ?? false,
-              },
+        stage: binding.stage,
+        stages: [binding.stage],
+        "enforcement-level": binding.enforcementLevel,
+        "run-task-name": task?.name ?? binding.runTaskId,
+        "run-task-description": task?.description ?? null,
+        "run-task-enabled": task?.enabled ?? false,
+      },
       relationships: {
-        "task": { data: { id: binding.runTaskId, type: "tasks" } },
+        task: { data: { id: binding.runTaskId, type: "tasks" } },
         workspace: { data: { id: workspaceId, type: "workspaces" } },
       },
     },
   };
 };
 
-function parseBindingUpdates(attrs: Record<string, unknown>, set: SetObj): { updates: Partial<typeof workspaceRunTasks.$inferInsert> } | { error: unknown } {
+function parseBindingUpdates(
+  attrs: Record<string, unknown>,
+  set: SetObj,
+): { updates: Partial<typeof workspaceRunTasks.$inferInsert> } | { error: unknown } {
   const updates: Partial<typeof workspaceRunTasks.$inferInsert> = {};
   if (typeof attrs["enforcement-level"] === "string") {
     const level = attrs["enforcement-level"];
     if (!["advisory", "mandatory", "must_pass"].includes(level)) {
       (set as { status: number }).status = 422;
-      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enforcement-level must be advisory, mandatory, or must_pass" }] } };
+      return {
+        error: {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "enforcement-level must be advisory, mandatory, or must_pass",
+            },
+          ],
+        },
+      };
     }
     updates.enforcementLevel = level;
   }
   const rawStages = attrs["stages"];
   if (Array.isArray(rawStages) && (rawStages as unknown[]).some((s): boolean => typeof s !== "string")) {
     (set as { status: number }).status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "stages must contain only strings" }] } };
+    return {
+      error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "stages must contain only strings" }] },
+    };
   }
   // The provider sends either a singular `stage` or the `stages` array; honor
   // whichever is present (single-stage binding, so >1 is rejected).
@@ -416,13 +545,33 @@ function parseBindingUpdates(attrs: Record<string, unknown>, set: SetObj): { upd
       : [];
   if (requestedStages.length > 1) {
     (set as { status: number }).status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "this binding stores a single stage; provide exactly one" }] } };
+    return {
+      error: {
+        errors: [
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail: "this binding stores a single stage; provide exactly one",
+          },
+        ],
+      },
+    };
   }
   if (requestedStages.length === 1) {
     const stage = requestedStages[0] ?? "";
     if (!["pre_plan", "post_plan", "pre_apply", "post_apply"].includes(stage)) {
       (set as { status: number }).status = 422;
-      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "stage must be one of pre_plan, post_plan, pre_apply, post_apply" }] } };
+      return {
+        error: {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "stage must be one of pre_plan, post_plan, pre_apply, post_apply",
+            },
+          ],
+        },
+      };
     }
     updates.stage = stage;
   }
@@ -432,27 +581,49 @@ function parseBindingUpdates(attrs: Record<string, unknown>, set: SetObj): { upd
 function parseAttachTaskId(body: unknown): { taskId: string; attrs: Record<string, unknown> } | { error: unknown } {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"] as Record<string, unknown> | undefined;
-  const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-  const { task: taskRelationship } = rels;
-  const runTaskRel = typeof taskRelationship === "object" && taskRelationship !== null
-    ? (taskRelationship as Record<string, unknown>)
-    : typeof rels["run-task"] === "object" && rels["run-task"] !== null
-      ? (rels["run-task"] as Record<string, unknown>)
+  const rels =
+    typeof data?.["relationships"] === "object" && data["relationships"] !== null
+      ? (data["relationships"] as Record<string, unknown>)
       : {};
-  const runTaskData = typeof runTaskRel["data"] === "object" && runTaskRel["data"] !== null ? (runTaskRel["data"] as Record<string, unknown>) : {};
+  const { task: taskRelationship } = rels;
+  const runTaskRel =
+    typeof taskRelationship === "object" && taskRelationship !== null
+      ? (taskRelationship as Record<string, unknown>)
+      : typeof rels["run-task"] === "object" && rels["run-task"] !== null
+        ? (rels["run-task"] as Record<string, unknown>)
+        : {};
+  const runTaskData =
+    typeof runTaskRel["data"] === "object" && runTaskRel["data"] !== null
+      ? (runTaskRel["data"] as Record<string, unknown>)
+      : {};
   const attrs = runTaskAttrs(body);
-  const taskId = typeof runTaskData["id"] === "string" ? runTaskData["id"] : (typeof attrs["run-task-id"] === "string" ? attrs["run-task-id"] : "");
+  const taskId =
+    typeof runTaskData["id"] === "string"
+      ? runTaskData["id"]
+      : typeof attrs["run-task-id"] === "string"
+        ? attrs["run-task-id"]
+        : "";
   if (taskId === "") return { error: { errors: [{ status: "422", title: "Unprocessable Entity" }] } };
   return { taskId, attrs };
 }
 
-function resolveAttachOptions(attrs: Record<string, unknown>): { stage: string; enforcementLevel: string } | { error: unknown } {
-  const requestedStages = Array.isArray(attrs["stages"]) ? (attrs["stages"] as unknown[]).filter((s): s is string => typeof s === "string") : [];
+function resolveAttachOptions(
+  attrs: Record<string, unknown>,
+): { stage: string; enforcementLevel: string } | { error: unknown } {
+  const requestedStages = Array.isArray(attrs["stages"])
+    ? (attrs["stages"] as unknown[]).filter((s): s is string => typeof s === "string")
+    : [];
   if (requestedStages.length > 1) {
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Only a single stage is supported" }] } };
+    return {
+      error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Only a single stage is supported" }] },
+    };
   }
-  const stage = typeof attrs["stage"] === "string" && attrs["stage"] !== "" ? attrs["stage"] : (requestedStages[0] ?? "post_plan");
-  const enforcementLevel = typeof attrs["enforcement-level"] === "string" && attrs["enforcement-level"] !== "" ? attrs["enforcement-level"] : "advisory";
+  const stage =
+    typeof attrs["stage"] === "string" && attrs["stage"] !== "" ? attrs["stage"] : (requestedStages[0] ?? "post_plan");
+  const enforcementLevel =
+    typeof attrs["enforcement-level"] === "string" && attrs["enforcement-level"] !== ""
+      ? attrs["enforcement-level"]
+      : "advisory";
   return { stage, enforcementLevel };
 }
 
@@ -469,17 +640,21 @@ async function insertWorkspaceBinding(
   } catch (error: unknown) {
     if (!isUniqueConstraintError(error)) throw error;
     (set as { status: number }).status = 409;
-    return { error: { errors: [{ status: "409", title: "Conflict", detail: "Run task is already attached to this workspace" }] } };
+    return {
+      error: {
+        errors: [{ status: "409", title: "Conflict", detail: "Run task is already attached to this workspace" }],
+      },
+    };
   }
   return { id };
 }
 
 function parseCallbackUpdate(body: unknown): { attrs: Record<string, unknown>; status: unknown } | { error: unknown } {
-  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"];
-  const dataObject = data !== null && typeof data === "object" ? data as Record<string, unknown> : {};
+  const dataObject = data !== null && typeof data === "object" ? (data as Record<string, unknown>) : {};
   const attributes = dataObject["attributes"];
-  const attrs = attributes !== null && typeof attributes === "object" ? attributes as Record<string, unknown> : {};
+  const attrs = attributes !== null && typeof attributes === "object" ? (attributes as Record<string, unknown>) : {};
   const status = attrs["status"];
   if (dataObject["type"] !== "task-results" || !["running", "passed", "failed"].includes(String(status))) {
     return { error: { errors: [{ status: "422", title: "Unprocessable Entity" }] } };
@@ -487,8 +662,13 @@ function parseCallbackUpdate(body: unknown): { attrs: Record<string, unknown>; s
   return { attrs, status };
 }
 
-function parseCallbackUrl(attrs: Record<string, unknown>, set: SetObj): { url: string | null | undefined } | { error: unknown } {
-  const invalid = { errors: [{ status: "422", title: "Unprocessable Entity", detail: "url must be a valid HTTP or HTTPS URL" }] };
+function parseCallbackUrl(
+  attrs: Record<string, unknown>,
+  set: SetObj,
+): { url: string | null | undefined } | { error: unknown } {
+  const invalid = {
+    errors: [{ status: "422", title: "Unprocessable Entity", detail: "url must be a valid HTTP or HTTPS URL" }],
+  };
   if (attrs["url"] === undefined) return { url: undefined };
   if (attrs["url"] === null) return { url: null };
   if (typeof attrs["url"] !== "string" || attrs["url"].trim() === "") {
@@ -513,30 +693,47 @@ async function persistBindingUpdates(
   bindingId: string,
   updates: Partial<typeof workspaceRunTasks.$inferInsert>,
 ): Promise<typeof workspaceRunTasks.$inferSelect | undefined> {
-  if (Object.keys(updates).length > 0) await db.update(workspaceRunTasks).set(updates).where(eq(workspaceRunTasks.id, bindingId));
+  if (Object.keys(updates).length > 0)
+    await db.update(workspaceRunTasks).set(updates).where(eq(workspaceRunTasks.id, bindingId));
   return db.query.workspaceRunTasks.findFirst({ where: eq(workspaceRunTasks.id, bindingId) });
 }
 
-const updateWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+const updateWorkspaceRunTask = async ({
+  params,
+  body,
+  user,
+  orgId: tokenOrgId,
+  teamId: tokenTeamId,
+  set,
+}: ParamCtx): Promise<unknown> => {
   const workspaceId = params["workspace_id"] ?? "";
   const taskId = params["task_id"] ?? "";
   // Mirrors the create handler: workspace run-tasks access AND org-level
   // task-management permission are both required to modify a binding.
   const ws = await findManageableWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
-  if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (ws === undefined) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
   const binding = await db.query.workspaceRunTasks.findFirst({
     where: and(
       eq(workspaceRunTasks.workspaceId, workspaceId),
       or(eq(workspaceRunTasks.id, taskId), eq(workspaceRunTasks.runTaskId, taskId)),
     ),
   });
-  if (binding === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (binding === undefined) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
   const attrs = runTaskAttrs(body);
   const parsed = parseBindingUpdates(attrs, set);
   if ("error" in parsed) return parsed.error;
   const updates = parsed.updates;
   const updated = await persistBindingUpdates(binding.id, updates);
-  if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (updated === undefined) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
   const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, updated.runTaskId) });
   return {
     data: {
@@ -551,17 +748,27 @@ const updateWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, t
         "run-task-enabled": task?.enabled ?? false,
       },
       relationships: {
-        "task": { data: { id: updated.runTaskId, type: "tasks" } },
+        task: { data: { id: updated.runTaskId, type: "tasks" } },
         workspace: { data: { id: workspaceId, type: "workspaces" } },
       },
     },
   };
 };
 
-const attachWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+const attachWorkspaceRunTask = async ({
+  params,
+  body,
+  user,
+  orgId: tokenOrgId,
+  teamId: tokenTeamId,
+  set,
+}: ParamCtx): Promise<unknown> => {
   const workspaceId = params["workspace_id"] ?? "";
   const ws = await findManageableWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
-  if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (ws === undefined) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
   const parsed = parseAttachTaskId(body);
   if ("error" in parsed) {
     (set as { status: number }).status = 422;
@@ -573,174 +780,322 @@ const attachWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, t
     return options.error;
   }
   const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, parsed.taskId) });
-  if (task?.orgId !== ws.orgId) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  if (!["pre_plan", "post_plan", "pre_apply", "post_apply"].includes(options.stage) || !["advisory", "mandatory", "must_pass"].includes(options.enforcementLevel)) {
+  if (task?.orgId !== ws.orgId) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
+  if (
+    !["pre_plan", "post_plan", "pre_apply", "post_apply"].includes(options.stage) ||
+    !["advisory", "mandatory", "must_pass"].includes(options.enforcementLevel)
+  ) {
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
   }
-  const inserted = await insertWorkspaceBinding(workspaceId, parsed.taskId, options.stage, options.enforcementLevel, set);
+  const inserted = await insertWorkspaceBinding(
+    workspaceId,
+    parsed.taskId,
+    options.stage,
+    options.enforcementLevel,
+    set,
+  );
   if ("error" in inserted) return inserted.error;
   const persisted = await db.query.workspaceRunTasks.findFirst({
     where: and(eq(workspaceRunTasks.workspaceId, workspaceId), eq(workspaceRunTasks.runTaskId, parsed.taskId)),
   });
-  if (persisted === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+  if (persisted === undefined) {
+    (set as { status: number }).status = 500;
+    return { errors: [{ status: "500", title: "Internal Server Error" }] };
+  }
   (set as { status: number }).status = 201;
-  return { data: { id: persisted.id, type: "workspace-tasks", attributes: { stage: persisted.stage, stages: [persisted.stage], "enforcement-level": persisted.enforcementLevel }, relationships: { "task": { data: { id: parsed.taskId, type: "tasks" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };
+  return {
+    data: {
+      id: persisted.id,
+      type: "workspace-tasks",
+      attributes: {
+        stage: persisted.stage,
+        stages: [persisted.stage],
+        "enforcement-level": persisted.enforcementLevel,
+      },
+      relationships: {
+        task: { data: { id: parsed.taskId, type: "tasks" } },
+        workspace: { data: { id: workspaceId, type: "workspaces" } },
+      },
+    },
+  };
 };
 
-const detachWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+const detachWorkspaceRunTask = async ({
+  params,
+  user,
+  orgId: tokenOrgId,
+  teamId: tokenTeamId,
+  set,
+}: ParamCtx): Promise<unknown> => {
   const workspaceId = params["workspace_id"] ?? "";
   const taskId = params["task_id"] ?? "";
   const ws = await findManageableWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
-  if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  await db.delete(workspaceRunTasks).where(and(
-    eq(workspaceRunTasks.workspaceId, workspaceId),
-    or(eq(workspaceRunTasks.id, taskId), eq(workspaceRunTasks.runTaskId, taskId)),
-  ));
+  if (ws === undefined) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
+  await db
+    .delete(workspaceRunTasks)
+    .where(
+      and(
+        eq(workspaceRunTasks.workspaceId, workspaceId),
+        or(eq(workspaceRunTasks.id, taskId), eq(workspaceRunTasks.runTaskId, taskId)),
+      ),
+    );
   (set as { status: number }).status = 204;
   return new Response(null, { status: 204 });
 };
 
-const overrideTaskStage = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+const overrideTaskStage = async ({
+  params,
+  user,
+  orgId: tokenOrgId,
+  teamId: tokenTeamId,
+  set,
+}: ParamCtx): Promise<unknown> => {
   const stageId = params["task_stage_id"] ?? "";
   const stage = await db.query.taskStages.findFirst({ where: eq(taskStages.id, stageId) });
-  if (stage === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (stage === undefined) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
   const authorized = await findAuthorizedRun(stage.runId, user?.id, tokenOrgId, tokenTeamId ?? null);
-  if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  if (!(await checkOrganizationPermission(authorized.workspace.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) {
+  if (authorized === undefined) {
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
+  if (
+    !(await checkOrganizationPermission(
+      authorized.workspace.orgId,
+      user?.id,
+      tokenOrgId,
+      tokenTeamId ?? null,
+      "manage-run-tasks",
+    ))
+  ) {
     (set as { status: number }).status = 403;
     return { errors: [{ status: "403", title: "Forbidden" }] };
   }
   if (!["failed", "awaiting_override", "errored"].includes(stage.status)) {
     (set as { status: number }).status = 409;
-    return { errors: [{ status: "409", title: "Conflict", detail: "Task stage cannot be overridden in current status" }] };
+    return {
+      errors: [{ status: "409", title: "Conflict", detail: "Task stage cannot be overridden in current status" }],
+    };
   }
-  const timestamps = { ...(parsePersistedStatusMetadata(stage.statusTimestamps, stage.statusMetadataSchemaVersion, stage.id) ?? {}), "overridden-at": new Date().toISOString() };
-  const updated = await db.update(taskStages).set({ status: "passed", statusTimestamps: timestamps, statusMetadataSchemaVersion: 1 }).where(and(eq(taskStages.id, stage.id), eq(taskStages.status, stage.status))).returning({ id: taskStages.id });
-  if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Task stage changed before it could be overridden" }] }; }
-  return { data: { id: stage.id, type: "task-stages", attributes: { stage: stage.stage, status: "passed", "status-timestamps": timestamps } } };
+  const timestamps = {
+    ...(parsePersistedStatusMetadata(stage.statusTimestamps, stage.statusMetadataSchemaVersion, stage.id) ?? {}),
+    "overridden-at": new Date().toISOString(),
+  };
+  const updated = await db
+    .update(taskStages)
+    .set({ status: "passed", statusTimestamps: timestamps, statusMetadataSchemaVersion: 1 })
+    .where(and(eq(taskStages.id, stage.id), eq(taskStages.status, stage.status)))
+    .returning({ id: taskStages.id });
+  if (updated.length === 0) {
+    (set as { status: number }).status = 409;
+    return {
+      errors: [{ status: "409", title: "Conflict", detail: "Task stage changed before it could be overridden" }],
+    };
+  }
+  return {
+    data: {
+      id: stage.id,
+      type: "task-stages",
+      attributes: { stage: stage.stage, status: "passed", "status-timestamps": timestamps },
+    },
+  };
 };
 
 export const runTaskRoutes = new Elysia({ name: "runTasks" })
-  .patch("/api/v2/task-results/:task_result_id/callback", async ({ params, body, request, set }: CallbackCtx): Promise<unknown> => {
-    const resultId = params["task_result_id"] ?? "";
-    const path = `/api/v2/task-results/${resultId}/callback`;
-    if (!validSignedApiURL(request, path, "PATCH")) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-    const parsed = parseCallbackUpdate(body);
-    if ("error" in parsed) {
-      (set as { status: number }).status = 422;
-      return parsed.error;
-    }
-    const { attrs, status } = parsed;
-    const result = await db.query.runTaskResults.findFirst({ where: eq(runTaskResults.id, resultId) });
-    if (result === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (["passed", "failed"].includes(result.status) && status !== result.status) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict" }] };
-    }
-    const parsedUrl = parseCallbackUrl(attrs, set);
-    if ("error" in parsedUrl) return parsedUrl.error;
-    const resultUrl = parsedUrl.url;
-    await db.update(runTaskResults).set({
-      status: String(status),
-      ...(typeof attrs["message"] === "string" ? { message: attrs["message"] } : {}),
-      ...(resultUrl !== undefined ? { url: resultUrl } : {}),
-    }).where(eq(runTaskResults.id, resultId));
-    (set as { status: number }).status = 200;
-    return {};
-  })
+  .patch(
+    "/api/v2/task-results/:task_result_id/callback",
+    async ({ params, body, request, set }: CallbackCtx): Promise<unknown> => {
+      const resultId = params["task_result_id"] ?? "";
+      const path = `/api/v2/task-results/${resultId}/callback`;
+      if (!validSignedApiURL(request, path, "PATCH")) {
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized" }] };
+      }
+      const parsed = parseCallbackUpdate(body);
+      if ("error" in parsed) {
+        (set as { status: number }).status = 422;
+        return parsed.error;
+      }
+      const { attrs, status } = parsed;
+      const result = await db.query.runTaskResults.findFirst({ where: eq(runTaskResults.id, resultId) });
+      if (result === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (["passed", "failed"].includes(result.status) && status !== result.status) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict" }] };
+      }
+      const parsedUrl = parseCallbackUrl(attrs, set);
+      if ("error" in parsedUrl) return parsedUrl.error;
+      const resultUrl = parsedUrl.url;
+      await db
+        .update(runTaskResults)
+        .set({
+          status: String(status),
+          ...(typeof attrs["message"] === "string" ? { message: attrs["message"] } : {}),
+          ...(resultUrl !== undefined ? { url: resultUrl } : {}),
+        })
+        .where(eq(runTaskResults.id, resultId));
+      (set as { status: number }).status = 200;
+      return {};
+    },
+  )
   .use(authPlugin)
-  .get("/api/v2/runs/:run_id/run-tasks", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, tokenOrgId, tokenTeamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const where = eq(runTaskResults.runId, runId);
-    const page = pageRequest(request);
-    const [results, countRows] = await Promise.all([
-      db.query.runTaskResults.findMany({ where, orderBy: [asc(runTaskResults.createdAt), asc(runTaskResults.id)], limit: page.size, offset: (page.number - 1) * page.size }),
-      db.select({ total: count() }).from(runTaskResults).where(where),
-    ]);
-    const totalCount = countRows[0]?.total ?? 0;
-    return { data: results.map(taskResultResource), ...pagination(request, page.number, page.size, totalCount) };
-  })
-  .get("/api/v2/run-tasks/:task_id/task-results", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const taskId = params["task_id"] ?? "";
-    const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
-    if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const where = eq(runTaskResults.runTaskId, taskId);
-    const page = pageRequest(request);
-    const [results, countRows] = await Promise.all([
-      db.query.runTaskResults.findMany({ where, orderBy: [asc(runTaskResults.createdAt), asc(runTaskResults.id)], limit: page.size, offset: (page.number - 1) * page.size }),
-      db.select({ total: count() }).from(runTaskResults).where(where),
-    ]);
-    const totalCount = countRows[0]?.total ?? 0;
-    return { data: results.map(taskResultResource), ...pagination(request, page.number, page.size, totalCount) };
-  })
-  .get("/api/v2/task-results/:task_result_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const result = await db.query.runTaskResults.findFirst({ where: eq(runTaskResults.id, params["task_result_id"] ?? "") });
-    if (result === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const authorized = await findAuthorizedRun(result.runId, user?.id, tokenOrgId, tokenTeamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: taskResultResource(result) };
-  })
-  .get("/api/v2/runs/:run_id/task-stages", async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, tokenOrgId, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const where = eq(taskStages.runId, runId);
-    const page = pageRequest(request);
-    const [stages, countRows] = await Promise.all([
-      db.query.taskStages.findMany({ where, orderBy: [asc(taskStages.createdAt), asc(taskStages.id)], limit: page.size, offset: (page.number - 1) * page.size }),
-      db.select({ total: count() }).from(taskStages).where(where),
-    ]);
-    const totalCount = countRows[0]?.total ?? 0;
-    return {
-      data: stages.map((s): Record<string, unknown> => ({
-        id: s.id,
-        type: "task-stages",
-        attributes: {
-          stage: s.stage,
-          status: s.status,
-          "status-timestamps": parsePersistedStatusMetadata(s.statusTimestamps, s.statusMetadataSchemaVersion, s.id) ?? {},
-        },
-        relationships: {
-          run: { data: { id: s.runId, type: "runs" } },
-        },
-      })),
-      ...pagination(request, page.number, page.size, totalCount),
-    };
-  })
-  .get("/api/v2/task-stages/:task_stage_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const stageId = params["task_stage_id"] ?? "";
-    const stage = await db.query.taskStages.findFirst({ where: eq(taskStages.id, stageId) });
-    if (stage === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const authorized = await findAuthorizedRun(stage.runId, user?.id, tokenOrgId, tokenTeamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const results = await db.query.runTaskResults.findMany({ where: eq(runTaskResults.taskStageId, stage.id) });
-    return {
-      data: {
-        id: stage.id,
-        type: "task-stages",
-        attributes: {
-          stage: stage.stage,
-          status: stage.status,
-          "status-timestamps": parsePersistedStatusMetadata(stage.statusTimestamps, stage.statusMetadataSchemaVersion, stage.id) ?? {},
-        },
-        relationships: {
-          run: { data: { id: stage.runId, type: "runs" } },
-          "task-results": {
-            data: results.map((r): Record<string, string> => ({ id: r.id, type: "task-results" })),
+  .get(
+    "/api/v2/runs/:run_id/run-tasks",
+    async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, tokenOrgId, tokenTeamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const where = eq(runTaskResults.runId, runId);
+      const page = pageRequest(request);
+      const [results, countRows] = await Promise.all([
+        db.query.runTaskResults.findMany({
+          where,
+          orderBy: [asc(runTaskResults.createdAt), asc(runTaskResults.id)],
+          limit: page.size,
+          offset: (page.number - 1) * page.size,
+        }),
+        db.select({ total: count() }).from(runTaskResults).where(where),
+      ]);
+      const totalCount = countRows[0]?.total ?? 0;
+      return { data: results.map(taskResultResource), ...pagination(request, page.number, page.size, totalCount) };
+    },
+  )
+  .get(
+    "/api/v2/run-tasks/:task_id/task-results",
+    async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const taskId = params["task_id"] ?? "";
+      const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
+      if (
+        task === undefined ||
+        !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const where = eq(runTaskResults.runTaskId, taskId);
+      const page = pageRequest(request);
+      const [results, countRows] = await Promise.all([
+        db.query.runTaskResults.findMany({
+          where,
+          orderBy: [asc(runTaskResults.createdAt), asc(runTaskResults.id)],
+          limit: page.size,
+          offset: (page.number - 1) * page.size,
+        }),
+        db.select({ total: count() }).from(runTaskResults).where(where),
+      ]);
+      const totalCount = countRows[0]?.total ?? 0;
+      return { data: results.map(taskResultResource), ...pagination(request, page.number, page.size, totalCount) };
+    },
+  )
+  .get(
+    "/api/v2/task-results/:task_result_id",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const result = await db.query.runTaskResults.findFirst({
+        where: eq(runTaskResults.id, params["task_result_id"] ?? ""),
+      });
+      if (result === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const authorized = await findAuthorizedRun(result.runId, user?.id, tokenOrgId, tokenTeamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: taskResultResource(result) };
+    },
+  )
+  .get(
+    "/api/v2/runs/:run_id/task-stages",
+    async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, tokenOrgId, teamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const where = eq(taskStages.runId, runId);
+      const page = pageRequest(request);
+      const [stages, countRows] = await Promise.all([
+        db.query.taskStages.findMany({
+          where,
+          orderBy: [asc(taskStages.createdAt), asc(taskStages.id)],
+          limit: page.size,
+          offset: (page.number - 1) * page.size,
+        }),
+        db.select({ total: count() }).from(taskStages).where(where),
+      ]);
+      const totalCount = countRows[0]?.total ?? 0;
+      return {
+        data: stages.map(
+          (s): Record<string, unknown> => ({
+            id: s.id,
+            type: "task-stages",
+            attributes: {
+              stage: s.stage,
+              status: s.status,
+              "status-timestamps":
+                parsePersistedStatusMetadata(s.statusTimestamps, s.statusMetadataSchemaVersion, s.id) ?? {},
+            },
+            relationships: {
+              run: { data: { id: s.runId, type: "runs" } },
+            },
+          }),
+        ),
+        ...pagination(request, page.number, page.size, totalCount),
+      };
+    },
+  )
+  .get(
+    "/api/v2/task-stages/:task_stage_id",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const stageId = params["task_stage_id"] ?? "";
+      const stage = await db.query.taskStages.findFirst({ where: eq(taskStages.id, stageId) });
+      if (stage === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const authorized = await findAuthorizedRun(stage.runId, user?.id, tokenOrgId, tokenTeamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const results = await db.query.runTaskResults.findMany({ where: eq(runTaskResults.taskStageId, stage.id) });
+      return {
+        data: {
+          id: stage.id,
+          type: "task-stages",
+          attributes: {
+            stage: stage.stage,
+            status: stage.status,
+            "status-timestamps":
+              parsePersistedStatusMetadata(stage.statusTimestamps, stage.statusMetadataSchemaVersion, stage.id) ?? {},
+          },
+          relationships: {
+            run: { data: { id: stage.runId, type: "runs" } },
+            "task-results": {
+              data: results.map((r): Record<string, string> => ({ id: r.id, type: "task-results" })),
+            },
           },
         },
-      },
-    };
-  })
+      };
+    },
+  )
   .patch("/api/v2/task-stages/:task_stage_id/actions/override", overrideTaskStage)
   .post("/api/v2/task-stages/:task_stage_id/actions/override", overrideTaskStage)
   .get("/api/v2/organizations/:org_name/run-tasks", listOrgRunTasks)

@@ -116,6 +116,9 @@ describe("remote-workflow configuration versions contract", () => {
   });
 
   it("returns 404 for ingress attributes when there is no VCS connection", async () => {
-    await expectErrorResponse(await request(`/api/v2/configuration-versions/${cvId}/ingress-attributes`, { headers }), 404);
+    await expectErrorResponse(
+      await request(`/api/v2/configuration-versions/${cvId}/ingress-attributes`, { headers }),
+      404,
+    );
   });
 });

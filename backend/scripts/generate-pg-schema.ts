@@ -20,6 +20,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as schema from "../src/db/schema-sqlite";
+import { schemaCodeLiteral, assertSchemaIdentifier as assertIdent } from "./schema-code";
 
 const OUT = join(import.meta.dir, "../src/db/schema-pg.ts");
 const NAME = Symbol.for("drizzle:Name");
@@ -54,18 +55,9 @@ type Table = {
 const tables = new Map<string, Table>();
 for (const [key, value] of Object.entries(schema)) {
   if (value !== null && typeof value === "object" && (value as Record<PropertyKey, unknown>)[COLUMNS] !== undefined) {
+    assertIdent("table var", key);
+    for (const prop of Object.keys((value as Table)[COLUMNS])) assertIdent("column prop", prop);
     tables.set(key, value as Table);
-  }
-}
-
-const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-// Tables and columns come from the sqlite schema module (a build-time input),
-// but their names are interpolated into generated TypeScript identifiers.
-// Reject anything that is not a safe identifier before emitting it.
-function assertIdent(label: string, value: string): void {
-  if (!IDENT.test(value)) {
-    throw new Error(`Refusing to emit non-identifier ${label} "${value}" into generated schema`);
   }
 }
 
@@ -79,9 +71,12 @@ const varFor = (table: Table): string => {
   throw new Error(`Table not found for ${String(table[NAME])}`);
 };
 
-const propByDbName = (table: Table): Map<string, string> => new Map(
-  Object.entries(table[COLUMNS]).map(([prop, column]): [string, string] => [column.name, prop]),
-);
+const propByDbName = (table: Table): Map<string, string> =>
+  new Map(Object.entries(table[COLUMNS]).map(([prop, column]): [string, string] => [column.name, prop]));
+
+function codeProperty(objectExpression: string, property: string): string {
+  return `${objectExpression}[${schemaCodeLiteral(property)}]`;
+}
 
 function columnBuilder(
   column: Column,
@@ -89,7 +84,7 @@ function columnBuilder(
   props: Map<string, string>,
   fk: { targetVar: string; foreignProp: string; onDelete?: string; onUpdate?: string } | null,
 ): string {
-  const dbName = JSON.stringify(column.name);
+  const dbName = schemaCodeLiteral(column.name);
   let builder: string;
   switch (column.columnType) {
     case "SQLiteText":
@@ -112,24 +107,30 @@ function columnBuilder(
   if (column.primary) parts.push(".primaryKey()");
   if (column.isUnique === true) parts.push(".unique()");
   if (column.hasDefault && column.default !== undefined) {
-    parts.push(`.default(${JSON.stringify(column.default)})`);
+    parts.push(`.default(${schemaCodeLiteral(column.default)})`);
   }
   if (column.defaultFn !== undefined && column.defaultFn !== null) {
-    parts.push(`.$defaultFn(() => sqliteSchema.${tableVar}.${props.get(column.name)}.defaultFn!())`);
+    const prop = props.get(column.name);
+    if (prop === undefined) throw new Error(`Column property not found for ${column.name}`);
+    parts.push(`.$defaultFn(() => ${codeProperty(codeProperty("sqliteSchema", tableVar), prop)}.defaultFn!())`);
   }
   if (fk !== null) {
     // Column-level references are lazy (arrow function), so forward
     // references to later-declared tables are safe without ordering.
     const actions: string[] = [];
-    if (fk.onDelete !== undefined) actions.push(`onDelete: ${JSON.stringify(fk.onDelete)}`);
-    if (fk.onUpdate !== undefined) actions.push(`onUpdate: ${JSON.stringify(fk.onUpdate)}`);
-    parts.push(`.references(() => ${fk.targetVar}.${fk.foreignProp}${actions.length > 0 ? `, { ${actions.join(", ")} }` : ""})`);
+    if (fk.onDelete !== undefined) actions.push(`onDelete: ${schemaCodeLiteral(fk.onDelete)}`);
+    if (fk.onUpdate !== undefined) actions.push(`onUpdate: ${schemaCodeLiteral(fk.onUpdate)}`);
+    parts.push(
+      `.references(() => ${codeProperty(`${codeProperty("pgSchema", fk.targetVar)}!`, fk.foreignProp)}${actions.length > 0 ? `, { ${actions.join(", ")} }` : ""})`,
+    );
   }
   return builder + parts.join("");
 }
 
 /** Column dbName -> inline FK metadata for the table. */
-function fksByColumn(table: Table): Map<string, { targetVar: string; foreignProp: string; onDelete?: string; onUpdate?: string }> {
+function fksByColumn(
+  table: Table,
+): Map<string, { targetVar: string; foreignProp: string; onDelete?: string; onUpdate?: string }> {
   const map = new Map<string, { targetVar: string; foreignProp: string; onDelete?: string; onUpdate?: string }>();
   for (const fk of table[INLINE_FK] ?? []) {
     const ref = fk.reference();
@@ -153,37 +154,55 @@ function fksByColumn(table: Table): Map<string, { targetVar: string; foreignProp
 }
 
 const PARTIAL_INDEX_OVERRIDES: Readonly<Record<string, (props: Map<string, string>) => string>> = {
-  projects_org_default_idx: (props): string =>
-    `sql\`\${table.${props.get("is_default")}} = true\``,
-  organization_invitations_org_email_pending_idx: (props): string =>
-    `sql\`\${table.${props.get("status")}} = 'pending'\``,
+  projects_org_default_idx: (props): string => {
+    const prop = props.get("is_default");
+    if (prop === undefined) throw new Error("projects_org_default_idx column missing");
+    return `sql\`\${${codeProperty("table", prop)}} = true\``;
+  },
+  organization_invitations_org_email_pending_idx: (props): string => {
+    const prop = props.get("status");
+    if (prop === undefined) throw new Error("organization_invitations_org_email_pending_idx column missing");
+    return `sql\`\${${codeProperty("table", prop)}} = 'pending'\``;
+  },
 };
 
 function renderExtras(table: Table, props: Map<string, string>): string[] {
   const entries: string[] = [];
   for (const item of table[EXTRA]?.(table) ?? []) {
-    const reference = (item as {
-      reference?: () => { name?: string; columns: Column[]; foreignTable: Table; foreignColumns: Column[] };
-      _onDelete?: string;
-      _onUpdate?: string;
-    }).reference;
+    const reference = (
+      item as {
+        reference?: () => { name?: string; columns: Column[]; foreignTable: Table; foreignColumns: Column[] };
+        _onDelete?: string;
+        _onUpdate?: string;
+      }
+    ).reference;
     if (typeof reference === "function") {
       const ref = reference();
-      const localRefs = ref.columns.map((column): string => `table.${props.get(column.name)}`).join(", ");
+      const localRefs = ref.columns
+        .map((column): string => {
+          const prop = props.get(column.name);
+          if (prop === undefined) throw new Error(`Local column property not found for ${column.name}`);
+          return codeProperty("table", prop);
+        })
+        .join(", ");
       const foreignProps = propByDbName(ref.foreignTable);
       const foreignTable = varFor(ref.foreignTable);
-      const foreignReference = ref.foreignTable === table ? "table" : foreignTable;
+      const foreignReference = ref.foreignTable === table ? "table" : `${codeProperty("pgSchema", foreignTable)}!`;
       const foreignRefs = ref.foreignColumns
-        .map((column): string => `${foreignReference}.${foreignProps.get(column.name)}`)
+        .map((column): string => {
+          const prop = foreignProps.get(column.name);
+          if (prop === undefined) throw new Error(`Foreign column property not found for ${column.name}`);
+          return codeProperty(foreignReference, prop);
+        })
         .join(", ");
       const onDelete = (item as { _onDelete?: string })._onDelete;
       const onUpdate = (item as { _onUpdate?: string })._onUpdate;
       const actions = [
-        onDelete === undefined ? "" : `.onDelete(${JSON.stringify(onDelete)})`,
-        onUpdate === undefined ? "" : `.onUpdate(${JSON.stringify(onUpdate)})`,
+        onDelete === undefined ? "" : `.onDelete(${schemaCodeLiteral(onDelete)})`,
+        onUpdate === undefined ? "" : `.onUpdate(${schemaCodeLiteral(onUpdate)})`,
       ].join("");
       entries.push(
-        `foreignKey({ columns: [${localRefs}], foreignColumns: [${foreignRefs}], name: ${JSON.stringify(ref.name)} })${actions}`,
+        `foreignKey({ columns: [${localRefs}], foreignColumns: [${foreignRefs}], name: ${schemaCodeLiteral(ref.name)} })${actions}`,
       );
       continue;
     }
@@ -193,9 +212,15 @@ function renderExtras(table: Table, props: Map<string, string>): string[] {
       // parameter: the export const is not yet initialized while pgTable()
       // evaluates the config callback.
       const columns = (config.columns as Column[] | undefined) ?? [];
-      const refs = columns.map((column): string => `table.${props.get(column.name)}`).join(", ");
+      const refs = columns
+        .map((column): string => {
+          const prop = props.get(column.name);
+          if (prop === undefined) throw new Error(`Index column property not found for ${column.name}`);
+          return codeProperty("table", prop);
+        })
+        .join(", ");
       const fn = config.unique === true ? "uniqueIndex" : "index";
-      let line = `${fn}(${JSON.stringify(config.name)}).on(${refs})`;
+      let line = `${fn}(${schemaCodeLiteral(config.name)}).on(${refs})`;
       const where = config.where;
       if (where !== undefined) {
         const override = PARTIAL_INDEX_OVERRIDES[config.name];
@@ -210,16 +235,24 @@ function renderExtras(table: Table, props: Map<string, string>): string[] {
     if (Array.isArray((item as { columns?: unknown }).columns)) {
       // Composite primary key.
       const columns = (item as { columns: Column[]; name?: string }).columns;
-      const refs = columns.map((column): string => `table.${props.get(column.name)}`).join(", ");
+      const refs = columns
+        .map((column): string => {
+          const prop = props.get(column.name);
+          if (prop === undefined) throw new Error(`Primary-key column property not found for ${column.name}`);
+          return codeProperty("table", prop);
+        })
+        .join(", ");
       const name = (item as { name?: string }).name;
       entries.push(
         name !== undefined
-          ? `primaryKey({ name: ${JSON.stringify(name)}, columns: [${refs}] })`
+          ? `primaryKey({ name: ${schemaCodeLiteral(name)}, columns: [${refs}] })`
           : `primaryKey({ columns: [${refs}] })`,
       );
       continue;
     }
-    throw new Error(`Unsupported extra config on ${String(table[NAME])}: ${String((item as { constructor?: { name?: string } }).constructor?.name)}`);
+    throw new Error(
+      `Unsupported extra config on ${String(table[NAME])}: ${String((item as { constructor?: { name?: string } }).constructor?.name)}`,
+    );
   }
   return entries;
 }
@@ -230,7 +263,7 @@ lines.push("// AUTO-GENERATED by scripts/generate-pg-schema.ts — DO NOT EDIT."
 lines.push("// Static pg-core mirror of ./schema-sqlite for drizzle-kit migration");
 lines.push("// generation. The runtime mirror (db/pg-convert.ts) is the app's pg");
 lines.push("// schema; tests/db/schema-parity.test.ts asserts the two never drift.");
-lines.push("import { sql } from \"drizzle-orm\";");
+lines.push('import { sql } from "drizzle-orm";');
 lines.push("import {");
 lines.push("  bigint,");
 lines.push("  boolean,");
@@ -241,21 +274,25 @@ lines.push("  pgTable,");
 lines.push("  primaryKey,");
 lines.push("  text,");
 lines.push("  uniqueIndex,");
-lines.push("} from \"drizzle-orm/pg-core\";");
-lines.push("import * as sqliteSchema from \"./schema-sqlite\";");
+lines.push('} from "drizzle-orm/pg-core";');
+lines.push('import * as sqliteSchema from "./schema-sqlite";');
+lines.push("");
+lines.push("const pgSchema: Record<string, Record<string, any>> = {};");
 lines.push("");
 
 for (const [tableVar, table] of tables) {
   const props = propByDbName(table);
   const fks = fksByColumn(table);
   const columnLines = Object.entries(table[COLUMNS]).map(
-    ([prop, column]): string => `    ${prop}: ${columnBuilder(column, tableVar, props, fks.get(column.name) ?? null)},`,
+    ([prop, column]): string =>
+      `    ${schemaCodeLiteral(prop)}: ${columnBuilder(column, tableVar, props, fks.get(column.name) ?? null)},`,
   );
   const extras = renderExtras(table, props);
   const configBlock = extras.length > 0 ? `, (table) => [\n    ${extras.join(",\n    ")},\n  ]` : "";
-  lines.push(`export const ${tableVar} = pgTable(${JSON.stringify(table[NAME])}, {`);
+  lines.push(`export const ${tableVar} = pgTable(${schemaCodeLiteral(table[NAME])}, {`);
   lines.push(...columnLines);
   lines.push(`}${configBlock});`);
+  lines.push(`${codeProperty("pgSchema", tableVar)} = ${tableVar};`);
   lines.push("");
 }
 

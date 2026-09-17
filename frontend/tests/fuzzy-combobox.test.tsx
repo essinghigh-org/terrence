@@ -13,7 +13,9 @@ const OPTIONS = [
   { id: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro", hint: "1M ctx" },
 ] as const;
 
-const noop = (): void => { /* no-op */ };
+const noop = (): void => {
+  /* no-op */
+};
 
 test("fuzzyScore: subsequence match scores higher when chars are consecutive and early", () => {
   expect(fuzzyScore("", "anything")).toBe(1);
@@ -29,9 +31,7 @@ test("fuzzyScore: subsequence match scores higher when chars are consecutive and
 });
 
 test("combobox filters options by fuzzy query", () => {
-  const view = render(
-    <FuzzyCombobox value="" options={OPTIONS} onSelect={noop} placeholder="Pick" />,
-  );
+  const view = render(<FuzzyCombobox value="" options={OPTIONS} onSelect={noop} placeholder="Pick" />);
   const input = view.getByRole("combobox");
   fireEvent.focus(input);
   fireEvent.input(input, { target: { value: "openr" } });
@@ -44,7 +44,14 @@ test("combobox filters options by fuzzy query", () => {
 test("combobox commits a selected option", () => {
   let selected = "";
   const view = render(
-    <FuzzyCombobox value="" options={OPTIONS} onSelect={(value: string): void => { selected = value; }} placeholder="Pick" />,
+    <FuzzyCombobox
+      value=""
+      options={OPTIONS}
+      onSelect={(value: string): void => {
+        selected = value;
+      }}
+      placeholder="Pick"
+    />,
   );
   const input = view.getByRole("combobox");
   fireEvent.focus(input);
@@ -56,7 +63,14 @@ test("combobox commits a selected option", () => {
 test("combobox allows custom free-text values via the Use row", () => {
   let selected = "";
   const view = render(
-    <FuzzyCombobox value="" options={OPTIONS} onSelect={(value: string): void => { selected = value; }} placeholder="Pick" />,
+    <FuzzyCombobox
+      value=""
+      options={OPTIONS}
+      onSelect={(value: string): void => {
+        selected = value;
+      }}
+      placeholder="Pick"
+    />,
   );
   const input = view.getByRole("combobox");
   fireEvent.focus(input);
@@ -66,19 +80,15 @@ test("combobox allows custom free-text values via the Use row", () => {
 });
 
 test("combobox shows the selected label when closed", () => {
-  const view = render(
-    <FuzzyCombobox value="openai" options={OPTIONS} onSelect={noop} />,
-  );
-// SAFETY: the component renders this element type for the queried role/label.
+  const view = render(<FuzzyCombobox value="openai" options={OPTIONS} onSelect={noop} />);
+  // SAFETY: the component renders this element type for the queried role/label.
   const input = view.getByRole("combobox") as HTMLInputElement;
   expect(input.value).toBe("OpenAI");
 });
 
 test("combobox keeps the selected label visible when focused", () => {
-  const view = render(
-    <FuzzyCombobox value="openai" options={OPTIONS} onSelect={noop} />,
-  );
-// SAFETY: the component renders this element type for the queried role/label.
+  const view = render(<FuzzyCombobox value="openai" options={OPTIONS} onSelect={noop} />);
+  // SAFETY: the component renders this element type for the queried role/label.
   const input = view.getByRole("combobox") as HTMLInputElement;
   fireEvent.focus(input);
   expect(input.value).toBe("OpenAI");
@@ -91,7 +101,7 @@ test("combobox exposes a stable labelled list relationship", () => {
       <FuzzyCombobox id="provider-picker" name="provider" value="" options={OPTIONS} onSelect={noop} />
     </>,
   );
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const input = view.getByRole("combobox") as HTMLInputElement;
   expect(input.id).toBe("provider-picker");
   expect(input.name).toBe("provider");
@@ -102,7 +112,14 @@ test("combobox exposes a stable labelled list relationship", () => {
 test("combobox keyboard navigation selects with Enter", () => {
   let selected = "";
   const view = render(
-    <FuzzyCombobox value="" options={OPTIONS} onSelect={(value: string): void => { selected = value; }} placeholder="Pick" />,
+    <FuzzyCombobox
+      value=""
+      options={OPTIONS}
+      onSelect={(value: string): void => {
+        selected = value;
+      }}
+      placeholder="Pick"
+    />,
   );
   const input = view.getByRole("combobox");
   fireEvent.focus(input);
@@ -112,9 +129,7 @@ test("combobox keyboard navigation selects with Enter", () => {
 });
 
 test("combobox closes on Escape and clears the query", () => {
-  const view = render(
-    <FuzzyCombobox value="" options={OPTIONS} onSelect={noop} placeholder="Pick" />,
-  );
+  const view = render(<FuzzyCombobox value="" options={OPTIONS} onSelect={noop} placeholder="Pick" />);
   const input = view.getByRole("combobox");
   fireEvent.focus(input);
   fireEvent.input(input, { target: { value: "openr" } });

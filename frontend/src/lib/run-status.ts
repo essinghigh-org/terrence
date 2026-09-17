@@ -7,7 +7,12 @@ import { isString } from "./type-guards";
  */
 export type RunStageId = "queue" | "plan" | "checks" | "apply";
 export type RunOutcome = "queued" | "running" | "waiting" | "succeeded" | "failed" | "canceled" | "discarded";
-export type RunWaitingReason = "workspace-queue" | "agent-capacity" | "scheduled-start" | "human-approval" | "policy-override";
+export type RunWaitingReason =
+  | "workspace-queue"
+  | "agent-capacity"
+  | "scheduled-start"
+  | "human-approval"
+  | "policy-override";
 
 export type RunDisplayInput = Readonly<{
   status: string;
@@ -40,10 +45,22 @@ const STAGE_LABELS: Readonly<Record<RunStageId, string>> = {
 
 const QUEUED_STATUSES = new Set(["pending", "queuing", "plan_queued", "confirmed", "apply_queued"]);
 const RUNNING_STATUSES = new Set([
-  "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed", "planning",
-  "cost_estimating", "cost_estimated", "policy_checking", "policy_checked",
-  "post_plan_running", "post_plan_completed", "pre_apply_running", "pre_apply_completed",
-  "applying", "post_apply_running", "post_apply_completed",
+  "fetching",
+  "fetching_completed",
+  "pre_plan_running",
+  "pre_plan_completed",
+  "planning",
+  "cost_estimating",
+  "cost_estimated",
+  "policy_checking",
+  "policy_checked",
+  "post_plan_running",
+  "post_plan_completed",
+  "pre_apply_running",
+  "pre_apply_completed",
+  "applying",
+  "post_apply_running",
+  "post_apply_completed",
 ]);
 const HUMAN_WAIT_STATUSES = new Set(["planned", "needs_confirmation", "planned_and_saved"]);
 const POLICY_WAIT_STATUSES = new Set(["policy_soft_failed", "policy_override"]);
@@ -57,8 +74,33 @@ function timestampValue(input: RunDisplayInput, key: string): string | null {
 }
 
 const STAGE_STATUS_GROUPS: readonly Readonly<{ stage: RunStageId; statuses: ReadonlySet<string> }>[] = [
-  { stage: "checks", statuses: new Set(["cost_estimating", "cost_estimated", "policy_checking", "policy_override", "policy_soft_failed", "policy_checked", "policy_hard_failed", "post_plan_running", "post_plan_completed"]) },
-  { stage: "apply", statuses: new Set(["confirmed", "apply_queued", "pre_apply_running", "pre_apply_completed", "applying", "post_apply_running", "post_apply_completed", "applied"]) },
+  {
+    stage: "checks",
+    statuses: new Set([
+      "cost_estimating",
+      "cost_estimated",
+      "policy_checking",
+      "policy_override",
+      "policy_soft_failed",
+      "policy_checked",
+      "policy_hard_failed",
+      "post_plan_running",
+      "post_plan_completed",
+    ]),
+  },
+  {
+    stage: "apply",
+    statuses: new Set([
+      "confirmed",
+      "apply_queued",
+      "pre_apply_running",
+      "pre_apply_completed",
+      "applying",
+      "post_apply_running",
+      "post_apply_completed",
+      "applied",
+    ]),
+  },
   { stage: "plan", statuses: new Set(["pre_plan_running", "pre_plan_completed", "planning"]) },
 ];
 
@@ -67,7 +109,8 @@ function stageForTimestamps(input: RunDisplayInput): RunStageId {
   // useful answer about where an interrupted run stopped.
   const timestamps = input["status-timestamps"] ?? {};
   if (timestampValue(input, "applied-at") !== null || timestampValue(input, "applying-at") !== null) return "apply";
-  if (timestampValue(input, "policy-checking-at") !== null || timestampValue(input, "cost-estimating-at") !== null) return "checks";
+  if (timestampValue(input, "policy-checking-at") !== null || timestampValue(input, "cost-estimating-at") !== null)
+    return "checks";
   if (timestampValue(input, "planning-at") !== null || timestampValue(input, "planned-at") !== null) return "plan";
   if (Object.keys(timestamps).length > 0) return "plan";
   return "queue";
@@ -86,7 +129,8 @@ function stageForStatus(input: RunDisplayInput): RunStageId {
 }
 
 function waitingReasonForExplicitReason(explicit: string | null | undefined): RunWaitingReason | null {
-  if (explicit === "workspace" || explicit === "workspace-queue" || explicit === "serialization") return "workspace-queue";
+  if (explicit === "workspace" || explicit === "workspace-queue" || explicit === "serialization")
+    return "workspace-queue";
   if (explicit === "agent" || explicit === "agent-capacity" || explicit === "agent_pool") return "agent-capacity";
   if (explicit === "scheduled" || explicit === "scheduled-start") return "scheduled-start";
   if (explicit === "approval" || explicit === "human-approval") return "human-approval";
@@ -159,7 +203,8 @@ function waitingLabelFor(reason: RunWaitingReason | null, input: RunDisplayInput
 function startedAtFor(input: RunDisplayInput, stage: RunStageId): string | null {
   if (stage === "queue") return timestampValue(input, "pending-at");
   if (stage === "plan") return timestampValue(input, "pre-plan-running-at") ?? timestampValue(input, "planning-at");
-  if (stage === "checks") return timestampValue(input, "cost-estimating-at") ?? timestampValue(input, "policy-checking-at");
+  if (stage === "checks")
+    return timestampValue(input, "cost-estimating-at") ?? timestampValue(input, "policy-checking-at");
   return timestampValue(input, "confirmed-at") ?? timestampValue(input, "applying-at");
 }
 
@@ -167,7 +212,7 @@ function finishedAtFor(input: RunDisplayInput, outcome: RunOutcome, stage: RunSt
   if (outcome === "succeeded") {
     return stage === "apply"
       ? timestampValue(input, "applied-at")
-      : timestampValue(input, "planned-at") ?? timestampValue(input, "planned-and-finished-at");
+      : (timestampValue(input, "planned-at") ?? timestampValue(input, "planned-and-finished-at"));
   }
   if (outcome === "failed") {
     return timestampValue(input, "errored-at") ?? timestampValue(input, "unreachable-at");
@@ -227,13 +272,19 @@ export type PhaseState = "pending" | "queued" | "running" | "finished" | "errore
 
 export function phaseTone(state: string): RunTone {
   switch (state) {
-    case "finished": return "success";
-    case "running": return "active";
-    case "queued": return "neutral";
+    case "finished":
+      return "success";
+    case "running":
+      return "active";
+    case "queued":
+      return "neutral";
     case "errored":
-    case "unreachable": return "danger";
-    case "canceled": return "neutral";
-    default: return "neutral";
+    case "unreachable":
+      return "danger";
+    case "canceled":
+      return "neutral";
+    default:
+      return "neutral";
   }
 }
 
@@ -263,7 +314,8 @@ function applyPhaseStatus(
   if (["applying", "post_apply_running"].includes(status)) return "running";
   if (["confirmed", "apply_queued", "pre_apply_running", "pre_apply_completed"].includes(status)) return "queued";
   if (artifactStatus === "finished" || isString(timestamps["applied-at"])) return "finished";
-  if (["errored", "failed", "unreachable"].includes(status)) return applyStarted ? "errored" : artifactStatus ?? "pending";
+  if (["errored", "failed", "unreachable"].includes(status))
+    return applyStarted ? "errored" : (artifactStatus ?? "pending");
   if (["canceled", "discarded", "force_canceled"].includes(status)) return applyStarted ? "canceled" : "pending";
   return artifactStatus ?? "pending";
 }
@@ -276,29 +328,32 @@ function planPhaseStatus(
 ): string {
   if (status === "planning") return "running";
   if (["queuing", "plan_queued", "pre_plan_running", "pre_plan_completed"].includes(status)) return "queued";
-  if ([
-    "planned",
-    "needs_confirmation",
-    "policy_hard_failed",
-    "pre_apply_running",
-    "pre_apply_completed",
-    "post_apply_running",
-    "post_apply_completed",
-    "cost_estimating",
-    "cost_estimated",
-    "policy_checking",
-    "policy_override",
-    "policy_checked",
-    "policy_soft_failed",
-    "post_plan_running",
-    "post_plan_completed",
-    "planned_and_finished",
-    "planned_and_saved",
-    "confirmed",
-    "apply_queued",
-    "applying",
-    "applied",
-  ].includes(status)) return "finished";
+  if (
+    [
+      "planned",
+      "needs_confirmation",
+      "policy_hard_failed",
+      "pre_apply_running",
+      "pre_apply_completed",
+      "post_apply_running",
+      "post_apply_completed",
+      "cost_estimating",
+      "cost_estimated",
+      "policy_checking",
+      "policy_override",
+      "policy_checked",
+      "policy_soft_failed",
+      "post_plan_running",
+      "post_plan_completed",
+      "planned_and_finished",
+      "planned_and_saved",
+      "confirmed",
+      "apply_queued",
+      "applying",
+      "applied",
+    ].includes(status)
+  )
+    return "finished";
   if (["errored", "failed", "unreachable"].includes(status)) return planFinished ? "finished" : "errored";
   if (["canceled", "discarded", "force_canceled"].includes(status)) {
     return planFinished ? "finished" : planStarted ? "canceled" : "pending";
@@ -314,12 +369,14 @@ export function resolvePhaseStatus(
   artifactStatus?: string,
 ): string {
   const planStarted = isString(timestamps["planning-at"]) || isString(timestamps["pre-plan-running-at"]);
-  const planFinished = artifactStatus === "finished" && phase === "plan"
-    || isString(timestamps["planned-at"])
-    || isString(timestamps["planned-and-finished-at"])
-    || isString(timestamps["planned-and-saved-at"]);
-  const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
-    .some((key: string): boolean => isString(timestamps[key]));
+  const planFinished =
+    (artifactStatus === "finished" && phase === "plan") ||
+    isString(timestamps["planned-at"]) ||
+    isString(timestamps["planned-and-finished-at"]) ||
+    isString(timestamps["planned-and-saved-at"]);
+  const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"].some((key: string): boolean =>
+    isString(timestamps[key]),
+  );
   if (phase === "apply") {
     return applyPhaseStatus(status, timestamps, artifactStatus, applyStarted);
   }

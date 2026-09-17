@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { db } from "../../src/db";
 import {
-  organizations, policyChecks, policies, policySetParameters, policySets, policySetWorkspaces, runs, workspaces,
+  organizations,
+  policyChecks,
+  policies,
+  policySetParameters,
+  policySets,
+  policySetWorkspaces,
+  runs,
+  workspaces,
 } from "../../src/db/schema";
 import { probePolicyEngine, redactSecrets, runPolicyChecks, splitSentinelParams } from "../../src/worker";
 import { variableValueForWrite } from "../../src/lib/variable-crypto";
@@ -98,10 +105,44 @@ main = rule { secret_word == "s3cret" }
       { id: `psw-poleng-senparam-${suffix}`, policySetId: senParamSetId, workspaceId: senWsId },
     ]);
     await db.insert(policies).values([
-      { id: opaPassId, orgId, policySetId: opaSetId, name: "opa-pass", kind: "opa", enforcementLevel: "advisory", query: "data.terrence", source: OPA_PASS_REGO },
-      { id: opaFailId, orgId, policySetId: opaSetId, name: "opa-fail", kind: "opa", enforcementLevel: "hard-mandatory", query: "data.terrence", source: OPA_FAIL_REGO },
-      { id: senPassId, orgId, policySetId: sentinelSetId, name: "sen-pass", kind: "sentinel", enforcementLevel: "advisory", source: SENTINEL_PASS },
-      { id: senParamId, orgId, policySetId: senParamSetId, name: "sen-param", kind: "sentinel", enforcementLevel: "advisory", source: SENTINEL_PARAM },
+      {
+        id: opaPassId,
+        orgId,
+        policySetId: opaSetId,
+        name: "opa-pass",
+        kind: "opa",
+        enforcementLevel: "advisory",
+        query: "data.terrence",
+        source: OPA_PASS_REGO,
+      },
+      {
+        id: opaFailId,
+        orgId,
+        policySetId: opaSetId,
+        name: "opa-fail",
+        kind: "opa",
+        enforcementLevel: "hard-mandatory",
+        query: "data.terrence",
+        source: OPA_FAIL_REGO,
+      },
+      {
+        id: senPassId,
+        orgId,
+        policySetId: sentinelSetId,
+        name: "sen-pass",
+        kind: "sentinel",
+        enforcementLevel: "advisory",
+        source: SENTINEL_PASS,
+      },
+      {
+        id: senParamId,
+        orgId,
+        policySetId: senParamSetId,
+        name: "sen-param",
+        kind: "sentinel",
+        enforcementLevel: "advisory",
+        source: SENTINEL_PARAM,
+      },
     ]);
     // Sensitive parameter stored encrypted at rest; the worker must deliver
     // it via the config file, never argv (CWE-200).
@@ -118,14 +159,38 @@ main = rule { secret_word == "s3cret" }
   });
 
   afterAll(async () => {
-    await db.delete(policyChecks).where(inArray(policyChecks.runId, [opaRunId, senRunId])).catch((): void => undefined);
-    await db.delete(policySetParameters).where(inArray(policySetParameters.policySetId, [senParamSetId])).catch((): void => undefined);
-    await db.delete(policies).where(inArray(policies.id, [opaPassId, opaFailId, senPassId, senParamId])).catch((): void => undefined);
-    await db.delete(policySetWorkspaces).where(inArray(policySetWorkspaces.workspaceId, [opaWsId, senWsId])).catch((): void => undefined);
-    await db.delete(policySets).where(inArray(policySets.id, [opaSetId, sentinelSetId, senParamSetId])).catch((): void => undefined);
-    await db.delete(runs).where(inArray(runs.id, [opaRunId, senRunId])).catch((): void => undefined);
-    await db.delete(workspaces).where(inArray(workspaces.id, [opaWsId, senWsId])).catch((): void => undefined);
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
+    await db
+      .delete(policyChecks)
+      .where(inArray(policyChecks.runId, [opaRunId, senRunId]))
+      .catch((): void => undefined);
+    await db
+      .delete(policySetParameters)
+      .where(inArray(policySetParameters.policySetId, [senParamSetId]))
+      .catch((): void => undefined);
+    await db
+      .delete(policies)
+      .where(inArray(policies.id, [opaPassId, opaFailId, senPassId, senParamId]))
+      .catch((): void => undefined);
+    await db
+      .delete(policySetWorkspaces)
+      .where(inArray(policySetWorkspaces.workspaceId, [opaWsId, senWsId]))
+      .catch((): void => undefined);
+    await db
+      .delete(policySets)
+      .where(inArray(policySets.id, [opaSetId, sentinelSetId, senParamSetId]))
+      .catch((): void => undefined);
+    await db
+      .delete(runs)
+      .where(inArray(runs.id, [opaRunId, senRunId]))
+      .catch((): void => undefined);
+    await db
+      .delete(workspaces)
+      .where(inArray(workspaces.id, [opaWsId, senWsId]))
+      .catch((): void => undefined);
+    await db
+      .delete(organizations)
+      .where(eq(organizations.id, orgId))
+      .catch((): void => undefined);
   });
 
   it("probe reports a missing engine with install guidance", async () => {
@@ -163,7 +228,7 @@ main = rule { secret_word == "s3cret" }
         expect(await probePolicyEngine("opa")).toEqual({ path: exePath });
       });
       await withEnv("OPA_BINARY_PATH", inertPath, async () => {
-        expect("missing" in await probePolicyEngine("opa")).toBe(true);
+        expect("missing" in (await probePolicyEngine("opa"))).toBe(true);
       });
     } finally {
       await rm(dir, { recursive: true, force: true });

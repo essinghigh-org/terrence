@@ -93,26 +93,40 @@ function pullRequestPayload(): Record<string, unknown> {
 
 async function generateSignature(payload: string): Promise<string> {
   const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey("raw", encoder.encode("test-secret"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode("test-secret"),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
   const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
   return `sha256=${Buffer.from(signature).toString("hex")}`;
 }
 
-async function sendWebhook(eventName: string, payload: Readonly<Record<string, unknown>>, deliveryId = crypto.randomUUID()): Promise<Response> {
+async function sendWebhook(
+  eventName: string,
+  payload: Readonly<Record<string, unknown>>,
+  deliveryId = crypto.randomUUID(),
+): Promise<Response> {
   const rawPayload = JSON.stringify(payload);
-  return app.handle(new Request("http://127.0.0.1/api/webhooks/github", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-github-delivery": deliveryId,
-      "x-github-event": eventName,
-      "x-hub-signature-256": await generateSignature(rawPayload),
-    },
-    body: rawPayload,
-  }));
+  return app.handle(
+    new Request("http://127.0.0.1/api/webhooks/github", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-github-delivery": deliveryId,
+        "x-github-event": eventName,
+        "x-hub-signature-256": await generateSignature(rawPayload),
+      },
+      body: rawPayload,
+    }),
+  );
 }
 
-async function waitForRuns(predicate: (runList: readonly (typeof runs.$inferSelect)[]) => boolean): Promise<readonly (typeof runs.$inferSelect)[]> {
+async function waitForRuns(
+  predicate: (runList: readonly (typeof runs.$inferSelect)[]) => boolean,
+): Promise<readonly (typeof runs.$inferSelect)[]> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
     const runList = await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) });
@@ -143,7 +157,9 @@ async function waitForCommitStatus(): Promise<Record<string, unknown> | undefine
   return commitStatuses.at(-1);
 }
 
-async function waitForCommitStatusMatching(predicate: (status: Record<string, unknown>) => boolean): Promise<Record<string, unknown> | undefined> {
+async function waitForCommitStatusMatching(
+  predicate: (status: Record<string, unknown>) => boolean,
+): Promise<Record<string, unknown> | undefined> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
     const status = commitStatuses.find(predicate);
@@ -173,7 +189,9 @@ describe("GitHub Webhooks", () => {
         const page = new URL(url).searchParams.get("page");
         if (page === "2") return Response.json([{ filename: "src/main.tf" }]);
         return Response.json([{ filename: "docs/readme.md" }], {
-          headers: { Link: '<https://api.github.com/repos/hashicorp/terraform/pulls/42/files?per_page=100&page=2>; rel="next"' },
+          headers: {
+            Link: '<https://api.github.com/repos/hashicorp/terraform/pulls/42/files?per_page=100&page=2>; rel="next"',
+          },
         });
       }
       if (url.endsWith("/repos/hashicorp/terraform")) return Response.json({ default_branch: defaultBranchResponse });
@@ -184,11 +202,15 @@ describe("GitHub Webhooks", () => {
       if (url.includes("/tarball/")) {
         tarballFetches += 1;
         tarballRequests.push({ url, authorization: new Headers(init?.headers).get("authorization") });
-        if (redirectTarball) return new Response(null, { status: 302, headers: { Location: "https://codeload.example/hashicorp/terraform.tar.gz" } });
+        if (redirectTarball)
+          return new Response(null, {
+            status: 302,
+            headers: { Location: "https://codeload.example/hashicorp/terraform.tar.gz" },
+          });
         return new Response(new Uint8Array([1, 2, 3]));
       }
       if (url.includes("/statuses/")) {
-        const body = typeof init?.body === "string" ? JSON.parse(init.body) as unknown : {};
+        const body = typeof init?.body === "string" ? (JSON.parse(init.body) as unknown) : {};
         if (body !== null && typeof body === "object" && !Array.isArray(body)) {
           commitStatuses.push(body as Record<string, unknown>);
         }
@@ -258,7 +280,8 @@ describe("GitHub Webhooks", () => {
     await db.delete(organizations).where(eq(organizations.id, crossOrgId));
     await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
     await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
-    await db.update(workspaces)
+    await db
+      .update(workspaces)
       .set({
         speculativeEnabled: true,
         queueAllRuns: true,
@@ -267,10 +290,13 @@ describe("GitHub Webhooks", () => {
         vcsRepo: { identifier: "hashicorp/terraform", branch: "main", githubAppInstallationId: installationId },
       })
       .where(eq(workspaces.id, workspaceId));
-    await db.update(organizations).set({
-      aggregatedCommitStatusEnabled: true,
-      sendPassingStatusesForUntriggeredSpeculativePlans: false,
-    }).where(eq(organizations.id, orgId));
+    await db
+      .update(organizations)
+      .set({
+        aggregatedCommitStatusEnabled: true,
+        sendPassingStatusesForUntriggeredSpeculativePlans: false,
+      })
+      .where(eq(organizations.id, orgId));
   });
 
   afterAll(async () => {
@@ -296,43 +322,47 @@ describe("GitHub Webhooks", () => {
   });
 
   test("organization owners can register and use a scoped installation", async () => {
-    const registerResponse = await app.handle(new Request(`http://127.0.0.1/api/v2/organizations/${orgName}/github-app/installations`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-        "Content-Type": "application/vnd.api+json",
-      },
-      body: JSON.stringify({
-        data: {
-          type: "github-app-installations",
-          attributes: { name: "secondary-installation", "installation-id": 67890 },
+    const registerResponse = await app.handle(
+      new Request(`http://127.0.0.1/api/v2/organizations/${orgName}/github-app/installations`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/vnd.api+json",
         },
+        body: JSON.stringify({
+          data: {
+            type: "github-app-installations",
+            attributes: { name: "secondary-installation", "installation-id": 67890 },
+          },
+        }),
       }),
-    }));
+    );
     expect(registerResponse.status).toBe(201);
-    const registered = await registerResponse.json() as { data: { id: string } };
+    const registered = (await registerResponse.json()) as { data: { id: string } };
 
-    const createWorkspaceResponse = await app.handle(new Request(`http://127.0.0.1/api/v2/organizations/${orgName}/workspaces`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-        "Content-Type": "application/vnd.api+json",
-      },
-      body: JSON.stringify({
-        data: {
-          type: "workspaces",
-          attributes: {
-            name: "scoped-installation-workspace",
-            "vcs-repo": {
-              identifier: "hashicorp/terraform",
-              "github-app-installation-id": registered.data.id,
+    const createWorkspaceResponse = await app.handle(
+      new Request(`http://127.0.0.1/api/v2/organizations/${orgName}/workspaces`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({
+          data: {
+            type: "workspaces",
+            attributes: {
+              name: "scoped-installation-workspace",
+              "vcs-repo": {
+                identifier: "hashicorp/terraform",
+                "github-app-installation-id": registered.data.id,
+              },
             },
           },
-        },
+        }),
       }),
-    }));
+    );
     expect(createWorkspaceResponse.status).toBe(201);
-    const workspaceResponse = await createWorkspaceResponse.json() as {
+    const workspaceResponse = (await createWorkspaceResponse.json()) as {
       data: { attributes: { "vcs-repo": { "github-app-installation-id": string } } };
     };
     expect(workspaceResponse.data.attributes["vcs-repo"]["github-app-installation-id"]).toBe(registered.data.id);
@@ -340,23 +370,27 @@ describe("GitHub Webhooks", () => {
   });
 
   test("missing signature returns 401 when secret is configured", async () => {
-    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/github", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    }));
+    const response = await app.handle(
+      new Request("http://127.0.0.1/api/webhooks/github", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+    );
     expect(response.status).toBe(401);
   });
 
   test("invalid signature is rejected", async () => {
-    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/github", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/vnd.api+json",
-        "x-hub-signature-256": "sha256=invalid",
-      },
-      body: JSON.stringify({ test: "data" }),
-    }));
+    const response = await app.handle(
+      new Request("http://127.0.0.1/api/webhooks/github", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "x-hub-signature-256": "sha256=invalid",
+        },
+        body: JSON.stringify({ test: "data" }),
+      }),
+    );
     expect(response.status).toBe(401);
   });
 
@@ -370,23 +404,29 @@ describe("GitHub Webhooks", () => {
     if (run === undefined) return;
     expect(run.id).toMatch(/^run-[a-f0-9]{14}$/);
     expect(run.id).toHaveLength(18);
-    expect(run.configurationVersionId).toMatch(/^cv-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+    expect(run.configurationVersionId).toMatch(
+      /^cv-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/,
+    );
     expect(run.message).toBe("Update Terraform");
     expect(run.createdBy).toBeNull();
-    const runResponse = await app.handle(new Request(`http://127.0.0.1/api/v2/runs/${run.id}`, {
-      headers: { Authorization: `Bearer ${authToken}` },
-    }));
-    const runDocument = await runResponse.json() as {
+    const runResponse = await app.handle(
+      new Request(`http://127.0.0.1/api/v2/runs/${run.id}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      }),
+    );
+    const runDocument = (await runResponse.json()) as {
       data: { attributes: Record<string, unknown> };
     };
     expect(runDocument.data.attributes).toMatchObject({
       "triggered-by": "octocat",
       "triggered-by-avatar-url": expect.stringMatching(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/),
     });
-    const eventResponse = await app.handle(new Request(`http://127.0.0.1/api/v2/runs/${run.id}/run-events`, {
-      headers: { Authorization: `Bearer ${authToken}` },
-    }));
-    const eventDocument = await eventResponse.json() as {
+    const eventResponse = await app.handle(
+      new Request(`http://127.0.0.1/api/v2/runs/${run.id}/run-events`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      }),
+    );
+    const eventDocument = (await eventResponse.json()) as {
       data: { attributes: Record<string, unknown> }[];
     };
     expect(eventDocument.data[0]?.attributes).toMatchObject({
@@ -415,10 +455,12 @@ describe("GitHub Webhooks", () => {
     const run = runList.find((item): boolean => item.workspaceId === workspaceId && !item.planOnly);
     expect(run).toBeDefined();
     if (run === undefined) return;
-    const runResponse = await app.handle(new Request(`http://127.0.0.1/api/v2/runs/${run.id}`, {
-      headers: { Authorization: `Bearer ${authToken}` },
-    }));
-    const runDocument = await runResponse.json() as { data: { attributes: Record<string, unknown> } };
+    const runResponse = await app.handle(
+      new Request(`http://127.0.0.1/api/v2/runs/${run.id}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      }),
+    );
+    const runDocument = (await runResponse.json()) as { data: { attributes: Record<string, unknown> } };
     expect(runDocument.data.attributes["triggered-by"]).toBe("henry");
   });
 
@@ -427,7 +469,9 @@ describe("GitHub Webhooks", () => {
     const nonAggregatedDelivery = crypto.randomUUID();
     await sendWebhook("push", pushPayload, nonAggregatedDelivery);
     await waitForDelivery(nonAggregatedDelivery);
-    expect(await waitForCommitStatusMatching((status): boolean => status["context"] === "terrence/webhook-ws")).toBeDefined();
+    expect(
+      await waitForCommitStatusMatching((status): boolean => status["context"] === "terrence/webhook-ws"),
+    ).toBeDefined();
 
     commitStatuses.length = 0;
     await db.update(organizations).set({ aggregatedCommitStatusEnabled: true }).where(eq(organizations.id, orgId));
@@ -447,7 +491,9 @@ describe("GitHub Webhooks", () => {
     if (run === undefined) return;
     await db.update(runs).set({ status: "errored" }).where(eq(runs.id, run.id));
     await reportRunVcsStatus(run.id, "errored");
-    expect(await waitForCommitStatusMatching((status): boolean => status["state"] === "failure")).toMatchObject({ state: "failure" });
+    expect(await waitForCommitStatusMatching((status): boolean => status["state"] === "failure")).toMatchObject({
+      state: "failure",
+    });
   });
 
   test("matching pull request creates a speculative run", async () => {
@@ -469,16 +515,24 @@ describe("GitHub Webhooks", () => {
   });
 
   test("can pass unaffected pull requests when non-aggregated statuses are enabled", async () => {
-    await db.update(organizations).set({
-      aggregatedCommitStatusEnabled: false,
-      sendPassingStatusesForUntriggeredSpeculativePlans: true,
-    }).where(eq(organizations.id, orgId));
-    await db.update(workspaces).set({ triggerPrefixes: ["infra/"] }).where(eq(workspaces.id, workspaceId));
+    await db
+      .update(organizations)
+      .set({
+        aggregatedCommitStatusEnabled: false,
+        sendPassingStatusesForUntriggeredSpeculativePlans: true,
+      })
+      .where(eq(organizations.id, orgId));
+    await db
+      .update(workspaces)
+      .set({ triggerPrefixes: ["infra/"] })
+      .where(eq(workspaces.id, workspaceId));
     const deliveryId = crypto.randomUUID();
     await sendWebhook("pull_request", pullRequestPayload(), deliveryId);
     await waitForDelivery(deliveryId);
     expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(0);
-    expect(await waitForCommitStatusMatching((status): boolean => status["state"] === "success")).toMatchObject({ state: "success" });
+    expect(await waitForCommitStatusMatching((status): boolean => status["state"] === "success")).toMatchObject({
+      state: "success",
+    });
   });
 
   test("non-matching branch creates no run", async () => {
@@ -490,11 +544,14 @@ describe("GitHub Webhooks", () => {
 
   test("does not retain a stale default-branch decision after cache invalidation", async () => {
     clearDefaultBranchCacheForTests();
-    await db.update(workspaces).set({
-      vcsRepo: { identifier: "hashicorp/terraform", githubAppInstallationId: installationId },
-      fileTriggersEnabled: true,
-      triggerPrefixes: ["src/"],
-    }).where(eq(workspaces.id, workspaceId));
+    await db
+      .update(workspaces)
+      .set({
+        vcsRepo: { identifier: "hashicorp/terraform", githubAppInstallationId: installationId },
+        fileTriggersEnabled: true,
+        triggerPrefixes: ["src/"],
+      })
+      .where(eq(workspaces.id, workspaceId));
     defaultBranchResponse = "main";
     const firstDelivery = crypto.randomUUID();
     await sendWebhook("push", pushPayload, firstDelivery);
@@ -518,20 +575,27 @@ describe("GitHub Webhooks", () => {
   });
 
   test("matching tag regex creates a run and records the tag", async () => {
-    await db.update(workspaces).set({
-      vcsRepo: {
-        identifier: "hashicorp/terraform",
-        branch: "main",
-        githubAppInstallationId: installationId,
-        tagsRegex: "^v\\d+\\.\\d+\\.\\d+$",
-      },
-    }).where(eq(workspaces.id, workspaceId));
+    await db
+      .update(workspaces)
+      .set({
+        vcsRepo: {
+          identifier: "hashicorp/terraform",
+          branch: "main",
+          githubAppInstallationId: installationId,
+          tagsRegex: "^v\\d+\\.\\d+\\.\\d+$",
+        },
+      })
+      .where(eq(workspaces.id, workspaceId));
     const deliveryId = crypto.randomUUID();
-    await sendWebhook("push", {
-      ...pushPayload,
-      ref: "refs/tags/v1.2.3",
-      commits: [{ modified: ["docs/readme.md"] }],
-    }, deliveryId);
+    await sendWebhook(
+      "push",
+      {
+        ...pushPayload,
+        ref: "refs/tags/v1.2.3",
+        commits: [{ modified: ["docs/readme.md"] }],
+      },
+      deliveryId,
+    );
     const runList = await waitForRuns((items): boolean => items.length === 1);
     await waitForDelivery(deliveryId);
     const run = runList[0];
@@ -545,14 +609,17 @@ describe("GitHub Webhooks", () => {
   });
 
   test("tag-triggered workspaces ignore ordinary branch pushes", async () => {
-    await db.update(workspaces).set({
-      vcsRepo: {
-        identifier: "hashicorp/terraform",
-        branch: "main",
-        githubAppInstallationId: installationId,
-        tagsRegex: "^v\\d+\\.\\d+\\.\\d+$",
-      },
-    }).where(eq(workspaces.id, workspaceId));
+    await db
+      .update(workspaces)
+      .set({
+        vcsRepo: {
+          identifier: "hashicorp/terraform",
+          branch: "main",
+          githubAppInstallationId: installationId,
+          tagsRegex: "^v\\d+\\.\\d+\\.\\d+$",
+        },
+      })
+      .where(eq(workspaces.id, workspaceId));
     const deliveryId = crypto.randomUUID();
     await sendWebhook("push", pushPayload, deliveryId);
     await waitForDelivery(deliveryId);
@@ -561,14 +628,17 @@ describe("GitHub Webhooks", () => {
 
   test("non-matching or invalid tag regex creates no run", async () => {
     for (const tagsRegex of ["^release-", "["]) {
-      await db.update(workspaces).set({
-        vcsRepo: {
-          identifier: "hashicorp/terraform",
-          branch: "main",
-          githubAppInstallationId: installationId,
-          tagsRegex,
-        },
-      }).where(eq(workspaces.id, workspaceId));
+      await db
+        .update(workspaces)
+        .set({
+          vcsRepo: {
+            identifier: "hashicorp/terraform",
+            branch: "main",
+            githubAppInstallationId: installationId,
+            tagsRegex,
+          },
+        })
+        .where(eq(workspaces.id, workspaceId));
       const deliveryId = crypto.randomUUID();
       await sendWebhook("push", { ...pushPayload, ref: "refs/tags/v1.2.3" }, deliveryId);
       await waitForDelivery(deliveryId);
@@ -585,32 +655,46 @@ describe("GitHub Webhooks", () => {
 
   test("empty commit on a matching branch creates no run", async () => {
     const deliveryId = crypto.randomUUID();
-    await sendWebhook("push", {
-      ...pushPayload,
-      commits: [{ added: [], modified: [], removed: [] }],
-    }, deliveryId);
+    await sendWebhook(
+      "push",
+      {
+        ...pushPayload,
+        commits: [{ added: [], modified: [], removed: [] }],
+      },
+      deliveryId,
+    );
     await waitForDelivery(deliveryId);
     expect((await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).length).toBe(0);
-    expect((await db.query.configurationVersions.findMany({ where: eq(configurationVersions.workspaceId, workspaceId) })).length).toBe(0);
+    expect(
+      (await db.query.configurationVersions.findMany({ where: eq(configurationVersions.workspaceId, workspaceId) }))
+        .length,
+    ).toBe(0);
     expect(tarballFetches).toBe(0);
     expect(commitStatuses).toHaveLength(0);
   });
 
   test("empty-commit tag push matching the tags regex still creates a run", async () => {
-    await db.update(workspaces).set({
-      vcsRepo: {
-        identifier: "hashicorp/terraform",
-        branch: "main",
-        githubAppInstallationId: installationId,
-        tagsRegex: "^v\\d+\\.\\d+\\.\\d+$",
-      },
-    }).where(eq(workspaces.id, workspaceId));
+    await db
+      .update(workspaces)
+      .set({
+        vcsRepo: {
+          identifier: "hashicorp/terraform",
+          branch: "main",
+          githubAppInstallationId: installationId,
+          tagsRegex: "^v\\d+\\.\\d+\\.\\d+$",
+        },
+      })
+      .where(eq(workspaces.id, workspaceId));
     const deliveryId = crypto.randomUUID();
-    await sendWebhook("push", {
-      ...pushPayload,
-      ref: "refs/tags/v2.3.4",
-      commits: [],
-    }, deliveryId);
+    await sendWebhook(
+      "push",
+      {
+        ...pushPayload,
+        ref: "refs/tags/v2.3.4",
+        commits: [],
+      },
+      deliveryId,
+    );
     const runList = await waitForRuns((items): boolean => items.some((run): boolean => !run.planOnly));
     await waitForDelivery(deliveryId);
     const run = runList.find((item): boolean => item.workspaceId === workspaceId && !item.planOnly);
@@ -621,19 +705,29 @@ describe("GitHub Webhooks", () => {
   });
 
   test("trigger patterns use repository-root glob matching", async () => {
-    await db.update(workspaces).set({ triggerPatterns: ["/**/networking/*.tf"] }).where(eq(workspaces.id, workspaceId));
+    await db
+      .update(workspaces)
+      .set({ triggerPatterns: ["/**/networking/*.tf"] })
+      .where(eq(workspaces.id, workspaceId));
     const deliveryId = crypto.randomUUID();
-    await sendWebhook("push", {
-      ...pushPayload,
-      commits: [{ modified: ["environments/dev/networking/main.tf"] }],
-    }, deliveryId);
+    await sendWebhook(
+      "push",
+      {
+        ...pushPayload,
+        commits: [{ modified: ["environments/dev/networking/main.tf"] }],
+      },
+      deliveryId,
+    );
     const runList = await waitForRuns((items): boolean => items.length === 1);
     await waitForDelivery(deliveryId);
     expect(runList).toHaveLength(1);
   });
 
   test("disabled speculative runs create no pull request run", async () => {
-    await db.update(workspaces).set({ speculativeEnabled: false, queueAllRuns: true }).where(eq(workspaces.id, workspaceId));
+    await db
+      .update(workspaces)
+      .set({ speculativeEnabled: false, queueAllRuns: true })
+      .where(eq(workspaces.id, workspaceId));
     const deliveryId = crypto.randomUUID();
     await sendWebhook("pull_request", pullRequestPayload(), deliveryId);
     await waitForDelivery(deliveryId);
@@ -642,10 +736,7 @@ describe("GitHub Webhooks", () => {
 
   test("duplicate delivery IDs create only one run", async () => {
     const deliveryId = crypto.randomUUID();
-    await Promise.all([
-      sendWebhook("push", pushPayload, deliveryId),
-      sendWebhook("push", pushPayload, deliveryId),
-    ]);
+    await Promise.all([sendWebhook("push", pushPayload, deliveryId), sendWebhook("push", pushPayload, deliveryId)]);
     const runList = await waitForRuns((items): boolean => items.length === 1);
     await waitForDelivery(deliveryId);
     expect(runList).toHaveLength(1);
@@ -665,7 +756,9 @@ describe("GitHub Webhooks", () => {
     await sendWebhook("push", pushPayload, deliveryId);
     await waitForDelivery(deliveryId);
     const runList = await db.query.runs.findMany();
-    expect(runList.filter((run): boolean => run.workspaceId === workspaceId || run.workspaceId === secondWorkspaceId)).toHaveLength(2);
+    expect(
+      runList.filter((run): boolean => run.workspaceId === workspaceId || run.workspaceId === secondWorkspaceId),
+    ).toHaveLength(2);
     expect(tarballFetches).toBe(1);
   });
 
@@ -828,7 +921,9 @@ describe("GitHub Webhooks", () => {
     await sendWebhook("push", { ...pushPayload, installation: { id: 67891 } }, secondaryDeliveryId);
     await waitForDelivery(secondaryDeliveryId);
     const runList = await db.query.runs.findMany();
-    expect(runList.filter((run): boolean => run.workspaceId === workspaceId || run.workspaceId === secondWorkspaceId)).toHaveLength(2);
+    expect(
+      runList.filter((run): boolean => run.workspaceId === workspaceId || run.workspaceId === secondWorkspaceId),
+    ).toHaveLength(2);
     expect(tarballFetches).toBe(2);
     expect(tarballRequests.map((request): string | null => request.authorization).sort()).toEqual([
       "Bearer secondary-token",
@@ -842,16 +937,22 @@ describe("GitHub Webhooks", () => {
     process.env["GITHUB_APP_API_URL"] = enterpriseApiUrl;
     try {
       const deliveryId = crypto.randomUUID();
-      await sendWebhook("push", {
-        ...pushPayload,
-        repository: {
-          ...pushPayload.repository,
-          clone_url: "https://github-enterprise.example/hashicorp/terraform.git",
+      await sendWebhook(
+        "push",
+        {
+          ...pushPayload,
+          repository: {
+            ...pushPayload.repository,
+            clone_url: "https://github-enterprise.example/hashicorp/terraform.git",
+          },
         },
-      }, deliveryId);
+        deliveryId,
+      );
       await waitForDelivery(deliveryId);
       expect(tarballRequests).toHaveLength(1);
-      expect(tarballRequests[0]?.url).toBe(`${enterpriseApiUrl}/repos/hashicorp/terraform/tarball/${pushPayload.after}`);
+      expect(tarballRequests[0]?.url).toBe(
+        `${enterpriseApiUrl}/repos/hashicorp/terraform/tarball/${pushPayload.after}`,
+      );
       expect(tarballRequests[0]?.authorization).toBe("Bearer test-token");
     } finally {
       if (previousApiUrl === undefined) delete process.env["GITHUB_APP_API_URL"];

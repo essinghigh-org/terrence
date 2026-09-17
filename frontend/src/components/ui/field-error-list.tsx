@@ -32,16 +32,15 @@ export function FieldErrorList({
       <ul
         role="alert"
         data-slot="field-error-list"
-        className={cn(
-          "my-1 list-disc space-y-1 text-sm text-destructive pl-5",
-          className,
-        )}
+        className={cn("my-1 list-disc space-y-1 text-sm text-destructive pl-5", className)}
       >
-        {entries.map(([field, message]): React.JSX.Element => (
-          <li key={field}>
-            <span className="font-medium">{field}:</span> {message}
-          </li>
-        ))}
+        {entries.map(
+          ([field, message]): React.JSX.Element => (
+            <li key={field}>
+              <span className="font-medium">{field}:</span> {message}
+            </li>
+          ),
+        )}
       </ul>
     );
   }

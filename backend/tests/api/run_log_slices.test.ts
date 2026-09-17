@@ -3,16 +3,14 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { archiveRunLogs, deleteRunLogArchive, readRunLogSlice, readRunLogsPage, runLogArchivePath } from "../../src/lib/run-logs";
 import {
-  apiTokens,
-  logs,
-  organizationMemberships,
-  organizations,
-  runs,
-  users,
-  workspaces,
-} from "../../src/db/schema";
+  archiveRunLogs,
+  deleteRunLogArchive,
+  readRunLogSlice,
+  readRunLogsPage,
+  runLogArchivePath,
+} from "../../src/lib/run-logs";
+import { apiTokens, logs, organizationMemberships, organizations, runs, users, workspaces } from "../../src/db/schema";
 
 // Run-log slices (issue #585): raw endpoints must serve exact byte windows
 // with O(window) cost, and over-cap runs must report truncation explicitly
@@ -28,12 +26,14 @@ describe("run log slices", () => {
   const bigRunId = `run-logslice-big-${suffix}`;
 
   const request = (path: string, headers: Record<string, string> = {}) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${auth}`, ...headers },
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${auth}`, ...headers },
+      }),
+    );
 
-  const rowText = (i: number): string => i % 9 === 0 ? "" : `row-${i}-héllo-✓-${"x".repeat(i % 17)}`;
+  const rowText = (i: number): string => (i % 9 === 0 ? "" : `row-${i}-héllo-✓-${"x".repeat(i % 17)}`);
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
@@ -115,7 +115,13 @@ describe("run log slices", () => {
       const end = Math.min(start + 500, total);
       const batch = [];
       for (let i = start; i < end; i++) {
-        batch.push({ id: `logslice-big-${suffix}-${i}`, runId: bigRunId, phase: "apply", outputText: `line-${i}`, createdAt: base + i });
+        batch.push({
+          id: `logslice-big-${suffix}-${i}`,
+          runId: bigRunId,
+          phase: "apply",
+          outputText: `line-${i}`,
+          createdAt: base + i,
+        });
       }
       await db.insert(logs).values(batch);
     }
@@ -127,7 +133,9 @@ describe("run log slices", () => {
     const full = await readRunLogSlice(bigRunId, "apply", 0, Number.POSITIVE_INFINITY);
     expect(full.totalCount).toBe(total);
     expect(full.truncated).toBe(false);
-    expect(Buffer.from(full.bytes).toString("utf8")).toBe(Array.from({ length: total }, (_, i) => `line-${i}`).join("\n"));
+    expect(Buffer.from(full.bytes).toString("utf8")).toBe(
+      Array.from({ length: total }, (_, i) => `line-${i}`).join("\n"),
+    );
 
     expect(await archiveRunLogs(bigRunId)).toBe(true);
     await db.delete(logs).where(eq(logs.runId, bigRunId));
@@ -135,7 +143,9 @@ describe("run log slices", () => {
     const archived = await readRunLogSlice(bigRunId, "apply", 0, Number.POSITIVE_INFINITY);
     expect(archived.truncated).toBe(true);
     expect(archived.totalCount).toBe(total);
-    expect(Buffer.from(archived.bytes).toString("utf8")).toBe(Array.from({ length: 10000 }, (_, i) => `line-${total - 10000 + i}`).join("\n"));
+    expect(Buffer.from(archived.bytes).toString("utf8")).toBe(
+      Array.from({ length: 10000 }, (_, i) => `line-${total - 10000 + i}`).join("\n"),
+    );
 
     const archivedPage = await readRunLogsPage(bigRunId, { number: 1, size: 20 });
     expect(archivedPage.totalCount).toBe(total);
@@ -151,14 +161,13 @@ describe("run log slices", () => {
 
     const window = await request(`/api/v2/runs/${runId}/apply/log?offset=2&limit=3`);
     expect(window.status).toBe(200);
-    expect(Buffer.from(await window.arrayBuffer())).toEqual(Buffer.from(
-      Array.from({ length: 120 }, (_, i) => rowText(i)).join("\n"),
-      "utf8",
-    ).subarray(2, 5));
+    expect(Buffer.from(await window.arrayBuffer())).toEqual(
+      Buffer.from(Array.from({ length: 120 }, (_, i) => rowText(i)).join("\n"), "utf8").subarray(2, 5),
+    );
 
     const paged = await request(`/api/v2/runs/${runId}/logs?page[number]=1&page[size]=20`);
     expect(paged.status).toBe(200);
-    const document = await paged.json() as { meta: { truncated: boolean; pagination: { "total-count": number } } };
+    const document = (await paged.json()) as { meta: { truncated: boolean; pagination: { "total-count": number } } };
     expect(document.meta.truncated).toBe(false);
     expect(document.meta.pagination["total-count"]).toBe(120);
   });
@@ -171,7 +180,12 @@ describe("run log slices", () => {
     for (const invalid of [
       { version: 1, logs: [] },
       { version: 1, logs: [], truncated: "false", totalCount: 0 },
-      ...[-1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((totalCount) => ({ version: 1, logs: [], truncated: false, totalCount })),
+      ...[-1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((totalCount) => ({
+        version: 1,
+        logs: [],
+        truncated: false,
+        totalCount,
+      })),
     ]) {
       await writeFile(runLogArchivePath(bigRunId), gzipSync(JSON.stringify(invalid)));
       expect(readRunLogsPage(bigRunId, { number: 1, size: 20 })).rejects.toThrow("Invalid run log archive format");
@@ -179,5 +193,4 @@ describe("run log slices", () => {
     await deleteRunLogArchive(bigRunId);
     expect((await readRunLogsPage(bigRunId, { number: 1, size: 20 })).logs).toEqual([]);
   });
-
 });

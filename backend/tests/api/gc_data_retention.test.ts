@@ -21,7 +21,7 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
         body: JSON.stringify({
           data: { attributes: { username, password: "Password123!" } },
         }),
-      })
+      }),
     );
 
     const loginRes = await app.handle(
@@ -31,7 +31,7 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
         body: JSON.stringify({
           data: { attributes: { username, password: "Password123!" } },
         }),
-      })
+      }),
     );
     const loginData = await loginRes.json();
     userToken = loginData.data.attributes.token;
@@ -47,7 +47,7 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
         body: JSON.stringify({
           data: { type: "organizations", attributes: { name: orgName } },
         }),
-      })
+      }),
     );
 
     // Create workspace
@@ -61,14 +61,16 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
         body: JSON.stringify({
           data: { type: "workspaces", attributes: { name: "gc-test-ws" } },
         }),
-      })
+      }),
     );
     const wsBody = await wsRes.json();
     workspaceId = wsBody.data.id;
-    const lock = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${userToken}` },
-    }));
+    const lock = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
     if (lock.status !== 200) throw new Error(`workspace lock failed: ${lock.status}`);
   });
 
@@ -85,14 +87,18 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
     // Issue #703: a pending reservation is an upload handle, not history. It
     // stays out of listings but remains reachable through the direct show
     // endpoint until it finalizes or is discarded.
-    const pendingListRes = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
-      headers: jsonHeaders(userToken),
-    }));
+    const pendingListRes = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
+        headers: jsonHeaders(userToken),
+      }),
+    );
     expect(pendingListRes.status).toBe(200);
     expect((await pendingListRes.json()).data.find((item: { id: string }) => item.id === pendingId)).toBeUndefined();
-    const pendingShowRes = await app.handle(new Request(`http://localhost/api/v2/state-versions/${pendingId}`, {
-      headers: jsonHeaders(userToken),
-    }));
+    const pendingShowRes = await app.handle(
+      new Request(`http://localhost/api/v2/state-versions/${pendingId}`, {
+        headers: jsonHeaders(userToken),
+      }),
+    );
     expect(pendingShowRes.status).toBe(200);
     const pendingResource = (await pendingShowRes.json()).data;
     expect(pendingResource.attributes.md5).toBeNull();
@@ -110,9 +116,12 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
             "Content-Type": "application/vnd.api+json",
           },
           body: JSON.stringify({
-            data: { type: "state-versions", attributes: { serial, state: b64State, md5: createHash("md5").update(rawState).digest("base64") } },
+            data: {
+              type: "state-versions",
+              attributes: { serial, state: b64State, md5: createHash("md5").update(rawState).digest("base64") },
+            },
           }),
-        })
+        }),
       );
     }
 
@@ -131,29 +140,37 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
             },
           },
         }),
-      })
+      }),
     );
 
     expect(drpRes.status).toBe(201);
     const drpBody = await drpRes.json();
-    const workspaceResponse = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}`, { headers: { Authorization: `Bearer ${userToken}` } }));
-    expect((await workspaceResponse.json()).data.relationships["data-retention-policy"].data).toEqual({ id: drpBody.data.id, type: "data-retention-policy-dont-deletes" });
+    const workspaceResponse = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
+    expect((await workspaceResponse.json()).data.relationships["data-retention-policy"].data).toEqual({
+      id: drpBody.data.id,
+      type: "data-retention-policy-dont-deletes",
+    });
     expect(drpBody.data.meta.gc.softDeleted).toBe(1);
     expect(drpBody.data.meta.gc.permanentlyDeleted).toBe(0);
 
     const softDeleted = await db.query.stateVersions.findFirst({
-      where: and(
-        eq(stateVersions.workspaceId, workspaceId),
-        eq(stateVersions.status, "backing_data_soft_deleted"),
-      ),
+      where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "backing_data_soft_deleted")),
     });
     expect(softDeleted).toBeDefined();
 
-    const softDeletedListRes = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
-      headers: jsonHeaders(userToken),
-    }));
+    const softDeletedListRes = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
+        headers: jsonHeaders(userToken),
+      }),
+    );
     expect(softDeletedListRes.status).toBe(200);
-    const softDeletedResource = (await softDeletedListRes.json()).data.find((item: { id: string }) => item.id === softDeleted!.id);
+    const softDeletedResource = (await softDeletedListRes.json()).data.find(
+      (item: { id: string }) => item.id === softDeleted!.id,
+    );
     expect(softDeletedResource.attributes.md5).toBeNull();
     expect(softDeletedResource.attributes.size).toBeNull();
 
@@ -161,7 +178,7 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
       new Request(`http://localhost/api/v2/state-versions/${softDeleted!.id}/actions/restore_backing_data`, {
         method: "POST",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(restoreRes.status).toBe(200);
 
@@ -171,14 +188,15 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/gc`, {
         method: "POST",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(gcRes.status).toBe(200);
     const gcBody = await gcRes.json();
     expect(gcBody.data.softDeleted).toBe(1);
     expect(gcBody.data.permanentlyDeleted).toBe(0);
 
-    await db.update(stateVersions)
+    await db
+      .update(stateVersions)
       .set({ softDeletedAt: Date.now() - 8 * 86_400_000 })
       .where(eq(stateVersions.id, softDeleted!.id));
 
@@ -186,7 +204,7 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/gc`, {
         method: "POST",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(finalGcRes.status).toBe(200);
     expect((await finalGcRes.json()).data.permanentlyDeleted).toBe(1);

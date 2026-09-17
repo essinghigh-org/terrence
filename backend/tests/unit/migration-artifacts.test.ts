@@ -32,5 +32,9 @@ test("artifact verification rejects missing files and directories without report
 
 test("prior schemas without newer artifact tables are supported", async () => {
   const source = new Database(":memory:");
-  try { expect(await verifyArtifactReferences(source)).toEqual([]); } finally { source.close(); }
+  try {
+    expect(await verifyArtifactReferences(source)).toEqual([]);
+  } finally {
+    source.close();
+  }
 });

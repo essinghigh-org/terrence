@@ -28,11 +28,7 @@ const DEDUP_WINDOW_MS = 5_000;
 const SNOOZE_MAX_MS = 7 * 24 * 60 * 60 * 1_000;
 
 /** Events that must remain visible while a destination is snoozed. */
-const CRITICAL_NOTIFICATION_TRIGGERS = new Set([
-  "run:errored",
-  "run:needs_attention",
-  "assessment:failed",
-]);
+const CRITICAL_NOTIFICATION_TRIGGERS = new Set(["run:errored", "run:needs_attention", "assessment:failed"]);
 
 /** Rows older than this are swept regardless of kind (dedup rows are already
  * short-lived; a breaker row older than an hour is stale by definition). */
@@ -51,12 +47,11 @@ function isOpen(windowStart: number | null, now: number): boolean {
 /** Read the shared breaker state for a configuration. */
 export async function sharedBreakerState(configurationId: string): Promise<SharedBreakerView> {
   const now = Date.now();
-  const rows = await db.select().from(notificationDeliveryState).where(
-    and(
-      eq(notificationDeliveryState.kind, "breaker"),
-      eq(notificationDeliveryState.stateKey, configurationId),
-    ),
-  ).limit(1);
+  const rows = await db
+    .select()
+    .from(notificationDeliveryState)
+    .where(and(eq(notificationDeliveryState.kind, "breaker"), eq(notificationDeliveryState.stateKey, configurationId)))
+    .limit(1);
   const row = rows[0];
   if (row === undefined) return { open: false, failures: 0, remainingMs: 0 };
   const windowStart: number | null = row.windowStart;
@@ -104,9 +99,9 @@ export async function sharedBreakerRecordFailure(configurationId: string): Promi
 
 /** Record a delivery success: clears the shared breaker. */
 export async function sharedBreakerRecordSuccess(configurationId: string): Promise<void> {
-  await db.delete(notificationDeliveryState).where(
-    and(eq(notificationDeliveryState.kind, "breaker"), eq(notificationDeliveryState.stateKey, configurationId)),
-  );
+  await db
+    .delete(notificationDeliveryState)
+    .where(and(eq(notificationDeliveryState.kind, "breaker"), eq(notificationDeliveryState.stateKey, configurationId)));
 }
 
 /** Whether the same logical notification was already emitted inside the dedup
@@ -114,9 +109,11 @@ export async function sharedBreakerRecordSuccess(configurationId: string): Promi
 export async function sharedDedupSuppressed(scope: "run" | "assessment", key: string): Promise<boolean> {
   const now = Date.now();
   const stateKey = `${scope}:${key}`;
-  const rows = await db.select().from(notificationDeliveryState).where(
-    and(eq(notificationDeliveryState.kind, "dedup"), eq(notificationDeliveryState.stateKey, stateKey)),
-  ).limit(1);
+  const rows = await db
+    .select()
+    .from(notificationDeliveryState)
+    .where(and(eq(notificationDeliveryState.kind, "dedup"), eq(notificationDeliveryState.stateKey, stateKey)))
+    .limit(1);
   const row = rows[0];
   if (row === undefined) return false;
   const windowStart: number | null = row.windowStart;
@@ -150,7 +147,10 @@ function snoozeStateKey(configurationId: string): string {
 }
 
 /** Read the expiry for a destination snooze. Expired rows are removed on read. */
-export async function notificationSnooze(configurationId: string, now = Date.now()): Promise<NotificationSnooze | null> {
+export async function notificationSnooze(
+  configurationId: string,
+  now = Date.now(),
+): Promise<NotificationSnooze | null> {
   const row = await db.query.notificationDeliveryState.findFirst({
     where: and(
       eq(notificationDeliveryState.kind, "snooze"),
@@ -176,25 +176,32 @@ export async function setNotificationSnooze(
     return null;
   }
   const until = now + Math.min(SNOOZE_MAX_MS, Math.floor(durationMs));
-  await db.insert(notificationDeliveryState).values({
-    id: crypto.randomUUID(),
-    kind: "snooze",
-    stateKey: snoozeStateKey(configurationId),
-    value: until,
-    windowStart: now,
-    updatedAt: now,
-  }).onConflictDoUpdate({
-    target: [notificationDeliveryState.kind, notificationDeliveryState.stateKey],
-    set: { value: until, windowStart: now, updatedAt: now },
-  });
+  await db
+    .insert(notificationDeliveryState)
+    .values({
+      id: crypto.randomUUID(),
+      kind: "snooze",
+      stateKey: snoozeStateKey(configurationId),
+      value: until,
+      windowStart: now,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [notificationDeliveryState.kind, notificationDeliveryState.stateKey],
+      set: { value: until, windowStart: now, updatedAt: now },
+    });
   return { until, reason: null };
 }
 
 export async function clearNotificationSnooze(configurationId: string): Promise<void> {
-  await db.delete(notificationDeliveryState).where(and(
-    eq(notificationDeliveryState.kind, "snooze"),
-    eq(notificationDeliveryState.stateKey, snoozeStateKey(configurationId)),
-  ));
+  await db
+    .delete(notificationDeliveryState)
+    .where(
+      and(
+        eq(notificationDeliveryState.kind, "snooze"),
+        eq(notificationDeliveryState.stateKey, snoozeStateKey(configurationId)),
+      ),
+    );
 }
 
 /** Critical failures bypass snoozes; ordinary repeated updates do not. */
@@ -218,12 +225,14 @@ export async function sweepSharedDeliveryState(): Promise<void> {
 }
 
 /** Only exported for tests: full shared state dump. */
-export async function sharedDeliveryStateRowsForTests(): Promise<readonly {
-  kind: string;
-  stateKey: string;
-  value: number;
-  windowStart: number | null;
-}[]> {
+export async function sharedDeliveryStateRowsForTests(): Promise<
+  readonly {
+    kind: string;
+    stateKey: string;
+    value: number;
+    windowStart: number | null;
+  }[]
+> {
   return db
     .select({
       kind: notificationDeliveryState.kind,

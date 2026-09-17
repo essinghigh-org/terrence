@@ -14,14 +14,16 @@ let orgId = "";
 let workspaceId = "";
 
 function request(path: string, method = "GET", body?: unknown): Promise<Response> {
-  return app.handle(new Request(`http://terrence.test${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
+  return app.handle(
+    new Request(`http://terrence.test${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
 }
 
 beforeAll(async () => {

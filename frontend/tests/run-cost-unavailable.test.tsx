@@ -29,52 +29,54 @@ test("unavailable cost estimate renders a neutral one-line explanation", async (
   const fetchMock = mock((input: string | URL | Request): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/runs/run-no-infracost") {
-      return Promise.resolve(json({
-        data: {
-          id: "run-no-infracost",
-          attributes: {
-            message: "Plan without cost tooling",
-            status: "planned",
-            permissions: {},
-            "created-at": "2026-07-29T10:00:00.000Z",
+      return Promise.resolve(
+        json({
+          data: {
+            id: "run-no-infracost",
+            attributes: {
+              message: "Plan without cost tooling",
+              status: "planned",
+              permissions: {},
+              "created-at": "2026-07-29T10:00:00.000Z",
+            },
           },
-        },
-      }));
+        }),
+      );
     }
     if (url === "/api/v2/runs/run-no-infracost/logs") {
       return Promise.resolve(json({ data: [{ attributes: { "output-text": "Plan: 1 to add." } }] }));
     }
     if (url === "/api/v2/runs/run-no-infracost/cost-estimate") {
-      return Promise.resolve(json({
-        data: {
-          id: "ce-run-no-infracost",
-          attributes: {
-            status: "unavailable",
-            "prior-monthly-cost": "0.0",
-            "proposed-monthly-cost": "0.0",
-            "delta-monthly-cost": "0.0",
-            "resources-count": 0,
-            "matched-resources-count": 0,
-            "unmatched-resources-count": 0,
-            "error-message": "Cost estimation is not installed in this image (no Infracost binary override and managed install failed).",
+      return Promise.resolve(
+        json({
+          data: {
+            id: "ce-run-no-infracost",
+            attributes: {
+              status: "unavailable",
+              "prior-monthly-cost": "0.0",
+              "proposed-monthly-cost": "0.0",
+              "delta-monthly-cost": "0.0",
+              "resources-count": 0,
+              "matched-resources-count": 0,
+              "unmatched-resources-count": 0,
+              "error-message":
+                "Cost estimation is not installed in this image (no Infracost binary override and managed install failed).",
+            },
           },
-        },
-      }));
+        }),
+      );
     }
     if (url.endsWith("/logs") || url.endsWith("/comments")) {
       return Promise.resolve(json({ data: [] }));
     }
     return Promise.resolve(json({ data: null }));
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-no-infracost"]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
-          element={<RunDetail />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<RunDetail />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -94,45 +96,51 @@ test("cost estimate shows pricing provenance, caveats, and responsible resource 
   const fetchMock = mock((input: string | URL | Request): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/runs/run-cost-review") {
-      return Promise.resolve(json({
-        data: {
-          id: "run-cost-review",
-          attributes: {
-            message: "Comparable cost review",
-            status: "planned",
-            permissions: {},
-            "created-at": "2026-07-29T10:00:00.000Z",
-          },
-        },
-      }));
-    }
-    if (url === "/api/v2/runs/run-cost-review/cost-estimate") {
-      return Promise.resolve(json({
-        data: {
-          id: "ce-run-cost-review",
-          attributes: {
-            status: "finished",
-            "prior-monthly-cost": "100",
-            "proposed-monthly-cost": "140",
-            "delta-monthly-cost": "40",
-            "resources-count": 2,
-            "matched-resources-count": 1,
-            "unmatched-resources-count": 1,
-            "error-message": null,
-            provenance: { tool: "infracost", version: "0.2", currency: "USD", "time-basis": "monthly" },
-            comparison: {
-              baseline: { comparable: true, reason: null },
-              warnings: ["1 resource has no supported price; totals exclude those resources."],
-              "resource-changes": [{ address: "aws_instance.web", module: "production", action: "changed", "delta-monthly-cost": "40" }],
+      return Promise.resolve(
+        json({
+          data: {
+            id: "run-cost-review",
+            attributes: {
+              message: "Comparable cost review",
+              status: "planned",
+              permissions: {},
+              "created-at": "2026-07-29T10:00:00.000Z",
             },
           },
-        },
-      }));
+        }),
+      );
+    }
+    if (url === "/api/v2/runs/run-cost-review/cost-estimate") {
+      return Promise.resolve(
+        json({
+          data: {
+            id: "ce-run-cost-review",
+            attributes: {
+              status: "finished",
+              "prior-monthly-cost": "100",
+              "proposed-monthly-cost": "140",
+              "delta-monthly-cost": "40",
+              "resources-count": 2,
+              "matched-resources-count": 1,
+              "unmatched-resources-count": 1,
+              "error-message": null,
+              provenance: { tool: "infracost", version: "0.2", currency: "USD", "time-basis": "monthly" },
+              comparison: {
+                baseline: { comparable: true, reason: null },
+                warnings: ["1 resource has no supported price; totals exclude those resources."],
+                "resource-changes": [
+                  { address: "aws_instance.web", module: "production", action: "changed", "delta-monthly-cost": "40" },
+                ],
+              },
+            },
+          },
+        }),
+      );
     }
     if (url.endsWith("/logs") || url.endsWith("/comments")) return Promise.resolve(json({ data: [] }));
     return Promise.resolve(json({ data: null }));
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-cost-review"]}>
@@ -142,7 +150,9 @@ test("cost estimate shows pricing provenance, caveats, and responsible resource 
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText(/Pricing provenance: infracost 0.2/)).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText(/Pricing provenance: infracost 0.2/)).toBeTruthy();
+  });
   expect(view.getByRole("note").textContent).toContain("no supported price");
   expect(view.getByRole("link", { name: "production:aws_instance.web" }).getAttribute("href")).toBe("#plan-heading");
 });

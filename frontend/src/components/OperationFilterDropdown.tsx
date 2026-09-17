@@ -71,7 +71,9 @@ export function OperationFilterDropdown({
         aria-haspopup="true"
         aria-expanded={open}
         aria-label="Filter operations"
-        onClick={(): void => { setOpen((prev): boolean => !prev); }}
+        onClick={(): void => {
+          setOpen((prev): boolean => !prev);
+        }}
         className="inline-flex h-8 items-center gap-2 rounded-md border border-input bg-background px-3 text-xs font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
       >
         <Filter className="size-3.5 text-muted-foreground" aria-hidden="true" />
@@ -102,7 +104,8 @@ export function OperationFilterDropdown({
         <option value="all">All operations</option>
         <option value="default">Default operations</option>
         {options.map((op): React.JSX.Element => {
-          const label = op === "remove" ? "Remove" : op === "replace" ? "Replace" : op.charAt(0).toUpperCase() + op.slice(1);
+          const label =
+            op === "remove" ? "Remove" : op === "replace" ? "Replace" : op.charAt(0).toUpperCase() + op.slice(1);
           return (
             <option key={op} value={op}>
               {label}
@@ -152,7 +155,8 @@ export function OperationFilterDropdown({
               const count = opCounts[op] ?? 0;
               const checked = selectedOps.has(op);
               const config = operationConfig[op];
-              const label = op === "remove" ? "Remove" : op === "replace" ? "Replace" : op.charAt(0).toUpperCase() + op.slice(1);
+              const label =
+                op === "remove" ? "Remove" : op === "replace" ? "Replace" : op.charAt(0).toUpperCase() + op.slice(1);
               return (
                 <label
                   key={op}
@@ -162,7 +166,9 @@ export function OperationFilterDropdown({
                     type="checkbox"
                     className="size-3.5 rounded border-input accent-primary"
                     checked={checked}
-                    onChange={(): void => { toggleOp(op); }}
+                    onChange={(): void => {
+                      toggleOp(op);
+                    }}
                   />
                   <span className={`inline-flex items-center justify-center font-semibold ${config.className}`}>
                     {"icon" in config ? (

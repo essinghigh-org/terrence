@@ -4,9 +4,7 @@ import { ACTION_CONFIRMATIONS, type RunActionKind } from "./run-decision";
 import type { AuxKind } from "./run-view-state";
 import { toast } from "../components/ui/toast";
 
-export type CommentSubmitHandler = (
-  event: React.SyntheticEvent<HTMLFormElement>,
-) => Promise<void>;
+export type CommentSubmitHandler = (event: React.SyntheticEvent<HTMLFormElement>) => Promise<void>;
 
 export type RunActions = Readonly<{
   /** The action currently being sent, or "" when idle. */
@@ -46,49 +44,53 @@ export function useRunActions(args: UseRunActionsArgs): RunActions {
    * "Apply changes" button it had just accepted a click on — which reads as
    * the click having failed.
    */
-  const performRunAction = useCallback(async (
-    action: RunActionKind,
-    successTitle: string,
-    comment = "",
-  ): Promise<boolean> => {
-    if (actionInFlightRef.current) return false;
-    actionInFlightRef.current = true;
-    setPendingAction(action);
-    try {
-      const trimmedComment = comment.trim();
-      const actionBody = {
-        method: "POST",
-        ...(trimmedComment !== "" ? {
-          body: JSON.stringify({
-            data: {
-              type: "runs",
-              attributes: { comment: trimmedComment },
-            },
-          }),
-        } : undefined),
-      };
-      await fetchApi(`/api/v2/runs/${encodeURIComponent(runId)}/actions/${action}`, actionBody);
-      toast.add({ title: successTitle, type: "success" });
-      markActionSent(action);
-      return true;
-    } catch (error: unknown) {
-      toast.add({
-        title: error instanceof Error ? error.message : `Failed to ${action.replace("-", " ")} run`,
-        type: "error",
-      });
-      // The action never took, so the page must go back to offering it.
-      markActionSettled();
-      refreshAll();
-      return false;
-    } finally {
-      setPendingAction("");
-      actionInFlightRef.current = false;
-    }
-  }, [runId, markActionSent, markActionSettled, refreshAll]);
+  const performRunAction = useCallback(
+    async (action: RunActionKind, successTitle: string, comment = ""): Promise<boolean> => {
+      if (actionInFlightRef.current) return false;
+      actionInFlightRef.current = true;
+      setPendingAction(action);
+      try {
+        const trimmedComment = comment.trim();
+        const actionBody = {
+          method: "POST",
+          ...(trimmedComment !== ""
+            ? {
+                body: JSON.stringify({
+                  data: {
+                    type: "runs",
+                    attributes: { comment: trimmedComment },
+                  },
+                }),
+              }
+            : undefined),
+        };
+        await fetchApi(`/api/v2/runs/${encodeURIComponent(runId)}/actions/${action}`, actionBody);
+        toast.add({ title: successTitle, type: "success" });
+        markActionSent(action);
+        return true;
+      } catch (error: unknown) {
+        toast.add({
+          title: error instanceof Error ? error.message : `Failed to ${action.replace("-", " ")} run`,
+          type: "error",
+        });
+        // The action never took, so the page must go back to offering it.
+        markActionSettled();
+        refreshAll();
+        return false;
+      } finally {
+        setPendingAction("");
+        actionInFlightRef.current = false;
+      }
+    },
+    [runId, markActionSent, markActionSettled, refreshAll],
+  );
 
-  const handleDecisionConfirm = useCallback((action: RunActionKind, comment: string): void => {
-    void performRunAction(action, ACTION_CONFIRMATIONS[action].successTitle, comment);
-  }, [performRunAction]);
+  const handleDecisionConfirm = useCallback(
+    (action: RunActionKind, comment: string): void => {
+      void performRunAction(action, ACTION_CONFIRMATIONS[action].successTitle, comment);
+    },
+    [performRunAction],
+  );
 
   async function handleCommentSubmit(event: React.SyntheticEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();

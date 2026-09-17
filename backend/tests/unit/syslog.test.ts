@@ -154,7 +154,11 @@ describe("RFC 5424 formatting", (): void => {
   });
 
   it("serializes Date values via toJSON instead of empty objects", (): void => {
-    const line = formatSyslogMessage({ ...base, meta: { at: new Date("2026-01-02T03:04:05.000Z") } }, IDENTITY, JSON_OPTS);
+    const line = formatSyslogMessage(
+      { ...base, meta: { at: new Date("2026-01-02T03:04:05.000Z") } },
+      IDENTITY,
+      JSON_OPTS,
+    );
     const body = JSON.parse(line) as Record<string, unknown>;
     expect(body["at"]).toBe("2026-01-02T03:04:05.000Z");
   });
@@ -175,21 +179,16 @@ describe("RFC 5424 formatting", (): void => {
   });
 
   it("uses a fitting fallback when fixed fields exceed the budget", (): void => {
-    const line = formatSyslogMessage(
-      { ...base, message: "hello" },
-      IDENTITY,
-      { maxBodyBytes: 64, format: "json" },
-    );
+    const line = formatSyslogMessage({ ...base, message: "hello" }, IDENTITY, { maxBodyBytes: 64, format: "json" });
     expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(64);
     expect(JSON.parse(line)).toEqual({ truncated: true });
   });
 
   it("keeps the body within budget when the truncation marker cannot fit", (): void => {
-    const line = formatSyslogMessage(
-      { ...base, message: "hello", meta: { requestId: "req-1" } },
-      IDENTITY,
-      { maxBodyBytes: 132, format: "json" },
-    );
+    const line = formatSyslogMessage({ ...base, message: "hello", meta: { requestId: "req-1" } }, IDENTITY, {
+      maxBodyBytes: 132,
+      format: "json",
+    });
     expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(132);
     const body = JSON.parse(line) as Record<string, unknown>;
     expect(body["truncated"]).toBe(true);
@@ -197,11 +196,7 @@ describe("RFC 5424 formatting", (): void => {
   });
 
   it("leaves small bodies untouched without a truncation flag", (): void => {
-    const line = formatSyslogMessage(
-      { ...base, message: "ok" },
-      IDENTITY,
-      { maxBodyBytes: 512, format: "json" },
-    );
+    const line = formatSyslogMessage({ ...base, message: "ok" }, IDENTITY, { maxBodyBytes: 512, format: "json" });
     expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(512);
     const body = JSON.parse(line) as Record<string, unknown>;
     expect(body["message"]).toBe("ok");

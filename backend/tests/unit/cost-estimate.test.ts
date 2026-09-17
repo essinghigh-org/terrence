@@ -20,22 +20,30 @@ describe("emptyCostEstimate", () => {
   });
 
   it("supports errored status with error message", () => {
-    const result = emptyCostEstimate("errored", {
-      "queued-at": null,
-      "pending-at": null,
-      "finished-at": null,
-    }, "Infracost not installed");
+    const result = emptyCostEstimate(
+      "errored",
+      {
+        "queued-at": null,
+        "pending-at": null,
+        "finished-at": null,
+      },
+      "Infracost not installed",
+    );
     expect(result.status).toBe("errored");
     expect(result["error-message"]).toBe("Infracost not installed");
     expect(result["delta-monthly-cost"]).toBe("0.0");
   });
 
   it("supports unavailable status for a missing binary (issue #605)", () => {
-    const result = emptyCostEstimate("unavailable", {
-      "queued-at": null,
-      "pending-at": null,
-      "finished-at": null,
-    }, "Cost estimation is not installed in this image.");
+    const result = emptyCostEstimate(
+      "unavailable",
+      {
+        "queued-at": null,
+        "pending-at": null,
+        "finished-at": null,
+      },
+      "Cost estimation is not installed in this image.",
+    );
     expect(result.status).toBe("unavailable");
     expect(result["error-message"]).toBe("Cost estimation is not installed in this image.");
     expect(result["delta-monthly-cost"]).toBe("0.0");
@@ -53,7 +61,9 @@ describe("emptyCostEstimate", () => {
 
   it("defaults errorMessage to null", () => {
     const result = emptyCostEstimate("canceled", {
-      "queued-at": null, "pending-at": null, "finished-at": null,
+      "queued-at": null,
+      "pending-at": null,
+      "finished-at": null,
     });
     expect(result["error-message"]).toBeNull();
   });
@@ -61,14 +71,13 @@ describe("emptyCostEstimate", () => {
 
 describe("parseInfracostOutput", () => {
   const timestamps = {
-    "queued-at": null, "pending-at": null, "finished-at": new Date().toISOString(),
+    "queued-at": null,
+    "pending-at": null,
+    "finished-at": new Date().toISOString(),
   };
 
   it("parses a minimal valid output", () => {
-    const result = parseInfracostOutput(
-      { totalMonthlyCost: "123.45", projects: [], summary: {} },
-      timestamps,
-    );
+    const result = parseInfracostOutput({ totalMonthlyCost: "123.45", projects: [], summary: {} }, timestamps);
     expect(result.status).toBe("finished");
     expect(result["proposed-monthly-cost"]).toBe("123.45");
     expect(result["prior-monthly-cost"]).toBe("0.0");
@@ -125,9 +134,7 @@ describe("parseInfracostOutput", () => {
   });
 
   it("throws on invalid JSON (non-object)", () => {
-    expect(() => parseInfracostOutput("not-an-object", timestamps)).toThrow(
-      "Infracost returned invalid JSON output.",
-    );
+    expect(() => parseInfracostOutput("not-an-object", timestamps)).toThrow("Infracost returned invalid JSON output.");
   });
 
   it("throws on missing totalMonthlyCost", () => {
@@ -170,18 +177,24 @@ describe("parseInfracostOutput", () => {
         pricingDate: "2026-09-01",
         totalMonthlyCost: "140",
         pastTotalMonthlyCost: "100",
-        projects: [{
-          name: "production",
-          pastBreakdown: { resources: [
-            { name: "aws_instance.web", monthlyCost: "100", resourceType: "aws_instance" },
-            { name: "aws_db.legacy", monthlyCost: "20", resourceType: "aws_db_instance" },
-          ] },
-          breakdown: { resources: [
-            { name: "aws_instance.web", monthlyCost: "140", resourceType: "aws_instance" },
-            { name: "aws_db.legacy", monthlyCost: null, resourceType: "aws_db_instance" },
-          ] },
-          diff: { resources: [{ name: "aws_instance.web", action: "modify", monthlyCost: "40" }] },
-        }],
+        projects: [
+          {
+            name: "production",
+            pastBreakdown: {
+              resources: [
+                { name: "aws_instance.web", monthlyCost: "100", resourceType: "aws_instance" },
+                { name: "aws_db.legacy", monthlyCost: "20", resourceType: "aws_db_instance" },
+              ],
+            },
+            breakdown: {
+              resources: [
+                { name: "aws_instance.web", monthlyCost: "140", resourceType: "aws_instance" },
+                { name: "aws_db.legacy", monthlyCost: null, resourceType: "aws_db_instance" },
+              ],
+            },
+            diff: { resources: [{ name: "aws_instance.web", action: "modify", monthlyCost: "40" }] },
+          },
+        ],
         summary: { totalDetectedResources: 2, totalSupportedResources: 1, totalUnsupportedResources: 1 },
       },
       timestamps,
@@ -224,15 +237,18 @@ describe("parseInfracostOutput", () => {
   });
 
   it("marks currency and time-basis changes incomparable", () => {
-    const result = parseInfracostOutput({
-      totalMonthlyCost: "30",
-      pastTotalMonthlyCost: "20",
-      currency: "GBP",
-      pastCurrency: "USD",
-      timeBasis: "annual",
-      projects: [],
-      summary: {},
-    }, timestamps);
+    const result = parseInfracostOutput(
+      {
+        totalMonthlyCost: "30",
+        pastTotalMonthlyCost: "20",
+        currency: "GBP",
+        pastCurrency: "USD",
+        timeBasis: "annual",
+        projects: [],
+        summary: {},
+      },
+      timestamps,
+    );
     expect(result.comparison?.baseline.comparable).toBe(false);
     expect(result.comparison?.baseline.reason).toContain("Currency differs");
     expect(result.comparison?.warnings).toContain("The estimate and baseline use different currencies.");

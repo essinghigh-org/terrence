@@ -2,7 +2,16 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { users, apiTokens, organizations, organizationMemberships, projects, workspaces, runs, taskStages } from "../../src/db/schema";
+import {
+  users,
+  apiTokens,
+  organizations,
+  organizationMemberships,
+  projects,
+  workspaces,
+  runs,
+  taskStages,
+} from "../../src/db/schema";
 
 describe("Task Stages & Multi-Stage API", () => {
   let token: string;
@@ -82,7 +91,7 @@ describe("Task Stages & Multi-Stage API", () => {
       new Request(`http://localhost/api/v2/runs/${runId}/task-stages?page%5Bsize%5D=1`, {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(200);
@@ -97,7 +106,7 @@ describe("Task Stages & Multi-Stage API", () => {
       new Request(`http://localhost/api/v2/task-stages/${stageId}`, {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(200);
@@ -111,7 +120,7 @@ describe("Task Stages & Multi-Stage API", () => {
       new Request(`http://localhost/api/v2/task-stages/${stageId}/actions/override`, {
         method: "PATCH",
         headers: { Authorization: `Bearer ${token}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(200);

@@ -24,7 +24,14 @@ const benchDir = mkdtempSync(join(tmpdir(), "terrence-bench-"));
 process.env.DATABASE_URL = `file:${join(benchDir, "bench.db")}`;
 process.env.STORAGE_DIR = join(benchDir, "storage");
 
-function parseArgs(): { iterations: number; warmup: number; jsonOut: string | null; filter: string | null; queryBreakdown: string | null; memory: boolean } {
+function parseArgs(): {
+  iterations: number;
+  warmup: number;
+  jsonOut: string | null;
+  filter: string | null;
+  queryBreakdown: string | null;
+  memory: boolean;
+} {
   const args = process.argv.slice(2);
   const get = (flag: string): string | null => {
     const index = args.indexOf(flag);
@@ -58,7 +65,7 @@ type ScenarioResult = {
   reqPerSec: number;
   queriesPerReq: number;
   queryCounts: number[];
-}
+};
 
 function percentile(sorted: readonly number[], p: number): number {
   if (sorted.length === 0) return 0;
@@ -74,9 +81,7 @@ function percentile(sorted: readonly number[], p: number): number {
  * this only matters for inline constants like LIMIT offsets).
  */
 function normalizeSql(sql: string): string {
-  return sql
-    .replace(/'(?:''|[^'])*'/g, "'?'")
-    .replace(/\b[0-9]+\b/g, "?");
+  return sql.replace(/'(?:''|[^'])*'/g, "'?'").replace(/\b[0-9]+\b/g, "?");
 }
 
 import type { app as benchAppInstance } from "../src/app";
@@ -233,15 +238,24 @@ async function writeJsonReport(
 ): Promise<void> {
   const { writeFile } = await import("node:fs/promises");
   const git = await import("node:child_process");
-  const commit = git.execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] })
-    .toString().trim();
-  await writeFile(jsonOut, JSON.stringify({
-    commit,
-    timestamp: new Date().toISOString(),
-    iterations,
-    ...(memory ? { peakRssMb: Math.round(peakRss / 1024 / 1024) } : {}),
-    results: results.map(({ queryCounts: _queryCounts, ...rest }): Omit<ScenarioResult, "queryCounts"> => rest),
-  }, null, 2));
+  const commit = git
+    .execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+    .toString()
+    .trim();
+  await writeFile(
+    jsonOut,
+    JSON.stringify(
+      {
+        commit,
+        timestamp: new Date().toISOString(),
+        iterations,
+        ...(memory ? { peakRssMb: Math.round(peakRss / 1024 / 1024) } : {}),
+        results: results.map(({ queryCounts: _queryCounts, ...rest }): Omit<ScenarioResult, "queryCounts"> => rest),
+      },
+      null,
+      2,
+    ),
+  );
   console.log(`Wrote ${jsonOut}`);
 }
 
@@ -253,13 +267,15 @@ function printResultsTable(
   peakRss: number,
 ): void {
   const pad = (value: string, width: number): string => value.padEnd(width);
-  console.log(`\n${"scenario".padEnd(36)} ${"m".padEnd(4)} ${"status".padEnd(6)} ${"avg ms".padStart(9)} ${"p50".padStart(9)} ${"p95".padStart(9)} ${"max".padStart(9)} ${"rps".padStart(8)} ${"sql/req".padStart(8)}`);
+  console.log(
+    `\n${"scenario".padEnd(36)} ${"m".padEnd(4)} ${"status".padEnd(6)} ${"avg ms".padStart(9)} ${"p50".padStart(9)} ${"p95".padStart(9)} ${"max".padStart(9)} ${"rps".padStart(8)} ${"sql/req".padStart(8)}`,
+  );
   console.log("-".repeat(110));
   for (const result of results) {
     console.log(
-      `${pad(result.name, 36)} ${pad(scenarios.find((s): boolean => s.name === result.name)?.method ?? "GET", 4)} ${pad(String(result.status), 6)} ${pad(result.avgMs.toFixed(2), 9)} `
-      + `${pad(result.p50Ms.toFixed(2), 9)} ${pad(result.p95Ms.toFixed(2), 9)} ${pad(result.maxMs.toFixed(2), 9)} `
-      + `${pad(result.reqPerSec.toFixed(1), 8)} ${pad(result.queriesPerReq.toFixed(1), 8)}`,
+      `${pad(result.name, 36)} ${pad(scenarios.find((s): boolean => s.name === result.name)?.method ?? "GET", 4)} ${pad(String(result.status), 6)} ${pad(result.avgMs.toFixed(2), 9)} ` +
+        `${pad(result.p50Ms.toFixed(2), 9)} ${pad(result.p95Ms.toFixed(2), 9)} ${pad(result.maxMs.toFixed(2), 9)} ` +
+        `${pad(result.reqPerSec.toFixed(1), 8)} ${pad(result.queriesPerReq.toFixed(1), 8)}`,
     );
   }
   console.log("-".repeat(110));
@@ -276,9 +292,9 @@ async function main(): Promise<void> {
   ]);
   const scenarios = buildScenarios().filter((s): boolean => filter === null || s.name === filter);
   if (scenarios.length === 0) {
-    throw new Error(filter === null
-      ? "No benchmark scenarios are defined"
-      : `No benchmark scenario matches "${filter}"`);
+    throw new Error(
+      filter === null ? "No benchmark scenarios are defined" : `No benchmark scenario matches "${filter}"`,
+    );
   }
   const ctx = await seedBenchmark();
   const deps: BenchDeps = { app, dbMod, ctx, tokenFor };

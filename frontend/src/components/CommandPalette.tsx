@@ -18,12 +18,7 @@ import {
   Variable,
 } from "lucide-react";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "./ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { fetchApi } from "../lib/api";
 import { copyTextToClipboard } from "../lib/utils";
@@ -62,9 +57,7 @@ function docsFromResponse(value: unknown): { slug: string; title: string; catego
     const slug = attributes["slug"];
     const title = attributes["title"];
     const category = attributes["category"];
-    return isString(slug) && isString(title) && isString(category)
-      ? [{ slug, title, category }]
-      : [];
+    return isString(slug) && isString(title) && isString(category) ? [{ slug, title, category }] : [];
   });
 }
 
@@ -118,21 +111,24 @@ export function CommandPalette({
     // Keep the empty palette cheap. Remote results are queried below once the
     // operator has typed a meaningful search term; this bounded preview is
     // only for the initial organization context and recent-result filtering.
-    void fetchApi("/organizations?page[size]=20", { signal: controller.signal }).then((result) => {
-      if (!controller.signal.aborted) {
-        setOrgs(namedResources(result));
-      }
-    }).catch(() => undefined);
+    void fetchApi("/organizations?page[size]=20", { signal: controller.signal })
+      .then((result) => {
+        if (!controller.signal.aborted) {
+          setOrgs(namedResources(result));
+        }
+      })
+      .catch(() => undefined);
 
     if (isNonEmptyString(currentOrgName)) {
-      void fetchApi(
-        `/organizations/${encodeURIComponent(currentOrgName)}/workspaces?page[size]=20`,
-        { signal: controller.signal },
-      ).then((result) => {
-        if (!controller.signal.aborted) {
-          setWorkspaces(namedResources(result));
-        }
-      }).catch(() => undefined);
+      void fetchApi(`/organizations/${encodeURIComponent(currentOrgName)}/workspaces?page[size]=20`, {
+        signal: controller.signal,
+      })
+        .then((result) => {
+          if (!controller.signal.aborted) {
+            setWorkspaces(namedResources(result));
+          }
+        })
+        .catch(() => undefined);
     }
 
     // Bundled documentation index: every doc page is reachable from the
@@ -140,7 +136,8 @@ export function CommandPalette({
     void fetchApi("/docs", { signal: controller.signal })
       .then((result) => {
         if (!controller.signal.aborted) setDocs(docsFromResponse(result));
-      }).catch(() => undefined);
+      })
+      .catch(() => undefined);
 
     return () => {
       controller.abort();
@@ -159,13 +156,16 @@ export function CommandPalette({
     const controller = new AbortController();
     const params = new URLSearchParams({ "page[size]": "20" });
     params.set("q", query);
-    const requests: Promise<unknown>[] = [fetchApi(`/organizations?${params.toString()}`, { signal: controller.signal })];
+    const requests: Promise<unknown>[] = [
+      fetchApi(`/organizations?${params.toString()}`, { signal: controller.signal }),
+    ];
     if (isNonEmptyString(currentOrgName)) {
       const workspaceParams = new URLSearchParams({ "page[size]": "20", "search[name]": query });
-      requests.push(fetchApi(
-        `/organizations/${encodeURIComponent(currentOrgName)}/workspaces?${workspaceParams.toString()}`,
-        { signal: controller.signal },
-      ));
+      requests.push(
+        fetchApi(`/organizations/${encodeURIComponent(currentOrgName)}/workspaces?${workspaceParams.toString()}`, {
+          signal: controller.signal,
+        }),
+      );
     }
     setRemoteSearchLoading(true);
     setRemoteSearchError(false);
@@ -179,7 +179,9 @@ export function CommandPalette({
       setRemoteSearchError(failed);
       setRemoteSearchLoading(false);
     });
-    return (): void => { controller.abort(); };
+    return (): void => {
+      controller.abort();
+    };
   }, [currentOrgName, open, search]);
 
   const items: CommandItemType[] = [
@@ -277,9 +279,7 @@ export function CommandPalette({
           title: ws.name,
           subtitle: `Workspace in ${currentOrgName}`,
           perform: () => {
-            navigate(
-              `/app/${encodeURIComponent(currentOrgName)}/workspaces/${encodeURIComponent(ws.name)}`,
-            );
+            navigate(`/app/${encodeURIComponent(currentOrgName)}/workspaces/${encodeURIComponent(ws.name)}`);
             onOpenChange(false);
           },
         }))
@@ -301,17 +301,19 @@ export function CommandPalette({
     ...(isNonEmptyString(currentOrgName)
       ? [
           ...(canManageWorkspaces
-            ? [{
-                id: "act-new-workspace",
-                category: "Actions" as const,
-                icon: Plus,
-                title: "New workspace",
-                subtitle: `Create a workspace in ${currentOrgName}`,
-                perform: () => {
-                  navigate(`/app/${encodeURIComponent(currentOrgName)}/workspaces/new`);
-                  onOpenChange(false);
+            ? [
+                {
+                  id: "act-new-workspace",
+                  category: "Actions" as const,
+                  icon: Plus,
+                  title: "New workspace",
+                  subtitle: `Create a workspace in ${currentOrgName}`,
+                  perform: () => {
+                    navigate(`/app/${encodeURIComponent(currentOrgName)}/workspaces/new`);
+                    onOpenChange(false);
+                  },
                 },
-              }]
+              ]
             : []),
           ...(isNonEmptyString(currentWorkspaceName)
             ? [
@@ -337,10 +339,10 @@ export function CommandPalette({
                   perform: () => {
                     void (async (): Promise<void> => {
                       try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-                        const response = await fetchApi(
+                        // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+                        const response = (await fetchApi(
                           `/organizations/${encodeURIComponent(currentOrgName)}/workspaces/${encodeURIComponent(currentWorkspaceName)}`,
-                        ) as { data?: { id?: string } };
+                        )) as { data?: { id?: string } };
                         const wsId = response.data?.id;
                         if (wsId !== undefined) {
                           await copyTextToClipboard(wsId);
@@ -365,16 +367,16 @@ export function CommandPalette({
                         // /api/v2/workspaces/:workspace_id/runs), so resolve the
                         // workspace ID from its org/name path first, then fetch
                         // the newest run (sort=-created-at, page[size]=1).
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-                        const wsResponse = await fetchApi(
+                        // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+                        const wsResponse = (await fetchApi(
                           `/organizations/${encodeURIComponent(currentOrgName)}/workspaces/${encodeURIComponent(currentWorkspaceName)}`,
-                        ) as { data?: { id?: string } };
+                        )) as { data?: { id?: string } };
                         const wsId = wsResponse.data?.id;
                         if (wsId === undefined) return;
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-                        const runsResponse = await fetchApi(
+                        // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+                        const runsResponse = (await fetchApi(
                           `/workspaces/${encodeURIComponent(wsId)}/runs?page[size]=1&sort=-created-at`,
-                        ) as { data?: { id?: string }[] };
+                        )) as { data?: { id?: string }[] };
                         const runId = runsResponse.data?.[0]?.id;
                         if (runId !== undefined) {
                           navigate(
@@ -412,29 +414,31 @@ export function CommandPalette({
   const authorizedOrgSet = new Set(orgs.map((o) => o.name));
   const recentItems: CommandItemType[] = getRecentWorkspaces()
     .filter((visit): boolean => orgs.length === 0 || authorizedOrgSet.has(visit.orgName))
-    .map((visit): CommandItemType => ({
-    id: `recent-${visit.orgName}-${visit.workspaceName}`,
-    category: "Recent",
-    icon: History,
-    title: visit.workspaceName,
-    subtitle: `Workspace in ${visit.orgName}`,
-    perform: () => {
-      navigate(
-        `/app/${encodeURIComponent(visit.orgName)}/workspaces/${encodeURIComponent(visit.workspaceName)}`,
-      );
-      onOpenChange(false);
-    },
-  }));
+    .map(
+      (visit): CommandItemType => ({
+        id: `recent-${visit.orgName}-${visit.workspaceName}`,
+        category: "Recent",
+        icon: History,
+        title: visit.workspaceName,
+        subtitle: `Workspace in ${visit.orgName}`,
+        perform: () => {
+          navigate(`/app/${encodeURIComponent(visit.orgName)}/workspaces/${encodeURIComponent(visit.workspaceName)}`);
+          onOpenChange(false);
+        },
+      }),
+    );
   // 14.18: when the query is empty, surface recently-visited workspaces (most
   // recent first) ahead of the generic navigation items. When the user types,
   // search runs over the full item list as usual.
-  const filtered = query === ""
-    ? [...recentItems, ...items].slice(0, 14)
-    : items.filter((item) =>
-        item.title.toLowerCase().includes(query) ||
-        (item.subtitle?.toLowerCase().includes(query) ?? false) ||
-        item.category.toLowerCase().includes(query),
-      );
+  const filtered =
+    query === ""
+      ? [...recentItems, ...items].slice(0, 14)
+      : items.filter(
+          (item) =>
+            item.title.toLowerCase().includes(query) ||
+            (item.subtitle?.toLowerCase().includes(query) ?? false) ||
+            item.category.toLowerCase().includes(query),
+        );
 
   // Keep the highlight pinned to a real row as the result set shrinks or grows.
   const clampedIndex = filtered.length === 0 ? 0 : Math.min(highlightedIndex, filtered.length - 1);
@@ -504,9 +508,7 @@ export function CommandPalette({
             role="combobox"
             aria-expanded
             aria-controls={listboxId}
-            aria-activedescendant={
-              filtered.length > 0 ? optionId(clampedIndex) : undefined
-            }
+            aria-activedescendant={filtered.length > 0 ? optionId(clampedIndex) : undefined}
             aria-label="Search commands and resources"
             ref={inputRef}
             autoFocus
@@ -540,7 +542,10 @@ export function CommandPalette({
             </div>
           )}
           {remoteSearchError && (
-            <div role="alert" className="mx-1 mb-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+            <div
+              role="alert"
+              className="mx-1 mb-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+            >
               Remote search is unavailable. Local navigation commands remain available.
             </div>
           )}
@@ -557,7 +562,14 @@ export function CommandPalette({
                   list.push(item);
                   grouped.set(item.category, list);
                 }
-                const categoryOrder = ["Recent", "Actions", "Navigation", "Workspaces", "Organizations", "Documentation"];
+                const categoryOrder = [
+                  "Recent",
+                  "Actions",
+                  "Navigation",
+                  "Workspaces",
+                  "Organizations",
+                  "Documentation",
+                ];
                 const rows: React.JSX.Element[] = [];
                 let flatIndex = 0;
                 for (const category of categoryOrder) {
@@ -630,7 +642,9 @@ export function CommandPalette({
                         onClick={item.perform}
                       >
                         <span>{item.title}</span>
-                        <span className="text-2xs uppercase font-semibold text-muted-foreground/70">{item.category}</span>
+                        <span className="text-2xs uppercase font-semibold text-muted-foreground/70">
+                          {item.category}
+                        </span>
                       </button>,
                     );
                   }

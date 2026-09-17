@@ -42,7 +42,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
             attributes: { username, password, email: `e2e_admin_${suffix}@example.com` },
           },
         }),
-      })
+      }),
     );
     expect(regRes.status).toBe(201);
 
@@ -51,7 +51,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
         method: "POST",
         headers: { "Content-Type": "application/vnd.api+json" },
         body: JSON.stringify({ data: { attributes: { username, password } } }),
-      })
+      }),
     );
     expect(loginRes.status).toBe(200);
     const loginData = await loginRes.json();
@@ -87,7 +87,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
             attributes: { name: orgName, email: "admin@e2e-homelab.internal" },
           },
         }),
-      })
+      }),
     );
     expect(createOrgRes.status).toBe(201);
 
@@ -101,7 +101,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
             attributes: { name: "Platform Infrastructure Engine" },
           },
         }),
-      })
+      }),
     );
     expect(createTeamRes.status).toBe(201);
 
@@ -116,7 +116,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
             attributes: { name: "Production Network Cluster" },
           },
         }),
-      })
+      }),
     );
     expect(projRes.status).toBe(201);
     const projData = await projRes.json();
@@ -141,7 +141,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
             },
           },
         }),
-      })
+      }),
     );
     expect(wsRes.status).toBe(201);
     const wsData = await wsRes.json();
@@ -164,7 +164,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
             },
           },
         }),
-      })
+      }),
     );
     expect(varRes.status).toBe(201);
 
@@ -184,7 +184,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
             },
           },
         }),
-      })
+      }),
     );
     expect(varsetRes.status).toBe(201);
     const varsetData = await varsetRes.json();
@@ -198,7 +198,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
         body: JSON.stringify({
           data: [{ id: projectId, type: "projects" }],
         }),
-      })
+      }),
     );
     expect(attachProjRes.status).toBe(204);
 
@@ -213,7 +213,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
             attributes: { auto_queue_runs: false, speculative: false },
           },
         }),
-      })
+      }),
     );
     expect(cvRes.status).toBe(201);
     const cvId = (await cvRes.json()).data.id;
@@ -226,7 +226,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
           "Content-Type": "application/octet-stream",
         },
         body: validTarGzip("e2e"),
-      })
+      }),
     );
     if (uploadRes.status !== 200) {
       console.error("Upload error status:", uploadRes.status, await uploadRes.text());
@@ -248,14 +248,17 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
             },
           },
         }),
-      })
+      }),
     );
     expect(runRes.status).toBe(201);
     const runData = await runRes.json();
     const runId = runData.data.id;
 
     // Simulate worker updating run to planned
-    await db.update(runs).set({ status: "planned" }).where(eq(runs.id, runId as string));
+    await db
+      .update(runs)
+      .set({ status: "planned" })
+      .where(eq(runs.id, runId as string));
 
     // Confirm Apply with Comment
     const applyActionRes = await app.handle(
@@ -263,13 +266,13 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
         method: "POST",
         headers: authHeaders,
         body: JSON.stringify({ comment: "Verified configuration. Proceed with apply." }),
-      })
+      }),
     );
     expect(applyActionRes.status).toBe(202);
 
     // Verify Comment saved
     const commentListRes = await app.handle(
-      new Request(`http://localhost/api/v2/runs/${runId}/comments`, { headers: authHeaders })
+      new Request(`http://localhost/api/v2/runs/${runId}/comments`, { headers: authHeaders }),
     );
     expect(commentListRes.status).toBe(200);
     const commentListData = await commentListRes.json();
@@ -277,7 +280,10 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
     expect(commentListData.data[0].attributes.body).toBe("Verified configuration. Proceed with apply.");
 
     // Simulate worker completing apply and writing state
-    await db.update(runs).set({ status: "applied" }).where(eq(runs.id, runId as string));
+    await db
+      .update(runs)
+      .set({ status: "applied" })
+      .where(eq(runs.id, runId as string));
 
     const stateVerId = `sv-${crypto.randomUUID()}`;
     await db.insert(stateVersions).values({
@@ -285,7 +291,13 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
       workspaceId,
       runId,
       serial: 1,
-      statePayload: JSON.stringify({ version: 4, terraform_version: "1.5.7", serial: 1, lineage: "abc-lineage", outputs: { node_ip: { value: "10.0.0.1", type: "string" } } }),
+      statePayload: JSON.stringify({
+        version: 4,
+        terraform_version: "1.5.7",
+        serial: 1,
+        lineage: "abc-lineage",
+        outputs: { node_ip: { value: "10.0.0.1", type: "string" } },
+      }),
       jsonState: JSON.stringify({ format_version: "1.0", values: { root_module: {} } }),
       status: "finalized",
       createdAt: Date.now(),
@@ -293,19 +305,21 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
 
     // 8. State Download & Outputs
     const currentStateRes = await app.handle(
-      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/current-state-version`, { headers: authHeaders })
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/current-state-version`, { headers: authHeaders }),
     );
     expect(currentStateRes.status).toBe(200);
 
     const jsonStateDownloadRes = await app.handle(
-      new Request(`http://localhost/api/v2/state-versions/${stateVerId}/json-download`, { headers: authHeaders })
+      new Request(`http://localhost/api/v2/state-versions/${stateVerId}/json-download`, { headers: authHeaders }),
     );
     expect(jsonStateDownloadRes.status).toBe(200);
     const jsonStateBody = await jsonStateDownloadRes.json();
     expect(jsonStateBody.format_version).toBe("1.0");
 
     const outputsRes = await app.handle(
-      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/current-state-version-outputs`, { headers: authHeaders })
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/current-state-version-outputs`, {
+        headers: authHeaders,
+      }),
     );
     expect(outputsRes.status).toBe(200);
     const outputsData = await outputsRes.json();
@@ -314,7 +328,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
 
     // 9. Audit Logs & System Verification
     const auditLogsRes = await app.handle(
-      new Request(`http://localhost/api/v2/organizations/${orgName}/audit-logs`, { headers: authHeaders })
+      new Request(`http://localhost/api/v2/organizations/${orgName}/audit-logs`, { headers: authHeaders }),
     );
     expect(auditLogsRes.status).toBe(200);
   });

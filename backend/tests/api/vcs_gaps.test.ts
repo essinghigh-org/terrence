@@ -27,16 +27,22 @@ describe("VCS integration gaps", () => {
   const installationId = `ghain-vcs-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
-  const createClient = (name: string, serviceProvider: string, scopedProjects: readonly string[] = []): Promise<Response> =>
+  const createClient = (
+    name: string,
+    serviceProvider: string,
+    scopedProjects: readonly string[] = [],
+  ): Promise<Response> =>
     request(`/api/v2/organizations/${orgName}/oauth-clients`, "POST", {
       data: {
         type: "oauth-clients",
@@ -111,9 +117,13 @@ describe("VCS integration gaps", () => {
     expect(shown.data.attributes["service-provider"]).toBe("bitbucket_data_center");
 
     expect((await createClient(`invalid-${suffix}`, "invented_vcs")).status).toBe(422);
-    expect((await request(`/api/v2/organizations/${orgName}/oauth-clients`, "POST", {
-      data: { attributes: { name: `wrong-type-${suffix}`, "service-provider": 42 } },
-    })).status).toBe(422);
+    expect(
+      (
+        await request(`/api/v2/organizations/${orgName}/oauth-clients`, "POST", {
+          data: { attributes: { name: `wrong-type-${suffix}`, "service-provider": 42 } },
+        })
+      ).status,
+    ).toBe(422);
   });
 
   test("creates, replaces, attaches, and detaches project scope", async () => {
@@ -121,19 +131,27 @@ describe("VCS integration gaps", () => {
     expect(createResponse.status).toBe(201);
     const created = await createResponse.json();
     const clientId = created.data.id as string;
-    expect(created.data.relationships.projects.data).toEqual([
-      { id: projectIds[0], type: "projects" },
-    ]);
+    expect(created.data.relationships.projects.data).toEqual([{ id: projectIds[0], type: "projects" }]);
 
-    expect((await request(`/api/v2/oauth-clients/${clientId}/relationships/projects`, "POST", {
-      data: [{ id: projectIds[1], type: "projects" }],
-    })).status).toBe(204);
+    expect(
+      (
+        await request(`/api/v2/oauth-clients/${clientId}/relationships/projects`, "POST", {
+          data: [{ id: projectIds[1], type: "projects" }],
+        })
+      ).status,
+    ).toBe(204);
     let shown = await (await request(`/api/v2/oauth-clients/${clientId}`)).json();
-    expect(shown.data.relationships.projects.data.map((item: { id: string }): string => item.id).sort()).toEqual([...projectIds].sort());
+    expect(shown.data.relationships.projects.data.map((item: { id: string }): string => item.id).sort()).toEqual(
+      [...projectIds].sort(),
+    );
 
-    expect((await request(`/api/v2/oauth-clients/${clientId}/relationships/projects`, "DELETE", {
-      data: [{ id: projectIds[0], type: "projects" }],
-    })).status).toBe(204);
+    expect(
+      (
+        await request(`/api/v2/oauth-clients/${clientId}/relationships/projects`, "DELETE", {
+          data: [{ id: projectIds[0], type: "projects" }],
+        })
+      ).status,
+    ).toBe(204);
     shown = await (await request(`/api/v2/oauth-clients/${clientId}`)).json();
     expect(shown.data.relationships.projects.data).toEqual([{ id: projectIds[1], type: "projects" }]);
 
@@ -148,12 +166,20 @@ describe("VCS integration gaps", () => {
     const replaced = await replaceResponse.json();
     expect(replaced.data.relationships.projects.data).toEqual([{ id: projectIds[0], type: "projects" }]);
 
-    expect((await request(`/api/v2/oauth-clients/${clientId}/relationships/projects`, "POST", {
-      data: [{ id: crossProjectId, type: "projects" }],
-    })).status).toBe(422);
-    expect((await request(`/api/v2/oauth-clients/${clientId}/relationships/projects`, "POST", {
-      data: [{ id: projectIds[1], type: "workspaces" }],
-    })).status).toBe(422);
+    expect(
+      (
+        await request(`/api/v2/oauth-clients/${clientId}/relationships/projects`, "POST", {
+          data: [{ id: crossProjectId, type: "projects" }],
+        })
+      ).status,
+    ).toBe(422);
+    expect(
+      (
+        await request(`/api/v2/oauth-clients/${clientId}/relationships/projects`, "POST", {
+          data: [{ id: projectIds[1], type: "workspaces" }],
+        })
+      ).status,
+    ).toBe(422);
   });
 
   test("persists and updates complete workspace VCS repository settings", async () => {

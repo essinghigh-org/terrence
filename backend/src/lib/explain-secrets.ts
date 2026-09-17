@@ -56,11 +56,12 @@ export async function collectExplainSecrets(runId: string): Promise<readonly str
     }),
   ]);
   const setIds = [...new Set([...links.map((link) => link.variableSetId), ...globalSets.map((set) => set.id)])];
-  const setVars = setIds.length === 0
-    ? []
-    : await db.query.variableSetVariables.findMany({
-      where: and(inArray(variableSetVariables.variableSetId, setIds), eq(variableSetVariables.sensitive, true)),
-    });
+  const setVars =
+    setIds.length === 0
+      ? []
+      : await db.query.variableSetVariables.findMany({
+          where: and(inArray(variableSetVariables.variableSetId, setIds), eq(variableSetVariables.sensitive, true)),
+        });
   const latest = await db.query.stateVersions.findFirst({
     where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")),
     orderBy: [desc(stateVersions.serial)],
@@ -73,7 +74,10 @@ export async function collectExplainSecrets(runId: string): Promise<readonly str
       continue;
     }
   }
-  for (const secret of sensitiveOutputSecrets(latest?.statePayload == null ? null : decodeStatePayload(latest.statePayload))) values.push(secret);
+  for (const secret of sensitiveOutputSecrets(
+    latest?.statePayload == null ? null : decodeStatePayload(latest.statePayload),
+  ))
+    values.push(secret);
   return [...new Set(values.filter((value) => value.length >= EXPLAIN_SECRET_MIN_LENGTH))];
 }
 
@@ -105,9 +109,10 @@ export function sensitiveOutputSecrets(decodedPayload: string | null): string[] 
   if (outputs === null || outputs === undefined || typeof outputs !== "object" || Array.isArray(outputs)) return [];
   const secrets: string[] = [];
   for (const raw of Object.values(outputs)) {
-    const output: Record<string, unknown> = raw !== null && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : { value: raw };
+    const output: Record<string, unknown> =
+      raw !== null && typeof raw === "object" && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>)
+        : { value: raw };
     if (output["sensitive"] !== true) continue;
     secrets.push(...secretStrings(output["value"]));
   }
@@ -124,8 +129,9 @@ export type RedactionResult = Readonly<{ text: string; hits: number }>;
 export function redactKnownSecrets(text: string, secrets: readonly string[]): RedactionResult {
   let redacted = text;
   let hits = 0;
-  const ordered = [...new Set(secrets.filter((secret) => secret.length >= EXPLAIN_SECRET_MIN_LENGTH))]
-    .sort((left, right) => right.length - left.length);
+  const ordered = [...new Set(secrets.filter((secret) => secret.length >= EXPLAIN_SECRET_MIN_LENGTH))].sort(
+    (left, right) => right.length - left.length,
+  );
   for (const secret of ordered) {
     if (!redacted.includes(secret)) continue;
     hits += redacted.split(secret).length - 1;

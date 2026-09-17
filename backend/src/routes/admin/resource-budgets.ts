@@ -6,26 +6,33 @@ import { parseResourceBudgetConfig, resourceBudgetConfigurationResource } from "
 /** Site-admin diagnostics for the durable work capacity policy. */
 export const resourceBudgetRoutes = new Elysia({ name: "admin-resource-budgets" })
   .use(authPlugin)
-  .get("/api/v2/admin/resource-budgets", async ({ set }: Readonly<{ set: Readonly<{ status?: number | string }> }>): Promise<unknown> => {
-    try {
-      const [config, snapshot, queue] = await Promise.all([
-        Promise.resolve(parseResourceBudgetConfig()),
-        collectDurableJobBudgetSnapshot(),
-        collectDurableJobQueueInspector(),
-      ]);
-      return {
-        data: {
-          id: "resource-budgets",
-          type: "resource-budgets",
-          attributes: {
-            config: resourceBudgetConfigurationResource(config),
-            snapshot,
-            queue,
+  .get(
+    "/api/v2/admin/resource-budgets",
+    async ({ set }: Readonly<{ set: Readonly<{ status?: number | string }> }>): Promise<unknown> => {
+      try {
+        const [config, snapshot, queue] = await Promise.all([
+          Promise.resolve(parseResourceBudgetConfig()),
+          collectDurableJobBudgetSnapshot(),
+          collectDurableJobQueueInspector(),
+        ]);
+        return {
+          data: {
+            id: "resource-budgets",
+            type: "resource-budgets",
+            attributes: {
+              config: resourceBudgetConfigurationResource(config),
+              snapshot,
+              queue,
+            },
           },
-        },
-      };
-    } catch {
-      (set as { status: number }).status = 503;
-      return { errors: [{ status: "503", title: "Service Unavailable", detail: "Resource budget diagnostics are unavailable" }] };
-    }
-  });
+        };
+      } catch {
+        (set as { status: number }).status = 503;
+        return {
+          errors: [
+            { status: "503", title: "Service Unavailable", detail: "Resource budget diagnostics are unavailable" },
+          ],
+        };
+      }
+    },
+  );

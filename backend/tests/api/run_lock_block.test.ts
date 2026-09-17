@@ -1,9 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens, logs, organizationMemberships, organizations, runs, users, workspaces,
-} from "../../src/db/schema";
+import { apiTokens, logs, organizationMemberships, organizations, runs, users, workspaces } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { and, eq } from "drizzle-orm";
 import { clearPlanLockLoggedForTests } from "../../src/worker";
@@ -21,14 +19,16 @@ describe("locked workspaces surface blocked runs (#575)", () => {
   const confirmedRunId = `run-lockblk-confirmed-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   const logText = async (runId: string, phase: "plan" | "apply"): Promise<string> => {
     const rows = await db.query.logs.findMany({
@@ -42,20 +42,29 @@ describe("locked workspaces surface blocked runs (#575)", () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({
-      id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
+      id: `mem-${suffix}`,
+      userId,
+      orgId,
+      role: "owner",
+      status: "active",
     });
     await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
-    await db.insert(workspaces).values([
-      { id: wsId, name: `lockblk-ws-${suffix}`, orgId, executionMode: "remote" },
-    ]);
+    await db.insert(workspaces).values([{ id: wsId, name: `lockblk-ws-${suffix}`, orgId, executionMode: "remote" }]);
     await db.insert(runs).values([
       {
-        id: pendingRunId, workspaceId: wsId, status: "pending",
-        logToken: crypto.randomUUID(), createdAt: Date.now(),
+        id: pendingRunId,
+        workspaceId: wsId,
+        status: "pending",
+        logToken: crypto.randomUUID(),
+        createdAt: Date.now(),
       },
       {
-        id: confirmedRunId, workspaceId: wsId, status: "confirmed",
-        scheduledAt: Date.now() - 1000, logToken: crypto.randomUUID(), createdAt: Date.now(),
+        id: confirmedRunId,
+        workspaceId: wsId,
+        status: "confirmed",
+        scheduledAt: Date.now() - 1000,
+        logToken: crypto.randomUUID(),
+        createdAt: Date.now(),
       },
     ]);
     const lockRes = await request(`/api/v2/workspaces/${wsId}/actions/lock`, "POST", {
@@ -65,14 +74,38 @@ describe("locked workspaces surface blocked runs (#575)", () => {
   });
 
   afterAll(async () => {
-    await db.delete(logs).where(eq(logs.runId, pendingRunId)).catch((): void => undefined);
-    await db.delete(logs).where(eq(logs.runId, confirmedRunId)).catch((): void => undefined);
-    await db.delete(runs).where(eq(runs.workspaceId, wsId)).catch((): void => undefined);
-    await db.delete(workspaces).where(eq(workspaces.orgId, orgId)).catch((): void => undefined);
-    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => undefined);
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`)).catch((): void => undefined);
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
-    await db.delete(users).where(eq(users.id, userId)).catch((): void => undefined);
+    await db
+      .delete(logs)
+      .where(eq(logs.runId, pendingRunId))
+      .catch((): void => undefined);
+    await db
+      .delete(logs)
+      .where(eq(logs.runId, confirmedRunId))
+      .catch((): void => undefined);
+    await db
+      .delete(runs)
+      .where(eq(runs.workspaceId, wsId))
+      .catch((): void => undefined);
+    await db
+      .delete(workspaces)
+      .where(eq(workspaces.orgId, orgId))
+      .catch((): void => undefined);
+    await db
+      .delete(apiTokens)
+      .where(eq(apiTokens.id, `tok-${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(organizationMemberships)
+      .where(eq(organizationMemberships.id, `mem-${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(organizations)
+      .where(eq(organizations.id, orgId))
+      .catch((): void => undefined);
+    await db
+      .delete(users)
+      .where(eq(users.id, userId))
+      .catch((): void => undefined);
   });
 
   it("logs the lock block for pending runs without starting them", async () => {

@@ -2,7 +2,13 @@ import { createHash } from "node:crypto";
 import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { db } from "../../db";
 import { stateVersions, workspaces } from "../../db/schema";
-import { decodeStatePayload, encryptStatePayload, isUniqueConstraintError, parseTerraformStatePayload, statePayloadError } from "../validation";
+import {
+  decodeStatePayload,
+  encryptStatePayload,
+  isUniqueConstraintError,
+  parseTerraformStatePayload,
+  statePayloadError,
+} from "../validation";
 import { fenceStateWorkspace, stateReservationObsolete } from "../state-reservations";
 import { replaceStateOutputIndex } from "../state-output-index";
 import type { DeepReadonly } from "../utils";
@@ -23,7 +29,11 @@ export type CommitStateVersionResult = Readonly<
   | { kind: "already-committed"; stateVersionId: string }
   | { kind: "not-found" }
   | { kind: "invalid"; reason: "state-payload" | "serial" | "reservation"; detail: string }
-  | { kind: "conflict"; reason: "reservation-obsolete" | "content-already-uploaded" | "workspace-changed"; detail: string }
+  | {
+      kind: "conflict";
+      reason: "reservation-obsolete" | "content-already-uploaded" | "workspace-changed";
+      detail: string;
+    }
 >;
 
 function stateLineageError(
@@ -43,9 +53,7 @@ function stateLineageError(
   if (previous === null) {
     return "State lineage cannot be validated because the workspace history contains an invalid state payload";
   }
-  return incomingState["lineage"] === previous["lineage"]
-    ? null
-    : "State lineage does not match the workspace history";
+  return incomingState["lineage"] === previous["lineage"] ? null : "State lineage does not match the workspace history";
 }
 
 function sha256(payload: string): string {
@@ -69,10 +77,7 @@ type PayloadValidation = Readonly<
   | { ok: false; result: Extract<CommitStateVersionResult, { kind: "invalid" }> }
 >;
 
-function validateReservationPayload(
-  reservation: StateVersion,
-  rawState: string,
-): PayloadValidation {
+function validateReservationPayload(reservation: StateVersion, rawState: string): PayloadValidation {
   const parsedTerraformState = parseTerraformStatePayload(rawState);
   if (parsedTerraformState === null) {
     return {
@@ -95,8 +100,8 @@ function validateReservationPayload(
     };
   }
   if (
-    (reservation.expectedLineage !== null && parsedTerraformState["lineage"] !== reservation.expectedLineage)
-    || (reservation.expectedMd5 !== null && !md5Matches(rawState, reservation.expectedMd5))
+    (reservation.expectedLineage !== null && parsedTerraformState["lineage"] !== reservation.expectedLineage) ||
+    (reservation.expectedMd5 !== null && !md5Matches(rawState, reservation.expectedMd5))
   ) {
     return {
       ok: false,
@@ -110,17 +115,21 @@ function validateReservationPayload(
   return { ok: true, parsed: parsedTerraformState };
 }
 
-function existingCommitResult(
-  reservation: StateVersion,
-  incomingSha256: string,
-): CommitStateVersionResult | null {
-  if (reservation.status === "finalized" && typeof reservation.statePayload === "string" && reservation.statePayload !== "") {
+function existingCommitResult(reservation: StateVersion, incomingSha256: string): CommitStateVersionResult | null {
+  if (
+    reservation.status === "finalized" &&
+    typeof reservation.statePayload === "string" &&
+    reservation.statePayload !== ""
+  ) {
     const committedSha256 = reservation.uploadSha256 ?? sha256(decodeStatePayload(reservation.statePayload));
     return incomingSha256 === committedSha256
       ? { kind: "already-committed", stateVersionId: reservation.id }
       : conflict("content-already-uploaded", "State content was already uploaded");
   }
-  if (reservation.status !== "pending" || (typeof reservation.statePayload === "string" && reservation.statePayload !== "")) {
+  if (
+    reservation.status !== "pending" ||
+    (typeof reservation.statePayload === "string" && reservation.statePayload !== "")
+  ) {
     return conflict("content-already-uploaded", "State content was already uploaded");
   }
   return null;
@@ -137,20 +146,14 @@ async function commitPendingReservation(
 ): Promise<CommitStateVersionResult> {
   const workspaceRow = workspace as WorkspaceRow;
   if (stateReservationObsolete(reservation, workspaceRow, now)) {
-    return conflict(
-      "reservation-obsolete",
-      "State upload reservation expired or its workspace lock changed",
-    );
+    return conflict("reservation-obsolete", "State upload reservation expired or its workspace lock changed");
   }
   if (!(await fenceStateWorkspace(tx, workspaceRow))) {
     return conflict("workspace-changed", "State content was already uploaded");
   }
 
   const current = await tx.query.stateVersions.findFirst({
-    where: and(
-      eq(stateVersions.workspaceId, reservation.workspaceId),
-      eq(stateVersions.status, "finalized"),
-    ),
+    where: and(eq(stateVersions.workspaceId, reservation.workspaceId), eq(stateVersions.status, "finalized")),
     orderBy: [desc(stateVersions.serial)],
   });
   if (current !== undefined && current.serial >= reservation.serial) {
@@ -162,29 +165,27 @@ async function commitPendingReservation(
   }
 
   const encrypted = await encryptStatePayload(rawState);
-  const decodedJsonState = reservation.jsonState === null
-    ? null
-    : decodeStatePayload(reservation.jsonState);
-  const finalized = await tx.update(stateVersions).set({
-    statePayload: encrypted,
-    status: "finalized",
-    uploadSha256: incomingSha256,
-  }).where(and(
-    eq(stateVersions.id, reservation.id),
-    eq(stateVersions.status, "pending"),
-    or(isNull(stateVersions.statePayload), eq(stateVersions.statePayload, "")),
-  )).returning({ id: stateVersions.id });
+  const decodedJsonState = reservation.jsonState === null ? null : decodeStatePayload(reservation.jsonState);
+  const finalized = await tx
+    .update(stateVersions)
+    .set({
+      statePayload: encrypted,
+      status: "finalized",
+      uploadSha256: incomingSha256,
+    })
+    .where(
+      and(
+        eq(stateVersions.id, reservation.id),
+        eq(stateVersions.status, "pending"),
+        or(isNull(stateVersions.statePayload), eq(stateVersions.statePayload, "")),
+      ),
+    )
+    .returning({ id: stateVersions.id });
   if (finalized.length === 0) {
     return conflict("content-already-uploaded", "State content was already uploaded");
   }
 
-  await replaceStateOutputIndex(
-    tx,
-    reservation.id,
-    reservation.workspaceId,
-    decodedJsonState,
-    rawState,
-  );
+  await replaceStateOutputIndex(tx, reservation.id, reservation.workspaceId, decodedJsonState, rawState);
   return { kind: "committed", stateVersionId: reservation.id };
 }
 
@@ -195,9 +196,7 @@ async function commitPendingReservation(
  * command owns the lifecycle checks and transaction that make a state upload
  * a single, reusable state transition for API, worker, and agent callers.
  */
-export async function commitStateVersion(
-  input: CommitStateVersionInput,
-): Promise<CommitStateVersionResult> {
+export async function commitStateVersion(input: CommitStateVersionInput): Promise<CommitStateVersionResult> {
   const incomingSha256 = sha256(input.rawState);
   const now = input.now ?? Date.now();
 
@@ -215,7 +214,8 @@ export async function commitStateVersion(
       const existing = existingCommitResult(reservation, incomingSha256);
       if (existing !== null) {
         if (existing.kind === "already-committed" && reservation.uploadSha256 === null) {
-          await tx.update(stateVersions)
+          await tx
+            .update(stateVersions)
             .set({ uploadSha256: incomingSha256 })
             .where(eq(stateVersions.id, reservation.id));
         }
@@ -226,22 +226,11 @@ export async function commitStateVersion(
       });
       if (workspace === undefined) return { kind: "not-found" };
       if (stateReservationObsolete(reservation, workspace, now)) {
-        return conflict(
-          "reservation-obsolete",
-          "State upload reservation expired or its workspace lock changed",
-        );
+        return conflict("reservation-obsolete", "State upload reservation expired or its workspace lock changed");
       }
       const payload = validateReservationPayload(reservation, input.rawState);
       if (!payload.ok) return payload.result;
-      return commitPendingReservation(
-        tx,
-        reservation,
-        workspace,
-        payload.parsed,
-        input.rawState,
-        incomingSha256,
-        now,
-      );
+      return commitPendingReservation(tx, reservation, workspace, payload.parsed, input.rawState, incomingSha256, now);
     });
   } catch (error: unknown) {
     if (isUniqueConstraintError(error)) {

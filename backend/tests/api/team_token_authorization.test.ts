@@ -84,14 +84,18 @@ describe("team token workspace authorization", () => {
 
   const waitForWorkspaceUnlock = async (): Promise<void> => {
     for (let attempt = 0; attempt < 500; attempt += 1) {
-      if ((await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId), columns: { locked: true } }))?.locked !== true) return;
+      if (
+        (await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId), columns: { locked: true } }))
+          ?.locked !== true
+      )
+        return;
       await Bun.sleep(10);
     }
     throw new Error("Workspace remained locked after waiting for worker completion");
   };
 
   const responseData = async <T>(response: Readonly<Response>): Promise<T> => {
-    const document = await response.json() as Readonly<{ data: T }>;
+    const document = (await response.json()) as Readonly<{ data: T }>;
     return document.data;
   };
 
@@ -105,7 +109,12 @@ describe("team token workspace authorization", () => {
     // so the run-creation assertions below exercise permissions, not setup.
     await db.insert(configurationVersions).values([
       { id: `cv-team-${suffix}`, workspaceId, status: "uploaded", archivePath: `test-only/cv-team-${suffix}.tar.gz` },
-      { id: `cv-team-unassigned-${suffix}`, workspaceId: unassignedWorkspaceId, status: "uploaded", archivePath: `test-only/cv-team-unassigned-${suffix}.tar.gz` },
+      {
+        id: `cv-team-unassigned-${suffix}`,
+        workspaceId: unassignedWorkspaceId,
+        status: "uploaded",
+        archivePath: `test-only/cv-team-unassigned-${suffix}.tar.gz`,
+      },
     ]);
     await db.insert(teams).values([
       { id: teamIds.read, orgId, name: `read-${suffix}` },
@@ -159,7 +168,9 @@ describe("team token workspace authorization", () => {
     await db.insert(apiTokens).values([
       ...Object.entries(teamIds).map(([role, teamId]) => ({
         id: `token-${role}-${suffix}`,
-        token: createHash("sha256").update(tokens[role as keyof typeof teamIds]).digest("hex"),
+        token: createHash("sha256")
+          .update(tokens[role as keyof typeof teamIds])
+          .digest("hex"),
         teamId,
       })),
       {
@@ -174,12 +185,14 @@ describe("team token workspace authorization", () => {
       name: `task-${suffix}`,
       url: "https://example.test/run-task",
     });
-    await db.insert(runs).values(Object.values(applyRunIds).map((id, index) => ({
-      id,
-      workspaceId,
-      status: "planned",
-      createdAt: Date.now() + index,
-    })));
+    await db.insert(runs).values(
+      Object.values(applyRunIds).map((id, index) => ({
+        id,
+        workspaceId,
+        status: "planned",
+        createdAt: Date.now() + index,
+      })),
+    );
     await db.insert(stateVersions).values({
       id: `sv-outputs-${suffix}`,
       workspaceId,
@@ -239,37 +252,40 @@ describe("team token workspace authorization", () => {
       type: "teams",
     });
 
-    for (const token of [
-      tokens.read,
-      tokens.plan,
-      tokens.write,
-      tokens.admin,
-      tokens.custom,
-      tokens.noState,
-    ]) {
+    for (const token of [tokens.read, tokens.plan, tokens.write, tokens.admin, tokens.custom, tokens.noState]) {
       expect((await request(`/api/v2/workspaces/${workspaceId}`, token)).status).toBe(200);
       expect((await request(`/api/v2/workspaces/${unassignedWorkspaceId}`, token)).status).toBe(404);
-      expect((await request("/api/v2/runs", token, "POST", {
-        data: {
-          type: "runs",
-          relationships: {
-            workspace: { data: { id: unassignedWorkspaceId, type: "workspaces" } },
-          },
-        },
-      })).status).toBe(404);
+      expect(
+        (
+          await request("/api/v2/runs", token, "POST", {
+            data: {
+              type: "runs",
+              relationships: {
+                workspace: { data: { id: unassignedWorkspaceId, type: "workspaces" } },
+              },
+            },
+          })
+        ).status,
+      ).toBe(404);
     }
 
     const listResponse = await request(`/api/v2/organizations/${orgName}/workspaces`, tokens.read);
     expect(listResponse.status).toBe(200);
-    expect((await responseData<{ id: string }[]>(listResponse)).map((workspace) => workspace.id)).toEqual([workspaceId]);
+    expect((await responseData<{ id: string }[]>(listResponse)).map((workspace) => workspace.id)).toEqual([
+      workspaceId,
+    ]);
   });
 
   it("enforces read and plan roles, including workspace auto-apply", async () => {
     expect((await request("/api/v2/runs", tokens.read, "POST", runBody())).status).toBe(403);
     expect((await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, tokens.read, "POST")).status).toBe(403);
-    expect((await request(`/api/v2/workspaces/${workspaceId}`, tokens.read, "PATCH", {
-      data: { type: "workspaces", attributes: { description: "forbidden" } },
-    })).status).toBe(403);
+    expect(
+      (
+        await request(`/api/v2/workspaces/${workspaceId}`, tokens.read, "PATCH", {
+          data: { type: "workspaces", attributes: { description: "forbidden" } },
+        })
+      ).status,
+    ).toBe(403);
 
     expect((await request("/api/v2/runs", tokens.plan, "POST", runBody({ "auto-apply": true }))).status).toBe(403);
     const planResponse = await request("/api/v2/runs", tokens.plan, "POST", runBody({ message: "plan-only access" }));
@@ -340,12 +356,9 @@ describe("team token workspace authorization", () => {
       "can-read-state-versions": false,
       "can-read-variable": false,
     });
-    expect((await request(`/api/v2/workspaces/${workspaceId}/resources`, tokens.custom)).status)
-      .toBe(200);
-    expect((await request(`/api/v2/workspaces/${workspaceId}/resources`, tokens.noState)).status)
-      .toBe(404);
-    expect((await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, tokens.noState)).status)
-      .toBe(404);
+    expect((await request(`/api/v2/workspaces/${workspaceId}/resources`, tokens.custom)).status).toBe(200);
+    expect((await request(`/api/v2/workspaces/${workspaceId}/resources`, tokens.noState)).status).toBe(404);
+    expect((await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, tokens.noState)).status).toBe(404);
 
     const bindingBody = {
       data: {
@@ -354,10 +367,18 @@ describe("team token workspace authorization", () => {
         relationships: { "run-task": { data: { id: runTaskId, type: "run-tasks" } } },
       },
     };
-    expect((await request(`/api/v2/workspaces/${workspaceId}/run-tasks`, tokens.plan, "POST", bindingBody)).status).toBe(404);
-    expect((await request(`/api/v2/workspaces/${workspaceId}/run-tasks`, tokens.custom, "POST", bindingBody)).status).toBe(404);
-    expect((await request(`/api/v2/workspaces/${workspaceId}/run-tasks`, tokens.manager, "POST", bindingBody)).status).toBe(201);
-    expect((await request(`/api/v2/workspaces/${workspaceId}/run-tasks/${runTaskId}`, tokens.manager, "DELETE")).status).toBe(204);
+    expect(
+      (await request(`/api/v2/workspaces/${workspaceId}/run-tasks`, tokens.plan, "POST", bindingBody)).status,
+    ).toBe(404);
+    expect(
+      (await request(`/api/v2/workspaces/${workspaceId}/run-tasks`, tokens.custom, "POST", bindingBody)).status,
+    ).toBe(404);
+    expect(
+      (await request(`/api/v2/workspaces/${workspaceId}/run-tasks`, tokens.manager, "POST", bindingBody)).status,
+    ).toBe(201);
+    expect(
+      (await request(`/api/v2/workspaces/${workspaceId}/run-tasks/${runTaskId}`, tokens.manager, "DELETE")).status,
+    ).toBe(204);
   });
 
   it("encrypts run-task HMAC keys on API create and update", async () => {
@@ -408,12 +429,11 @@ describe("team token workspace authorization", () => {
       expect(data.id).toBe(workspaceId);
       const relationships = (body as { data: { relationships: Record<string, unknown> } }).data.relationships;
       expect(relationships["outputs"]).toMatchObject({
-        data: [
-          { id: expect.any(String), type: "workspace-outputs" },
-        ],
+        data: [{ id: expect.any(String), type: "workspace-outputs" }],
         links: { related: `/api/v2/workspaces/${workspaceId}/current-state-version-outputs` },
       });
-      const included = (body as { included?: { id: string; type: string; attributes: Record<string, unknown> }[] }).included ?? [];
+      const included =
+        (body as { included?: { id: string; type: string; attributes: Record<string, unknown> }[] }).included ?? [];
       expect(included.length).toBe(1);
       expect(included[0]?.type).toBe("workspace-outputs");
       expect(included[0]?.attributes).toMatchObject({
@@ -436,22 +456,34 @@ describe("team token workspace authorization", () => {
     await waitForWorkspaceUnlock();
     expect((await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, tokens.write, "POST")).status).toBe(200);
     expect((await request(`/api/v2/workspaces/${workspaceId}/actions/unlock`, tokens.write, "POST")).status).toBe(200);
-    expect((await request(`/api/v2/workspaces/${workspaceId}`, tokens.write, "PATCH", {
-      data: { type: "workspaces", attributes: { description: "forbidden" } },
-    })).status).toBe(403);
+    expect(
+      (
+        await request(`/api/v2/workspaces/${workspaceId}`, tokens.write, "PATCH", {
+          data: { type: "workspaces", attributes: { description: "forbidden" } },
+        })
+      ).status,
+    ).toBe(403);
 
     expect((await request(`/api/v2/runs/${applyRunIds.custom}/actions/apply`, tokens.custom, "POST")).status).toBe(202);
     await waitForTerminalRun(applyRunIds.custom);
     await waitForWorkspaceUnlock();
     expect((await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, tokens.custom, "POST")).status).toBe(200);
     expect((await request(`/api/v2/workspaces/${workspaceId}/actions/unlock`, tokens.custom, "POST")).status).toBe(200);
-    expect((await request(`/api/v2/workspaces/${workspaceId}`, tokens.custom, "PATCH", {
-      data: { type: "workspaces", attributes: { description: "forbidden" } },
-    })).status).toBe(403);
+    expect(
+      (
+        await request(`/api/v2/workspaces/${workspaceId}`, tokens.custom, "PATCH", {
+          data: { type: "workspaces", attributes: { description: "forbidden" } },
+        })
+      ).status,
+    ).toBe(403);
     expect((await request(`/api/v2/workspaces/${workspaceId}/vars`, tokens.custom)).status).toBe(200);
-    expect((await request(`/api/v2/workspaces/${workspaceId}/vars`, tokens.custom, "POST", {
-      data: { type: "vars", attributes: { key: "not-allowed", value: "no" } },
-    })).status).toBe(404);
+    expect(
+      (
+        await request(`/api/v2/workspaces/${workspaceId}/vars`, tokens.custom, "POST", {
+          data: { type: "vars", attributes: { key: "not-allowed", value: "no" } },
+        })
+      ).status,
+    ).toBe(404);
   });
 
   it("reserves workspace settings and force-cancel for admins", async () => {
@@ -459,7 +491,9 @@ describe("team token workspace authorization", () => {
       data: { type: "workspaces", attributes: { description: "administered" } },
     });
     expect(patchResponse.status).toBe(200);
-    expect((await responseData<{ attributes: { description: string } }>(patchResponse)).attributes.description).toBe("administered");
+    expect((await responseData<{ attributes: { description: string } }>(patchResponse)).attributes.description).toBe(
+      "administered",
+    );
 
     const forceRunId = `run-force-${suffix}`;
     await db.insert(runs).values({
@@ -475,13 +509,23 @@ describe("team token workspace authorization", () => {
 
   it("propagates team workspace access through assessment APIs", async () => {
     expect((await request(`/api/v2/assessment-results/${assessmentIds.assigned}`, tokens.read)).status).toBe(200);
-    expect((await request(`/api/v2/assessment-results/${assessmentIds.assigned}/check-results`, tokens.read)).status).toBe(200);
+    expect(
+      (await request(`/api/v2/assessment-results/${assessmentIds.assigned}/check-results`, tokens.read)).status,
+    ).toBe(200);
     expect((await request(`/api/v2/runs/${applyRunIds.plan}/check-results`, tokens.read)).status).toBe(200);
     expect((await request(`/api/v2/assessment-results/${assessmentIds.unassigned}`, tokens.read)).status).toBe(404);
-    expect((await request(`/api/v2/assessment-results/${assessmentIds.assigned}/json-output`, tokens.read)).status).toBe(403);
-    expect((await request(`/api/v2/assessment-results/${assessmentIds.assigned}/json-output`, tokens.admin)).status).toBe(200);
-    expect((await request(`/api/v2/assessment-results/${assessmentIds.unassigned}/json-output`, tokens.manager)).status).toBe(200);
-    expect((await request(`/api/v2/assessment-results/${assessmentIds.assigned}/json-output`, orgToken)).status).toBe(403);
+    expect(
+      (await request(`/api/v2/assessment-results/${assessmentIds.assigned}/json-output`, tokens.read)).status,
+    ).toBe(403);
+    expect(
+      (await request(`/api/v2/assessment-results/${assessmentIds.assigned}/json-output`, tokens.admin)).status,
+    ).toBe(200);
+    expect(
+      (await request(`/api/v2/assessment-results/${assessmentIds.unassigned}/json-output`, tokens.manager)).status,
+    ).toBe(200);
+    expect((await request(`/api/v2/assessment-results/${assessmentIds.assigned}/json-output`, orgToken)).status).toBe(
+      403,
+    );
   });
 
   it("honors manage-workspaces organization access as workspace admin access", async () => {
@@ -499,6 +543,8 @@ describe("team token workspace authorization", () => {
     const run = await responseData<{ attributes: { permissions: Record<string, boolean> } }>(readResponse);
     expect(run.attributes.permissions["can-apply"]).toBe(false);
     expect((await request("/api/v2/runs", orgToken, "POST", runBody())).status).toBe(403);
-    expect((await request(`/api/v2/runs/${applyRunIds.organization}/actions/apply`, orgToken, "POST")).status).toBe(403);
+    expect((await request(`/api/v2/runs/${applyRunIds.organization}/actions/apply`, orgToken, "POST")).status).toBe(
+      403,
+    );
   });
 });

@@ -103,7 +103,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     if (url === "/api/v2/admin/saml-settings" && init?.method === "PATCH") {
       // SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const body = isString(init.body)
-        ? JSON.parse(init.body) as { data?: { attributes?: { enabled?: unknown } } }
+        ? (JSON.parse(init.body) as { data?: { attributes?: { enabled?: unknown } } })
         : {};
       samlServerEnabled = body.data?.attributes?.enabled === true;
       return json({
@@ -127,9 +127,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     }
     if (url === "/api/v2/admin/oidc-settings" && init?.method === "PATCH") {
       // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const body = isString(init.body)
-        ? JSON.parse(init.body) as { data?: { attributes?: JsonObject } }
-        : {};
+      const body = isString(init.body) ? (JSON.parse(init.body) as { data?: { attributes?: JsonObject } }) : {};
       const attributes = body.data?.attributes ?? {};
       oidcPatchAttributes = attributes;
       oidcServerEnabled = attributes["enabled"] === true;
@@ -151,13 +149,27 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
       });
     }
     if (url === "/api/v2/admin/general-settings" && init?.method === undefined) {
-      return json({ data: { id: "general-settings", type: "general-settings", attributes: { "local-auth-enabled": localAuthServerEnabled } } });
+      return json({
+        data: {
+          id: "general-settings",
+          type: "general-settings",
+          attributes: { "local-auth-enabled": localAuthServerEnabled },
+        },
+      });
     }
     if (url === "/api/v2/admin/general-settings" && init?.method === "PATCH") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const body = isString(init.body) ? JSON.parse(init.body) as { data?: { attributes?: { "local-auth-enabled"?: boolean } } } : {};
+      // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+      const body = isString(init.body)
+        ? (JSON.parse(init.body) as { data?: { attributes?: { "local-auth-enabled"?: boolean } } })
+        : {};
       localAuthServerEnabled = body.data?.attributes?.["local-auth-enabled"] ?? localAuthServerEnabled;
-      return json({ data: { id: "general-settings", type: "general-settings", attributes: { "local-auth-enabled": localAuthServerEnabled } } });
+      return json({
+        data: {
+          id: "general-settings",
+          type: "general-settings",
+          attributes: { "local-auth-enabled": localAuthServerEnabled },
+        },
+      });
     }
     if (url === "/api/v2/admin/ldap-settings" && init?.method === undefined) {
       return json({
@@ -182,22 +194,25 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     }
     if (url === "/api/v2/admin/ldap-settings" && init?.method === "PATCH") {
       // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const body = isString(init.body)
-        ? JSON.parse(init.body) as { data?: { attributes?: JsonObject } }
-        : {};
+      const body = isString(init.body) ? (JSON.parse(init.body) as { data?: { attributes?: JsonObject } }) : {};
       ldapPatchAttributes = body.data?.attributes ?? null;
       ldapServerEnabled = body.data?.attributes?.["enabled"] === true;
       return json({
         data: {
           id: "ldap-settings",
           type: "ldap-settings",
-          attributes: { enabled: ldapServerEnabled, host: "ldap.example.com", port: 389, "base-dn": "dc=example,dc=com" },
+          attributes: {
+            enabled: ldapServerEnabled,
+            host: "ldap.example.com",
+            port: 389,
+            "base-dn": "dc=example,dc=com",
+          },
         },
       });
     }
     throw new Error(`Unexpected request: ${url} method=${init?.method ?? "GET"}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/admin/auth"]}>
@@ -212,25 +227,26 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   );
 
   // The admin sections live in the sidebar, not in a dashboard navbar
-  await waitFor((): void => { expect(view.getByText("SAML SSO")).toBeTruthy(); });
-  expect(view.getByRole("link", { name: "Site overview" }).getAttribute("href"))
-    .toBe("/app/admin");
-  expect(view.getByRole("link", { name: "Users" }).getAttribute("href"))
-    .toBe("/app/admin/users");
+  await waitFor((): void => {
+    expect(view.getByText("SAML SSO")).toBeTruthy();
+  });
+  expect(view.getByRole("link", { name: "Site overview" }).getAttribute("href")).toBe("/app/admin");
+  expect(view.getByRole("link", { name: "Users" }).getAttribute("href")).toBe("/app/admin/users");
   expect(
-    view.getAllByRole("link", { name: "Organizations" })
+    view
+      .getAllByRole("link", { name: "Organizations" })
       .some((link): boolean => link.getAttribute("href") === "/app/admin/organizations"),
   ).toBeTrue();
-  expect(view.getByRole("link", { name: "Authentication" }).getAttribute("aria-current"))
-    .toBe("page");
+  expect(view.getByRole("link", { name: "Authentication" }).getAttribute("aria-current")).toBe("page");
 
   // Navigate between sections via the sidebar
   fireEvent.click(view.getByRole("link", { name: "Users" }));
-  await waitFor((): void => { expect(view.getByText("Registered Users")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Registered Users")).toBeTruthy();
+  });
   fireEvent.click(view.getByRole("link", { name: "Authentication" }));
   await waitFor((): void => {
-    expect(view.getByRole("link", { name: "Authentication" }).getAttribute("aria-current"))
-      .toBe("page");
+    expect(view.getByRole("link", { name: "Authentication" }).getAttribute("aria-current")).toBe("page");
     expect(view.getByLabelText("Enable SAML SSO")).toBeTruthy();
   });
   expect(view.getByText("OpenID Connect")).toBeTruthy();
@@ -240,23 +256,32 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   expect(within(samlSection).getByText(/Security Assertion Markup Language/)).toBeTruthy();
 
   // Enable SAML
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const samlEnabledCheckbox = within(samlSection).getByLabelText("Enable SAML SSO") as HTMLInputElement;
   expect(samlEnabledCheckbox.checked).toBeFalse();
-  await act(async (): Promise<void> => { fireEvent.click(samlEnabledCheckbox); });
+  await act(async (): Promise<void> => {
+    fireEvent.click(samlEnabledCheckbox);
+  });
 
   // Fill in SSO endpoint
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const ssoInput = within(samlSection).getByLabelText("SSO Endpoint URL") as HTMLInputElement;
-  await act(async (): Promise<void> => { typeInput(ssoInput, "https://idp.example.com/sso"); });
+  await act(async (): Promise<void> => {
+    typeInput(ssoInput, "https://idp.example.com/sso");
+  });
   expect(ssoInput.value).toBe("https://idp.example.com/sso");
 
   // Save SAML settings
   const saveSaml = within(samlSection).getByRole("button", { name: "Save SAML settings" });
-  await act(async (): Promise<void> => { fireEvent.click(saveSaml); });
+  await act(async (): Promise<void> => {
+    fireEvent.click(saveSaml);
+  });
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-      urlOf(input) === "/api/v2/admin/saml-settings" && init?.method === "PATCH")).toBeTrue();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]): boolean => urlOf(input) === "/api/v2/admin/saml-settings" && init?.method === "PATCH",
+      ),
+    ).toBeTrue();
   });
 
   // --- OIDC section ---
@@ -264,21 +289,30 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   expect(within(oidcSection).getByText(/OpenID Connect provider/)).toBeTruthy();
 
   // Fill in OIDC issuer URL and client ID
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const issuerInput = within(oidcSection).getByLabelText("Issuer URL") as HTMLInputElement;
-  await act(async (): Promise<void> => { typeInput(issuerInput, "https://accounts.example.com"); });
+  await act(async (): Promise<void> => {
+    typeInput(issuerInput, "https://accounts.example.com");
+  });
   expect(issuerInput.value).toBe("https://accounts.example.com");
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const clientIdInput = within(oidcSection).getByLabelText("Client ID") as HTMLInputElement;
-  await act(async (): Promise<void> => { typeInput(clientIdInput, "my-client-id"); });
+  await act(async (): Promise<void> => {
+    typeInput(clientIdInput, "my-client-id");
+  });
   expect(clientIdInput.value).toBe("my-client-id");
 
   // Save OIDC settings
   const saveOidc = within(oidcSection).getByRole("button", { name: "Save OIDC settings" });
-  await act(async (): Promise<void> => { fireEvent.click(saveOidc); });
+  await act(async (): Promise<void> => {
+    fireEvent.click(saveOidc);
+  });
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-      urlOf(input) === "/api/v2/admin/oidc-settings" && init?.method === "PATCH")).toBeTrue();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]): boolean => urlOf(input) === "/api/v2/admin/oidc-settings" && init?.method === "PATCH",
+      ),
+    ).toBeTrue();
   });
   // The secret field was left untouched: with a client ID configured, an
   // empty secret preserves the stored value instead of clearing it.
@@ -288,50 +322,70 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   const localAuthCard = view.getByText("Local authentication").closest<HTMLElement>('[data-slot="card"]');
   expect(localAuthCard).not.toBeNull();
   if (localAuthCard === null) throw new Error("Local authentication card is missing");
-// SAFETY: the component renders this element type for the queried role/label.
-  const localAuthCheckbox = within(localAuthCard).getByLabelText("Allow local password authentication") as HTMLInputElement;
+  // SAFETY: the component renders this element type for the queried role/label.
+  const localAuthCheckbox = within(localAuthCard).getByLabelText(
+    "Allow local password authentication",
+  ) as HTMLInputElement;
   expect(localAuthCheckbox.checked).toBeTrue();
-  await act(async (): Promise<void> => { fireEvent.click(localAuthCheckbox); });
+  await act(async (): Promise<void> => {
+    fireEvent.click(localAuthCheckbox);
+  });
   const saveLocalAuth = within(localAuthCard).getByRole("button", { name: "Save sign-in settings" });
-  await act(async (): Promise<void> => { fireEvent.click(saveLocalAuth); });
+  await act(async (): Promise<void> => {
+    fireEvent.click(saveLocalAuth);
+  });
   await waitFor((): void => {
     // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-      urlOf(input) === "/api/v2/admin/general-settings"
-      && init?.method === "PATCH"
-      && isString(init.body)
-      && !(JSON.parse(init.body) as { data: { attributes: { "local-auth-enabled": boolean } } }).data.attributes["local-auth-enabled"],
-    )).toBeTrue();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]): boolean =>
+          urlOf(input) === "/api/v2/admin/general-settings" &&
+          init?.method === "PATCH" &&
+          isString(init.body) &&
+          !(JSON.parse(init.body) as { data: { attributes: { "local-auth-enabled": boolean } } }).data.attributes[
+            "local-auth-enabled"
+          ],
+      ),
+    ).toBeTrue();
   });
 
   // --- LDAP section ---
   const ldapSection = view.getByText("LDAP").closest<HTMLElement>('[data-slot="card"]');
   if (ldapSection === null) throw new Error("LDAP card is missing");
   expect(within(ldapSection).getByText(/directory access protocol password authentication/i)).toBeTruthy();
-  await waitFor((): void => { expect(view.getByRole("button", { name: "Save LDAP settings" })).toBeTruthy(); });
-// SAFETY: the component renders this element type for the queried role/label.
+  await waitFor((): void => {
+    expect(view.getByRole("button", { name: "Save LDAP settings" })).toBeTruthy();
+  });
+  // SAFETY: the component renders this element type for the queried role/label.
   const ldapEnabledCheckbox = within(ldapSection).getByLabelText("Enable LDAP") as HTMLInputElement;
   expect(ldapEnabledCheckbox.checked).toBeFalse();
 
   await waitFor((): void => {
-// SAFETY: the component renders this element type for the queried role/label.
+    // SAFETY: the component renders this element type for the queried role/label.
     expect((view.getByLabelText("LDAP host") as HTMLInputElement).value).toBe("ldap.example.com");
-// SAFETY: the component renders this element type for the queried role/label.
+    // SAFETY: the component renders this element type for the queried role/label.
     expect((view.getByLabelText("LDAP base DN") as HTMLInputElement).value).toBe("dc=example,dc=com");
   });
-  await act(async (): Promise<void> => { fireEvent.click(ldapEnabledCheckbox); });
+  await act(async (): Promise<void> => {
+    fireEvent.click(ldapEnabledCheckbox);
+  });
   const saveLdap = within(ldapSection).getByRole("button", { name: "Save LDAP settings" });
   // Fill in a service account bind DN
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const bindDnInput = within(ldapSection).getByLabelText("LDAP bind DN") as HTMLInputElement;
-  await act(async (): Promise<void> => { typeInput(bindDnInput, "cn=service,dc=example,dc=com"); });
+  await act(async (): Promise<void> => {
+    typeInput(bindDnInput, "cn=service,dc=example,dc=com");
+  });
   expect(bindDnInput.value).toBe("cn=service,dc=example,dc=com");
   await act(async (): Promise<void> => {
     fireEvent.click(saveLdap);
   });
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-      urlOf(input) === "/api/v2/admin/ldap-settings" && init?.method === "PATCH")).toBeTrue();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]): boolean => urlOf(input) === "/api/v2/admin/ldap-settings" && init?.method === "PATCH",
+      ),
+    ).toBeTrue();
   });
   // The bind password field was left untouched: with a bind DN configured,
   // an empty password preserves the stored value instead of clearing it.
@@ -340,15 +394,15 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
 });
 
 test("hides the site administration sidebar from non-admin users", async (): Promise<void> => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "bob", "is-site-admin": false } } });
     }
     if (url === "/api/v2/organizations?page[size]=100") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/admin"]}>
@@ -362,7 +416,9 @@ test("hides the site administration sidebar from non-admin users", async (): Pro
   );
 
   // Non-admins are redirected to the app home once their account is loaded
-  await waitFor((): void => { expect(view.getByText("Redirect target")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Redirect target")).toBeTruthy();
+  });
   expect(view.queryByRole("link", { name: "Authentication" })).toBeNull();
   expect(view.queryByRole("link", { name: "Site overview" })).toBeNull();
   expect(view.getByRole("link", { name: "Organizations" }).getAttribute("href")).toBe("/app");
@@ -388,14 +444,20 @@ test("shows the security overview from existing admin controls", async (): Promi
     }
     if (url === "/api/v2/ping") return json({ "signup-enabled": false });
     if (url === "/api/v2/meta") {
-      return json({ data: { id: "meta", type: "meta", attributes: { "run-sandbox": { enabled: true, available: true, reason: null } } } });
+      return json({
+        data: {
+          id: "meta",
+          type: "meta",
+          attributes: { "run-sandbox": { enabled: true, available: true, reason: null } },
+        },
+      });
     }
     if (url === "/api/v2/admin/saml-settings") return json({ data: { attributes: { enabled: true } } });
     if (url === "/api/v2/admin/oidc-settings") return json({ data: { attributes: { enabled: false } } });
     if (url === "/api/v2/admin/ldap-settings") return json({ data: { attributes: { enabled: false } } });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/admin"]}>
@@ -407,9 +469,10 @@ test("shows the security overview from existing admin controls", async (): Promi
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("Identity providers")).toBeTruthy(); });
-  expect(view.getByRole("link", { name: "Site overview" }).getAttribute("aria-current"))
-    .toBe("page");
+  await waitFor((): void => {
+    expect(view.getByText("Identity providers")).toBeTruthy();
+  });
+  expect(view.getByRole("link", { name: "Site overview" }).getAttribute("aria-current")).toBe("page");
 
   const identityCard = view.getByText("Identity providers").closest<HTMLElement>('[data-slot="card"]') ?? document.body;
   expect(within(identityCard).getByText("Enabled")).toBeTruthy();

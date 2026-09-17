@@ -26,8 +26,9 @@ describe("log truncation #367, #590", (): void => {
       .filter((file): boolean => file.endsWith(".tsx"))
       .map((file): string => join(sectionDir, file));
     const sources = await Promise.all(
-      [join(import.meta.dir, "../src/views/RunDetail.tsx"), ...sectionFiles]
-        .map((file): Promise<string> => readFile(file, "utf8")),
+      [join(import.meta.dir, "../src/views/RunDetail.tsx"), ...sectionFiles].map(
+        (file): Promise<string> => readFile(file, "utf8"),
+      ),
     );
     const source = sources.join("\n");
     const uses = (source.match(/truncateLogForDisplay\(/g) ?? []).length;

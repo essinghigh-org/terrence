@@ -10,7 +10,10 @@ type ObservedRequest = Readonly<{
   url: string;
 }>;
 
-function observe(target: Readonly<{ url: string }>, init: Readonly<{ body?: string; headers?: Readonly<Record<string, string>>; method: string }>): ObservedRequest {
+function observe(
+  target: Readonly<{ url: string }>,
+  init: Readonly<{ body?: string; headers?: Readonly<Record<string, string>>; method: string }>,
+): ObservedRequest {
   const headers = new Headers(init.headers);
   return {
     authorization: headers.get("authorization"),

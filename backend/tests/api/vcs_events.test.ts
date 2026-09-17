@@ -48,7 +48,7 @@ describe("VCS Events API", () => {
       new Request(`http://localhost/api/v2/organizations/${orgName}/vcs-events`, {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(200);

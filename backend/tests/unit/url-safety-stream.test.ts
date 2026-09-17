@@ -25,7 +25,9 @@ describe("streamed external URL responses", () => {
     });
     await new Promise<void>((resolve, reject): void => {
       server.once("error", reject);
-      server.listen(0, "127.0.0.1", (): void => { resolve(); });
+      server.listen(0, "127.0.0.1", (): void => {
+        resolve();
+      });
     });
   });
 

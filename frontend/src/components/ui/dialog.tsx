@@ -25,7 +25,7 @@ function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props):
       className={cn(
         "fixed inset-0 z-50 bg-black/60 backdrop-blur-sm duration-200",
         "data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
-        className
+        className,
       )}
       {...props}
     />
@@ -130,43 +130,20 @@ function DrawerContent({
   );
 }
 
-function DialogHeader({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
-  return (
-    <div
-      className={cn(
-        "flex flex-col space-y-1.5 text-center sm:text-left",
-        className
-      )}
-      {...props}
-    />
-  );
+function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
+  return <div className={cn("flex flex-col space-y-1.5 text-center sm:text-left", className)} {...props} />;
 }
 
-function DialogFooter({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
+function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
   return (
-    <div
-      className={cn(
-        "flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end",
-        className
-      )}
-      {...props}
-    />
+    <div className={cn("flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end", className)} {...props} />
   );
 }
 
 function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props): React.JSX.Element {
   return (
     <DialogPrimitive.Title
-      className={cn(
-        "font-heading text-xl font-semibold leading-tight tracking-tight",
-        className
-      )}
+      className={cn("font-heading text-xl font-semibold leading-tight tracking-tight", className)}
       {...props}
     />
   );

@@ -1,4 +1,10 @@
-import { deploymentSecretNames, parseDeploymentSecret, parseSecretConfiguration, type DeploymentSecretName, type SecretConfiguration } from "./secret-config";
+import {
+  deploymentSecretNames,
+  parseDeploymentSecret,
+  parseSecretConfiguration,
+  type DeploymentSecretName,
+  type SecretConfiguration,
+} from "./secret-config";
 import { parseIntegrationConfiguration, type IntegrationConfiguration } from "./integration-config";
 import { parseNetworkConfiguration, type NetworkConfiguration } from "./network-config";
 import { assertKnownEnvironmentNames } from "./environment-names";
@@ -91,14 +97,21 @@ export const booleanConfiguration = {
 export type BooleanConfigurationName = keyof typeof booleanConfiguration;
 
 type ExecutionConfiguration = Readonly<
-  Record<"TERRENCE_RUN_SANDBOX", boolean>
-  & Record<"TERRENCE_RUN_NET_POLICY", "allow" | "deny">
-  & Record<"TERRENCE_EXECUTOR_BACKEND", "landlock" | "container" | "kubernetes" | "agent" | "microvm">
-  & Record<"PUBLIC_URL", string | null>
-  & Record<"CORS_ORIGIN", readonly string[]>
-  & Record<"TERRENCE_SANDBOX_MIN_ABI", number | null>
+  Record<"TERRENCE_RUN_SANDBOX", boolean> &
+    Record<"TERRENCE_RUN_NET_POLICY", "allow" | "deny"> &
+    Record<"TERRENCE_EXECUTOR_BACKEND", "landlock" | "container" | "kubernetes" | "agent" | "microvm"> &
+    Record<"PUBLIC_URL", string | null> &
+    Record<"CORS_ORIGIN", readonly string[]> &
+    Record<"TERRENCE_SANDBOX_MIN_ABI", number | null>
 >;
-export type RuntimeConfiguration = Readonly<Record<IntegerConfigurationName, number>> & ExecutionConfiguration & Readonly<Record<BooleanConfigurationName, boolean>> & LoggingEnvironment & ListenerConfiguration & NetworkConfiguration & IntegrationConfiguration & SecretConfiguration;
+export type RuntimeConfiguration = Readonly<Record<IntegerConfigurationName, number>> &
+  ExecutionConfiguration &
+  Readonly<Record<BooleanConfigurationName, boolean>> &
+  LoggingEnvironment &
+  ListenerConfiguration &
+  NetworkConfiguration &
+  IntegrationConfiguration &
+  SecretConfiguration;
 type Environment = Readonly<Record<string, string | undefined>>;
 export type ConfigurationReportEntry = Readonly<{
   name: keyof RuntimeConfiguration;
@@ -130,8 +143,15 @@ function parsePublicUrl(raw: string | undefined): string | null {
   if (raw === undefined) return null;
   try {
     const url = new URL(raw);
-    if (!["http:", "https:"].includes(url.protocol) || url.username !== "" || url.password !== ""
-      || url.search !== "" || url.hash !== "" || raw.trim() !== raw) throw new Error();
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.search !== "" ||
+      url.hash !== "" ||
+      raw.trim() !== raw
+    )
+      throw new Error();
     return url.toString();
   } catch {
     throw new Error("PUBLIC_URL must be an HTTP(S) URL without credentials, query, or fragment");
@@ -146,7 +166,9 @@ function parseOrigins(raw: string | undefined): readonly string[] {
       const url = new URL(origin);
       if (!["http:", "https:"].includes(url.protocol) || url.origin !== origin) throw new Error();
     } catch {
-      throw new Error("CORS_ORIGIN must be comma-separated HTTP(S) origins without paths, credentials, query, or fragment");
+      throw new Error(
+        "CORS_ORIGIN must be comma-separated HTTP(S) origins without paths, credentials, query, or fragment",
+      );
     }
   }
   return Object.freeze([...new Set(origins)]);
@@ -163,7 +185,13 @@ function parseSandboxMinimum(raw: string | undefined): number | null {
 
 function parseExecutionConfiguration(environment: Environment): ExecutionConfiguration {
   const executor = (environment["TERRENCE_EXECUTOR_BACKEND"] ?? "landlock").trim().toLowerCase();
-  if (executor !== "landlock" && executor !== "container" && executor !== "kubernetes" && executor !== "agent" && executor !== "microvm") {
+  if (
+    executor !== "landlock" &&
+    executor !== "container" &&
+    executor !== "kubernetes" &&
+    executor !== "agent" &&
+    executor !== "microvm"
+  ) {
     throw new Error("TERRENCE_EXECUTOR_BACKEND must be landlock, container, kubernetes, agent, or microvm");
   }
   const sandbox = (environment["TERRENCE_RUN_SANDBOX"] ?? "true").toLowerCase();
@@ -173,7 +201,8 @@ function parseExecutionConfiguration(environment: Environment): ExecutionConfigu
   const required = ["true", "1", "yes", "on"].includes(sandbox);
   const policy = (environment["TERRENCE_RUN_NET_POLICY"] ?? "allow").toLowerCase().trim();
   if (policy !== "allow" && policy !== "deny") throw new Error("TERRENCE_RUN_NET_POLICY must be allow or deny");
-  if (!required && policy === "deny") throw new Error("TERRENCE_RUN_NET_POLICY=deny requires TERRENCE_RUN_SANDBOX=true");
+  if (!required && policy === "deny")
+    throw new Error("TERRENCE_RUN_NET_POLICY=deny requires TERRENCE_RUN_SANDBOX=true");
   return {
     TERRENCE_SANDBOX_MIN_ABI: parseSandboxMinimum(environment["TERRENCE_SANDBOX_MIN_ABI"]),
     TERRENCE_EXECUTOR_BACKEND: executor,
@@ -185,19 +214,37 @@ function parseExecutionConfiguration(environment: Environment): ExecutionConfigu
 }
 
 export function parseRuntimeConfiguration(environment: Environment, rejectUnknown = false): RuntimeConfiguration {
-  const values = Object.fromEntries(Object.keys(integerConfiguration).map((key): [string, number] => {
-    const name = key as IntegerConfigurationName;
-    return [name, parseInteger(name, environment)];
-  })) as Record<IntegerConfigurationName, number>;
+  const values = Object.fromEntries(
+    Object.keys(integerConfiguration).map((key): [string, number] => {
+      const name = key as IntegerConfigurationName;
+      return [name, parseInteger(name, environment)];
+    }),
+  ) as Record<IntegerConfigurationName, number>;
   if (values.PORT === values.SYSTEM_API_PORT) {
     throw new Error("PORT and SYSTEM_API_PORT must use different ports");
   }
-  const flags = Object.fromEntries(Object.keys(booleanConfiguration).map((key): [string, boolean] => {
-    const name = key as BooleanConfigurationName;
-    return [name, parseBoolean(name, environment)];
-  })) as Record<BooleanConfigurationName, boolean>;
-  const configuration = Object.freeze({ ...values, ...flags, ...parseExecutionConfiguration(environment), ...parseLoggingEnvironment(environment), ...parseListenerConfiguration(environment), ...parseNetworkConfiguration(environment), ...parseIntegrationConfiguration(environment), ...parseSecretConfiguration(environment) });
-  if (rejectUnknown && Object.keys(environment).some((key): boolean => !Object.hasOwn(configuration, key) && key !== "TERRENCE_SYSLOG_TARGET")) {
+  const flags = Object.fromEntries(
+    Object.keys(booleanConfiguration).map((key): [string, boolean] => {
+      const name = key as BooleanConfigurationName;
+      return [name, parseBoolean(name, environment)];
+    }),
+  ) as Record<BooleanConfigurationName, boolean>;
+  const configuration = Object.freeze({
+    ...values,
+    ...flags,
+    ...parseExecutionConfiguration(environment),
+    ...parseLoggingEnvironment(environment),
+    ...parseListenerConfiguration(environment),
+    ...parseNetworkConfiguration(environment),
+    ...parseIntegrationConfiguration(environment),
+    ...parseSecretConfiguration(environment),
+  });
+  if (
+    rejectUnknown &&
+    Object.keys(environment).some(
+      (key): boolean => !Object.hasOwn(configuration, key) && key !== "TERRENCE_SYSLOG_TARGET",
+    )
+  ) {
     throw new Error("Unsupported setting in configuration example");
   }
   assertKnownEnvironmentNames(environment, configuration);
@@ -207,14 +254,43 @@ export function parseRuntimeConfiguration(environment: Environment, rejectUnknow
 let startupConfiguration: RuntimeConfiguration | undefined;
 let startupReport: readonly ConfigurationReportEntry[] | undefined;
 
-function configurationReport(values: RuntimeConfiguration, environment: Environment): readonly ConfigurationReportEntry[] {
-  const redacted = new Set<string>([...deploymentSecretNames, "TERRENCE_SANDBOX_EXTRA_RW_PATHS", "TERRENCE_AGENT_UPDATE_URL", "GITHUB_API_URL", "GITHUB_APP_API_URL", "GITHUB_APP_HTTP_URL", "SYSTEM_API_TLS_CERT", "SYSTEM_API_TLS_KEY", "STORAGE_DIR", "TERRENCE_SYSLOG_TARGETS", "TERRENCE_SYSLOG_HOSTNAME", "TERRENCE_SYSLOG_APP"]);
-  return Object.freeze(Object.keys(values).map((key): ConfigurationReportEntry => {
-    const name = key as keyof RuntimeConfiguration;
-    const inherited = name === "GITHUB_APP_API_URL" ? environment["GITHUB_API_URL"] : name === "TERRENCE_SYSLOG_TARGETS" ? environment["TERRENCE_SYSLOG_TARGET"]
-      : name === "TERRENCE_SYSLOG_LEVEL" ? environment["LOG_LEVEL"] : undefined;
-    return Object.freeze({ name, value: redacted.has(name) ? "[redacted]" : values[name], origin: environment[name] === undefined && inherited === undefined ? "default" : "environment", restartRequired: true });
-  }));
+function configurationReport(
+  values: RuntimeConfiguration,
+  environment: Environment,
+): readonly ConfigurationReportEntry[] {
+  const redacted = new Set<string>([
+    ...deploymentSecretNames,
+    "TERRENCE_SANDBOX_EXTRA_RW_PATHS",
+    "TERRENCE_AGENT_UPDATE_URL",
+    "GITHUB_API_URL",
+    "GITHUB_APP_API_URL",
+    "GITHUB_APP_HTTP_URL",
+    "SYSTEM_API_TLS_CERT",
+    "SYSTEM_API_TLS_KEY",
+    "STORAGE_DIR",
+    "TERRENCE_SYSLOG_TARGETS",
+    "TERRENCE_SYSLOG_HOSTNAME",
+    "TERRENCE_SYSLOG_APP",
+  ]);
+  return Object.freeze(
+    Object.keys(values).map((key): ConfigurationReportEntry => {
+      const name = key as keyof RuntimeConfiguration;
+      const inherited =
+        name === "GITHUB_APP_API_URL"
+          ? environment["GITHUB_API_URL"]
+          : name === "TERRENCE_SYSLOG_TARGETS"
+            ? environment["TERRENCE_SYSLOG_TARGET"]
+            : name === "TERRENCE_SYSLOG_LEVEL"
+              ? environment["LOG_LEVEL"]
+              : undefined;
+      return Object.freeze({
+        name,
+        value: redacted.has(name) ? "[redacted]" : values[name],
+        origin: environment[name] === undefined && inherited === undefined ? "default" : "environment",
+        restartRequired: true,
+      });
+    }),
+  );
 }
 
 export function initializeRuntimeConfiguration(environment: Environment = process.env): RuntimeConfiguration {
@@ -232,7 +308,9 @@ export function integerSetting(name: IntegerConfigurationName): number {
 }
 
 export function executionSetting<Name extends keyof ExecutionConfiguration>(name: Name): ExecutionConfiguration[Name] {
-  return startupConfiguration === undefined ? parseExecutionConfiguration(process.env)[name] : startupConfiguration[name];
+  return startupConfiguration === undefined
+    ? parseExecutionConfiguration(process.env)[name]
+    : startupConfiguration[name];
 }
 
 export function runtimeConfigurationReport(): readonly ConfigurationReportEntry[] {
@@ -248,17 +326,25 @@ export function loggingSetting<Name extends keyof LoggingEnvironment>(name: Name
 }
 
 export function listenerSetting<Name extends keyof ListenerConfiguration>(name: Name): ListenerConfiguration[Name] {
-  return startupConfiguration === undefined ? parseListenerConfiguration(process.env)[name] : startupConfiguration[name];
+  return startupConfiguration === undefined
+    ? parseListenerConfiguration(process.env)[name]
+    : startupConfiguration[name];
 }
 
 export function networkSetting(name: keyof NetworkConfiguration): readonly string[] {
   return startupConfiguration === undefined ? parseNetworkConfiguration(process.env)[name] : startupConfiguration[name];
 }
 
-export function integrationSetting<Name extends keyof IntegrationConfiguration>(name: Name): IntegrationConfiguration[Name] {
-  return startupConfiguration === undefined ? parseIntegrationConfiguration(process.env)[name] : startupConfiguration[name];
+export function integrationSetting<Name extends keyof IntegrationConfiguration>(
+  name: Name,
+): IntegrationConfiguration[Name] {
+  return startupConfiguration === undefined
+    ? parseIntegrationConfiguration(process.env)[name]
+    : startupConfiguration[name];
 }
 
 export function deploymentSecret(name: DeploymentSecretName): string | undefined {
-  return startupConfiguration === undefined ? parseDeploymentSecret(name, process.env[name]) : startupConfiguration[name];
+  return startupConfiguration === undefined
+    ? parseDeploymentSecret(name, process.env[name])
+    : startupConfiguration[name];
 }

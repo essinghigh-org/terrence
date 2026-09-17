@@ -101,9 +101,12 @@ export function RunDetail({
     runId: string;
     summary: PlanOutputSummary;
   }> | null>(null);
-  const handlePlanSummaryChange = useCallback((summary: PlanOutputSummary | null): void => {
-    setPlanSummary(summary === null ? null : { runId, summary });
-  }, [runId]);
+  const handlePlanSummaryChange = useCallback(
+    (summary: PlanOutputSummary | null): void => {
+      setPlanSummary(summary === null ? null : { runId, summary });
+    },
+    [runId],
+  );
 
   // Phase disclosure state resolves before the loading returns so the hook
   // count stays stable; with no run yet the statuses fall back to "".
@@ -113,10 +116,7 @@ export function RunDetail({
   // Terraform warnings and errors embedded in the phase logs surface as
   // colored bubbles; they do not affect run or phase status. Declared before
   // the early returns so the hook count stays stable across loading states.
-  const planDiagnostics = useMemo(
-    (): TerraformDiagnostic[] => extractDiagnostics(planLogs),
-    [planLogs],
-  );
+  const planDiagnostics = useMemo((): TerraformDiagnostic[] => extractDiagnostics(planLogs), [planLogs]);
   const planWarnings = useMemo(
     (): TerraformDiagnostic[] => planDiagnostics.filter((diag) => diag.severity === "warning"),
     [planDiagnostics],
@@ -125,10 +125,7 @@ export function RunDetail({
     (): TerraformDiagnostic[] => planDiagnostics.filter((diag) => diag.severity === "error"),
     [planDiagnostics],
   );
-  const applyDiagnostics = useMemo(
-    (): TerraformDiagnostic[] => extractDiagnostics(applyLogs),
-    [applyLogs],
-  );
+  const applyDiagnostics = useMemo((): TerraformDiagnostic[] => extractDiagnostics(applyLogs), [applyLogs]);
   const applyWarnings = useMemo(
     (): TerraformDiagnostic[] => applyDiagnostics.filter((diag) => diag.severity === "warning"),
     [applyDiagnostics],
@@ -144,19 +141,29 @@ export function RunDetail({
   );
 
   if (run !== null && run.id !== runId) return <div className="p-8 text-muted-foreground">Loading run…</div>;
-  if (loading && run === null) return (
-    <div role="status" aria-label="Loading run" className="flex flex-col gap-5">
-      <div className="h-3 w-40 animate-pulse rounded bg-muted" />
-      <div className="h-10 w-72 animate-pulse rounded bg-muted" />
-      <div className="h-28 animate-pulse rounded-md border bg-muted/50" />
-      <div className="h-64 animate-pulse rounded-md border bg-muted/50" />
-    </div>
-  );
+  if (loading && run === null)
+    return (
+      <div role="status" aria-label="Loading run" className="flex flex-col gap-5">
+        <div className="h-3 w-40 animate-pulse rounded bg-muted" />
+        <div className="h-10 w-72 animate-pulse rounded bg-muted" />
+        <div className="h-28 animate-pulse rounded-md border bg-muted/50" />
+        <div className="h-64 animate-pulse rounded-md border bg-muted/50" />
+      </div>
+    );
   if (run === null) {
     return (
-      <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-5 text-sm text-destructive">
+      <div
+        role="alert"
+        className="rounded-md border border-destructive/30 bg-destructive/10 p-5 text-sm text-destructive"
+      >
         <p className="font-medium">{loadError !== "" ? loadError : "Run not found"}</p>
-        <Button className="mt-3" variant="outline" onClick={(): void => { refreshAll(); }}>
+        <Button
+          className="mt-3"
+          variant="outline"
+          onClick={(): void => {
+            refreshAll();
+          }}
+        >
           Try again
         </Button>
       </div>
@@ -280,7 +287,9 @@ export function RunDetail({
             planStatus={planStatus}
             applyStatus={applyStatus}
             planExplainerEnabled={planExplainerEnabled}
-            onExplain={(kind, refresh): void => { void explainer.handleExplain(kind, refresh); }}
+            onExplain={(kind, refresh): void => {
+              void explainer.handleExplain(kind, refresh);
+            }}
             timestamps={timestamps}
             planWarnings={planWarnings}
             planErrors={planErrors}
@@ -293,8 +302,12 @@ export function RunDetail({
             applyRawLogMessage={applyRawLogMessage}
             applyLogTruncated={view.applyLog.truncated}
             logWrap={logWrap}
-            onToggleWrap={() => { setLogWrap((wrap) => !wrap); }}
-            onOpenFullscreen={(phase): void => { fullscreen.setFullscreenLog(phase); }}
+            onToggleWrap={() => {
+              setLogWrap((wrap) => !wrap);
+            }}
+            onOpenFullscreen={(phase): void => {
+              fullscreen.setFullscreenLog(phase);
+            }}
             onSummaryChange={handlePlanSummaryChange}
             planCounts={planCounts}
             planImportCount={planImportCount}
@@ -307,7 +320,9 @@ export function RunDetail({
             showPolicyChecks={policy.showPolicyChecks}
             assessmentChecks={assessmentChecks}
             refreshAll={refreshAll}
-            onRerunCurrent={(): void => { void rerun.performRerun("current"); }}
+            onRerunCurrent={(): void => {
+              void rerun.performRerun("current");
+            }}
             phaseOpen={phaseOpen}
           />
           <RunDetailRail
@@ -354,7 +369,9 @@ export function RunDetail({
           planLogTruncated={view.planLog.truncated}
           applyLogTruncated={view.applyLog.truncated}
           logWrap={logWrap}
-          onToggleWrap={() => { setLogWrap((wrap) => !wrap); }}
+          onToggleWrap={() => {
+            setLogWrap((wrap) => !wrap);
+          }}
           planLogUrl={plan?.attributes["log-read-url"]}
           applyLogUrl={apply?.attributes["log-read-url"]}
           planLogs={planLogs}
@@ -363,7 +380,9 @@ export function RunDetail({
           applyRawLogMessage={applyRawLogMessage}
           closeRef={fullscreen.closeRef}
           containerRef={fullscreen.containerRef}
-          onClose={(): void => { fullscreen.setFullscreenLog(null); }}
+          onClose={(): void => {
+            fullscreen.setFullscreenLog(null);
+          }}
         />
       )}
     </>

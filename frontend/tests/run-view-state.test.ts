@@ -19,16 +19,22 @@ type Tail = Readonly<{
   truncated: boolean;
 }>;
 
-const tail = (
-  chunk: string,
-  totalBytes: number,
-  nextOffset: number,
-  truncated = false,
-): Tail => ({ chunk, totalBytes, totalKnown: true, nextOffset, truncated });
+const tail = (chunk: string, totalBytes: number, nextOffset: number, truncated = false): Tail => ({
+  chunk,
+  totalBytes,
+  totalKnown: true,
+  nextOffset,
+  truncated,
+});
 
 /** A response from a server whose `X-Terrence-Log-Total-Bytes` was stripped. */
-const tailWithoutTotal = (chunk: string, nextOffset: number): Tail =>
-  ({ chunk, totalBytes: nextOffset, totalKnown: false, nextOffset, truncated: false });
+const tailWithoutTotal = (chunk: string, nextOffset: number): Tail => ({
+  chunk,
+  totalBytes: nextOffset,
+  totalKnown: false,
+  nextOffset,
+  truncated: false,
+});
 
 const runAt = (status: string): RunResource => ({
   id: "run-1",
@@ -209,7 +215,9 @@ test("an accepted action is held until the run's status actually changes", () =>
 
 test("a failed action is released so the page offers it again", () => {
   let state = runViewReducer(INITIAL_RUN_VIEW_STATE, {
-    type: "action-sent", action: "apply", fromStatus: "planned",
+    type: "action-sent",
+    action: "apply",
+    fromStatus: "planned",
   });
   state = runViewReducer(state, { type: "action-settled" });
   expect(state.awaitingAction).toBeNull();

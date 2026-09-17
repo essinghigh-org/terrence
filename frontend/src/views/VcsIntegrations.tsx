@@ -6,7 +6,14 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "../components/ui/dialog";
 import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
 import { CheckCircle, ExternalLink, GitBranch, Plus, Trash2, Unplug } from "lucide-react";
@@ -87,10 +94,11 @@ function authorizationUrl(payload: AuthorizationDocument): string {
     throw new Error("The server returned an invalid authorization URL.");
   }
   if (
-    (destination.protocol !== "https:" && destination.protocol !== "http:")
-    || destination.username !== ""
-    || destination.password !== ""
-  ) throw new Error("The server returned an unsafe authorization URL.");
+    (destination.protocol !== "https:" && destination.protocol !== "http:") ||
+    destination.username !== "" ||
+    destination.password !== ""
+  )
+    throw new Error("The server returned an unsafe authorization URL.");
   return destination.toString();
 }
 
@@ -99,11 +107,8 @@ function navigateBrowser(url: string): void {
 }
 
 async function fetchVcsPermission(encodedOrgName: string, signal: AbortSignal): Promise<boolean> {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-  const organizationResponse = await fetchApi(
-    `/organizations/${encodedOrgName}`,
-    { signal },
-  ) as {
+  // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+  const organizationResponse = (await fetchApi(`/organizations/${encodedOrgName}`, { signal })) as {
     data?: {
       attributes?: {
         permissions?: { "can-manage-vcs-settings"?: boolean };
@@ -125,19 +130,13 @@ async function loadInstallationsAndClients(
   signal: AbortSignal,
 ): Promise<InstallationsAndClients> {
   const [installationResult, clientResult] = await Promise.allSettled([
-    fetchApi(
-      `/organizations/${encodedOrgName}/github-app/installations`,
-      { signal },
-    ),
-    fetchApi(
-      `/organizations/${encodedOrgName}/oauth-clients`,
-      { signal },
-    ),
+    fetchApi(`/organizations/${encodedOrgName}/github-app/installations`, { signal }),
+    fetchApi(`/organizations/${encodedOrgName}/oauth-clients`, { signal }),
   ]);
   const errors: string[] = [];
   let installations: GitHubAppInstallation[] = [];
   if (installationResult.status === "fulfilled") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+    // SAFETY: the fixture matches the JSON:API envelope the component consumes.
     const data = (installationResult.value as { data?: GitHubAppInstallation[] }).data;
     installations = Array.isArray(data) ? data : [];
   } else {
@@ -148,22 +147,25 @@ async function loadInstallationsAndClients(
   if (clientResult.status === "rejected") {
     errors.push("Failed to load OAuth clients.");
   } else {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+    // SAFETY: the fixture matches the JSON:API envelope the component consumes.
     const data = (clientResult.value as { data?: OAuthClient[] }).data;
     clients = Array.isArray(data) ? data : [];
-    const tokenResults = await Promise.allSettled(clients.map(async (client): Promise<readonly [string, readonly OAuthToken[]]> => {
-      const related = client.relationships?.["oauth-tokens"]?.links?.related;
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(
-        related ?? `/oauth-clients/${encodeURIComponent(client.id)}/oauth-tokens`,
-        { signal },
-      ) as { data?: OAuthToken[] };
-      return [client.id, Array.isArray(response.data) ? response.data : []] as const;
-    }));
+    const tokenResults = await Promise.allSettled(
+      clients.map(async (client): Promise<readonly [string, readonly OAuthToken[]]> => {
+        const related = client.relationships?.["oauth-tokens"]?.links?.related;
+        // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+        const response = (await fetchApi(related ?? `/oauth-clients/${encodeURIComponent(client.id)}/oauth-tokens`, {
+          signal,
+        })) as { data?: OAuthToken[] };
+        return [client.id, Array.isArray(response.data) ? response.data : []] as const;
+      }),
+    );
     tokensByClient = Object.fromEntries(
       tokenResults
-        .filter((result): result is PromiseFulfilledResult<readonly [string, readonly OAuthToken[]]> =>
-          result.status === "fulfilled")
+        .filter(
+          (result): result is PromiseFulfilledResult<readonly [string, readonly OAuthToken[]]> =>
+            result.status === "fulfilled",
+        )
         .map((result): readonly [string, readonly OAuthToken[]] => result.value),
     );
     if (tokenResults.some((result): boolean => result.status === "rejected")) {
@@ -196,9 +198,7 @@ function GitHubAppsSection({
           <p className="text-sm text-muted-foreground">Manage your Terrence GitHub App installations.</p>
         </div>
         <Button disabled={startingGitHubSetup} onClick={onSetup}>
-          {startingGitHubSetup
-            ? <Spinner data-icon="inline-start" />
-            : <Plus data-icon="inline-start" />}
+          {startingGitHubSetup ? <Spinner data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
           {startingGitHubSetup ? "Opening GitHub…" : "Install GitHub App"}
         </Button>
       </div>
@@ -229,50 +229,54 @@ function GitHubAppsSection({
                   </TableCell>
                 </TableRow>
               ) : (
-                ghApps.map((app: GitHubAppInstallation): React.JSX.Element => (
-                  <TableRow key={app.id}>
-                    <TableCell className="font-medium flex items-center gap-2">
-                      {isString(app.attributes["icon-url"]) && app.attributes["icon-url"] !== "" && (
-                        <img
-                          src={app.attributes["icon-url"]}
-                          className="size-6 rounded-full"
-                          alt=""
-                        />
-                      )}
-                      {app.attributes.name}
-                    </TableCell>
-                    <TableCell>{app.attributes["installation-id"]}</TableCell>
-                    <TableCell><Badge variant="outline">{app.attributes["installation-type"] ?? "Organization"}</Badge></TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">
-                        <CheckCircle data-icon="inline-start" />
-                        Connected
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex justify-end">
-                        <div className="flex flex-wrap justify-end gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={(): void => { onUninstall(app); }}
-                          >
-                            <Unplug data-icon="inline-start" />
-                            Uninstall
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={(): void => { onRemove(app); }}
-                          >
-                            <Trash2 data-icon="inline-start" />
-                            Remove
-                          </Button>
+                ghApps.map(
+                  (app: GitHubAppInstallation): React.JSX.Element => (
+                    <TableRow key={app.id}>
+                      <TableCell className="font-medium flex items-center gap-2">
+                        {isString(app.attributes["icon-url"]) && app.attributes["icon-url"] !== "" && (
+                          <img src={app.attributes["icon-url"]} className="size-6 rounded-full" alt="" />
+                        )}
+                        {app.attributes.name}
+                      </TableCell>
+                      <TableCell>{app.attributes["installation-id"]}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{app.attributes["installation-type"] ?? "Organization"}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="secondary">
+                          <CheckCircle data-icon="inline-start" />
+                          Connected
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex justify-end">
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(): void => {
+                                onUninstall(app);
+                              }}
+                            >
+                              <Unplug data-icon="inline-start" />
+                              Uninstall
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={(): void => {
+                                onRemove(app);
+                              }}
+                            >
+                              <Trash2 data-icon="inline-start" />
+                              Remove
+                            </Button>
+                          </div>
                         </div>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
+                      </TableCell>
+                    </TableRow>
+                  ),
+                )
               )}
             </TableBody>
           </Table>
@@ -368,7 +372,9 @@ function OAuthClientsSection({
                           {!statusKnown
                             ? "Status unavailable"
                             : connected
-                              ? providerUser === undefined ? "Connected" : `Connected as ${providerUser}`
+                              ? providerUser === undefined
+                                ? "Connected"
+                                : `Connected as ${providerUser}`
                               : "Not connected"}
                         </Badge>
                       </TableCell>
@@ -379,18 +385,24 @@ function OAuthClientsSection({
                               size="sm"
                               variant="outline"
                               disabled={connecting}
-                              onClick={(): void => { onConnect(client); }}
+                              onClick={(): void => {
+                                onConnect(client);
+                              }}
                             >
-                              {connecting
-                                ? <Spinner data-icon="inline-start" />
-                                : <ExternalLink data-icon="inline-start" />}
+                              {connecting ? (
+                                <Spinner data-icon="inline-start" />
+                              ) : (
+                                <ExternalLink data-icon="inline-start" />
+                              )}
                               {connecting ? "Opening…" : "Connect"}
                             </Button>
                           )}
                           <Button
                             size="sm"
                             variant="destructive"
-                            onClick={(): void => { onDeleteRequest(client); }}
+                            onClick={(): void => {
+                              onDeleteRequest(client);
+                            }}
                           >
                             <Trash2 data-icon="inline-start" />
                             Delete
@@ -462,30 +474,41 @@ function CreateProviderDialog({
           </div>
         )}
 
-        <form onSubmit={(e): void => { void onSubmit(e); }} noValidate className="space-y-4 py-2">
+        <form
+          onSubmit={(e): void => {
+            void onSubmit(e);
+          }}
+          noValidate
+          className="space-y-4 py-2"
+        >
           <div className="space-y-1.5">
-            <label htmlFor="vcs-name" className="text-sm font-medium">Name</label>
+            <label htmlFor="vcs-name" className="text-sm font-medium">
+              Name
+            </label>
             <Input
               id="vcs-name"
               name="vcs-integration-name"
               autoComplete="off"
               spellCheck={false}
               value={name}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onNameChange(event.target.value); }}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                onNameChange(event.target.value);
+              }}
               placeholder="GitHub Commercial"
               required
             />
           </div>
 
           <div className="space-y-1.5">
-            <label htmlFor="vcs-provider" className="text-sm font-medium">VCS Type</label>
+            <label htmlFor="vcs-provider" className="text-sm font-medium">
+              VCS Type
+            </label>
             <Select
               id="vcs-provider"
               name="service-provider"
-
               value={serviceProvider}
               onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
-// SAFETY: the select options are generated from the same union; the change event carries one of them.
+                // SAFETY: the select options are generated from the same union; the change event carries one of them.
                 const provider = event.target.value as ServiceProvider;
                 onProviderChange(provider);
               }}
@@ -499,58 +522,78 @@ function CreateProviderDialog({
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <label htmlFor="vcs-http-url" className="text-xs font-medium">HTTP URL</label>
+              <label htmlFor="vcs-http-url" className="text-xs font-medium">
+                HTTP URL
+              </label>
               <Input
                 id="vcs-http-url"
                 name="http-url"
                 autoComplete="url"
                 value={httpUrl}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onHttpUrlChange(event.target.value); }}
-                placeholder={serviceProvider === "github_enterprise"
-                  ? "https://github.example.com"
-                  : providerDefaults[serviceProvider].httpUrl}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                  onHttpUrlChange(event.target.value);
+                }}
+                placeholder={
+                  serviceProvider === "github_enterprise"
+                    ? "https://github.example.com"
+                    : providerDefaults[serviceProvider].httpUrl
+                }
                 required
               />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="vcs-api-url" className="text-xs font-medium">API URL</label>
+              <label htmlFor="vcs-api-url" className="text-xs font-medium">
+                API URL
+              </label>
               <Input
                 id="vcs-api-url"
                 name="api-url"
                 autoComplete="url"
                 value={apiUrl}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onApiUrlChange(event.target.value); }}
-                placeholder={serviceProvider === "github_enterprise"
-                  ? "https://github.example.com/api/v3"
-                  : providerDefaults[serviceProvider].apiUrl}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                  onApiUrlChange(event.target.value);
+                }}
+                placeholder={
+                  serviceProvider === "github_enterprise"
+                    ? "https://github.example.com/api/v3"
+                    : providerDefaults[serviceProvider].apiUrl
+                }
                 required
               />
             </div>
           </div>
 
           <div className="space-y-1.5">
-            <label htmlFor="vcs-key" className="text-sm font-medium">OAuth Application Client ID</label>
+            <label htmlFor="vcs-key" className="text-sm font-medium">
+              OAuth Application Client ID
+            </label>
             <Input
               id="vcs-key"
               name="client-id"
               autoComplete="off"
               spellCheck={false}
               value={oauthKey}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onKeyChange(event.target.value); }}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                onKeyChange(event.target.value);
+              }}
               placeholder="Client ID or Application ID"
               required
             />
           </div>
 
           <div className="space-y-1.5">
-            <label htmlFor="vcs-secret" className="text-sm font-medium">OAuth Client Secret</label>
+            <label htmlFor="vcs-secret" className="text-sm font-medium">
+              OAuth Client Secret
+            </label>
             <Input
               id="vcs-secret"
               name="client-secret"
               autoComplete="new-password"
               type="password"
               value={secret}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onSecretChange(event.target.value); }}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                onSecretChange(event.target.value);
+              }}
               placeholder="Client Secret"
               required
             />
@@ -599,11 +642,15 @@ function VcsConfirmDialogs({
     <>
       <ConfirmDialog
         open={installationToDelete !== null}
-        onOpenChange={(open): void => { if (!open && !deletingInstallation) onClearInstallationToDelete(); }}
+        onOpenChange={(open): void => {
+          if (!open && !deletingInstallation) onClearInstallationToDelete();
+        }}
         title="Remove GitHub App integration"
         description={
           <>
-            This removes <strong className="text-foreground">{installationToDelete?.attributes.name}</strong> from Terrence. It does not uninstall the GitHub App from GitHub. It cannot be removed while workspaces or policy sets use it.
+            This removes <strong className="text-foreground">{installationToDelete?.attributes.name}</strong> from
+            Terrence. It does not uninstall the GitHub App from GitHub. It cannot be removed while workspaces or policy
+            sets use it.
           </>
         }
         confirmText="Remove Integration"
@@ -617,17 +664,25 @@ function VcsConfirmDialogs({
 
       <ConfirmDialog
         open={installationToUninstall !== null}
-        onOpenChange={(open): void => { if (!open && !uninstallingInstallation) onClearInstallationToUninstall(); }}
+        onOpenChange={(open): void => {
+          if (!open && !uninstallingInstallation) onClearInstallationToUninstall();
+        }}
         title="Uninstall GitHub App installation"
         description={
           <>
-            This calls GitHub to uninstall <strong className="text-foreground">{installationToUninstall?.attributes.name}</strong>, then removes that installation from Terrence. The site-wide App registration and other installations remain in place.
+            This calls GitHub to uninstall{" "}
+            <strong className="text-foreground">{installationToUninstall?.attributes.name}</strong>, then removes that
+            installation from Terrence. The site-wide App registration and other installations remain in place.
           </>
         }
         confirmText="Uninstall installation"
         confirmVariant="destructive"
         requireText={installationToUninstall?.attributes.name}
-        requireTextLabel={installationToUninstall === null ? undefined : `Type ${installationToUninstall.attributes.name} to confirm the GitHub uninstall.`}
+        requireTextLabel={
+          installationToUninstall === null
+            ? undefined
+            : `Type ${installationToUninstall.attributes.name} to confirm the GitHub uninstall.`
+        }
         loading={uninstallingInstallation}
         onConfirm={async (): Promise<void> => {
           if (installationToUninstall !== null) await onConfirmUninstallInstallation(installationToUninstall);
@@ -636,11 +691,15 @@ function VcsConfirmDialogs({
 
       <ConfirmDialog
         open={clientToDelete !== null}
-        onOpenChange={(open): void => { if (!open && !deletingClient) onClearClientToDelete(); }}
+        onOpenChange={(open): void => {
+          if (!open && !deletingClient) onClearClientToDelete();
+        }}
         title="Delete VCS Integration"
         description={
           <>
-            Are you sure you want to delete VCS client <strong className="text-foreground">{clientToDelete?.attributes.name}</strong>? It cannot be removed while workspaces or policy sets use it.
+            Are you sure you want to delete VCS client{" "}
+            <strong className="text-foreground">{clientToDelete?.attributes.name}</strong>? It cannot be removed while
+            workspaces or policy sets use it.
           </>
         }
         confirmText="Delete Integration"
@@ -680,9 +739,7 @@ export function VcsIntegrations({
   const orgPath = `/app/${encodeURIComponent(currentOrgName)}`;
   const currentOrgNameRef = useRef(currentOrgName);
   currentOrgNameRef.current = currentOrgName;
-  const accessStatus: VcsAccess | "loading" = access?.orgName === currentOrgName
-    ? access.status
-    : "loading";
+  const accessStatus: VcsAccess | "loading" = access?.orgName === currentOrgName ? access.status : "loading";
   const canManageVcsSettings = accessStatus === "allowed";
 
   // Create Modal OAuth
@@ -700,8 +757,7 @@ export function VcsIntegrations({
     loadRequest.current?.abort();
     const controller = new AbortController();
     loadRequest.current = controller;
-    const requestIsCurrent = (): boolean =>
-      !controller.signal.aborted && loadRequest.current === controller;
+    const requestIsCurrent = (): boolean => !controller.signal.aborted && loadRequest.current === controller;
 
     setLoading(true);
     setError("");
@@ -759,10 +815,10 @@ export function VcsIntegrations({
   }, [loadIntegrations]);
 
   const requestAuthorization = async (endpoint: string): Promise<string> => {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-    const response = await fetchApi(endpoint, {
+    // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+    const response = (await fetchApi(endpoint, {
       headers: { Accept: "application/vnd.api+json" },
-    }) as AuthorizationDocument;
+    })) as AuthorizationDocument;
     return authorizationUrl(response);
   };
 
@@ -772,8 +828,8 @@ export function VcsIntegrations({
     setConnectingClientId(client.id);
     setError("");
     try {
-      const connectPath = client.attributes["connect-path"]
-        ?? `/oauth-clients/${encodeURIComponent(client.id)}/connect`;
+      const connectPath =
+        client.attributes["connect-path"] ?? `/oauth-clients/${encodeURIComponent(client.id)}/connect`;
       const destination = await requestAuthorization(connectPath);
       if (currentOrgNameRef.current === actionOrgName) navigateExternal(destination);
     } catch (caught: unknown) {
@@ -809,9 +865,14 @@ export function VcsIntegrations({
     setDeletingInstallation(true);
     setError("");
     try {
-      await fetchApi(`/organizations/${encodeURIComponent(actionOrgName)}/github-app/installations/${encodeURIComponent(installation.id)}`, { method: "DELETE" });
+      await fetchApi(
+        `/organizations/${encodeURIComponent(actionOrgName)}/github-app/installations/${encodeURIComponent(installation.id)}`,
+        { method: "DELETE" },
+      );
       if (currentOrgNameRef.current === actionOrgName) {
-        setGhApps((previous): GitHubAppInstallation[] => previous.filter((candidate): boolean => candidate.id !== installation.id));
+        setGhApps((previous): GitHubAppInstallation[] =>
+          previous.filter((candidate): boolean => candidate.id !== installation.id),
+        );
       }
     } catch (caught: unknown) {
       if (currentOrgNameRef.current === actionOrgName) {
@@ -831,9 +892,14 @@ export function VcsIntegrations({
     setUninstallingInstallation(true);
     setError("");
     try {
-      await fetchApi(`/organizations/${encodeURIComponent(actionOrgName)}/github-app/installations/${encodeURIComponent(installation.id)}/actions/uninstall`, { method: "POST" });
+      await fetchApi(
+        `/organizations/${encodeURIComponent(actionOrgName)}/github-app/installations/${encodeURIComponent(installation.id)}/actions/uninstall`,
+        { method: "POST" },
+      );
       if (currentOrgNameRef.current === actionOrgName) {
-        setGhApps((previous): GitHubAppInstallation[] => previous.filter((candidate): boolean => candidate.id !== installation.id));
+        setGhApps((previous): GitHubAppInstallation[] =>
+          previous.filter((candidate): boolean => candidate.id !== installation.id),
+        );
       }
     } catch (caught: unknown) {
       if (currentOrgNameRef.current === actionOrgName) {
@@ -858,8 +924,8 @@ export function VcsIntegrations({
     setCreating(true);
     setFormError("");
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const res = await fetchApi(`/organizations/${encodeURIComponent(actionOrgName)}/oauth-clients`, {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const res = (await fetchApi(`/organizations/${encodeURIComponent(actionOrgName)}/oauth-clients`, {
         method: "POST",
         body: JSON.stringify({
           data: {
@@ -874,13 +940,15 @@ export function VcsIntegrations({
             },
           },
         }),
-      }) as { data: OAuthClient };
+      })) as { data: OAuthClient };
       if (currentOrgNameRef.current !== actionOrgName) return;
       setClients((prev: readonly OAuthClient[]): OAuthClient[] => [...prev, res.data]);
-      setOauthTokensByClient((previous): Record<string, readonly OAuthToken[]> => ({
-        ...previous,
-        [res.data.id]: [],
-      }));
+      setOauthTokensByClient(
+        (previous): Record<string, readonly OAuthToken[]> => ({
+          ...previous,
+          [res.data.id]: [],
+        }),
+      );
       setDialogOpen(false);
       setName("");
       setKey("");
@@ -907,7 +975,9 @@ export function VcsIntegrations({
     try {
       await fetchApi(`/oauth-clients/${encodeURIComponent(client.id)}`, { method: "DELETE" });
       if (currentOrgNameRef.current === actionOrgName) {
-        setClients((prev: readonly OAuthClient[]): OAuthClient[] => prev.filter((c: OAuthClient): boolean => c.id !== client.id));
+        setClients((prev: readonly OAuthClient[]): OAuthClient[] =>
+          prev.filter((c: OAuthClient): boolean => c.id !== client.id),
+        );
       }
     } catch (err: unknown) {
       if (currentOrgNameRef.current === actionOrgName) {
@@ -957,7 +1027,13 @@ export function VcsIntegrations({
       {accessStatus === "error" && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
           <span>{error}</span>
-          <Button size="sm" variant="outline" onClick={(): void => { void loadIntegrations(); }}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={(): void => {
+              void loadIntegrations();
+            }}
+          >
             Try again
           </Button>
         </div>
@@ -968,76 +1044,98 @@ export function VcsIntegrations({
           {error !== "" && (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
               <span>{error}</span>
-              <Button size="sm" variant="outline" onClick={(): void => { void loadIntegrations(); }}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(): void => {
+                  void loadIntegrations();
+                }}
+              >
                 Try again
               </Button>
             </div>
           )}
 
-        <GitHubAppsSection
-          loading={loading}
-          ghApps={ghApps}
-          startingGitHubSetup={startingGitHubSetup}
-          onSetup={(): void => { void handleGitHubSetup(); }}
-          onUninstall={(app: GitHubAppInstallation): void => { setInstallationToUninstall(app); }}
-          onRemove={(app: GitHubAppInstallation): void => { setInstallationToDelete(app); }}
-        />
+          <GitHubAppsSection
+            loading={loading}
+            ghApps={ghApps}
+            startingGitHubSetup={startingGitHubSetup}
+            onSetup={(): void => {
+              void handleGitHubSetup();
+            }}
+            onUninstall={(app: GitHubAppInstallation): void => {
+              setInstallationToUninstall(app);
+            }}
+            onRemove={(app: GitHubAppInstallation): void => {
+              setInstallationToDelete(app);
+            }}
+          />
 
-        <OAuthClientsSection
-          loading={loading}
-          clients={clients}
-          tokensByClient={oauthTokensByClient}
-          connectingClientId={connectingClientId}
-          onConnect={(client: OAuthClient): void => { void handleConnect(client); }}
-          onDeleteRequest={(client: OAuthClient): void => {
-            const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
-            if (isTestEnv) {
-              void handleDelete(client);
-            } else {
-              setClientToDelete(client);
-            }
-          }}
-          onAdd={(): void => { setDialogOpen(true); }}
-        />
+          <OAuthClientsSection
+            loading={loading}
+            clients={clients}
+            tokensByClient={oauthTokensByClient}
+            connectingClientId={connectingClientId}
+            onConnect={(client: OAuthClient): void => {
+              void handleConnect(client);
+            }}
+            onDeleteRequest={(client: OAuthClient): void => {
+              const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+              if (isTestEnv) {
+                void handleDelete(client);
+              } else {
+                setClientToDelete(client);
+              }
+            }}
+            onAdd={(): void => {
+              setDialogOpen(true);
+            }}
+          />
 
-      <CreateProviderDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        name={name}
-        onNameChange={setName}
-        serviceProvider={serviceProvider}
-        onProviderChange={(provider: ServiceProvider): void => {
-          setServiceProvider(provider);
-          setHttpUrl(providerDefaults[provider].httpUrl);
-          setApiUrl(providerDefaults[provider].apiUrl);
-        }}
-        httpUrl={httpUrl}
-        onHttpUrlChange={setHttpUrl}
-        apiUrl={apiUrl}
-        onApiUrlChange={setApiUrl}
-        oauthKey={key}
-        onKeyChange={setKey}
-        secret={secret}
-        onSecretChange={setSecret}
-        formError={formError}
-        creating={creating}
-        onSubmit={handleCreate}
-      />
+          <CreateProviderDialog
+            open={dialogOpen}
+            onOpenChange={setDialogOpen}
+            name={name}
+            onNameChange={setName}
+            serviceProvider={serviceProvider}
+            onProviderChange={(provider: ServiceProvider): void => {
+              setServiceProvider(provider);
+              setHttpUrl(providerDefaults[provider].httpUrl);
+              setApiUrl(providerDefaults[provider].apiUrl);
+            }}
+            httpUrl={httpUrl}
+            onHttpUrlChange={setHttpUrl}
+            apiUrl={apiUrl}
+            onApiUrlChange={setApiUrl}
+            oauthKey={key}
+            onKeyChange={setKey}
+            secret={secret}
+            onSecretChange={setSecret}
+            formError={formError}
+            creating={creating}
+            onSubmit={handleCreate}
+          />
 
-      <VcsConfirmDialogs
-        installationToDelete={installationToDelete}
-        deletingInstallation={deletingInstallation}
-        onClearInstallationToDelete={(): void => { setInstallationToDelete(null); }}
-        onConfirmDeleteInstallation={handleDeleteInstallation}
-        installationToUninstall={installationToUninstall}
-        uninstallingInstallation={uninstallingInstallation}
-        onClearInstallationToUninstall={(): void => { setInstallationToUninstall(null); }}
-        onConfirmUninstallInstallation={handleUninstallInstallation}
-        clientToDelete={clientToDelete}
-        deletingClient={deletingClient}
-        onClearClientToDelete={(): void => { setClientToDelete(null); }}
-        onConfirmDeleteClient={handleDelete}
-      />
+          <VcsConfirmDialogs
+            installationToDelete={installationToDelete}
+            deletingInstallation={deletingInstallation}
+            onClearInstallationToDelete={(): void => {
+              setInstallationToDelete(null);
+            }}
+            onConfirmDeleteInstallation={handleDeleteInstallation}
+            installationToUninstall={installationToUninstall}
+            uninstallingInstallation={uninstallingInstallation}
+            onClearInstallationToUninstall={(): void => {
+              setInstallationToUninstall(null);
+            }}
+            onConfirmUninstallInstallation={handleUninstallInstallation}
+            clientToDelete={clientToDelete}
+            deletingClient={deletingClient}
+            onClearClientToDelete={(): void => {
+              setClientToDelete(null);
+            }}
+            onConfirmDeleteClient={handleDelete}
+          />
         </>
       )}
     </PageShell>

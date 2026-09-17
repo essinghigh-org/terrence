@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { buildRunPhaseEnv, buildSanitizedEnv, normalizeRunVariables, runTerraformVariableLines } from "../../src/worker";
+import {
+  buildRunPhaseEnv,
+  buildSanitizedEnv,
+  normalizeRunVariables,
+  runTerraformVariableLines,
+} from "../../src/worker";
 
 // Issue #577: per-run variables respect category. Env-category keys land in
 // the environment directly (never TF_VAR_-prefixed, never -var flags);
@@ -13,32 +18,38 @@ describe("run variable normalization and env composition (#577)", () => {
   });
 
   it("keeps env category and sensitivity flags", () => {
-    expect(normalizeRunVariables([
-      { key: "AWS_SECRET_ACCESS_KEY", value: "s", category: "env", sensitive: true },
-      { key: "VERBOSE", value: "1", category: "env", sensitive: false },
-    ])).toEqual([
+    expect(
+      normalizeRunVariables([
+        { key: "AWS_SECRET_ACCESS_KEY", value: "s", category: "env", sensitive: true },
+        { key: "VERBOSE", value: "1", category: "env", sensitive: false },
+      ]),
+    ).toEqual([
       { key: "AWS_SECRET_ACCESS_KEY", value: "s", category: "env", sensitive: true },
       { key: "VERBOSE", value: "1", category: "env", sensitive: false },
     ]);
   });
 
   it("skips malformed entries", () => {
-    expect(normalizeRunVariables([
-      null,
-      "nope",
-      { key: "ok", value: "v", category: "env" },
-      { key: 42, value: "v" },
-      { key: "novalue" },
-    ])).toEqual([{ key: "ok", value: "v", category: "env", sensitive: false }]);
+    expect(
+      normalizeRunVariables([
+        null,
+        "nope",
+        { key: "ok", value: "v", category: "env" },
+        { key: 42, value: "v" },
+        { key: "novalue" },
+      ]),
+    ).toEqual([{ key: "ok", value: "v", category: "env", sensitive: false }]);
     expect(normalizeRunVariables(undefined)).toEqual([]);
     expect(normalizeRunVariables("nope")).toEqual([]);
   });
 
   it("injects env run variables directly without TF_VAR_ prefix", () => {
-    const env = buildSanitizedEnv(normalizeRunVariables([
-      { key: "AWS_SECRET_ACCESS_KEY", value: "s", category: "env", sensitive: true },
-      { key: "VERBOSE", value: "1", category: "env", sensitive: false },
-    ]));
+    const env = buildSanitizedEnv(
+      normalizeRunVariables([
+        { key: "AWS_SECRET_ACCESS_KEY", value: "s", category: "env", sensitive: true },
+        { key: "VERBOSE", value: "1", category: "env", sensitive: false },
+      ]),
+    );
     expect(env["AWS_SECRET_ACCESS_KEY"]).toBe("s");
     expect(env["VERBOSE"]).toBe("1");
     expect(env["TF_VAR_AWS_SECRET_ACCESS_KEY"]).toBeUndefined();
@@ -54,18 +65,20 @@ describe("run variable normalization and env composition (#577)", () => {
   });
 
   it("leaves non-sensitive terraform run variables out of env (tfvars file)", () => {
-    const env = buildSanitizedEnv(normalizeRunVariables([
-      { key: "region", value: "us-east-1", category: "terraform", sensitive: false },
-    ]));
+    const env = buildSanitizedEnv(
+      normalizeRunVariables([{ key: "region", value: "us-east-1", category: "terraform", sensitive: false }]),
+    );
     expect(env["region"]).toBeUndefined();
     expect(env["TF_VAR_region"]).toBeUndefined();
   });
 
   it("still blocks protected keys from run variables", () => {
-    const env = buildSanitizedEnv(normalizeRunVariables([
-      { key: "LD_PRELOAD", value: "evil", category: "env" },
-      { key: "PATH", value: "evil", category: "env" },
-    ]));
+    const env = buildSanitizedEnv(
+      normalizeRunVariables([
+        { key: "LD_PRELOAD", value: "evil", category: "env" },
+        { key: "PATH", value: "evil", category: "env" },
+      ]),
+    );
     expect(env["LD_PRELOAD"]).toBeUndefined();
     expect(env["PATH"]).not.toBe("evil");
   });
@@ -110,7 +123,6 @@ describe("run variable env parity across phases (#607, #608)", () => {
   });
 });
 
-
 it("sensitivity does not change run value precedence and priority inputs win in both categories", () => {
   const workspace = [
     { key: "HOME", value: "/workspace-home", category: "env" },
@@ -131,7 +143,6 @@ it("sensitivity does not change run value precedence and priority inputs win in 
     expect(env["TF_VAR_fixed"]).toBe("priority");
   }
 });
-
 
 it("rejects misspelled network policies instead of silently allowing traffic", async () => {
   const { runNetPolicy } = await import("../../src/lib/sandbox");

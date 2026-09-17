@@ -8,17 +8,17 @@ import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 
-const json = (data: JsonValue, status = 200): Response => new Response(JSON.stringify(data), {
-  status,
-  headers: { "Content-Type": "application/vnd.api+json" },
-});
+const json = (data: JsonValue, status = 200): Response =>
+  new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/vnd.api+json" },
+  });
 
-const requestUrl = (input: string | URL | Request): string => (
-  isString(input) ? input : input instanceof URL ? input.toString() : input.url
-);
+const requestUrl = (input: string | URL | Request): string =>
+  isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 
 const changeInput = (element: HTMLElement, value: string): void => {
-// SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
+  // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
   // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
   const tracker = (element as { _valueTracker?: { setValue: (nextValue: string) => void } })._valueTracker;
   tracker?.setValue(value === "" ? "x" : "");
@@ -38,12 +38,15 @@ test("fails closed and deletes only after exact confirmation and a successful re
   const fetchMock = mock(async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     deleteAttempts += 1;
     if (deleteAttempts === 1) {
-      return new Response(JSON.stringify({
-        errors: [{ status: "409", detail: "Workspace could not be deleted" }],
-      }), {
-        status: 409,
-        headers: { "Content-Type": "application/vnd.api+json" },
-      });
+      return new Response(
+        JSON.stringify({
+          errors: [{ status: "409", detail: "Workspace could not be deleted" }],
+        }),
+        {
+          status: 409,
+          headers: { "Content-Type": "application/vnd.api+json" },
+        },
+      );
     }
     return await new Promise<Response>((resolve): void => {
       resolveSuccess = resolve;
@@ -52,14 +55,11 @@ test("fails closed and deletes only after exact confirmation and a successful re
   const onDeleted = mock((): void => {
     // Callback assertion below.
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter>
-      <WorkspaceDestruction
-        workspace={{ id: "ws/1", attributes: { name: "production" } }}
-        onDeleted={onDeleted}
-      />
+      <WorkspaceDestruction workspace={{ id: "ws/1", attributes: { name: "production" } }} onDeleted={onDeleted} />
     </MemoryRouter>,
   );
 
@@ -83,11 +83,11 @@ test("fails closed and deletes only after exact confirmation and a successful re
 
   const confirmation = view.getByLabelText("Workspace name");
   changeInput(confirmation, "Production");
-  expect((view.getByRole("button", { name: "Delete workspace permanently" }) as HTMLButtonElement).disabled)
-    .toBe(true);
+  expect((view.getByRole("button", { name: "Delete workspace permanently" }) as HTMLButtonElement).disabled).toBe(true);
   changeInput(confirmation, "production");
-  expect((view.getByRole("button", { name: "Delete workspace permanently" }) as HTMLButtonElement).disabled)
-    .toBe(false);
+  expect((view.getByRole("button", { name: "Delete workspace permanently" }) as HTMLButtonElement).disabled).toBe(
+    false,
+  );
 
   await act(async (): Promise<void> => {
     fireEvent.click(view.getByRole("button", { name: "Delete workspace permanently" }));
@@ -108,10 +108,12 @@ test("fails closed and deletes only after exact confirmation and a successful re
     expect(onDeleted).toHaveBeenCalledTimes(1);
   });
   expect(view.queryByRole("dialog")).toBeNull();
-  expect(fetchMock.mock.calls.map(([input, init]): [string, string | undefined] => [
-    isString(input) ? input : input instanceof URL ? input.toString() : input.url,
-    init?.method,
-  ])).toEqual([
+  expect(
+    fetchMock.mock.calls.map(([input, init]): [string, string | undefined] => [
+      isString(input) ? input : input instanceof URL ? input.toString() : input.url,
+      init?.method,
+    ]),
+  ).toEqual([
     ["/api/v2/workspaces/ws%2F1", "DELETE"],
     ["/api/v2/workspaces/ws%2F1", "DELETE"],
   ]);
@@ -123,18 +125,18 @@ test("updates destroy-plan permission and navigates to the queued destroy run", 
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/workspaces/ws%2F1" && init?.method === "PATCH") {
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      patchBody = isString(init.body) ? JSON.parse(init.body) as unknown : undefined;
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      patchBody = isString(init.body) ? (JSON.parse(init.body) as unknown) : undefined;
       return json({ data: { id: "ws/1", type: "workspaces" } });
     }
     if (url === "/api/v2/runs" && init?.method === "POST") {
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      runBody = isString(init.body) ? JSON.parse(init.body) as unknown : undefined;
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      runBody = isString(init.body) ? (JSON.parse(init.body) as unknown) : undefined;
       return json({ data: { id: "run/destroy", type: "runs" } }, 201);
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
   const onDeleted = mock((): void => {
     // Delete behavior is covered separately.
   });
@@ -144,7 +146,7 @@ test("updates destroy-plan permission and navigates to the queued destroy run", 
       <Routes>
         <Route
           path="/app/:orgName/workspaces/:workspaceName/settings/delete"
-          element={(
+          element={
             <WorkspaceDestruction
               workspace={{
                 id: "ws/1",
@@ -160,12 +162,9 @@ test("updates destroy-plan permission and navigates to the queued destroy run", 
               }}
               onDeleted={onDeleted}
             />
-          )}
+          }
         />
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
-          element={<p>Created destroy run</p>}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<p>Created destroy run</p>} />
       </Routes>
     </MemoryRouter>
   );

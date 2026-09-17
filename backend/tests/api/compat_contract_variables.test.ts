@@ -96,7 +96,11 @@ describe("remote-workflow variables contract", () => {
     expect(resource.attributes["sensitive"]).toBe(true);
     expect(resource.attributes["value"]).not.toBe("super-secret");
 
-    const shown = await expectSuccessResponse(await request(`/api/v2/workspaces/${workspaceId}/vars/${resource.id}`, { headers }), 200, "vars");
+    const shown = await expectSuccessResponse(
+      await request(`/api/v2/workspaces/${workspaceId}/vars/${resource.id}`, { headers }),
+      200,
+      "vars",
+    );
     expect(shown.attributes["value"]).not.toBe("super-secret");
   });
 
@@ -137,7 +141,9 @@ describe("remote-workflow variables contract", () => {
       }),
     });
     const created = (await createResponse.json()).data as { id: string };
-    await expectNoContent(await request(`/api/v2/workspaces/${workspaceId}/vars/${created.id}`, { method: "DELETE", headers }));
+    await expectNoContent(
+      await request(`/api/v2/workspaces/${workspaceId}/vars/${created.id}`, { method: "DELETE", headers }),
+    );
     await expectErrorResponse(await request(`/api/v2/workspaces/${workspaceId}/vars/${created.id}`, { headers }), 404);
   });
 

@@ -77,12 +77,15 @@ describe("variable precedence matrix (VAR-005)", () => {
     const wsVar = `wv-np-${suffix}`;
     await db.insert(variableSets).values({ id: set, orgId, name: "non-priority", global: false, priority: false });
     await db.insert(variableSetWorkspaces).values({ id: `link-${suffix}`, variableSetId: set, workspaceId: wsId });
-    await db.insert(variableSetVariables).values({ id: `vsv-np-${suffix}`, variableSetId: set, key: "region", value: "set-value", category: "terraform" });
-    await db.insert(workspaceVariables).values({ id: wsVar, workspaceId: wsId, key: "region", value: "workspace-value", category: "terraform" });
+    await db
+      .insert(variableSetVariables)
+      .values({ id: `vsv-np-${suffix}`, variableSetId: set, key: "region", value: "set-value", category: "terraform" });
+    await db
+      .insert(workspaceVariables)
+      .values({ id: wsVar, workspaceId: wsId, key: "region", value: "workspace-value", category: "terraform" });
 
     const m = asMap(await executionVariables(wsId, orgId, null));
     expect(m.get("terraform:region")).toBe("workspace-value#priority=false");
-
   });
 
   it("priority variable set overrides a workspace variable (tier 2 -> 3)", async () => {
@@ -90,12 +93,19 @@ describe("variable precedence matrix (VAR-005)", () => {
     const wsVar = `wv-pri-${suffix}`;
     await db.insert(variableSets).values({ id: set, orgId, name: "priority", global: false, priority: true });
     await db.insert(variableSetWorkspaces).values({ id: `link-pri-${suffix}`, variableSetId: set, workspaceId: wsId });
-    await db.insert(variableSetVariables).values({ id: `vsv-pri-${suffix}`, variableSetId: set, key: "region", value: "priority-value", category: "terraform" });
-    await db.insert(workspaceVariables).values({ id: wsVar, workspaceId: wsId, key: "region", value: "workspace-value", category: "terraform" });
+    await db.insert(variableSetVariables).values({
+      id: `vsv-pri-${suffix}`,
+      variableSetId: set,
+      key: "region",
+      value: "priority-value",
+      category: "terraform",
+    });
+    await db
+      .insert(workspaceVariables)
+      .values({ id: wsVar, workspaceId: wsId, key: "region", value: "workspace-value", category: "terraform" });
 
     const m = asMap(await executionVariables(wsId, orgId, null));
     expect(m.get("terraform:region")).toBe("priority-value#priority=true");
-
   });
 
   it("full tier chain: non-priority < workspace < priority for the same key", async () => {
@@ -111,31 +121,49 @@ describe("variable precedence matrix (VAR-005)", () => {
       { id: `link-chain-pri-${suffix}`, variableSetId: pri, workspaceId: wsId },
     ]);
     await db.insert(variableSetVariables).values([
-      { id: `vsv-chain-np-${suffix}`, variableSetId: np, key: "env", value: "from-non-priority", category: "terraform" },
+      {
+        id: `vsv-chain-np-${suffix}`,
+        variableSetId: np,
+        key: "env",
+        value: "from-non-priority",
+        category: "terraform",
+      },
       { id: `vsv-chain-pri-${suffix}`, variableSetId: pri, key: "env", value: "from-priority", category: "terraform" },
     ]);
-    await db.insert(workspaceVariables).values({ id: wsVar, workspaceId: wsId, key: "env", value: "from-workspace", category: "terraform" });
+    await db
+      .insert(workspaceVariables)
+      .values({ id: wsVar, workspaceId: wsId, key: "env", value: "from-workspace", category: "terraform" });
 
     const m = asMap(await executionVariables(wsId, orgId, null));
     expect(m.get("terraform:env")).toBe("from-priority#priority=true");
-
   });
 
   it("global variable set applies without an explicit workspace link", async () => {
     const set = `vs-global-${suffix}`;
     await db.insert(variableSets).values({ id: set, orgId, name: "global-set", global: true, priority: false });
-    await db.insert(variableSetVariables).values({ id: `vsv-global-${suffix}`, variableSetId: set, key: "shared", value: "global-value", category: "terraform" });
+    await db.insert(variableSetVariables).values({
+      id: `vsv-global-${suffix}`,
+      variableSetId: set,
+      key: "shared",
+      value: "global-value",
+      category: "terraform",
+    });
 
     const m = asMap(await executionVariables(wsId, orgId, null));
     expect(m.get("terraform:shared")).toBe("global-value#priority=false");
-
   });
 
   it("project-linked variable set applies through projectId", async () => {
     const set = `vs-proj-${suffix}`;
     await db.insert(variableSets).values({ id: set, orgId, name: "project-set", global: false, priority: false });
     await db.insert(variableSetProjects).values({ id: `link-proj-${suffix}`, variableSetId: set, projectId });
-    await db.insert(variableSetVariables).values({ id: `vsv-proj-${suffix}`, variableSetId: set, key: "fromProject", value: "project-value", category: "terraform" });
+    await db.insert(variableSetVariables).values({
+      id: `vsv-proj-${suffix}`,
+      variableSetId: set,
+      key: "fromProject",
+      value: "project-value",
+      category: "terraform",
+    });
 
     const m = asMap(await executionVariables(wsId, orgId, projectId));
     expect(m.get("terraform:fromProject")).toBe("project-value#priority=false");
@@ -143,7 +171,6 @@ describe("variable precedence matrix (VAR-005)", () => {
     // Same set is invisible when the workspace has no project.
     const withoutProject = asMap(await executionVariables(wsId, orgId, null));
     expect(withoutProject.get("terraform:fromProject")).toBeUndefined();
-
   });
 
   it("terraform and env vars with the same key resolve independently", async () => {
@@ -157,7 +184,6 @@ describe("variable precedence matrix (VAR-005)", () => {
     const m = asMap(await executionVariables(wsId, orgId, null));
     expect(m.get("terraform:dupe")).toBe("terraform-value#priority=false");
     expect(m.get("env:dupe")).toBe("env-value#priority=false");
-
   });
 
   it("lexically earliest non-priority set wins ties within the same tier", async () => {
@@ -165,20 +191,35 @@ describe("variable precedence matrix (VAR-005)", () => {
     // lexical precedence: the earliest set name wins, with id as a tie-breaker.
     const lowerIdSet = `vs-lower-${suffix}`;
     const higherIdSet = `vs-higher-${suffix}`;
-    await db.insert(variableSets).values({ id: lowerIdSet, orgId, name: "aaa-earlier-name", global: false, priority: false });
-    await db.insert(variableSets).values({ id: higherIdSet, orgId, name: "zzz-later-name", global: false, priority: false });
+    await db
+      .insert(variableSets)
+      .values({ id: lowerIdSet, orgId, name: "aaa-earlier-name", global: false, priority: false });
+    await db
+      .insert(variableSets)
+      .values({ id: higherIdSet, orgId, name: "zzz-later-name", global: false, priority: false });
     await db.insert(variableSetWorkspaces).values([
       { id: `link-lower-${suffix}`, variableSetId: lowerIdSet, workspaceId: wsId },
       { id: `link-higher-${suffix}`, variableSetId: higherIdSet, workspaceId: wsId },
     ]);
     // Higher id (vsv-zzz) is on the set with the lexically LATER name.
-    await db.insert(variableSetVariables).values({ id: `vsv-zzz-${suffix}`, variableSetId: higherIdSet, key: "tier", value: "later-name-loses", category: "terraform" });
-    await db.insert(variableSetVariables).values({ id: `vsv-aaa-${suffix}`, variableSetId: lowerIdSet, key: "tier", value: "earlier-name-wins", category: "terraform" });
+    await db.insert(variableSetVariables).values({
+      id: `vsv-zzz-${suffix}`,
+      variableSetId: higherIdSet,
+      key: "tier",
+      value: "later-name-loses",
+      category: "terraform",
+    });
+    await db.insert(variableSetVariables).values({
+      id: `vsv-aaa-${suffix}`,
+      variableSetId: lowerIdSet,
+      key: "tier",
+      value: "earlier-name-wins",
+      category: "terraform",
+    });
 
     const m = asMap(await executionVariables(wsId, orgId, null));
     // The lexically earlier set wins regardless of insertion/id order.
     expect(m.get("terraform:tier")).toBe("earlier-name-wins#priority=false");
-
   });
 
   it("renaming a set moves its rank: the winner follows the live name (issue #704)", async () => {
@@ -211,7 +252,6 @@ describe("variable precedence matrix (VAR-005)", () => {
     if (entry?.source !== "varset") throw new Error("expected renamed to come from a set");
     expect(entry.setName).toBe("000-now-earlier");
     expect(entry.variable.value).toBe("from-zzz");
-
   });
 
   it("project move swaps which project-linked sets apply (issue #704)", async () => {
@@ -229,8 +269,20 @@ describe("variable precedence matrix (VAR-005)", () => {
         { id: `link-move-b-${suffix}`, variableSetId: setB, projectId: projectB },
       ]);
       await db.insert(variableSetVariables).values([
-        { id: `vsv-move-a-${suffix}`, variableSetId: setA, key: "moved", value: "from-project-a", category: "terraform" },
-        { id: `vsv-move-b-${suffix}`, variableSetId: setB, key: "moved", value: "from-project-b", category: "terraform" },
+        {
+          id: `vsv-move-a-${suffix}`,
+          variableSetId: setA,
+          key: "moved",
+          value: "from-project-a",
+          category: "terraform",
+        },
+        {
+          id: `vsv-move-b-${suffix}`,
+          variableSetId: setB,
+          key: "moved",
+          value: "from-project-b",
+          category: "terraform",
+        },
       ]);
 
       const inA = asMap(await executionVariables(wsId, orgId, projectId));
@@ -249,15 +301,18 @@ describe("variable precedence matrix (VAR-005)", () => {
       await db.update(workspaces).set({ projectId: null }).where(eq(workspaces.id, wsId));
       await db.delete(projects).where(eq(projects.id, projectB));
     }
-
   });
 
   it("a set attached through workspace and project paths wins once, not twice (issue #704)", async () => {
     const set = `vs-dupe-${suffix}`;
     await db.insert(variableSets).values({ id: set, orgId, name: "dupe-attached", global: false, priority: false });
-    await db.insert(variableSetWorkspaces).values({ id: `link-dupe-ws-${suffix}`, variableSetId: set, workspaceId: wsId });
+    await db
+      .insert(variableSetWorkspaces)
+      .values({ id: `link-dupe-ws-${suffix}`, variableSetId: set, workspaceId: wsId });
     await db.insert(variableSetProjects).values({ id: `link-dupe-proj-${suffix}`, variableSetId: set, projectId });
-    await db.insert(variableSetVariables).values({ id: `vsv-dupe-${suffix}`, variableSetId: set, key: "dupekey", value: "once", category: "terraform" });
+    await db
+      .insert(variableSetVariables)
+      .values({ id: `vsv-dupe-${suffix}`, variableSetId: set, key: "dupekey", value: "once", category: "terraform" });
 
     const executed = await executionVariables(wsId, orgId, projectId);
     expect(executed.filter((entry) => entry.key === "dupekey")).toHaveLength(1);
@@ -265,7 +320,6 @@ describe("variable precedence matrix (VAR-005)", () => {
 
     const displayed = await effectiveWorkspaceVariables(wsId, orgId, projectId);
     expect(displayed.filter((row) => row.variable.key === "dupekey")).toHaveLength(1);
-
   });
 
   it("code-point comparison orders case and non-ASCII deterministically (issue #704)", async () => {
@@ -277,7 +331,6 @@ describe("variable precedence matrix (VAR-005)", () => {
     expect(compareCodePoints("z", "𝌆")).toBeLessThan(0);
     expect(compareCodePoints("é", "Ω")).toBeLessThan(0);
     expect(compareCodePoints("same", "same")).toBe(0);
-
   });
 
   it("display order follows code points across letter case (issue #704)", async () => {
@@ -289,7 +342,6 @@ describe("variable precedence matrix (VAR-005)", () => {
     ]);
     const displayed = await effectiveWorkspaceVariables(wsId, orgId, null);
     expect(displayed.map((row) => row.variable.key)).toEqual(["Banana", "apple"]);
-
   });
 
   it("one set cannot hold the same key twice, so row-id ties cannot occur (issue #704)", async () => {
@@ -298,23 +350,44 @@ describe("variable precedence matrix (VAR-005)", () => {
     // migration dropping the constraint visibly breaks this contract.
     const set = `vs-unique-${suffix}`;
     await db.insert(variableSets).values({ id: set, orgId, name: "unique-guard", global: false, priority: false });
-    await db.insert(variableSetVariables).values({ id: `vsv-unique-1-${suffix}`, variableSetId: set, key: "only", value: "first", category: "terraform" });
+    await db
+      .insert(variableSetVariables)
+      .values({ id: `vsv-unique-1-${suffix}`, variableSetId: set, key: "only", value: "first", category: "terraform" });
     let rejected: unknown = null;
     try {
-      await db.insert(variableSetVariables).values({ id: `vsv-unique-2-${suffix}`, variableSetId: set, key: "only", value: "second", category: "terraform" });
+      await db.insert(variableSetVariables).values({
+        id: `vsv-unique-2-${suffix}`,
+        variableSetId: set,
+        key: "only",
+        value: "second",
+        category: "terraform",
+      });
     } catch (error: unknown) {
       rejected = error;
     }
     expect(rejected).not.toBeNull();
-
   });
 
   it("agent execution resolves the same winners regardless of sensitivity (issue #691)", async () => {
     const set = `vs-agent-${suffix}`;
     await db.insert(variableSets).values({ id: set, orgId, name: "agent-priority", global: false, priority: true });
-    await db.insert(variableSetWorkspaces).values({ id: `link-agent-${suffix}`, variableSetId: set, workspaceId: wsId });
-    await db.insert(variableSetVariables).values({ id: `vsv-agent-${suffix}`, variableSetId: set, key: "fixed", value: "priority", category: "terraform" });
-    await db.insert(workspaceVariables).values({ id: `wv-agent-${suffix}`, workspaceId: wsId, key: "region", value: "workspace", category: "terraform" });
+    await db
+      .insert(variableSetWorkspaces)
+      .values({ id: `link-agent-${suffix}`, variableSetId: set, workspaceId: wsId });
+    await db.insert(variableSetVariables).values({
+      id: `vsv-agent-${suffix}`,
+      variableSetId: set,
+      key: "fixed",
+      value: "priority",
+      category: "terraform",
+    });
+    await db.insert(workspaceVariables).values({
+      id: `wv-agent-${suffix}`,
+      workspaceId: wsId,
+      key: "region",
+      value: "workspace",
+      category: "terraform",
+    });
 
     for (const sensitive of [false, true]) {
       const env = await agentEnvironment(wsId, orgId, null, [
@@ -329,6 +402,5 @@ describe("variable precedence matrix (VAR-005)", () => {
       expect(env["RUN_ENV"]).toBe("run-env");
       expect(env["TF_VAR_RUN_ENV"]).toBeUndefined();
     }
-
   });
 });

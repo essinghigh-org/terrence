@@ -2,7 +2,20 @@ import { describe, expect, it, beforeEach } from "bun:test";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { users, organizations, organizationMemberships, projects, workspaces, workspaceVariables, variableSets, variableSetProjects, stateVersions, configurationVersions, runs, apiTokens } from "../../src/db/schema";
+import {
+  users,
+  organizations,
+  organizationMemberships,
+  projects,
+  workspaces,
+  workspaceVariables,
+  variableSets,
+  variableSetProjects,
+  stateVersions,
+  configurationVersions,
+  runs,
+  apiTokens,
+} from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 
 describe("Epics 6, 7 & 8 API Features: Global Vars, Variable Sets, State & CV Enhancements", () => {
@@ -99,7 +112,7 @@ describe("Epics 6, 7 & 8 API Features: Global Vars, Variable Sets, State & CV En
             },
           },
         }),
-      })
+      }),
     );
     expect(postRes.status).toBe(201);
     const postBody = await postRes.json();
@@ -108,7 +121,7 @@ describe("Epics 6, 7 & 8 API Features: Global Vars, Variable Sets, State & CV En
     const listRes = await app.handle(
       new Request("http://localhost/api/v2/vars", {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(listRes.status).toBe(200);
     const listBody = await listRes.json();
@@ -125,7 +138,7 @@ describe("Epics 6, 7 & 8 API Features: Global Vars, Variable Sets, State & CV En
         body: JSON.stringify({
           data: { attributes: { value: "pg-cluster.internal" } },
         }),
-      })
+      }),
     );
     expect(patchRes.status).toBe(200);
 
@@ -133,22 +146,24 @@ describe("Epics 6, 7 & 8 API Features: Global Vars, Variable Sets, State & CV En
       new Request(`http://localhost/api/v2/vars/${varId}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(delRes.status).toBe(204);
   });
 
   it("bounds and paginates the global vars listing", async () => {
-    await db.insert(workspaceVariables).values(Array.from({ length: 21 }, (_, index) => ({
-      id: `var-pagination-${String(index).padStart(2, "0")}`,
-      workspaceId,
-      key: `KEY_${String(index).padStart(2, "0")}`,
-      value: `value-${index}`,
-      sensitive: false,
-      hcl: false,
-      category: "terraform",
-      description: null,
-    })));
+    await db.insert(workspaceVariables).values(
+      Array.from({ length: 21 }, (_, index) => ({
+        id: `var-pagination-${String(index).padStart(2, "0")}`,
+        workspaceId,
+        key: `KEY_${String(index).padStart(2, "0")}`,
+        value: `value-${index}`,
+        sensitive: false,
+        hcl: false,
+        category: "terraform",
+        description: null,
+      })),
+    );
 
     const listRes = await app.handle(
       new Request("http://localhost/api/v2/vars?page[number]=2&page[size]=5", {
@@ -192,7 +207,7 @@ describe("Epics 6, 7 & 8 API Features: Global Vars, Variable Sets, State & CV En
             },
           },
         }),
-      })
+      }),
     );
     expect(createVs.status).toBe(201);
     const vsBody = await createVs.json();
@@ -209,14 +224,14 @@ describe("Epics 6, 7 & 8 API Features: Global Vars, Variable Sets, State & CV En
         body: JSON.stringify({
           data: [{ id: projectId, type: "projects" }],
         }),
-      })
+      }),
     );
     expect(attachProj.status).toBe(204);
 
     const getVs = await app.handle(
       new Request(`http://localhost/api/v2/varsets/${varsetId}`, {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(getVs.status).toBe(200);
     const getVsBody = await getVs.json();
@@ -237,7 +252,7 @@ describe("Epics 6, 7 & 8 API Features: Global Vars, Variable Sets, State & CV En
     const jsonRes = await app.handle(
       new Request(`http://localhost/api/v2/state-versions/${svId}/json-download`, {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(jsonRes.status).toBe(200);
     const jsonText = await jsonRes.text();
@@ -247,7 +262,7 @@ describe("Epics 6, 7 & 8 API Features: Global Vars, Variable Sets, State & CV En
       new Request(`http://localhost/api/v2/state-versions/${svId}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(delRes.status).toBe(204);
 

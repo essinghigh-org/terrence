@@ -36,7 +36,9 @@ process.env["STORAGE_DIR"] ??= join(testDir, "storage");
 // require Go on every developer or CI machine.
 if (process.env["TERRAFORM_CONFIG_INSPECT_PATH"] === undefined) {
   const inspector = join(testDir, "terraform-config-inspect");
-  writeFileSync(inspector, `#!/usr/bin/env bun
+  writeFileSync(
+    inspector,
+    `#!/usr/bin/env bun
 const directory = Bun.argv.at(-1) ?? "";
 const subnet = directory.endsWith("/modules/subnet");
 const example = directory.endsWith("/examples/basic");
@@ -53,7 +55,8 @@ const value = subnet ? {
   outputs: { vpc_id: { description: "Created VPC ID", sensitive: true } },
 };
 process.stdout.write(JSON.stringify(value));
-`);
+`,
+  );
   chmodSync(inspector, 0o755);
   process.env["TERRAFORM_CONFIG_INSPECT_PATH"] = inspector;
 }

@@ -11,7 +11,7 @@ import {
 // A representative slice of the models.dev catalog shape: providers with and
 // without an `api` base URL, models with and without text output.
 const SAMPLE = JSON.stringify({
-  "openrouter": {
+  openrouter: {
     id: "openrouter",
     name: "OpenRouter",
     api: "https://openrouter.ai/api/v1",
@@ -31,7 +31,7 @@ const SAMPLE = JSON.stringify({
       },
     },
   },
-  "openai": {
+  openai: {
     id: "openai",
     name: "OpenAI",
     api: null,
@@ -50,7 +50,7 @@ const SAMPLE = JSON.stringify({
       },
     },
   },
-  "nostalgiacorp": {
+  nostalgiacorp: {
     id: "nostalgiacorp",
     name: "Nostalgia Corp",
     api: null,
@@ -87,7 +87,9 @@ describe("parseModelCatalog", () => {
 
   it("captures reasoning flag and context length", () => {
     const providers = parseModelCatalog(SAMPLE);
-    const model = providers.find((p) => p.id === "openrouter")?.models.find((m) => m.id === "deepcogito/cogito-v2.1-671b");
+    const model = providers
+      .find((p) => p.id === "openrouter")
+      ?.models.find((m) => m.id === "deepcogito/cogito-v2.1-671b");
     expect(model?.reasoning).toBe(true);
     expect(model?.context).toBe(128000);
     const retro = providers.find((p) => p.id === "nostalgiacorp")?.models[0];

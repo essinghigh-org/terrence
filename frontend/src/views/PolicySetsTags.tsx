@@ -49,10 +49,10 @@ export function PolicySetsTags(): React.JSX.Element {
     setLoading(true);
     setError("");
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const organizationResponse = await fetchApi(
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const organizationResponse = (await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}`,
-      ) as {
+      )) as {
         data?: { attributes?: { permissions?: { "can-manage-policies"?: boolean } } };
       };
       if (activeOrganizationName.current !== requestedOrganizationName) return;
@@ -62,10 +62,10 @@ export function PolicySetsTags(): React.JSX.Element {
         setLoading(false);
         return;
       }
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/policy-sets`,
-      ) as { data?: PolicyTagsSet[] };
+      )) as { data?: PolicyTagsSet[] };
       if (activeOrganizationName.current !== requestedOrganizationName) return;
       const all = Array.isArray(response.data) ? response.data : [];
       // Only tag-scoped policy sets are relevant to this view.
@@ -81,9 +81,10 @@ export function PolicySetsTags(): React.JSX.Element {
   };
 
   const formatSelector = (selector: TagSelector): string => {
-    const tag = selector["tag-value"] != null && selector["tag-value"] !== ""
-      ? `${selector["tag-key"].toLowerCase()}:${selector["tag-value"]}`
-      : selector["tag-key"].toLowerCase();
+    const tag =
+      selector["tag-value"] != null && selector["tag-value"] !== ""
+        ? `${selector["tag-key"].toLowerCase()}:${selector["tag-value"]}`
+        : selector["tag-key"].toLowerCase();
     return selector["is-exclude"] ? `-${tag}` : tag;
   };
 
@@ -106,67 +107,73 @@ export function PolicySetsTags(): React.JSX.Element {
 
       <Card>
         <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Kind</TableHead>
-                      <TableHead>Tag selectors</TableHead>
-                      <TableHead>Description</TableHead>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Kind</TableHead>
+                <TableHead>Tag selectors</TableHead>
+                <TableHead>Description</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="h-32 text-center">
+                    <Spinner />
+                  </TableCell>
+                </TableRow>
+              ) : error !== "" ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="h-32 text-center text-sm text-muted-foreground">
+                    {error}
+                  </TableCell>
+                </TableRow>
+              ) : sets.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <Tags className="h-8 w-8 text-muted-foreground/60" />
+                      <p className="text-sm">No tag-based policy sets found.</p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                sets.map(
+                  (policySet): React.JSX.Element => (
+                    <TableRow
+                      key={policySet.id}
+                      className="cursor-pointer"
+                      onClick={(): void => {
+                        void navigate(
+                          `/app/${encodeURIComponent(orgName)}/settings/policy-sets/${encodeURIComponent(policySet.id)}`,
+                        );
+                      }}
+                    >
+                      <TableCell className="font-medium">
+                        <Link
+                          to={`/app/${encodeURIComponent(orgName)}/settings/policy-sets/${encodeURIComponent(policySet.id)}`}
+                          className="flex items-center gap-2 hover:underline"
+                        >
+                          <Tags className="h-4 w-4 text-primary" />
+                          {policySet.attributes.name}
+                        </Link>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{(policySet.attributes.kind ?? "sentinel").toUpperCase()}</Badge>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{tagSummary(policySet)}</TableCell>
+                      <TableCell className="max-w-xs truncate text-muted-foreground">
+                        {policySet.attributes.description != null && policySet.attributes.description !== ""
+                          ? policySet.attributes.description
+                          : "—"}
+                      </TableCell>
                     </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {loading ? (
-                      <TableRow>
-                        <TableCell colSpan={4} className="h-32 text-center">
-                          <Spinner />
-                        </TableCell>
-                      </TableRow>
-                    ) : error !== "" ? (
-                      <TableRow>
-                        <TableCell colSpan={4} className="h-32 text-center text-sm text-muted-foreground">{error}</TableCell>
-                      </TableRow>
-                    ) : sets.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
-                          <div className="flex flex-col items-center justify-center gap-2">
-                            <Tags className="h-8 w-8 text-muted-foreground/60" />
-                            <p className="text-sm">No tag-based policy sets found.</p>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ) : sets.map((policySet): React.JSX.Element => (
-                  <TableRow
-                    key={policySet.id}
-                    className="cursor-pointer"
-                    onClick={(): void => {
-                      void navigate(`/app/${encodeURIComponent(orgName)}/settings/policy-sets/${encodeURIComponent(policySet.id)}`);
-                    }}
-                  >
-                    <TableCell className="font-medium">
-                      <Link
-                        to={`/app/${encodeURIComponent(orgName)}/settings/policy-sets/${encodeURIComponent(policySet.id)}`}
-                        className="flex items-center gap-2 hover:underline"
-                      >
-                        <Tags className="h-4 w-4 text-primary" />
-                        {policySet.attributes.name}
-                      </Link>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{(policySet.attributes.kind ?? "sentinel").toUpperCase()}</Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{tagSummary(policySet)}</TableCell>
-                    <TableCell className="max-w-xs truncate text-muted-foreground">
-                      {policySet.attributes.description != null && policySet.attributes.description !== "" ? (
-                        policySet.attributes.description
-                      ) : (
-                        "—"
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                  ),
+                )
+              )}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
     </PageShell>

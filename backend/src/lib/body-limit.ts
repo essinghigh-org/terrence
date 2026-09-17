@@ -25,10 +25,12 @@ export class BodyTooLargeError extends Error {
 
 /** True for the archive-upload paths that keep the 100 MiB server limit. */
 export function isUploadPath(pathname: string): boolean {
-  return pathname.endsWith("/upload")
-    || pathname.endsWith("/json-upload")
-    || pathname.endsWith("/json-outputs-upload")
-    || /^\/api\/agent\/jobs\/[^/]+\/filesystem$/.test(pathname);
+  return (
+    pathname.endsWith("/upload") ||
+    pathname.endsWith("/json-upload") ||
+    pathname.endsWith("/json-outputs-upload") ||
+    /^\/api\/agent\/jobs\/[^/]+\/filesystem$/.test(pathname)
+  );
 }
 
 /**

@@ -82,7 +82,7 @@ function findRunner(): string | null {
  * PATH. Returns null if not found, a directory, or not executable. */
 function findExecutable(name: string): string | null {
   if (name === "") return null;
-  if (isAbsolute(name)) return (existsSync(name) && statIsExecutable(name)) ? name : null;
+  if (isAbsolute(name)) return existsSync(name) && statIsExecutable(name) ? name : null;
   if (name.includes("/")) return null;
   const pathDirs = (process.env["PATH"] ?? "").split(":").filter(Boolean);
   for (const dir of pathDirs) {
@@ -139,7 +139,9 @@ function netRuleArgs(): string[] {
   if (!runNetDenyEnabled()) return [];
   const abi = probeLandlockAbi();
   if (abi < 4) {
-    throw new Error(`Run network isolation requires Landlock ABI >= 4. Host ABI is ${abi}. Upgrade the kernel or set TERRENCE_RUN_NET_POLICY=allow.`);
+    throw new Error(
+      `Run network isolation requires Landlock ABI >= 4. Host ABI is ${abi}. Upgrade the kernel or set TERRENCE_RUN_NET_POLICY=allow.`,
+    );
   }
   return ["--deny-net"];
 }
@@ -163,16 +165,9 @@ export function landlockAccessFlagsForAbi(abi: number): {
 /** Directories that must be traversable/readable for any dynamically linked
  *  binary or provisioner shell. */
 function systemRuleArgs(): string[] {
-  return [
-    "/bin",
-    "/usr/bin",
-    "/sbin",
-    "/usr/sbin",
-    "/lib",
-    "/lib64",
-    "/usr/lib",
-    "/usr/lib64",
-  ].filter(existsSync).map((path): string => `--rx=${path}`);
+  return ["/bin", "/usr/bin", "/sbin", "/usr/sbin", "/lib", "/lib64", "/usr/lib", "/usr/lib64"]
+    .filter(existsSync)
+    .map((path): string => `--rx=${path}`);
 }
 
 /** Minimal system configuration allow-list needed by network clients. */
@@ -275,91 +270,98 @@ export class RunSandbox {
   }
 
   /** Spawn a generic command (sentinel, etc.) under the Landlock allow-list.
-     * Uses the same rules as terraform/tofu but with a custom binary. */
-    public spawnGeneric(
-      args: readonly string[],
-      opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>>; cgroup?: string | null; extraRo?: readonly string[] }>,
-    ): Subprocess<"ignore", "pipe", "pipe"> {
-      let binaryPath = args[0] ?? "";
-      if (this.runner === null) {
-        throw new Error("landlock-runner binary not found; cannot sandbox run");
-      }
-
-      // Resolve bare commands (e.g. "sentinel") to absolute paths before
-      // constructing Landlock rules. If unresolved, fail fast instead of
-      // treating as current directory.
-      if (binaryPath === "" || !isAbsolute(binaryPath)) {
-        const found = findExecutable(binaryPath);
-        if (found === null) {
-          throw new Error(`executable not found: ${binaryPath}`);
-        }
-        binaryPath = found;
-      }
-      const resolvedArgs = [binaryPath, ...args.slice(1)];
-
-      const workDir = this.workDirForRunCwd(opts.cwd);
-      const binaryDir = dirname(binaryPath);
-      const tmpDir = join(workDir, "tmp");
-      // Terraform's go-plugin binds its provider socket under $TMPDIR, and
-      // AF_UNIX paths cap at 107 usable bytes: a TMPDIR deeper than ~75
-      // chars fails plugin startup with "bind: invalid argument" (flaky,
-      // since the "plugin<...>" socket suffix length varies per run).
-      // Production run workdirs are short, but a deep custom TMPDIR would
-      // otherwise surface as a cryptic provider handshake failure — warn
-      // loudly instead. Warning only (not a throw): tofu dials over TCP
-      // loopback and is unaffected by socket path length.
-      if (tmpDir.length + 32 > 107) {
-        try {
-          log.warn("sandbox TMPDIR too deep for terraform provider sockets", { tmpDir, length: tmpDir.length });
-        } catch { /* logging is best-effort */ }
-      }
-      const env: Record<string, string> = {
-        ...opts.env,
-        PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        HOME: workDir,
-        TMPDIR: tmpDir,
-        USER: process.env["USER"] ?? "nobody",
-      };
-
-      const runnerArgs = [
-        this.runner,
-        `--rwx=${workDir}`,
-        `--rx=${binaryDir}`,
-        ...systemRuleArgs(),
-        ...systemEtcRuleArgs(),
-        ...devRuleArgs(),
-        ...netRuleArgs(),
-        ...extraRwArgs(),
-        ...extraRoArgs(opts.extraRo ?? []),
-        `--cwd=${opts.cwd}`,
-        "--",
-        ...resolvedArgs,
-      ];
-
-      const spawnOpts: Record<string, unknown> = {
-        env,
-        stdout: "pipe",
-        stderr: "pipe",
-        detached: true,
-      };
-      if (typeof opts.cgroup === "string" && opts.cgroup !== "") {
-        spawnOpts["cgroup"] = opts.cgroup;
-      }
-
-      return Bun.spawn(runnerArgs, spawnOpts as never);
+   * Uses the same rules as terraform/tofu but with a custom binary. */
+  public spawnGeneric(
+    args: readonly string[],
+    opts: Readonly<{
+      cwd: string;
+      env: Readonly<Record<string, string>>;
+      cgroup?: string | null;
+      extraRo?: readonly string[];
+    }>,
+  ): Subprocess<"ignore", "pipe", "pipe"> {
+    let binaryPath = args[0] ?? "";
+    if (this.runner === null) {
+      throw new Error("landlock-runner binary not found; cannot sandbox run");
     }
 
-    /** Spawn a terraform/tofu command under the Landlock allow-list.
-     * `args[0]` is the host binary path; `opts.cwd` is the host execution dir
-     * (inside the run workdir). The helper applies the rules to itself, chdirs,
-     * then execs — restrictions flow to provider and provisioner children.
-     */
-    public spawn(
-      args: readonly string[],
-      opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>>; cgroup?: string | null }>,
-    ): Subprocess<"ignore", "pipe", "pipe"> {
-      return this.spawnGeneric(args, opts);
+    // Resolve bare commands (e.g. "sentinel") to absolute paths before
+    // constructing Landlock rules. If unresolved, fail fast instead of
+    // treating as current directory.
+    if (binaryPath === "" || !isAbsolute(binaryPath)) {
+      const found = findExecutable(binaryPath);
+      if (found === null) {
+        throw new Error(`executable not found: ${binaryPath}`);
+      }
+      binaryPath = found;
     }
+    const resolvedArgs = [binaryPath, ...args.slice(1)];
+
+    const workDir = this.workDirForRunCwd(opts.cwd);
+    const binaryDir = dirname(binaryPath);
+    const tmpDir = join(workDir, "tmp");
+    // Terraform's go-plugin binds its provider socket under $TMPDIR, and
+    // AF_UNIX paths cap at 107 usable bytes: a TMPDIR deeper than ~75
+    // chars fails plugin startup with "bind: invalid argument" (flaky,
+    // since the "plugin<...>" socket suffix length varies per run).
+    // Production run workdirs are short, but a deep custom TMPDIR would
+    // otherwise surface as a cryptic provider handshake failure — warn
+    // loudly instead. Warning only (not a throw): tofu dials over TCP
+    // loopback and is unaffected by socket path length.
+    if (tmpDir.length + 32 > 107) {
+      try {
+        log.warn("sandbox TMPDIR too deep for terraform provider sockets", { tmpDir, length: tmpDir.length });
+      } catch {
+        /* logging is best-effort */
+      }
+    }
+    const env: Record<string, string> = {
+      ...opts.env,
+      PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      HOME: workDir,
+      TMPDIR: tmpDir,
+      USER: process.env["USER"] ?? "nobody",
+    };
+
+    const runnerArgs = [
+      this.runner,
+      `--rwx=${workDir}`,
+      `--rx=${binaryDir}`,
+      ...systemRuleArgs(),
+      ...systemEtcRuleArgs(),
+      ...devRuleArgs(),
+      ...netRuleArgs(),
+      ...extraRwArgs(),
+      ...extraRoArgs(opts.extraRo ?? []),
+      `--cwd=${opts.cwd}`,
+      "--",
+      ...resolvedArgs,
+    ];
+
+    const spawnOpts: Record<string, unknown> = {
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+      detached: true,
+    };
+    if (typeof opts.cgroup === "string" && opts.cgroup !== "") {
+      spawnOpts["cgroup"] = opts.cgroup;
+    }
+
+    return Bun.spawn(runnerArgs, spawnOpts as never);
+  }
+
+  /** Spawn a terraform/tofu command under the Landlock allow-list.
+   * `args[0]` is the host binary path; `opts.cwd` is the host execution dir
+   * (inside the run workdir). The helper applies the rules to itself, chdirs,
+   * then execs — restrictions flow to provider and provisioner children.
+   */
+  public spawn(
+    args: readonly string[],
+    opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>>; cgroup?: string | null }>,
+  ): Subprocess<"ignore", "pipe", "pipe"> {
+    return this.spawnGeneric(args, opts);
+  }
 
   /** Resolve the run workdir containing a cwd (execution dir). */
   private workDirForRunCwd(cwd: string): string {
@@ -370,12 +372,20 @@ export class RunSandbox {
     try {
       resolvedCwd = resolve(cwd);
       // Best-effort realpath to collapse symlinks when the path exists.
-      try { resolvedCwd = realpathSync(resolvedCwd); } catch { /* use resolved */ }
+      try {
+        resolvedCwd = realpathSync(resolvedCwd);
+      } catch {
+        /* use resolved */
+      }
     } catch {
       return cwd;
     }
     let resolvedBase = runsBase;
-    try { resolvedBase = realpathSync(runsBase); } catch { /* use resolved */ }
+    try {
+      resolvedBase = realpathSync(runsBase);
+    } catch {
+      /* use resolved */
+    }
     const prefix = resolvedBase.endsWith("/") ? resolvedBase : resolvedBase + "/";
     if (resolvedCwd === resolvedBase || resolvedCwd.startsWith(prefix)) {
       const rest = resolvedCwd === resolvedBase ? "" : resolvedCwd.slice(prefix.length);
@@ -401,7 +411,9 @@ function storageProtectionPrefix(allowStorage: boolean): string | null {
     const { storageDir } = require("../db/driver") as { storageDir: string };
     const resolvedStorageDir = resolve(storageDir);
     return resolvedStorageDir.endsWith("/") ? resolvedStorageDir : resolvedStorageDir + "/";
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
   return null;
 }
 
@@ -425,7 +437,11 @@ function extraRwArgs(): string[] {
     if (p === "") continue;
     if (!isAbsolute(p)) continue;
     let canon = resolve(p);
-    try { canon = realpathSync(canon); } catch { /* use resolved */ }
+    try {
+      canon = realpathSync(canon);
+    } catch {
+      /* use resolved */
+    }
     // 71: unless explicitly allowed, never widen the sandbox beneath storage (protect DB/key).
     if (storagePrefix !== null && (canon === storagePrefix.slice(0, -1) || canon.startsWith(storagePrefix))) continue;
     out.push(`--rw=${canon}`);
@@ -435,7 +451,9 @@ function extraRwArgs(): string[] {
     // can correlate which widened paths are actually in effect.
     try {
       log.warn("sandbox extra RW paths active", { paths: out.map((a) => a.slice("--rw=".length)) });
-    } catch { /* logging is best-effort during early boot */ }
+    } catch {
+      /* logging is best-effort during early boot */
+    }
   }
   return out;
 }

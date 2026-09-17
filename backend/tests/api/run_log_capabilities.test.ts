@@ -2,10 +2,27 @@ import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
-import { apiTokens, auditLogs, logs, organizationMemberships, runs, teams, teamWorkspaces, users, workspaces } from "../../src/db/schema";
+import {
+  apiTokens,
+  auditLogs,
+  logs,
+  organizationMemberships,
+  runs,
+  teams,
+  teamWorkspaces,
+  users,
+  workspaces,
+} from "../../src/db/schema";
 import { archiveRunLogs, deleteRunLogArchive } from "../../src/lib/run-logs";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
-import { cleanupSeed, expectSuccessResponse, jsonHeaders, persistSeed, request, seedOrg } from "./compat_contract_helpers";
+import {
+  cleanupSeed,
+  expectSuccessResponse,
+  jsonHeaders,
+  persistSeed,
+  request,
+  seedOrg,
+} from "./compat_contract_helpers";
 
 const seed = seedOrg("log-capability");
 const workspaceId = `ws-${seed.suffix}`;
@@ -19,15 +36,31 @@ const reader = jsonHeaders(teamToken);
 const canary = "SYNTHETIC_LOG_CANARY";
 const link = async (phase: "plan" | "apply", headers = owner): Promise<string> => {
   const type = phase === "plan" ? "plans" : "applies";
-  const resource = await expectSuccessResponse(await request(`/api/v2/${type}/${phase}-${runId}`, { headers }), 200, type);
+  const resource = await expectSuccessResponse(
+    await request(`/api/v2/${type}/${phase}-${runId}`, { headers }),
+    200,
+    type,
+  );
   return resource.attributes["log-read-url"] as string;
 };
 
 beforeAll(async () => {
   await persistSeed(seed);
   await db.insert(workspaces).values({ id: workspaceId, orgId: seed.orgId, name: "log-capability" });
-  await db.insert(runs).values([runId, otherRunId].map((id) => ({ id, workspaceId, status: "applying", logToken, createdAt: Date.now() })));
-  await db.insert(logs).values(["plan", "apply"].map((phase) => ({ id: crypto.randomUUID(), runId, phase, outputText: canary, createdAt: Date.now() })));
+  await db
+    .insert(runs)
+    .values(
+      [runId, otherRunId].map((id) => ({ id, workspaceId, status: "applying", logToken, createdAt: Date.now() })),
+    );
+  await db.insert(logs).values(
+    ["plan", "apply"].map((phase) => ({
+      id: crypto.randomUUID(),
+      runId,
+      phase,
+      outputText: canary,
+      createdAt: Date.now(),
+    })),
+  );
   await db.insert(teams).values({ id: teamId, orgId: seed.orgId, name: "reader" });
   await db.insert(teamWorkspaces).values({ id: `tw-${seed.suffix}`, teamId, workspaceId, access: "read" });
   await db.insert(apiTokens).values({ id: `tk-${seed.suffix}`, teamId, token: hashAuthenticationToken(teamToken) });
@@ -64,12 +97,16 @@ test("phase/run-bound links survive go-tfe query replacement and long polling, t
         expect(response.headers.get("cache-control")).toContain("no-store");
         expect(response.headers.get("referrer-policy")).toBe("no-referrer");
       }
-      expect((await request(issued.replace(`/${phase}/log/`, phase === "plan" ? "/apply/log/" : "/plan/log/"))).status).toBe(404);
+      expect(
+        (await request(issued.replace(`/${phase}/log/`, phase === "plan" ? "/apply/log/" : "/plan/log/"))).status,
+      ).toBe(404);
       expect((await request(issued.replace(runId, otherRunId))).status).toBe(404);
       expect((await request(issued + "0")).status).toBe(404);
       // Old URLs disclosed logToken. It must never become the signing secret.
       const forgedExpiry = Math.floor(now / 1000) + 999999;
-      const forgedSignature = createHmac("sha256", logToken).update(`${runId}\n${phase}\n${forgedExpiry}`).digest("hex");
+      const forgedSignature = createHmac("sha256", logToken)
+        .update(`${runId}\n${phase}\n${forgedExpiry}`)
+        .digest("hex");
       expect((await request(`/api/v2/runs/${runId}/${phase}/log/${forgedExpiry}.${forgedSignature}`)).status).toBe(404);
       expect((await request(`/api/v2/runs/${runId}/${phase}/log/${logToken}`)).status).toBe(404);
       clock.mockReturnValue(now + 49 * 3600_000);
@@ -105,24 +142,41 @@ test("only an administrator can revoke; removed readers cannot renew; rotation i
 
 test("removing an organization membership immediately invalidates issued links (issue #699)", async () => {
   const targetRunId = `rot-${seed.suffix}`;
-  await db.insert(runs).values({ id: targetRunId, workspaceId, status: "applying", logToken: crypto.randomUUID(), createdAt: Date.now() });
-  await db.insert(logs).values({ id: crypto.randomUUID(), runId: targetRunId, phase: "plan", outputText: canary, createdAt: Date.now() });
+  await db
+    .insert(runs)
+    .values({ id: targetRunId, workspaceId, status: "applying", logToken: crypto.randomUUID(), createdAt: Date.now() });
+  await db
+    .insert(logs)
+    .values({ id: crypto.randomUUID(), runId: targetRunId, phase: "plan", outputText: canary, createdAt: Date.now() });
   try {
     const leaverId = `leaver-${seed.suffix}`;
     const leaverMemId = `leaver-mem-${seed.suffix}`;
     await db.insert(users).values({ id: leaverId, username: `leaver-${seed.suffix}`, passwordHash: "unused" });
-    await db.insert(organizationMemberships).values({ id: leaverMemId, userId: leaverId, orgId: seed.orgId, role: "member" });
+    await db
+      .insert(organizationMemberships)
+      .values({ id: leaverMemId, userId: leaverId, orgId: seed.orgId, role: "member" });
 
-    const resource = await expectSuccessResponse(await request(`/api/v2/plans/plan-${targetRunId}`, { headers: owner }), 200, "plans");
+    const resource = await expectSuccessResponse(
+      await request(`/api/v2/plans/plan-${targetRunId}`, { headers: owner }),
+      200,
+      "plans",
+    );
     const before = resource.attributes["log-read-url"] as string;
     expect((await request(before)).status).toBe(200);
 
-    const removed = await request(`/api/v2/organization-memberships/${leaverMemId}`, { method: "DELETE", headers: owner });
+    const removed = await request(`/api/v2/organization-memberships/${leaverMemId}`, {
+      method: "DELETE",
+      headers: owner,
+    });
     expect(removed.status).toBe(204);
     // The removed member's captured link dies with the rotation, while the
     // remaining owner fetches a fresh working link (active polling survives).
     expect((await request(before)).status).toBe(404);
-    const fresh = await expectSuccessResponse(await request(`/api/v2/plans/plan-${targetRunId}`, { headers: owner }), 200, "plans");
+    const fresh = await expectSuccessResponse(
+      await request(`/api/v2/plans/plan-${targetRunId}`, { headers: owner }),
+      200,
+      "plans",
+    );
     expect((await request(fresh.attributes["log-read-url"] as string)).status).toBe(200);
   } finally {
     await db.delete(logs).where(eq(logs.runId, targetRunId));
@@ -134,15 +188,25 @@ test("removing an organization membership immediately invalidates issued links (
 
 test("demoting a membership from active also invalidates issued links (issue #699)", async () => {
   const targetRunId = `dem-${seed.suffix}`;
-  await db.insert(runs).values({ id: targetRunId, workspaceId, status: "applying", logToken: crypto.randomUUID(), createdAt: Date.now() });
-  await db.insert(logs).values({ id: crypto.randomUUID(), runId: targetRunId, phase: "plan", outputText: canary, createdAt: Date.now() });
+  await db
+    .insert(runs)
+    .values({ id: targetRunId, workspaceId, status: "applying", logToken: crypto.randomUUID(), createdAt: Date.now() });
+  await db
+    .insert(logs)
+    .values({ id: crypto.randomUUID(), runId: targetRunId, phase: "plan", outputText: canary, createdAt: Date.now() });
   try {
     const demoteeId = `demotee-${seed.suffix}`;
     const demoteeMemId = `demotee-mem-${seed.suffix}`;
     await db.insert(users).values({ id: demoteeId, username: `demotee-${seed.suffix}`, passwordHash: "unused" });
-    await db.insert(organizationMemberships).values({ id: demoteeMemId, userId: demoteeId, orgId: seed.orgId, role: "member" });
+    await db
+      .insert(organizationMemberships)
+      .values({ id: demoteeMemId, userId: demoteeId, orgId: seed.orgId, role: "member" });
 
-    const resource = await expectSuccessResponse(await request(`/api/v2/plans/plan-${targetRunId}`, { headers: owner }), 200, "plans");
+    const resource = await expectSuccessResponse(
+      await request(`/api/v2/plans/plan-${targetRunId}`, { headers: owner }),
+      200,
+      "plans",
+    );
     const before = resource.attributes["log-read-url"] as string;
     expect((await request(before)).status).toBe(200);
 
@@ -153,7 +217,19 @@ test("demoting a membership from active also invalidates issued links (issue #69
     });
     expect(demoted.status).toBe(200);
     expect((await request(before)).status).toBe(404);
-    expect((await request((await expectSuccessResponse(await request(`/api/v2/plans/plan-${targetRunId}`, { headers: owner }), 200, "plans")).attributes["log-read-url"] as string)).status).toBe(200);
+    expect(
+      (
+        await request(
+          (
+            await expectSuccessResponse(
+              await request(`/api/v2/plans/plan-${targetRunId}`, { headers: owner }),
+              200,
+              "plans",
+            )
+          ).attributes["log-read-url"] as string,
+        )
+      ).status,
+    ).toBe(200);
   } finally {
     await db.delete(logs).where(eq(logs.runId, targetRunId));
     await db.delete(runs).where(eq(runs.id, targetRunId));
@@ -169,9 +245,15 @@ test("retained archives remain readable until revocation; soft-deleted runs cann
   expect(await (await request(issued)).text()).toBe(canary);
   await db.update(runs).set({ softDeletedAt: Date.now() }).where(eq(runs.id, runId));
   expect((await request(issued)).status).toBe(404);
-  const resource = await expectSuccessResponse(await request(`/api/v2/plans/plan-${runId}`, { headers: owner }), 200, "plans");
+  const resource = await expectSuccessResponse(
+    await request(`/api/v2/plans/plan-${runId}`, { headers: owner }),
+    200,
+    "plans",
+  );
   expect(resource.attributes["log-read-url"]).toBeNull();
-  expect((await request(`/api/v2/runs/${runId}/actions/revoke-log-links`, { method: "POST", headers: owner })).status).toBe(404);
+  expect(
+    (await request(`/api/v2/runs/${runId}/actions/revoke-log-links`, { method: "POST", headers: owner })).status,
+  ).toBe(404);
   // The existing authorized archive endpoint keeps its retention contract.
   expect(await (await request(`/api/v2/runs/${runId}/plan/log`, { headers: owner })).text()).toBe(canary);
 });

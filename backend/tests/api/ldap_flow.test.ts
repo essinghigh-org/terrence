@@ -29,14 +29,16 @@ describe("LDAP authentication", () => {
   let originalLdap: typeof adminSettings.$inferSelect | undefined;
 
   const request = (method: string, path: string, token?: string, body?: unknown): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        ...(token === undefined ? {} : { Authorization: `Bearer ${token}` }),
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          ...(token === undefined ? {} : { Authorization: `Bearer ${token}` }),
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   const login = async (username: string, password: string, browserSession = true): Promise<Response> =>
     request("POST", "/api/v2/users/login", undefined, {
@@ -58,7 +60,9 @@ describe("LDAP authentication", () => {
       "attr-display-name": "cn",
       ...overrides,
     };
-    await db.insert(adminSettings).values({ id: "ldap", values, updatedAt: Date.now() })
+    await db
+      .insert(adminSettings)
+      .values({ id: "ldap", values, updatedAt: Date.now() })
       .onConflictDoUpdate({ target: adminSettings.id, set: { values, updatedAt: Date.now() } });
     invalidateSettingsCache();
     invalidatePingSsoCache();
@@ -68,7 +72,9 @@ describe("LDAP authentication", () => {
     const values = enabled
       ? { "local-auth-enabled": true, "limit-user-organization-creation": false }
       : { "local-auth-enabled": false, "limit-user-organization-creation": false };
-    await db.insert(adminSettings).values({ id: "general", values, updatedAt: Date.now() })
+    await db
+      .insert(adminSettings)
+      .values({ id: "general", values, updatedAt: Date.now() })
       .onConflictDoUpdate({ target: adminSettings.id, set: { values, updatedAt: Date.now() } });
     invalidateSettingsCache();
     invalidatePingSsoCache();
@@ -82,7 +88,12 @@ describe("LDAP authentication", () => {
 
     await db.insert(users).values([
       { id: adminId, username: adminId, passwordHash: "unused", isSiteAdmin: true },
-      { id: localId, username: localUsername, email: `local-${localUsername}@example.com`, passwordHash: await Bun.password.hash("local-pass", { algorithm: "bcrypt", cost: 10 }) },
+      {
+        id: localId,
+        username: localUsername,
+        email: `local-${localUsername}@example.com`,
+        passwordHash: await Bun.password.hash("local-pass", { algorithm: "bcrypt", cost: 10 }),
+      },
     ]);
     await db.insert(apiTokens).values({
       id: `api-ldap-${suffix}`,
@@ -102,17 +113,23 @@ describe("LDAP authentication", () => {
       if (originalLdap === undefined) {
         await db.delete(adminSettings).where(eq(adminSettings.id, "ldap"));
       } else {
-        await db.update(adminSettings).set({ values: originalLdap.values, updatedAt: Date.now() })
+        await db
+          .update(adminSettings)
+          .set({ values: originalLdap.values, updatedAt: Date.now() })
           .where(eq(adminSettings.id, "ldap"));
       }
       if (originalGeneral === undefined) {
         await db.delete(adminSettings).where(eq(adminSettings.id, "general"));
       } else {
-        await db.update(adminSettings).set({ values: originalGeneral.values, updatedAt: Date.now() })
+        await db
+          .update(adminSettings)
+          .set({ values: originalGeneral.values, updatedAt: Date.now() })
           .where(eq(adminSettings.id, "general"));
       }
       invalidateSettingsCache();
-      const provisioned = await db.query.users.findMany({ where: inArray(users.username, [ldapUsername, localUsername]) });
+      const provisioned = await db.query.users.findMany({
+        where: inArray(users.username, [ldapUsername, localUsername]),
+      });
       const ids = [adminId, localId, ...provisioned.map((row): string => row.id)];
       await db.delete(apiTokens).where(inArray(apiTokens.userId, ids));
       await db.delete(users).where(inArray(users.id, ids));
@@ -122,7 +139,7 @@ describe("LDAP authentication", () => {
   test("provisions a new user on successful directory credentials", async () => {
     const response = await login(ldapUsername, VALID_USER_PASSWORD, true);
     expect(response.status).toBe(200);
-    const body = await response.json() as { data: { attributes: { token: string } } };
+    const body = (await response.json()) as { data: { attributes: { token: string } } };
     expect(body.data.attributes.token).toMatch(/^user-/);
 
     const created = await db.query.users.findFirst({ where: eq(users.username, ldapUsername) });
@@ -137,22 +154,28 @@ describe("LDAP authentication", () => {
     expect(provisioned).not.toBeUndefined();
     if (provisioned === undefined) return;
     const lockedUntil = Date.now() + 60_000;
-    await db.update(users).set({
-      loginFailedAttempts: 5,
-      loginFailureWindowStartedAt: Date.now() - 1_000,
-      loginLockedUntil: lockedUntil,
-    }).where(eq(users.id, provisioned.id));
+    await db
+      .update(users)
+      .set({
+        loginFailedAttempts: 5,
+        loginFailureWindowStartedAt: Date.now() - 1_000,
+        loginLockedUntil: lockedUntil,
+      })
+      .where(eq(users.id, provisioned.id));
     try {
       const response = await login(ldapUsername, VALID_USER_PASSWORD, true);
       expect(response.status).toBe(200);
       const unchanged = await db.query.users.findFirst({ where: eq(users.id, provisioned.id) });
       expect(unchanged?.loginLockedUntil).toBe(lockedUntil);
     } finally {
-      await db.update(users).set({
-        loginFailedAttempts: 0,
-        loginFailureWindowStartedAt: null,
-        loginLockedUntil: null,
-      }).where(eq(users.id, provisioned.id));
+      await db
+        .update(users)
+        .set({
+          loginFailedAttempts: 0,
+          loginFailureWindowStartedAt: null,
+          loginLockedUntil: null,
+        })
+        .where(eq(users.id, provisioned.id));
     }
   });
 
@@ -176,7 +199,7 @@ describe("LDAP authentication", () => {
   test("returns a non-browser token for API logins", async () => {
     const response = await login(ldapUsername, VALID_USER_PASSWORD, false);
     expect(response.status).toBe(200);
-    const body = await response.json() as { data: { attributes: { token: string } } };
+    const body = (await response.json()) as { data: { attributes: { token: string } } };
     expect(body.data.attributes.token).toMatch(/^user-/);
     expect(response.headers.getSetCookie().some((value): boolean => value.startsWith("terrence_refresh="))).toBeFalse();
   });
@@ -205,7 +228,10 @@ describe("LDAP authentication", () => {
   });
 
   test("uses LDAP for Terraform CLI authorization when local auth is disabled", async () => {
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("ldap-cli-verifier-012345678901234567890123456789"));
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode("ldap-cli-verifier-012345678901234567890123456789"),
+    );
     const parameters = new URLSearchParams({
       client_id: "terraform-cli",
       code_challenge: Buffer.from(digest).toString("base64url"),
@@ -234,26 +260,29 @@ describe("LDAP authentication", () => {
       expect(ldapLogin.status).toBe(200);
       const refreshCookie = ldapLogin.headers.get("Set-Cookie") ?? "";
 
-      const complete = await oauthApp.handle(new Request(
-        `http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`,
-        { headers: { Cookie: `terraform_oauth_state=${oauthState}; ${refreshCookie}` } },
-      ));
+      const complete = await oauthApp.handle(
+        new Request(`http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`, {
+          headers: { Cookie: `terraform_oauth_state=${oauthState}; ${refreshCookie}` },
+        }),
+      );
       expect(complete.status).toBe(302);
       const callback = new URL(complete.headers.get("Location") ?? "");
-      const token = await oauthApp.handle(new Request("http://localhost/oauth/token", {
-        method: "POST",
-        headers: {
-          Authorization: `Basic ${Buffer.from("terraform-cli:").toString("base64")}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams({
-          client_id: "terraform-cli",
-          code: callback.searchParams.get("code") ?? "",
-          code_verifier: "ldap-cli-verifier-012345678901234567890123456789",
-          grant_type: "authorization_code",
-          redirect_uri: "http://localhost:10000/login",
+      const token = await oauthApp.handle(
+        new Request("http://localhost/oauth/token", {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${Buffer.from("terraform-cli:").toString("base64")}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            client_id: "terraform-cli",
+            code: callback.searchParams.get("code") ?? "",
+            code_verifier: "ldap-cli-verifier-012345678901234567890123456789",
+            grant_type: "authorization_code",
+            redirect_uri: "http://localhost:10000/login",
+          }),
         }),
-      }));
+      );
       expect(token.status).toBe(200);
     } finally {
       await setLocalAuth(true);
@@ -312,7 +341,7 @@ describe("LDAP authentication", () => {
   test("exposes the local-auth and SSO state through the public ping endpoint", async () => {
     const enabled = await request("GET", "/api/v2/ping");
     expect(enabled.status).toBe(200);
-    const enabledBody = await enabled.json() as {
+    const enabledBody = (await enabled.json()) as {
       "local-auth-enabled": boolean;
       sso: { saml: boolean; oidc: boolean; ldap: boolean };
     };
@@ -323,7 +352,7 @@ describe("LDAP authentication", () => {
     await setLocalAuth(false);
     try {
       const disabled = await request("GET", "/api/v2/ping");
-      const disabledBody = await disabled.json() as {
+      const disabledBody = (await disabled.json()) as {
         "local-auth-enabled": boolean;
         sso: { saml: boolean; oidc: boolean; ldap: boolean };
       };
@@ -359,8 +388,8 @@ describe("LDAP authentication", () => {
       });
       expect(missingPlaceholder.status).toBe(422);
 
-    // A bind DN without a bind password would be an unauthenticated bind;
-    // the admin API must reject the configuration up front.
+      // A bind DN without a bind password would be an unauthenticated bind;
+      // the admin API must reject the configuration up front.
       const bindDnWithoutPassword = await request("PATCH", "/api/v2/admin/ldap-settings", adminToken, {
         data: { attributes: { "bind-dn": SERVICE_DN, "bind-password": null } },
       });

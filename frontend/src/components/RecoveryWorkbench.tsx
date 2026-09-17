@@ -57,7 +57,10 @@ function downloadBlob(blob: Blob, runId: string): void {
   URL.revokeObjectURL(url);
 }
 
-function promotionFlags(promotion: Record<string, unknown> | null, promotionComplete: boolean): Readonly<{
+function promotionFlags(
+  promotion: Record<string, unknown> | null,
+  promotionComplete: boolean,
+): Readonly<{
   alreadyPromoted: boolean;
   serverAllowsPromotion: boolean;
 }> {
@@ -70,13 +73,25 @@ function isFormatBlocked(formatSupported: boolean, capture: Record<string, unkno
   return !formatSupported || capture?.["status"] === "opaque";
 }
 
-function promotionReadiness(alreadyPromoted: boolean, serverAllowsPromotion: boolean, formatBlocked: boolean): "Promoted" | "Ready" | "Blocked" {
+function promotionReadiness(
+  alreadyPromoted: boolean,
+  serverAllowsPromotion: boolean,
+  formatBlocked: boolean,
+): "Promoted" | "Ready" | "Blocked" {
   if (alreadyPromoted) return "Promoted";
   if (serverAllowsPromotion && !formatBlocked) return "Ready";
   return "Blocked";
 }
 
-function RecoveryActions({ pendingAction, canPromote, alreadyPromoted, onFreshPlan, onDownload, onPromote, onPlan }: Readonly<{
+function RecoveryActions({
+  pendingAction,
+  canPromote,
+  alreadyPromoted,
+  onFreshPlan,
+  onDownload,
+  onPromote,
+  onPlan,
+}: Readonly<{
   pendingAction: "download" | "promote" | "plan" | null;
   canPromote: boolean;
   alreadyPromoted: boolean;
@@ -92,7 +107,11 @@ function RecoveryActions({ pendingAction, canPromote, alreadyPromoted, onFreshPl
         {pendingAction === "download" ? "Working…" : "Download recovery state"}
       </Button>
       <Button type="button" size="sm" disabled={pendingAction !== null || !canPromote} onClick={onPromote}>
-        {pendingAction === "promote" ? "Working…" : alreadyPromoted ? "Recover again (idempotent)" : "Recover into new state version"}
+        {pendingAction === "promote"
+          ? "Working…"
+          : alreadyPromoted
+            ? "Recover again (idempotent)"
+            : "Recover into new state version"}
       </Button>
       {alreadyPromoted && onFreshPlan !== undefined && (
         <Button type="button" variant="outline" size="sm" disabled={pendingAction !== null} onClick={onPlan}>
@@ -104,7 +123,11 @@ function RecoveryActions({ pendingAction, canPromote, alreadyPromoted, onFreshPl
   );
 }
 
-function RecoveryAlerts({ reviewError, actionError, formatBlocked }: Readonly<{
+function RecoveryAlerts({
+  reviewError,
+  actionError,
+  formatBlocked,
+}: Readonly<{
   reviewError: string;
   actionError: string;
   formatBlocked: boolean;
@@ -112,10 +135,14 @@ function RecoveryAlerts({ reviewError, actionError, formatBlocked }: Readonly<{
   return (
     <>
       {reviewError !== "" && (
-        <p role="alert" className="mt-2 text-xs font-medium text-destructive">{reviewError}</p>
+        <p role="alert" className="mt-2 text-xs font-medium text-destructive">
+          {reviewError}
+        </p>
       )}
       {actionError !== "" && (
-        <p role="alert" className="mt-2 text-xs font-medium text-destructive">{actionError}</p>
+        <p role="alert" className="mt-2 text-xs font-medium text-destructive">
+          {actionError}
+        </p>
       )}
       {formatBlocked && (
         <p className="mt-2 text-xs">Client-encrypted state requires its original keys and cannot be promoted.</p>
@@ -124,7 +151,10 @@ function RecoveryAlerts({ reviewError, actionError, formatBlocked }: Readonly<{
   );
 }
 
-function EvidenceTable({ candidate, committed }: Readonly<{
+function EvidenceTable({
+  candidate,
+  committed,
+}: Readonly<{
   candidate: Record<string, unknown> | null;
   committed: Record<string, unknown> | null;
 }>): React.JSX.Element {
@@ -132,7 +162,11 @@ function EvidenceTable({ candidate, committed }: Readonly<{
     <div className="overflow-x-auto rounded-md border border-border/70">
       <Table density="dense">
         <TableHeader>
-          <TableRow><TableHead>State evidence</TableHead><TableHead>Candidate</TableHead><TableHead>Last committed</TableHead></TableRow>
+          <TableRow>
+            <TableHead>State evidence</TableHead>
+            <TableHead>Candidate</TableHead>
+            <TableHead>Last committed</TableHead>
+          </TableRow>
         </TableHeader>
         <TableBody>
           {[
@@ -140,21 +174,29 @@ function EvidenceTable({ candidate, committed }: Readonly<{
             ["Lineage", stringValue(candidate?.["lineage"]), stringValue(committed?.["lineage"])],
             ["SHA-256", stringValue(candidate?.["digest"]), stringValue(committed?.["digest"])],
             ["Bytes", numberValue(candidate?.["size"]), numberValue(committed?.["size"])],
-            ["Terraform version", stringValue(candidate?.["terraformVersion"]), stringValue(committed?.["terraformVersion"])],
-          ].map(([label, candidateValue, committedValue]): React.JSX.Element => (
-            <TableRow key={label}>
-              <TableCell className="font-medium">{label}</TableCell>
-              <TableCell className="max-w-[280px] break-all font-mono text-xs">{candidateValue}</TableCell>
-              <TableCell className="max-w-[280px] break-all font-mono text-xs">{committedValue}</TableCell>
-            </TableRow>
-          ))}
+            [
+              "Terraform version",
+              stringValue(candidate?.["terraformVersion"]),
+              stringValue(committed?.["terraformVersion"]),
+            ],
+          ].map(
+            ([label, candidateValue, committedValue]): React.JSX.Element => (
+              <TableRow key={label}>
+                <TableCell className="font-medium">{label}</TableCell>
+                <TableCell className="max-w-[280px] break-all font-mono text-xs">{candidateValue}</TableCell>
+                <TableCell className="max-w-[280px] break-all font-mono text-xs">{committedValue}</TableCell>
+              </TableRow>
+            ),
+          )}
         </TableBody>
       </Table>
     </div>
   );
 }
 
-function ChecksGrid({ checks }: Readonly<{
+function ChecksGrid({
+  checks,
+}: Readonly<{
   checks: readonly Record<string, unknown>[];
 }>): React.JSX.Element {
   return (
@@ -162,9 +204,15 @@ function ChecksGrid({ checks }: Readonly<{
       {checks.map((check): React.JSX.Element => {
         const checkStatus = stringValue(check["status"], "unknown");
         return (
-          <div key={stringValue(check["id"])} className="flex items-start gap-2 rounded-md border border-border/60 px-3 py-2 text-xs">
+          <div
+            key={stringValue(check["id"])}
+            className="flex items-start gap-2 rounded-md border border-border/60 px-3 py-2 text-xs"
+          >
             <CheckIcon status={checkStatus} />
-            <span className="min-w-0 flex-1"><span className="font-medium">{stringValue(check["id"], "Check")}</span><span className="ml-1 text-muted-foreground">{stringValue(check["detail"])}</span></span>
+            <span className="min-w-0 flex-1">
+              <span className="font-medium">{stringValue(check["id"], "Check")}</span>
+              <span className="ml-1 text-muted-foreground">{stringValue(check["detail"])}</span>
+            </span>
             <Badge variant={statusVariant(checkStatus)}>{checkStatus}</Badge>
           </div>
         );
@@ -173,19 +221,29 @@ function ChecksGrid({ checks }: Readonly<{
   );
 }
 
-function BlockersPanel({ blockers }: Readonly<{
+function BlockersPanel({
+  blockers,
+}: Readonly<{
   blockers: readonly string[];
 }>): React.JSX.Element | null {
   if (!(blockers.length > 0)) return null;
   return (
     <div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs">
       <p className="font-medium text-warning-text">Promotion preconditions</p>
-      <ul className="mt-1 list-disc space-y-1 pl-4 text-muted-foreground">{blockers.map((blocker): React.JSX.Element => <li key={blocker}>{blocker}</li>)}</ul>
+      <ul className="mt-1 list-disc space-y-1 pl-4 text-muted-foreground">
+        {blockers.map(
+          (blocker): React.JSX.Element => (
+            <li key={blocker}>{blocker}</li>
+          ),
+        )}
+      </ul>
     </div>
   );
 }
 
-function ExecutionOwnerDetails({ review }: Readonly<{
+function ExecutionOwnerDetails({
+  review,
+}: Readonly<{
   review: Record<string, unknown> | null;
 }>): React.JSX.Element {
   return (
@@ -194,19 +252,42 @@ function ExecutionOwnerDetails({ review }: Readonly<{
         <FileWarning className="size-3.5" aria-hidden="true" /> Execution owner and relevant logs
       </summary>
       <div className="mt-2 space-y-2 text-xs">
-        {recordValue(review?.["execution-owner"])?.["terminated"] !== true && <p className="text-warning-text">An active run or agent owner still holds this recovery attempt.</p>}
-        {Array.isArray(review?.["relevant-logs"]) && review["relevant-logs"].map((entry): React.JSX.Element | null => {
-          const logEntry = recordValue(entry);
-          if (logEntry === null) return null;
-          return <pre key={stringValue(logEntry["id"])} className="max-h-32 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 font-mono">{stringValue(logEntry["excerpt"])}</pre>;
-        })}
-        {(!Array.isArray(review?.["relevant-logs"]) || review["relevant-logs"].length === 0) && <p className="text-muted-foreground">No relevant run logs were recorded.</p>}
+        {recordValue(review?.["execution-owner"])?.["terminated"] !== true && (
+          <p className="text-warning-text">An active run or agent owner still holds this recovery attempt.</p>
+        )}
+        {Array.isArray(review?.["relevant-logs"]) &&
+          review["relevant-logs"].map((entry): React.JSX.Element | null => {
+            const logEntry = recordValue(entry);
+            if (logEntry === null) return null;
+            return (
+              <pre
+                key={stringValue(logEntry["id"])}
+                className="max-h-32 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 font-mono"
+              >
+                {stringValue(logEntry["excerpt"])}
+              </pre>
+            );
+          })}
+        {(!Array.isArray(review?.["relevant-logs"]) || review["relevant-logs"].length === 0) && (
+          <p className="text-muted-foreground">No relevant run logs were recorded.</p>
+        )}
       </div>
     </details>
   );
 }
 
-function EvidenceReview({ ready, alreadyPromoted, serverAllowsPromotion, formatBlocked, statusText, candidate, committed, checks, blockers, review }: Readonly<{
+function EvidenceReview({
+  ready,
+  alreadyPromoted,
+  serverAllowsPromotion,
+  formatBlocked,
+  statusText,
+  candidate,
+  committed,
+  checks,
+  blockers,
+  review,
+}: Readonly<{
   ready: boolean;
   alreadyPromoted: boolean;
   serverAllowsPromotion: boolean;
@@ -239,7 +320,12 @@ function EvidenceReview({ ready, alreadyPromoted, serverAllowsPromotion, formatB
   );
 }
 
-export function RecoveryWorkbench({ runId, formatSupported = true, onRecoveryComplete, onFreshPlan }: RecoveryWorkbenchProps): React.JSX.Element {
+export function RecoveryWorkbench({
+  runId,
+  formatSupported = true,
+  onRecoveryComplete,
+  onFreshPlan,
+}: RecoveryWorkbenchProps): React.JSX.Element {
   const [reviewState, setReviewState] = useState<ReviewState>({ kind: "loading" });
   const [pendingAction, setPendingAction] = useState<"download" | "promote" | "plan" | null>(null);
   const [actionError, setActionError] = useState("");
@@ -263,9 +349,15 @@ export function RecoveryWorkbench({ runId, formatSupported = true, onRecoveryCom
         if (promotion?.["already-promoted"] === true) setPromotionComplete(true);
       })
       .catch((error: unknown): void => {
-        if (!controller.signal.aborted) setReviewState({ kind: "error", message: error instanceof Error ? error.message : "Could not load the recovery review." });
+        if (!controller.signal.aborted)
+          setReviewState({
+            kind: "error",
+            message: error instanceof Error ? error.message : "Could not load the recovery review.",
+          });
       });
-    return (): void => { controller.abort(); };
+    return (): void => {
+      controller.abort();
+    };
   };
 
   useEffect((): (() => void) => loadReview(), [runId]);
@@ -308,7 +400,10 @@ export function RecoveryWorkbench({ runId, formatSupported = true, onRecoveryCom
     setPendingAction("promote");
     setActionError("");
     try {
-      const result = await fetchApi<{ meta?: { idempotent?: unknown } }>(`/api/v2/runs/${encodeURIComponent(runId)}/actions/recover-state`, { method: "POST" });
+      const result = await fetchApi<{ meta?: { idempotent?: unknown } }>(
+        `/api/v2/runs/${encodeURIComponent(runId)}/actions/recover-state`,
+        { method: "POST" },
+      );
       const idempotent = result.meta?.idempotent === true;
       setPromotionComplete(true);
       toast.add({ title: idempotent ? "Recovery was already promoted" : "Recovery state promoted", type: "success" });
@@ -316,9 +411,13 @@ export function RecoveryWorkbench({ runId, formatSupported = true, onRecoveryCom
       loadReview();
     } catch (error: unknown) {
       if (error instanceof ApiError && error.status === 409) {
-        setActionError(/lock/i.test(error.message)
-          ? "The workspace must be locked by you before recovering state. Lock it on the workspace page, then try again."
-          : error.message !== "" ? error.message : "Recovery is blocked by a current state, lock, or active owner.");
+        setActionError(
+          /lock/i.test(error.message)
+            ? "The workspace must be locked by you before recovering state. Lock it on the workspace page, then try again."
+            : error.message !== ""
+              ? error.message
+              : "Recovery is blocked by a current state, lock, or active owner.",
+        );
       } else {
         setActionError(error instanceof Error ? error.message : "Could not promote the recovery copy.");
       }
@@ -343,25 +442,29 @@ export function RecoveryWorkbench({ runId, formatSupported = true, onRecoveryCom
       aria-label="Interrupted-apply recovery"
       title="Recovery state available"
       className="mb-5"
-      actions={(
+      actions={
         <RecoveryActions
           pendingAction={pendingAction}
           canPromote={canPromote}
           alreadyPromoted={alreadyPromoted}
           onFreshPlan={onFreshPlan}
-          onDownload={(): void => { void downloadRecoveryState(); }}
-          onPromote={(): void => { void promoteRecoveryState(); }}
+          onDownload={(): void => {
+            void downloadRecoveryState();
+          }}
+          onPromote={(): void => {
+            void promoteRecoveryState();
+          }}
           onPlan={startFreshPlan}
         />
-      )}
+      }
     >
       <p>
-        This run was interrupted during apply. Review the captured state and its evidence before promoting it.
-        Promotion records a new state version; it does not undo changes already made in the cloud.
+        This run was interrupted during apply. Review the captured state and its evidence before promoting it. Promotion
+        records a new state version; it does not undo changes already made in the cloud.
       </p>
       <p className="mt-2 text-xs">
-        Raw state and log excerpts can contain secrets. Download a backup only to an approved secure location.
-        The capture and promotion record remain available under the configured recovery retention policy.
+        Raw state and log excerpts can contain secrets. Download a backup only to an approved secure location. The
+        capture and promotion record remain available under the configured recovery retention policy.
       </p>
       <RecoveryAlerts reviewError={reviewError} actionError={actionError} formatBlocked={formatBlocked} />
       <EvidenceReview

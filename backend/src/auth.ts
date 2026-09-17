@@ -27,7 +27,6 @@ export type SystemAuthToken = Readonly<{
 type HeaderGetter = { readonly get: (name: string) => string | null };
 type DeriveContext = { readonly request: { readonly headers: HeaderGetter } };
 
-
 const rateLimitPrincipals = new WeakMap<object, string>();
 
 export function authenticatedRateLimitKey(request: object): string | undefined {
@@ -35,16 +34,16 @@ export function authenticatedRateLimitKey(request: object): string | undefined {
 }
 
 export function rememberRateLimitPrincipal(request: object, token: Readonly<AuthToken>): void {
-  const principal = token.userId !== null
-    ? `user:${token.userId}`
-    : token.teamId !== null
-      ? `team:${token.teamId}`
-      : token.orgId !== null
-        ? `organization:${token.orgId}`
-        : undefined;
+  const principal =
+    token.userId !== null
+      ? `user:${token.userId}`
+      : token.teamId !== null
+        ? `team:${token.teamId}`
+        : token.orgId !== null
+          ? `organization:${token.orgId}`
+          : undefined;
   if (principal !== undefined) rateLimitPrincipals.set(request, principal);
 }
-
 
 type DerivedAuthContext = {
   user: typeof users.$inferSelect | null;
@@ -67,7 +66,7 @@ function parseBearerCredential(request: DeriveContext["request"]): BearerParse {
   if (typeof authHeader !== "string") return { kind: "none" };
   // Scheme is case-insensitive per RFC 7235 (todo 176); the credential that
   // follows is not.
-  const bearerMatch = (/^bearer\s+/i.exec(authHeader));
+  const bearerMatch = /^bearer\s+/i.exec(authHeader);
   if (bearerMatch === null) return { kind: "none" };
   const tokenString = authHeader.slice(bearerMatch[0].length).trim();
   // Cheap rejection BEFORE any DB lookup (todo 175): a bearer token longer
@@ -83,7 +82,8 @@ async function lookupApiToken(
   legacyTokenHash: string,
   tokenHashes: readonly string[],
 ): Promise<{ token: AuthToken | undefined; user: Readonly<typeof users.$inferSelect> | null }> {
-  const rows = await db.select({ token: apiTokens, user: users })
+  const rows = await db
+    .select({ token: apiTokens, user: users })
     .from(apiTokens)
     .leftJoin(users, eq(users.id, apiTokens.userId))
     .where(inArray(apiTokens.token, tokenHashes))
@@ -109,9 +109,7 @@ async function resolveRunToken(
   // Todo 335: prefix dispatch - run tokens are `trun_`, so skip this lookup
   // for tokens whose prefix clearly indicates another credential class.
   if (!(isRunPrefix || !isSystemPrefix)) return null;
-  const runRows = await db.select().from(runTokens)
-    .where(inArray(runTokens.tokenHash, tokenHashes))
-    .limit(2);
+  const runRows = await db.select().from(runTokens).where(inArray(runTokens.tokenHash, tokenHashes)).limit(2);
   const runToken = runRows.find((candidate): boolean => candidate.tokenHash === tokenHash) ?? runRows[0];
   if (runToken === undefined) return null;
   if (runToken.tokenHash === legacyTokenHash) {
@@ -145,8 +143,11 @@ async function resolveSystemToken(
   // hot application path (api_tokens + users in one query) free of an
   // extra round trip for a rare credential class.
   if (!(isSystemPrefix || !isRunPrefix)) return null;
-  const systemRows = await db.select().from(systemApiTokens)
-    .where(inArray(systemApiTokens.tokenHash, tokenHashes)).limit(2);
+  const systemRows = await db
+    .select()
+    .from(systemApiTokens)
+    .where(inArray(systemApiTokens.tokenHash, tokenHashes))
+    .limit(2);
   const systemRow = systemRows.find((candidate): boolean => candidate.tokenHash === tokenHash) ?? systemRows[0];
   if (systemRow === undefined) return null;
   if (systemRow.tokenHash === legacyTokenHash) {
@@ -165,7 +166,12 @@ async function resolveSystemToken(
   rateLimitPrincipals.set(request, `system:${systemRow.id}`);
   return {
     ...anonymousAuth(null),
-    systemToken: { id: systemRow.id, description: systemRow.description, expiresAt: systemRow.expiresAt, lastUsedAt: now },
+    systemToken: {
+      id: systemRow.id,
+      description: systemRow.description,
+      expiresAt: systemRow.expiresAt,
+      lastUsedAt: now,
+    },
   };
 }
 
@@ -176,7 +182,12 @@ async function validateApiTokenFreshness(token: Readonly<AuthToken>, now: number
 
   if (token.refreshFamilyId != null) {
     const session = await db.query.refreshSessions.findFirst({
-      where: and(eq(refreshSessions.familyId, token.refreshFamilyId), eq(refreshSessions.userId, token.userId ?? ""), isNull(refreshSessions.revokedAt), gt(refreshSessions.expiresAt, now)),
+      where: and(
+        eq(refreshSessions.familyId, token.refreshFamilyId),
+        eq(refreshSessions.userId, token.userId ?? ""),
+        isNull(refreshSessions.revokedAt),
+        gt(refreshSessions.expiresAt, now),
+      ),
       columns: { id: true },
     });
     if (session === undefined) return anonymousAuth("invalid");
@@ -187,9 +198,7 @@ async function validateApiTokenFreshness(token: Readonly<AuthToken>, now: number
 
 async function touchApiTokenLastUsed(token: Readonly<AuthToken>, now: number): Promise<void> {
   if (token.lastUsedAt === null || now - token.lastUsedAt > 60000) {
-    await db.update(apiTokens)
-      .set({ lastUsedAt: now })
-      .where(eq(apiTokens.id, token.id));
+    await db.update(apiTokens).set({ lastUsedAt: now }).where(eq(apiTokens.id, token.id));
   }
 }
 
@@ -199,7 +208,7 @@ async function resolveUserToken(
   usedToken: Readonly<AuthToken>,
 ): Promise<DerivedAuthContext> {
   // The joined lookup already resolves the user.
-  const resolvedUser = user ?? await db.query.users.findFirst({ where: eq(users.id, userId) });
+  const resolvedUser = user ?? (await db.query.users.findFirst({ where: eq(users.id, userId) }));
   // A token whose owner row has been removed is no longer a valid user
   // credential.  Without this guard the token would survive a partial
   // cleanup and be returned as authenticated with a null user.
@@ -220,7 +229,14 @@ async function resolveTeamToken(teamId: string, usedToken: Readonly<AuthToken>):
   const team = await db.query.teams.findFirst({
     where: eq(teams.id, teamId),
   });
-  return { user: null, token: usedToken, orgId: null, teamId: team?.id ?? null, tokenError: team === undefined ? "invalid" : null, run: null };
+  return {
+    user: null,
+    token: usedToken,
+    orgId: null,
+    teamId: team?.id ?? null,
+    tokenError: team === undefined ? "invalid" : null,
+    run: null,
+  };
 }
 
 export const authPlugin = new Elysia({ name: "auth" })
@@ -246,12 +262,28 @@ export const authPlugin = new Elysia({ name: "auth" })
     // Only run/system credentials have dedicated tables. Other prefixed
     // credentials still use the indexed API-token lookup.
     const skipApiLookup = isRunPrefix || isSystemPrefix;
-    const { token, user } = skipApiLookup ? { token: undefined, user: null } : await lookupApiToken(tokenHash, legacyTokenHash, tokenHashes);
+    const { token, user } = skipApiLookup
+      ? { token: undefined, user: null }
+      : await lookupApiToken(tokenHash, legacyTokenHash, tokenHashes);
 
     if (token === undefined) {
-      const runAuth = await resolveRunToken(request, tokenHashes, tokenHash, legacyTokenHash, isRunPrefix, isSystemPrefix);
+      const runAuth = await resolveRunToken(
+        request,
+        tokenHashes,
+        tokenHash,
+        legacyTokenHash,
+        isRunPrefix,
+        isSystemPrefix,
+      );
       if (runAuth !== null) return runAuth;
-      const systemAuth = await resolveSystemToken(request, tokenHashes, tokenHash, legacyTokenHash, isSystemPrefix, isRunPrefix);
+      const systemAuth = await resolveSystemToken(
+        request,
+        tokenHashes,
+        tokenHash,
+        legacyTokenHash,
+        isSystemPrefix,
+        isRunPrefix,
+      );
       if (systemAuth !== null) return systemAuth;
       return anonymousAuth("invalid");
     }
@@ -280,8 +312,15 @@ export const authPlugin = new Elysia({ name: "auth" })
   .macro({
     isAuth(value: boolean): Record<string, unknown> {
       return {
-        beforeHandle({ user: _, token, set }: { readonly user?: unknown; readonly token?: unknown; readonly set: Readonly<{ status: number }> }): Record<string, unknown> | undefined {
-
+        beforeHandle({
+          user: _,
+          token,
+          set,
+        }: {
+          readonly user?: unknown;
+          readonly token?: unknown;
+          readonly set: Readonly<{ status: number }>;
+        }): Record<string, unknown> | undefined {
           if (!value) return;
           if (token === null || token === undefined) {
             (set as { status: number }).status = 401;
@@ -292,7 +331,15 @@ export const authPlugin = new Elysia({ name: "auth" })
     },
     systemAuth(value: boolean): Record<string, unknown> {
       return {
-        beforeHandle({ token, systemToken, set }: { readonly token?: unknown; readonly systemToken?: unknown; readonly set: Readonly<{ status: number }> }): Record<string, unknown> | undefined {
+        beforeHandle({
+          token,
+          systemToken,
+          set,
+        }: {
+          readonly token?: unknown;
+          readonly systemToken?: unknown;
+          readonly set: Readonly<{ status: number }>;
+        }): Record<string, unknown> | undefined {
           if (!value) return;
           if ((token === null || token === undefined) && (systemToken === null || systemToken === undefined)) {
             (set as { status: number }).status = 401;

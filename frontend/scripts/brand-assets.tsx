@@ -3,7 +3,13 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Terrence, TerrenceLogo, type TerrencePose, type TerrenceSurface, type TerrenceDetail } from "../src/components/brand/Terrence";
+import {
+  Terrence,
+  TerrenceLogo,
+  type TerrencePose,
+  type TerrenceSurface,
+  type TerrenceDetail,
+} from "../src/components/brand/Terrence";
 import { verifyBrandIcons } from "./brand-icons";
 
 // Export the component's exact geometry so downloadable art never drifts.
@@ -13,7 +19,8 @@ if (!check) mkdirSync(`${publicDir}/brand`, { recursive: true });
 
 function publish(path: string, contents: string): void {
   if (check) {
-    if (readFileSync(path, "utf8") !== contents) throw new Error(`Stale brand asset: ${path}. Run frontend/scripts/brand-assets.tsx.`);
+    if (readFileSync(path, "utf8") !== contents)
+      throw new Error(`Stale brand asset: ${path}. Run frontend/scripts/brand-assets.tsx.`);
   } else {
     writeFileSync(path, contents);
   }
@@ -27,8 +34,15 @@ function assertSafeSvg(svg: string, label: string): void {
   if (new Set(ids).size !== ids.length) throw new Error(`Duplicate SVG IDs in generated asset: ${label}`);
 }
 
-function poseSvg(pose: TerrencePose, surface: TerrenceSurface = "transparent", detail: TerrenceDetail = "full", animated = false): string {
-  const svg = renderToStaticMarkup(<Terrence pose={pose} surface={surface} detail={detail} animated={animated} />).replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ');
+function poseSvg(
+  pose: TerrencePose,
+  surface: TerrenceSurface = "transparent",
+  detail: TerrenceDetail = "full",
+  animated = false,
+): string {
+  const svg = renderToStaticMarkup(
+    <Terrence pose={pose} surface={surface} detail={detail} animated={animated} />,
+  ).replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ');
   assertSafeSvg(svg, pose);
   return svg;
 }
@@ -41,7 +55,18 @@ function logoSvg(): string {
   return svg;
 }
 
-const poses: TerrencePose[] = ["welcome", "empty", "healthy", "failed", "lost", "maintenance", "guide", "blocked", "interrupted", "ecosystem"];
+const poses: TerrencePose[] = [
+  "welcome",
+  "empty",
+  "healthy",
+  "failed",
+  "lost",
+  "maintenance",
+  "guide",
+  "blocked",
+  "interrupted",
+  "ecosystem",
+];
 const labels: Record<TerrencePose, string> = {
   welcome: "Welcome",
   empty: "No workspaces yet",
@@ -90,13 +115,22 @@ const socialManifest = `${publicDir}/brand/github-social.manifest.json`;
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 if (!check) {
   execFileSync("rsvg-convert", ["-w", "1280", "-h", "640", `${publicDir}/brand/github-social.svg`, "-o", socialPng]);
-  publish(socialManifest, `${JSON.stringify({ sourceSha256: sha256(socialSvg), pngSha256: createHash("sha256").update(readFileSync(socialPng)).digest("hex") }, null, 2)}\n`);
+  publish(
+    socialManifest,
+    `${JSON.stringify({ sourceSha256: sha256(socialSvg), pngSha256: createHash("sha256").update(readFileSync(socialPng)).digest("hex") }, null, 2)}\n`,
+  );
 } else {
   const manifest = JSON.parse(readFileSync(socialManifest, "utf8")) as { sourceSha256?: string; pngSha256?: string };
   const bytes = readFileSync(socialPng);
-  if (manifest.sourceSha256 !== sha256(socialSvg) || manifest.pngSha256 !== createHash("sha256").update(bytes).digest("hex")
-    || bytes.length < 24 || bytes.length >= 1_000_000 || bytes.readUInt32BE(0) !== 0x89504e47
-    || bytes.readUInt32BE(16) !== 1280 || bytes.readUInt32BE(20) !== 640) {
+  if (
+    manifest.sourceSha256 !== sha256(socialSvg) ||
+    manifest.pngSha256 !== createHash("sha256").update(bytes).digest("hex") ||
+    bytes.length < 24 ||
+    bytes.length >= 1_000_000 ||
+    bytes.readUInt32BE(0) !== 0x89504e47 ||
+    bytes.readUInt32BE(16) !== 1280 ||
+    bytes.readUInt32BE(20) !== 640
+  ) {
     throw new Error("Stale or invalid GitHub social PNG. Run frontend/scripts/brand-assets.tsx.");
   }
 }
@@ -145,13 +179,17 @@ footer{margin-top:28px;max-width:760px}
 <main>
   <header>${logo}<div><h1>terrence.</h1><p>Canonical brand regression sheet</p></div></header>
   <p class="intro">Every pose is reviewed as the same dependable companion. The fixtures below cover the approved content sizes, a dark surface, long adjacent explanation text, narrow layouts, reduced motion, and the compact mark used by navigation and install icons.</p>
-  <div class="poses">${poses.map((pose): string => `
+  <div class="poses">${poses
+    .map(
+      (pose): string => `
     <section class="pose-card" data-pose="${pose}">
       <h2>${labels[pose]}</h2>
       <div class="fixture-row">${[96, 128, 176].map((size): string => `<figure class="fixture"><div class="art-frame size-${size}">${poseSvg(pose, "transparent", size <= 128 ? "small" : "full")}</div><figcaption>${size}px</figcaption></figure>`).join("")}</div>
       <div class="fixture-row surface-dark"><figure class="fixture"><div class="art-frame size-128">${poseSvg(pose, "transparent", "small")}</div><figcaption>128px · transparent</figcaption></figure><figure class="fixture"><div class="art-frame size-128">${poseSvg(pose, "paper", "small")}</div><figcaption>128px · paper</figcaption></figure></div>
       <p class="fixture-copy">${labels[pose]} art stays decorative. The adjacent copy owns the state, explains what happened, and provides the useful next step without relying on the illustration or its color.</p>
-    </section>`).join("")}</div>
+    </section>`,
+    )
+    .join("")}</div>
   <section class="pose-card" aria-labelledby="social-preview-title" style="margin-top:18px">
     <h2 id="social-preview-title">GitHub social preview</h2>
     <img src="github-social.png?v=${sha256(socialSvg).slice(0, 12)}" width="1280" height="640" alt="Terrence: Big plans. Steady hands. A self-hosted Terraform and OpenTofu run platform." style="display:block;width:100%;height:auto;margin-top:20px;border-radius:8px">
@@ -169,8 +207,17 @@ publish(`${publicDir}/brand/index.html`, gallery);
 
 // Keep the no-JavaScript server fallback self-contained and on-model.
 const fallback = `${publicDir}/404.html`;
-publish(fallback, readFileSync(fallback, "utf8")
-  .replace(/<!-- terrence-lost -->[\s\S]*?<!-- \/terrence-lost -->/, `<!-- terrence-lost -->${poseSvg("lost")}<!-- /terrence-lost -->`)
-  .replace(/<!-- terrence-logo -->[\s\S]*?<!-- \/terrence-logo -->/, `<!-- terrence-logo -->${logo}<!-- /terrence-logo -->`));
+publish(
+  fallback,
+  readFileSync(fallback, "utf8")
+    .replace(
+      /<!-- terrence-lost -->[\s\S]*?<!-- \/terrence-lost -->/,
+      `<!-- terrence-lost -->${poseSvg("lost")}<!-- /terrence-lost -->`,
+    )
+    .replace(
+      /<!-- terrence-logo -->[\s\S]*?<!-- \/terrence-logo -->/,
+      `<!-- terrence-logo -->${logo}<!-- /terrence-logo -->`,
+    ),
+);
 
 if (check) verifyBrandIcons(publicDir);

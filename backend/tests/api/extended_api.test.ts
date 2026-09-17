@@ -28,9 +28,9 @@ describe("the reference format API v2 - Extended APIs", () => {
         method: "POST",
         headers: { "Content-Type": "application/vnd.api+json" },
         body: JSON.stringify({
-          data: { type: "users", attributes: { username: "ext-admin", password: "extpassword" } }
-        })
-      })
+          data: { type: "users", attributes: { username: "ext-admin", password: "extpassword" } },
+        }),
+      }),
     );
 
     const loginRes = await app.handle(
@@ -38,9 +38,9 @@ describe("the reference format API v2 - Extended APIs", () => {
         method: "POST",
         headers: { "Content-Type": "application/vnd.api+json" },
         body: JSON.stringify({
-          data: { attributes: { username: "ext-admin", password: "extpassword" } }
-        })
-      })
+          data: { attributes: { username: "ext-admin", password: "extpassword" } },
+        }),
+      }),
     );
     userToken = (await loginRes.json()).data.attributes.token;
 
@@ -50,12 +50,12 @@ describe("the reference format API v2 - Extended APIs", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
-          data: { type: "organizations", attributes: { name: orgName } }
-        })
-      })
+          data: { type: "organizations", attributes: { name: orgName } },
+        }),
+      }),
     );
     expect(orgRes.status).toBe(201);
 
@@ -65,12 +65,12 @@ describe("the reference format API v2 - Extended APIs", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
-          data: { type: "workspaces", attributes: { name: "prod-cluster", "auto-apply": false } }
-        })
-      })
+          data: { type: "workspaces", attributes: { name: "prod-cluster", "auto-apply": false } },
+        }),
+      }),
     );
     const wsData = await wsRes.json();
     workspaceId = wsData.data.id;
@@ -79,7 +79,9 @@ describe("the reference format API v2 - Extended APIs", () => {
   afterAll(async () => {
     if (cvId) {
       const cvPath = join(import.meta.dir, "../../storage/cv", `${cvId}.tar.gz`);
-      try { await rm(cvPath, { force: true }); } catch {}
+      try {
+        await rm(cvPath, { force: true });
+      } catch {}
     }
   });
 
@@ -89,12 +91,12 @@ describe("the reference format API v2 - Extended APIs", () => {
         method: "PATCH",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
-          data: { attributes: { "auto-apply": true, "terraform-version": "1.6.0" } }
-        })
-      })
+          data: { attributes: { "auto-apply": true, "terraform-version": "1.6.0" } },
+        }),
+      }),
     );
     expect(res.status).toBe(200);
     const data = await res.json();
@@ -108,23 +110,23 @@ describe("the reference format API v2 - Extended APIs", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: [
             { type: "tags", attributes: { key: "env:production" } },
-            { type: "tags", attributes: { key: "team:platform" } }
-          ]
-        })
-      })
+            { type: "tags", attributes: { key: "team:platform" } },
+          ],
+        }),
+      }),
     );
     expect(addRes.status).toBe(201);
 
     const getRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/relationships/tags`, {
         method: "GET",
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     expect(getRes.status).toBe(200);
     const tagData = await getRes.json();
@@ -137,15 +139,15 @@ describe("the reference format API v2 - Extended APIs", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: {
             attributes: { key: "DB_HOST", value: "postgres.internal", category: "env", sensitive: false },
-            type: "vars"
-          }
-        })
-      })
+            type: "vars",
+          },
+        }),
+      }),
     );
     expect(createRes.status).toBe(201);
     varId = (await createRes.json()).data.id;
@@ -153,8 +155,8 @@ describe("the reference format API v2 - Extended APIs", () => {
     const getRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/vars/${varId}`, {
         method: "GET",
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     expect(getRes.status).toBe(200);
 
@@ -163,20 +165,20 @@ describe("the reference format API v2 - Extended APIs", () => {
         method: "PATCH",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
-          data: { attributes: { value: "postgres-cluster.internal" }, type: "vars" }
-        })
-      })
+          data: { attributes: { value: "postgres-cluster.internal" }, type: "vars" },
+        }),
+      }),
     );
     expect(patchRes.status).toBe(200);
 
     const delRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/vars/${varId}`, {
         method: "DELETE",
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     expect(delRes.status).toBe(204);
   });
@@ -185,8 +187,8 @@ describe("the reference format API v2 - Extended APIs", () => {
     const createCv = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/configuration-versions`, {
         method: "POST",
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     expect(createCv.status).toBe(201);
     cvId = (await createCv.json()).data.id;
@@ -194,17 +196,17 @@ describe("the reference format API v2 - Extended APIs", () => {
     const uploadRes = await app.handle(
       new Request(`http://localhost/api/v2/configuration-versions/${cvId}/upload`, {
         method: "PUT",
-        headers: { "Authorization": `Bearer ${userToken}` },
-        body: validTarGzip("extended")
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+        body: validTarGzip("extended"),
+      }),
     );
     expect(uploadRes.status).toBe(200);
 
     const cvGet = await app.handle(
       new Request(`http://localhost/api/v2/configuration-versions/${cvId}`, {
         method: "GET",
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     expect((await cvGet.json()).data.attributes.status).toBe("uploaded");
   }, 30_000);
@@ -215,15 +217,15 @@ describe("the reference format API v2 - Extended APIs", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: {
             attributes: { message: "Test Run execution" },
-            relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } }
-          }
-        })
-      })
+            relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+          },
+        }),
+      }),
     );
     expect(runRes.status).toBe(201);
     runId = (await runRes.json()).data.id;
@@ -231,8 +233,8 @@ describe("the reference format API v2 - Extended APIs", () => {
     const runsList = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/runs`, {
         method: "GET",
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     expect(runsList.status).toBe(200);
     const listData = await runsList.json();
@@ -249,8 +251,8 @@ describe("the reference format API v2 - Extended APIs", () => {
       const runStatusRes = await app.handle(
         new Request(`http://localhost/api/v2/runs/${runId}`, {
           method: "GET",
-          headers: { "Authorization": `Bearer ${userToken}` }
-        })
+          headers: { Authorization: `Bearer ${userToken}` },
+        }),
       );
       if (runStatusRes.status === 200) {
         runStatus = (await runStatusRes.json()).data?.attributes?.status;
@@ -259,13 +261,17 @@ describe("the reference format API v2 - Extended APIs", () => {
       const logRes = await app.handle(
         new Request(`http://localhost/api/v2/runs/${runId}/plan/log`, {
           method: "GET",
-          headers: { "Authorization": `Bearer ${userToken}` }
-        })
+          headers: { Authorization: `Bearer ${userToken}` },
+        }),
       );
       expect(logRes.status).toBe(200);
       logText = await logRes.text();
-      if (logText.length > 0 && ["planning", "planned", "applied", "errored", "canceled", "discarded"].includes(runStatus)) break;
-      await new Promise(r => setTimeout(r, 200));
+      if (
+        logText.length > 0 &&
+        ["planning", "planned", "applied", "errored", "canceled", "discarded"].includes(runStatus)
+      )
+        break;
+      await new Promise((r) => setTimeout(r, 200));
       attempts++;
     }
     expect(logText.length).toBeGreaterThan(0);
@@ -275,10 +281,12 @@ describe("the reference format API v2 - Extended APIs", () => {
   });
 
   it("should list state versions and download state JSON payload", async () => {
-    const lock = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${userToken}` },
-    }));
+    const lock = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
     expect(lock.status).toBe(200);
     const rawState = JSON.stringify({ version: 4, serial: 1, lineage: "test-lineage", resources: [] });
     const createState = await app.handle(
@@ -286,12 +294,15 @@ describe("the reference format API v2 - Extended APIs", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
-          data: { type: "state-versions", attributes: { serial: 1, state: rawState, md5: createHash("md5").update(rawState).digest("base64") } }
-        })
-      })
+          data: {
+            type: "state-versions",
+            attributes: { serial: 1, state: rawState, md5: createHash("md5").update(rawState).digest("base64") },
+          },
+        }),
+      }),
     );
     expect(createState.status).toBe(201);
     stateId = (await createState.json()).data.id;
@@ -299,8 +310,8 @@ describe("the reference format API v2 - Extended APIs", () => {
     const listStates = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
         method: "GET",
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     expect(listStates.status).toBe(200);
     const stateList = await listStates.json();
@@ -309,8 +320,8 @@ describe("the reference format API v2 - Extended APIs", () => {
     const dlRes = await app.handle(
       new Request(`http://localhost/api/v2/state-versions/${stateId}/download`, {
         method: "GET",
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     expect(dlRes.status).toBe(200);
   });
@@ -326,9 +337,9 @@ describe("the reference format API v2 - Organization Management Lifecycle", () =
         method: "POST",
         headers: { "Content-Type": "application/vnd.api+json" },
         body: JSON.stringify({
-          data: { attributes: { username: "ext-admin", password: "extpassword" } }
-        })
-      })
+          data: { attributes: { username: "ext-admin", password: "extpassword" } },
+        }),
+      }),
     );
     userToken = (await loginRes.json()).data.attributes.token;
 
@@ -337,12 +348,12 @@ describe("the reference format API v2 - Organization Management Lifecycle", () =
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
-          data: { type: "organizations", attributes: { name: isolatedOrgName } }
-        })
-      })
+          data: { type: "organizations", attributes: { name: isolatedOrgName } },
+        }),
+      }),
     );
   });
 
@@ -352,20 +363,20 @@ describe("the reference format API v2 - Organization Management Lifecycle", () =
         method: "PATCH",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
-          data: { attributes: { name: `${isolatedOrgName}-updated` } }
-        })
-      })
+          data: { attributes: { name: `${isolatedOrgName}-updated` } },
+        }),
+      }),
     );
     expect(patchOrg.status).toBe(200);
 
     const delOrg = await app.handle(
       new Request(`http://localhost/api/v2/organizations/${isolatedOrgName}-updated`, {
         method: "DELETE",
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     expect(delOrg.status).toBe(204);
   });

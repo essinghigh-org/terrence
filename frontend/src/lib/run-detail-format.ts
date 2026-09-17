@@ -62,7 +62,13 @@ export const APPLY_DURATION_END_KEYS = [
 export type RunProvenanceManifest = Readonly<{
   schemaVersion: number;
   runId: string;
-  configuration: Readonly<{ versionId: string | null; digest: string; source: string | null; commitSha: string | null; branch: string | null }>;
+  configuration: Readonly<{
+    versionId: string | null;
+    digest: string;
+    source: string | null;
+    commitSha: string | null;
+    branch: string | null;
+  }>;
   engine: Readonly<{ binary: string; version: string | null; digest: string | null }>;
   workspace: Readonly<{ workingDirectory: string | null; executionMode: string }>;
   inputState: Readonly<{ id: string | null; digest: string | null }>;
@@ -82,7 +88,8 @@ export function taskOutcomeLabel(value: unknown): string {
     const status = (item as RunTaskStage | null)?.attributes?.status;
     return isString(status) ? status : "unknown";
   });
-  if (statuses.some((status: string): boolean => ["failed", "errored", "unreachable"].includes(status))) return "Failed";
+  if (statuses.some((status: string): boolean => ["failed", "errored", "unreachable"].includes(status)))
+    return "Failed";
   if (statuses.some((status: string): boolean => ["running"].includes(status))) return "Running";
   if (statuses.some((status: string): boolean => ["pending", "queued"].includes(status))) return "Queued";
   if (statuses.every((status: string): boolean => ["passed", "overridden"].includes(status))) return "Passed";
@@ -105,14 +112,13 @@ export function runExecutionDurationMilliseconds(
   planOnly: boolean,
   now = Date.now(),
 ): number | undefined {
-  const planStart = timestampMilliseconds("planning-at", timestamps["planning-at"])
-    ?? timestampMilliseconds("pending-at", timestamps["pending-at"])
-    ?? timestampMilliseconds("planned-at", timestamps["planned-at"]);
+  const planStart =
+    timestampMilliseconds("planning-at", timestamps["planning-at"]) ??
+    timestampMilliseconds("pending-at", timestamps["pending-at"]) ??
+    timestampMilliseconds("planned-at", timestamps["planned-at"]);
   const planEnd = firstTimestampMilliseconds(timestamps, PLAN_DURATION_END_KEYS);
   if (planStart === undefined) return undefined;
-  const planDuration = planEnd === undefined
-    ? Math.max(0, now - planStart)
-    : Math.max(0, planEnd - planStart);
+  const planDuration = planEnd === undefined ? Math.max(0, now - planStart) : Math.max(0, planEnd - planStart);
   if (planOnly) return planDuration;
 
   const applyStart = timestampMilliseconds("applying-at", timestamps["applying-at"]);
@@ -124,9 +130,7 @@ export function runExecutionDurationMilliseconds(
     return planDuration;
   }
   const applyEnd = firstTimestampMilliseconds(timestamps, APPLY_DURATION_END_KEYS);
-  return planDuration + (applyEnd === undefined
-    ? Math.max(0, now - applyStart)
-    : Math.max(0, applyEnd - applyStart));
+  return planDuration + (applyEnd === undefined ? Math.max(0, now - applyStart) : Math.max(0, applyEnd - applyStart));
 }
 
 /** Format a duration stored as seconds (e.g. "300" -> "5 minutes"). */
@@ -200,7 +204,7 @@ export function policyResultText(result: unknown): string {
   if (isString(result)) return result;
   if (isNumber(result) || isBoolean(result) || isBigInt(result)) return `${result}`;
   if (!isObjectLike(result)) return "No detailed result";
-// SAFETY: the fixture object is read as a record; each field is typed below.
+  // SAFETY: the fixture object is read as a record; each field is typed below.
   const details = result as JsonObject;
   return describePolicyResultObject(result, details);
 }
@@ -213,11 +217,13 @@ export function isAdvisoryPolicyIssue(check: PolicyCheck): boolean {
   const result = check.attributes.result;
   // SAFETY: the run result payload is read as a record; the advisory-failed
   // field is typeof-validated before the comparison.
-  return result !== null
-    && isObjectLike(result)
-    && !Array.isArray(result)
-    && isNumber((result as JsonObject)["advisory-failed"])
-    && ((result as JsonObject)["advisory-failed"] as number) > 0;
+  return (
+    result !== null &&
+    isObjectLike(result) &&
+    !Array.isArray(result) &&
+    isNumber((result as JsonObject)["advisory-failed"]) &&
+    ((result as JsonObject)["advisory-failed"] as number) > 0
+  );
 }
 
 export async function waitForAbortableDelay(signal: Readonly<AbortSignal>, delayMs: number): Promise<boolean> {
@@ -231,8 +237,12 @@ export async function waitForAbortableDelay(signal: Readonly<AbortSignal>, delay
       signal.removeEventListener("abort", onAbort);
       resolve(result);
     };
-    const onAbort = (): void => { finish(false); };
-    const timer = window.setTimeout((): void => { finish(true); }, delayMs);
+    const onAbort = (): void => {
+      finish(false);
+    };
+    const timer = window.setTimeout((): void => {
+      finish(true);
+    }, delayMs);
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) finish(false);
   });

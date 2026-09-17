@@ -2,30 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Select, SelectItem } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { fetchApi } from "@/lib/api";
 
 type RunTask = {
@@ -64,8 +45,7 @@ const enforcementOptions = [
   ["must_pass", "Must pass"],
 ] as const;
 
-const messageFrom = (error: unknown, fallback: string): string =>
-  error instanceof Error ? error.message : fallback;
+const messageFrom = (error: unknown, fallback: string): string => (error instanceof Error ? error.message : fallback);
 
 type BindingLabels = Readonly<{
   taskId: string;
@@ -83,10 +63,11 @@ function bindingLabels(binding: WorkspaceRunTask, task: RunTask | undefined): Bi
     taskName: task?.attributes.name ?? binding.attributes["run-task-name"] ?? taskId,
     taskDescription: task?.attributes.description ?? binding.attributes["run-task-description"],
     taskEnabled: task?.attributes.enabled ?? binding.attributes["run-task-enabled"],
-    stageLabel: stageOptions.find(([value]): boolean => value === binding.attributes.stage)?.[1]
-      ?? binding.attributes.stage,
-    enforcementLabel: enforcementOptions.find(([value]): boolean => value === binding.attributes["enforcement-level"])?.[1]
-      ?? binding.attributes["enforcement-level"],
+    stageLabel:
+      stageOptions.find(([value]): boolean => value === binding.attributes.stage)?.[1] ?? binding.attributes.stage,
+    enforcementLabel:
+      enforcementOptions.find(([value]): boolean => value === binding.attributes["enforcement-level"])?.[1] ??
+      binding.attributes["enforcement-level"],
   };
 }
 
@@ -128,24 +109,25 @@ function AttachRunTaskForm({
             <SelectItem value="">
               {availableTasks.length === 0 ? "No available run tasks" : "Select a run task"}
             </SelectItem>
-            {availableTasks.map((task: RunTask): React.JSX.Element => (
-              <SelectItem key={task.id} value={task.id}>
-                {task.attributes.name}
-              </SelectItem>
-            ))}
+            {availableTasks.map(
+              (task: RunTask): React.JSX.Element => (
+                <SelectItem key={task.id} value={task.id}>
+                  {task.attributes.name}
+                </SelectItem>
+              ),
+            )}
           </Select>
         </Field>
         <Field data-disabled={controlsDisabled}>
           <FieldLabel htmlFor="workspace-run-task-stage">Stage</FieldLabel>
-          <Select
-            id="workspace-run-task-stage"
-            value={stage}
-            onValueChange={onStageChange}
-            disabled={controlsDisabled}
-          >
-            {stageOptions.map(([value, label]): React.JSX.Element => (
-              <SelectItem key={value} value={value}>{label}</SelectItem>
-            ))}
+          <Select id="workspace-run-task-stage" value={stage} onValueChange={onStageChange} disabled={controlsDisabled}>
+            {stageOptions.map(
+              ([value, label]): React.JSX.Element => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ),
+            )}
           </Select>
         </Field>
         <Field data-disabled={controlsDisabled}>
@@ -156,16 +138,16 @@ function AttachRunTaskForm({
             onValueChange={onEnforcementChange}
             disabled={controlsDisabled}
           >
-            {enforcementOptions.map(([value, label]): React.JSX.Element => (
-              <SelectItem key={value} value={value}>{label}</SelectItem>
-            ))}
+            {enforcementOptions.map(
+              ([value, label]): React.JSX.Element => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ),
+            )}
           </Select>
         </Field>
-        <Button
-          type="submit"
-          className="self-start md:col-span-3"
-          disabled={selectedTaskId === "" || saving !== null}
-        >
+        <Button type="submit" className="self-start md:col-span-3" disabled={selectedTaskId === "" || saving !== null}>
           {saving === "attach" && <Spinner data-icon="inline-start" />}
           {saving === "attach" ? "Attaching" : "Attach run task"}
         </Button>
@@ -203,10 +185,10 @@ export function WorkspaceRunTasks({
         ? fetchApi(`/organizations/${encodeURIComponent(orgName)}/run-tasks`)
         : Promise.resolve({ data: [] });
       // SAFETY: both endpoints return the JSON:API envelope per contract.
-      const [taskResponse, bindingResponse] = await Promise.all([
+      const [taskResponse, bindingResponse] = (await Promise.all([
         taskRequest,
         fetchApi(`/workspaces/${encodeURIComponent(workspaceId)}/run-tasks`),
-      ]) as [{ data?: RunTask[] }, { data?: WorkspaceRunTask[] }];
+      ])) as [{ data?: RunTask[] }, { data?: WorkspaceRunTask[] }];
       setTasks(Array.isArray(taskResponse.data) ? taskResponse.data : []);
       setBindings(Array.isArray(bindingResponse.data) ? bindingResponse.data : []);
     } catch (caught: unknown) {
@@ -221,21 +203,15 @@ export function WorkspaceRunTasks({
   }, [load]);
 
   const attachedTaskIds = useMemo(
-    (): Set<string> => new Set(
-      bindings.map((binding: WorkspaceRunTask): string =>
-        binding.relationships["run-task"].data.id,
-      ),
-    ),
+    (): Set<string> =>
+      new Set(bindings.map((binding: WorkspaceRunTask): string => binding.relationships["run-task"].data.id)),
     [bindings],
   );
   const availableTasks = tasks.filter(
-    (task: RunTask): boolean =>
-      task.attributes.enabled !== false && !attachedTaskIds.has(task.id),
+    (task: RunTask): boolean => task.attributes.enabled !== false && !attachedTaskIds.has(task.id),
   );
   const tasksById = useMemo(
-    (): Map<string, RunTask> => new Map(
-      tasks.map((task: RunTask): [string, RunTask] => [task.id, task]),
-    ),
+    (): Map<string, RunTask> => new Map(tasks.map((task: RunTask): [string, RunTask] => [task.id, task])),
     [tasks],
   );
 
@@ -277,15 +253,11 @@ export function WorkspaceRunTasks({
     setError("");
     setNotice("");
     try {
-      await fetchApi(
-        `/workspaces/${encodeURIComponent(workspaceId)}/run-tasks/${encodeURIComponent(taskId)}`,
-        { method: "DELETE" },
-      );
+      await fetchApi(`/workspaces/${encodeURIComponent(workspaceId)}/run-tasks/${encodeURIComponent(taskId)}`, {
+        method: "DELETE",
+      });
       setBindings((current: WorkspaceRunTask[]): WorkspaceRunTask[] =>
-        current.filter(
-          (binding: WorkspaceRunTask): boolean =>
-            binding.relationships["run-task"].data.id !== taskId,
-        ),
+        current.filter((binding: WorkspaceRunTask): boolean => binding.relationships["run-task"].data.id !== taskId),
       );
       setNotice("Run task removed.");
     } catch (caught: unknown) {
@@ -298,127 +270,156 @@ export function WorkspaceRunTasks({
 
   return (
     <>
-    <Card>
-      <CardHeader>
-        <CardTitle>Attached run tasks</CardTitle>
-        <CardDescription>
-          Run external checks at defined stages in this workspace&apos;s run lifecycle.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {canManage ? (
-          <AttachRunTaskForm
-            loading={loading}
-            saving={saving}
-            availableTasks={availableTasks}
-            selectedTaskId={selectedTaskId}
-            onSelectedTaskIdChange={(value: string): void => { setSelectedTaskId(value); }}
-            stage={stage}
-            onStageChange={(value: string): void => { setStage(value); }}
-            enforcementLevel={enforcementLevel}
-            onEnforcementChange={(value: string): void => { setEnforcementLevel(value); }}
-            onSubmit={attach}
-          />
-        ) : (
-          <FieldDescription>
-            You can view attached run tasks, but only workspace administrators with run task access can change them.
-          </FieldDescription>
-        )}
-
-        <div className="flex items-center gap-3">
-          <FieldError>{error}</FieldError>
-          {error !== "" && (
-            <Button size="sm" variant="outline" onClick={(): void => { void load(); }}>
-              Try again
-            </Button>
+      <Card>
+        <CardHeader>
+          <CardTitle>Attached run tasks</CardTitle>
+          <CardDescription>
+            Run external checks at defined stages in this workspace&apos;s run lifecycle.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {canManage ? (
+            <AttachRunTaskForm
+              loading={loading}
+              saving={saving}
+              availableTasks={availableTasks}
+              selectedTaskId={selectedTaskId}
+              onSelectedTaskIdChange={(value: string): void => {
+                setSelectedTaskId(value);
+              }}
+              stage={stage}
+              onStageChange={(value: string): void => {
+                setStage(value);
+              }}
+              enforcementLevel={enforcementLevel}
+              onEnforcementChange={(value: string): void => {
+                setEnforcementLevel(value);
+              }}
+              onSubmit={attach}
+            />
+          ) : (
+            <FieldDescription>
+              You can view attached run tasks, but only workspace administrators with run task access can change them.
+            </FieldDescription>
           )}
-          {error === "" && <span role="status" className="text-sm text-muted-foreground">{notice}</span>}
-        </div>
 
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Run task</TableHead>
-                <TableHead>Stage</TableHead>
-                <TableHead>Enforcement</TableHead>
-                {canManage && <TableHead className="text-right">Actions</TableHead>}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading && (
+          <div className="flex items-center gap-3">
+            <FieldError>{error}</FieldError>
+            {error !== "" && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(): void => {
+                  void load();
+                }}
+              >
+                Try again
+              </Button>
+            )}
+            {error === "" && (
+              <span role="status" className="text-sm text-muted-foreground">
+                {notice}
+              </span>
+            )}
+          </div>
+
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={canManage ? 4 : 3} className="h-20 text-center text-muted-foreground">
-                    Loading run tasks…
-                  </TableCell>
+                  <TableHead>Run task</TableHead>
+                  <TableHead>Stage</TableHead>
+                  <TableHead>Enforcement</TableHead>
+                  {canManage && <TableHead className="text-right">Actions</TableHead>}
                 </TableRow>
-              )}
-              {!loading && bindings.map((binding: WorkspaceRunTask): React.JSX.Element => {
-                const labels = bindingLabels(binding, tasksById.get(binding.relationships["run-task"].data.id));
-                const { taskId, taskName, taskDescription, taskEnabled, stageLabel, enforcementLabel } = labels;
-                return (
-                  <TableRow key={binding.id}>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{taskName}</span>
-                          {taskEnabled === false && <Badge variant="secondary">Disabled</Badge>}
-                        </div>
-                        {taskDescription != null && taskDescription !== "" && (
-                          <span className="max-w-md whitespace-normal text-sm text-muted-foreground">
-                            {taskDescription}
-                          </span>
-                        )}
-                      </div>
+              </TableHeader>
+              <TableBody>
+                {loading && (
+                  <TableRow>
+                    <TableCell colSpan={canManage ? 4 : 3} className="h-20 text-center text-muted-foreground">
+                      Loading run tasks…
                     </TableCell>
-                    <TableCell><Badge variant="outline">{stageLabel}</Badge></TableCell>
-                    <TableCell>
-                      <Badge variant={binding.attributes["enforcement-level"] === "advisory" ? "outline" : "secondary"}>
-                        {enforcementLabel}
-                      </Badge>
-                    </TableCell>
-                    {canManage && (
-                      <TableCell className="text-right">
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          aria-label={`Remove ${taskName}`}
-                          disabled={saving !== null}
-                          onClick={(): void => { setPendingRemove({ taskId, taskName }); }}
-                        >
-                          {saving === taskId && <Spinner data-icon="inline-start" />}
-                          {saving === taskId ? "Removing" : "Remove"}
-                        </Button>
-                      </TableCell>
-                    )}
                   </TableRow>
-                );
-              })}
-              {!loading && error === "" && bindings.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={canManage ? 4 : 3} className="h-20 text-center text-muted-foreground">
-                    No run tasks are attached to this workspace.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </div>
-      </CardContent>
-    </Card>
+                )}
+                {!loading &&
+                  bindings.map((binding: WorkspaceRunTask): React.JSX.Element => {
+                    const labels = bindingLabels(binding, tasksById.get(binding.relationships["run-task"].data.id));
+                    const { taskId, taskName, taskDescription, taskEnabled, stageLabel, enforcementLabel } = labels;
+                    return (
+                      <TableRow key={binding.id}>
+                        <TableCell>
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{taskName}</span>
+                              {taskEnabled === false && <Badge variant="secondary">Disabled</Badge>}
+                            </div>
+                            {taskDescription != null && taskDescription !== "" && (
+                              <span className="max-w-md whitespace-normal text-sm text-muted-foreground">
+                                {taskDescription}
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{stageLabel}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={binding.attributes["enforcement-level"] === "advisory" ? "outline" : "secondary"}
+                          >
+                            {enforcementLabel}
+                          </Badge>
+                        </TableCell>
+                        {canManage && (
+                          <TableCell className="text-right">
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              aria-label={`Remove ${taskName}`}
+                              disabled={saving !== null}
+                              onClick={(): void => {
+                                setPendingRemove({ taskId, taskName });
+                              }}
+                            >
+                              {saving === taskId && <Spinner data-icon="inline-start" />}
+                              {saving === taskId ? "Removing" : "Remove"}
+                            </Button>
+                          </TableCell>
+                        )}
+                      </TableRow>
+                    );
+                  })}
+                {!loading && error === "" && bindings.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={canManage ? 4 : 3} className="h-20 text-center text-muted-foreground">
+                      No run tasks are attached to this workspace.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
       <ConfirmDialog
         open={pendingRemove !== null}
-        onOpenChange={(open): void => { if (!open) setPendingRemove(null); }}
+        onOpenChange={(open): void => {
+          if (!open) setPendingRemove(null);
+        }}
         title="Remove run task?"
-        description={pendingRemove === null ? undefined : (
-          <>
-            Run task <strong>{pendingRemove.taskName}</strong> will stop running against this
-            workspace. Later runs skip its checks entirely.
-          </>
-        )}
+        description={
+          pendingRemove === null ? undefined : (
+            <>
+              Run task <strong>{pendingRemove.taskName}</strong> will stop running against this workspace. Later runs
+              skip its checks entirely.
+            </>
+          )
+        }
         confirmText="Remove run task"
         confirmVariant="destructive"
-        onConfirm={(): void => { if (pendingRemove !== null) void remove(pendingRemove.taskId); }}
+        onConfirm={(): void => {
+          if (pendingRemove !== null) void remove(pendingRemove.taskId);
+        }}
       />
     </>
   );

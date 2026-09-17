@@ -3,14 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens,
-  organizationMemberships,
-  organizations,
-  runs,
-  users,
-  workspaces,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, runs, users, workspaces } from "../../src/db/schema";
 
 describe("single workspace current-run include (audit finding 9)", () => {
   const suffix = crypto.randomUUID();
@@ -24,9 +17,11 @@ describe("single workspace current-run include (audit finding 9)", () => {
   const token = `token-${suffix}`;
 
   const request = (path: string) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      headers: { Authorization: "Bearer " + token },
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        headers: { Authorization: "Bearer " + token },
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: `current-run-${suffix}`, passwordHash: "unused" });
@@ -56,7 +51,7 @@ describe("single workspace current-run include (audit finding 9)", () => {
   });
 
   const currentRunIdOf = async (res: Response): Promise<unknown> => {
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       data: { relationships?: { "current-run"?: { data: { id: string } | null } } };
     };
     return body.data.relationships?.["current-run"]?.data;
@@ -77,7 +72,7 @@ describe("single workspace current-run include (audit finding 9)", () => {
   it("omits the relationship without the include", async () => {
     const res = await request(`/api/v2/workspaces/${workspaceId}`);
     expect(res.status).toBe(200);
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       data: { relationships?: Record<string, unknown> };
     };
     expect(body.data.relationships?.["current-run"]).toBeUndefined();

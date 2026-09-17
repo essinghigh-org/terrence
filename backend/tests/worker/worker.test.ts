@@ -47,7 +47,8 @@ async function runWorkerScript(script: string, env: Record<string, string> = {})
 }
 
 test("plans uploaded cloud configuration against the latest local state and records applied state", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { chmod, mkdir, readFile, writeFile, exists, rm } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
@@ -285,7 +286,9 @@ test("plans uploaded cloud configuration against the latest local state and reco
       stateSerials: recordedStates.map(state => state.serial),
       appliedState: JSON.parse(decodeStatePayload(recordedStates.at(-1)?.statePayload ?? "null")),
     }));
-  `, { NODE_ENV: "production", SIMULATED_RUNS: "false" });
+  `,
+    { NODE_ENV: "production", SIMULATED_RUNS: "false" },
+  );
 
   expect(result).toMatchObject({
     seededSerial: 7,
@@ -339,7 +342,8 @@ test("plans uploaded cloud configuration against the latest local state and reco
 }, 30_000);
 
 test("finishes plan-only runs without applying even when the workspace auto-applies", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { db } = await import("./src/db/index.ts");
     const { organizations, runTaskResults, runTasks, runs, workspaces } = await import("./src/db/schema.ts");
     const { executeRun } = await import("./src/worker.ts");
@@ -379,7 +383,9 @@ test("finishes plan-only runs without applying even when the workspace auto-appl
         imports: run?.planResourceImports,
       },
     }));
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+  `,
+    { NODE_ENV: "test", SIMULATED_RUNS: "true" },
+  );
 
   expect(result).toEqual({
     status: "planned_and_finished",
@@ -389,7 +395,8 @@ test("finishes plan-only runs without applying even when the workspace auto-appl
 }, 30_000);
 
 test("keeps a pending plan durable so apply can recover after the work directory is gone", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { exists, readFile } = await import("fs/promises");
     const { tmpdir } = await import("os");
     const { join } = await import("path");
@@ -422,7 +429,9 @@ test("keeps a pending plan durable so apply can recover after the work directory
       appliedStatus: applied?.status,
       cleanedAfterApply: !(await exists(savedPlanDir)),
     }));
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+  `,
+    { NODE_ENV: "test", SIMULATED_RUNS: "true" },
+  );
 
   expect(result).toEqual({
     plannedStatus: "planned",
@@ -436,7 +445,8 @@ test("keeps a pending plan durable so apply can recover after the work directory
 }, 30_000);
 
 test("restores a saved plan beside a single-root archive and records apply preflight diagnostics", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { chmod, exists, mkdir, writeFile } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
@@ -523,7 +533,9 @@ test("restores a saved plan beside a single-root archive and records apply prefl
       preflight,
       diagnosticEvents: diagnostics.map((diagnostic) => diagnostic.event),
     }));
-  `, { NODE_ENV: "production", SIMULATED_RUNS: "false" });
+  `,
+    { NODE_ENV: "production", SIMULATED_RUNS: "false" },
+  );
 
   expect(result.status).toBe("applied");
   expect(result.applyInvoked).toBe(true);
@@ -553,7 +565,8 @@ test("restores a saved plan beside a single-root archive and records apply prefl
 }, 30_000);
 
 test("ignores a stale client plan bookmark in the uploaded archive during saved-plan apply", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { chmod, exists, mkdir, writeFile } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
@@ -620,14 +633,17 @@ test("ignores a stale client plan bookmark in the uploaded archive during saved-
       status: applied?.status,
       applyInvoked: await exists(join(recordDir, "apply")),
     }));
-  `, { NODE_ENV: "production", SIMULATED_RUNS: "false" });
+  `,
+    { NODE_ENV: "production", SIMULATED_RUNS: "false" },
+  );
 
   expect(result.status).toBe("applied");
   expect(result.applyInvoked).toBe(true);
 }, 30_000);
 
 test("restores configuration into the working directory without double-nesting", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { chmod, exists, mkdir, writeFile } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
@@ -693,14 +709,17 @@ test("restores configuration into the working directory without double-nesting",
       status: applied?.status,
       applyInvoked: await exists(join(recordDir, "apply")),
     }));
-  `, { NODE_ENV: "production", SIMULATED_RUNS: "false" });
+  `,
+    { NODE_ENV: "production", SIMULATED_RUNS: "false" },
+  );
 
   expect(result.status).toBe("applied");
   expect(result.applyInvoked).toBe(true);
 }, 30_000);
 
 test("fails an apply explicitly when saved-plan metadata is corrupt", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { mkdir, writeFile } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
@@ -770,7 +789,9 @@ test("fails an apply explicitly when saved-plan metadata is corrupt", async () =
       invalidIdentifiersLog: invalidIdentifiersLogs.some(log => log.outputText.includes("invalid shape")),
       invalidIdentifiersEvents: diagnosticEvents(invalidIdentifiersLogs).sort(),
     }));
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+  `,
+    { NODE_ENV: "test", SIMULATED_RUNS: "true" },
+  );
 
   expect(result).toEqual({
     invalidJsonStatus: "errored",
@@ -783,7 +804,8 @@ test("fails an apply explicitly when saved-plan metadata is corrupt", async () =
 }, 30_000);
 
 test("runs signed pre-plan and post-plan tasks around cost and policy stages", async () => {
-  const result = await runWorkerScript(`\n    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
+  const result = await runWorkerScript(
+    `\n    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
     const { createHmac } = await import("node:crypto");
     const { db } = await import("./src/db/index.ts");
     const {
@@ -924,7 +946,14 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
       resultStatuses: taskResults.map(result => result.status).sort(),
     }));
     process.exit(0);
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true", RUN_TASK_TIMEOUT_MS: "1000", TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS: "true" });
+  `,
+    {
+      NODE_ENV: "test",
+      SIMULATED_RUNS: "true",
+      RUN_TASK_TIMEOUT_MS: "1000",
+      TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS: "true",
+    },
+  );
 
   expect(result.status).toBe("applied");
   expect(result.planJsonAccessStatus).toBe(200);
@@ -934,7 +963,13 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
     { path: "/global", stage: "post_apply", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
     { path: "/overlap", stage: "pre_apply", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
     { path: "/post", stage: "post_plan", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
-    { path: "/post-apply", stage: "post_apply", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
+    {
+      path: "/post-apply",
+      stage: "post_apply",
+      enforcementLevel: "mandatory",
+      hasCallback: true,
+      signatureValid: true,
+    },
     { path: "/pre", stage: "pre_plan", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
     { path: "/pre-apply", stage: "pre_apply", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
   ]);
@@ -964,7 +999,8 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
 });
 
 test("blocks apply on mandatory pre-apply failure and preserves applied after post-apply failure", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
     const { db } = await import("./src/db/index.ts");
     const { logs, organizations, runs, runTaskResults, runTasks, workspaceRunTasks, workspaces } = await import("./src/db/schema.ts");
@@ -1023,7 +1059,9 @@ test("blocks apply on mandatory pre-apply failure and preserves applied after po
       postTaskObservedStatus: postApplyObservedStatus,
     }));
     process.exit(0);
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+  `,
+    { NODE_ENV: "test", SIMULATED_RUNS: "true" },
+  );
 
   expect(result).toEqual({
     preStatus: "errored",
@@ -1038,7 +1076,8 @@ test("blocks apply on mandatory pre-apply failure and preserves applied after po
 }, 30_000);
 
 test("evaluates project policy sets after cost estimation and honors workspace exclusions", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { chmod, mkdir, writeFile } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
@@ -1126,7 +1165,9 @@ test("evaluates project policy sets after cost estimation and honors workspace e
       statusKeys: Object.keys(completed?.statusTimestamps ?? {}),
       checks: checks.map(check => ({ policyId: check.policyId, status: check.status })),
     }));
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+  `,
+    { NODE_ENV: "test", SIMULATED_RUNS: "true" },
+  );
 
   expect(result.status).toBe("policy_soft_failed");
   expect(result.checks).toEqual([{ policyId: "soft-policy", status: "soft_failed" }]);
@@ -1135,7 +1176,8 @@ test("evaluates project policy sets after cost estimation and honors workspace e
 }, 30_000);
 
 test("fails closed when plan JSON is unavailable instead of evaluating against state (kanban t_282cf10b)", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { db } = await import("./src/db/index.ts");
     const {
       organizations,
@@ -1177,14 +1219,19 @@ test("fails closed when plan JSON is unavailable instead of evaluating against s
       verdict,
       checks: checks.map(check => ({ status: check.status, error: check.result?.error })),
     }));
-  `, { NODE_ENV: "test" });
+  `,
+    { NODE_ENV: "test" },
+  );
 
   expect(result.verdict).toEqual({ proceed: false, hardFailed: true, softFailed: false });
-  expect(result.checks).toEqual([{ status: "errored", error: "Plan JSON is unavailable; policy evaluation failed closed" }]);
+  expect(result.checks).toEqual([
+    { status: "errored", error: "Plan JSON is unavailable; policy evaluation failed closed" },
+  ]);
 }, 30_000);
 
 test("evaluates Sentinel policies and persists structured results", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { chmod, mkdir, readFile, writeFile } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
@@ -1260,7 +1307,9 @@ test("evaluates Sentinel policies and persists structured results", async () => 
       args: await readFile(argsPath, "utf8"),
       config: await readFile(configPath, "utf8"),
     }));
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+  `,
+    { NODE_ENV: "test", SIMULATED_RUNS: "true" },
+  );
 
   expect(result.status).toBe("errored");
   expect(result.checkStatus).toBe("failed");
@@ -1289,7 +1338,8 @@ test("evaluates Sentinel policies and persists structured results", async () => 
 }, 30_000);
 
 test("evaluates OPA policies through the required sandbox", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { chmod, mkdir, readFile, writeFile } = await import("fs/promises");
     const { join } = await import("path");
 
@@ -1352,7 +1402,9 @@ test("evaluates OPA policies through the required sandbox", async () => {
       checkStatus: check?.status,
       runnerArgs: await readFile(runnerArgsPath, "utf8"),
     }));
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "false", TERRENCE_RUN_SANDBOX: "true" });
+  `,
+    { NODE_ENV: "test", SIMULATED_RUNS: "false", TERRENCE_RUN_SANDBOX: "true" },
+  );
 
   expect(result.verdict).toEqual({ proceed: true, hardFailed: false, softFailed: false });
   expect(result.checkStatus).toBe("passed");
@@ -1361,7 +1413,8 @@ test("evaluates OPA policies through the required sandbox", async () => {
 }, 30_000);
 
 test("rejects configuration archives containing traversal paths or links", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { mkdir, rm, writeFile, readFile, exists, symlink } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
@@ -1431,7 +1484,9 @@ test("rejects configuration archives containing traversal paths or links", async
       .filter(log => log.outputText.includes("Configuration archive extraction failed"))
       .map(log => [log.runId, log.outputText]));
     console.log(JSON.stringify({ statuses, errors }));
-  `, { NODE_ENV: "production", SIMULATED_RUNS: "false" });
+  `,
+    { NODE_ENV: "production", SIMULATED_RUNS: "false" },
+  );
 
   expect(result.statuses).toEqual({
     "traversal-run": "errored",
@@ -1441,7 +1496,8 @@ test("rejects configuration archives containing traversal paths or links", async
 }, 30_000);
 
 test("queues one run per unlocked idle workspace without resolving a binary in simulated mode", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { exists } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
@@ -1472,7 +1528,9 @@ test("queues one run per unlocked idle workspace without resolving a binary in s
     const statuses = Object.fromEntries((await db.query.runs.findMany()).map(run => [run.id, run.status]));
     const binaryCacheCreated = await exists(join(process.env.STORAGE_DIR, "binaries"));
     console.log(JSON.stringify({ claimed, statuses, binaryCacheCreated }));
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+  `,
+    { NODE_ENV: "test", SIMULATED_RUNS: "true" },
+  );
 
   expect(result).toEqual({
     claimed: ["first"],
@@ -1488,7 +1546,8 @@ test("queues one run per unlocked idle workspace without resolving a binary in s
 }, 30_000);
 
 test("scans past ineligible pending runs to reach newer eligible ones (kanban 1.5)", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { db } = await import("./src/db/index.ts");
     const { organizations, runs, workspaces } = await import("./src/db/schema.ts");
     const { pollWorkerQueue } = await import("./src/worker.ts");
@@ -1521,14 +1580,17 @@ test("scans past ineligible pending runs to reach newer eligible ones (kanban 1.
     }
     const eligible = await db.query.runs.findFirst({ where: (run, { eq }) => eq(run.id, "eligible-run") });
     console.log(JSON.stringify({ claimed, eligibleStatus: eligible?.status }));
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+  `,
+    { NODE_ENV: "test", SIMULATED_RUNS: "true" },
+  );
 
   expect(result.claimed).toContain("eligible-run");
   expect(result.eligibleStatus).toBe("applied");
 }, 30_000);
 
 test("cancel during a run-task wait stops promptly with a canceled result (issue #584)", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
     const { db } = await import("./src/db/index.ts");
     const { and, eq } = await import("drizzle-orm");
@@ -1586,7 +1648,14 @@ test("cancel during a run-task wait stops promptly with a canceled result (issue
       errorLeak: text.includes("[terrence ERROR]"),
     }));
     process.exit(0);
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true", RUN_TASK_TIMEOUT_MS: "20000", TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS: "true" });
+  `,
+    {
+      NODE_ENV: "test",
+      SIMULATED_RUNS: "true",
+      RUN_TASK_TIMEOUT_MS: "20000",
+      TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS: "true",
+    },
+  );
 
   // The 20s task timeout must not be waited out: cancellation ends the wait.
   expect(result.elapsed).toBeLessThan(15000);

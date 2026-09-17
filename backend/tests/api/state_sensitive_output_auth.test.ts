@@ -53,14 +53,16 @@ describe("sensitive state output authorization (STATE-003)", () => {
   let stateVersionId = "";
 
   const request = (path: string, auth: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([
@@ -68,7 +70,9 @@ describe("sensitive state output authorization (STATE-003)", () => {
       { id: otherUserId, username: `outother-${suffix}`, passwordHash: "unused" },
     ]);
     await db.insert(organizations).values({ id: orgId, name: orgName });
-    await db.insert(organizationMemberships).values({ id: `mem-out-${suffix}`, userId: `user-out-${suffix}`, orgId, role: "owner" });
+    await db
+      .insert(organizationMemberships)
+      .values({ id: `mem-out-${suffix}`, userId: `user-out-${suffix}`, orgId, role: "owner" });
     await db.insert(apiTokens).values([
       { id: userTokenId, token: hashAuthenticationToken(`out-user-token-${suffix}`), userId: `user-out-${suffix}` },
       { id: otherUserTokenId, token: hashAuthenticationToken(`out-other-token-${suffix}`), userId: otherUserId },
@@ -76,19 +80,23 @@ describe("sensitive state output authorization (STATE-003)", () => {
     userToken = `out-user-token-${suffix}`;
     otherUserToken = `out-other-token-${suffix}`;
     await db.insert(workspaces).values({ id: wsId, name: `out-ws-${suffix}`, orgId });
-    await db.insert(runs).values({ id: runId, workspaceId: wsId, status: "planned", isDestroy: false, createdAt: Date.now() });
-    const lock = await app.handle(new Request(`http://terrence.test/api/v2/workspaces/${wsId}/actions/lock`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${userToken}` },
-    }));
+    await db
+      .insert(runs)
+      .values({ id: runId, workspaceId: wsId, status: "planned", isDestroy: false, createdAt: Date.now() });
+    const lock = await app.handle(
+      new Request(`http://terrence.test/api/v2/workspaces/${wsId}/actions/lock`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
     if (lock.status !== 200) throw new Error(`workspace lock failed: ${lock.status}`);
 
-    const svRes = await request(
-      `/api/v2/workspaces/${wsId}/state-versions`,
-      userToken,
-      "POST",
-      { data: { type: "state-versions", attributes: { serial: 1, state: STATE_PAYLOAD, md5: createHash("md5").update(STATE_PAYLOAD).digest("base64") } } },
-    );
+    const svRes = await request(`/api/v2/workspaces/${wsId}/state-versions`, userToken, "POST", {
+      data: {
+        type: "state-versions",
+        attributes: { serial: 1, state: STATE_PAYLOAD, md5: createHash("md5").update(STATE_PAYLOAD).digest("base64") },
+      },
+    });
     expect(svRes.status).toBe(201);
     stateVersionId = (await svRes.json()).data.id as string;
   });

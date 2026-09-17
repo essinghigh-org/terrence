@@ -18,14 +18,16 @@ let workspaceId = "";
 let testDir = "";
 
 async function api(method: string, path: string, body?: unknown): Promise<Response> {
-  return app.handle(new Request("http://localhost" + path, {
-    method,
-    headers: {
-      ...(token === "" ? {} : { Authorization: "Bearer " + token }),
-      ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
+  return app.handle(
+    new Request("http://localhost" + path, {
+      method,
+      headers: {
+        ...(token === "" ? {} : { Authorization: "Bearer " + token }),
+        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
 }
 
 async function patchWorkspace(attributes: Record<string, unknown>): Promise<Response> {
@@ -85,7 +87,10 @@ describe("workspace save-time validation (#628)", (): void => {
     const typed = await patchWorkspace({ "trigger-prefixes": ["terraform", 42] });
     expect(typed.status).toBe(422);
 
-    const valid = await patchWorkspace({ "trigger-patterns": ["terraform/**/*.tf"], "trigger-prefixes": ["terraform"] });
+    const valid = await patchWorkspace({
+      "trigger-patterns": ["terraform/**/*.tf"],
+      "trigger-prefixes": ["terraform"],
+    });
     expect(valid.status).toBe(200);
   });
 
@@ -104,11 +109,15 @@ describe("workspace save-time validation (#628)", (): void => {
     await patchWorkspace({ "trigger-patterns": ["terraform/**/*.tf", "nomatch/**/*.tf"] });
     const preview = await api("GET", "/api/v2/workspaces/" + workspaceId + "/trigger-preview");
     expect(preview.status).toBe(200);
-    const body = (await preview.json()) as { data: { attributes: {
-      "configuration-version-id": string;
-      "files-checked": number;
-      patterns: { pattern: string; matches: number; "matched-files": string[] }[];
-    } } };
+    const body = (await preview.json()) as {
+      data: {
+        attributes: {
+          "configuration-version-id": string;
+          "files-checked": number;
+          patterns: { pattern: string; matches: number; "matched-files": string[] }[];
+        };
+      };
+    };
     expect(body.data.attributes["files-checked"]).toBeGreaterThan(0);
     const byPattern = new Map(body.data.attributes.patterns.map((entry) => [entry.pattern, entry]));
     expect(byPattern.get("terraform/**/*.tf")?.matches).toBeGreaterThan(0);

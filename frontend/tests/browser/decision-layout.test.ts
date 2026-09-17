@@ -21,9 +21,17 @@ test("confirmation sidebar keeps text readable and scrolls with its context", as
         return new Response(JSON.stringify(body), { headers: response.headers });
       }, original);
     });
-    await page.goto(`${server.baseUrl}${TEST_PATHS.runDetail}`, { initStorage: authInitStorage(), waitUntil: "networkidle" });
+    await page.goto(`${server.baseUrl}${TEST_PATHS.runDetail}`, {
+      initStorage: authInitStorage(),
+      waitUntil: "networkidle",
+    });
     await page.waitForSelector("[data-decision-rail]");
-    const layout = await page.evaluate<{ textWidth: number; buttonsBelow: boolean; sticky: boolean; overflows: boolean }>(`(() => {
+    const layout = await page.evaluate<{
+      textWidth: number;
+      buttonsBelow: boolean;
+      sticky: boolean;
+      overflows: boolean;
+    }>(`(() => {
       const panel = document.querySelector('[data-decision-rail]');
       const heading = panel.querySelector('h2');
       const detail = heading.nextElementSibling;

@@ -44,14 +44,16 @@ describe("No-code module API contract", () => {
 
   const hash = (token: string): string => createHash("sha256").update(token).digest("hex");
   const request = (path: string, method = "GET", body?: unknown, auth = userToken): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   const enablePayload = (
     module: string,
@@ -69,16 +71,20 @@ describe("No-code module API contract", () => {
         "registry-module": {
           data: { id: module, type: "registry-module" },
         },
-        ...(variableOptions === undefined ? {} : {
-          "variable-options": { data: variableOptions },
-        }),
+        ...(variableOptions === undefined
+          ? {}
+          : {
+              "variable-options": { data: variableOptions },
+            }),
       },
     },
   });
 
   beforeAll(async () => {
     await mkdir(moduleDir, { recursive: true });
-    await writeFile(join(moduleDir, "variables.tf"), `
+    await writeFile(
+      join(moduleDir, "variables.tf"),
+      `
 variable "region" {
   type        = string
   description = "AWS deployment region"
@@ -93,7 +99,8 @@ variable "enable_monitoring" {
   type    = bool
   default = true
 }
-`);
+`,
+    );
     const archive = Bun.spawn(["tar", "-czf", moduleArchivePath, "-C", moduleDir, "."]);
     expect(await archive.exited).toBe(0);
     await db.insert(users).values([
@@ -126,10 +133,25 @@ variable "enable_monitoring" {
     ]);
     await db.insert(registryModuleVersions).values([
       { id: versionOneId, moduleId, version: "1.0.0", status: "ok", createdAt: Date.now() - 100 },
-      { id: versionTwoId, moduleId, version: "2.0.0", status: "ok", archivePath: moduleArchivePath, metadata: { description: "Preserved metadata" }, createdAt: Date.now() },
+      {
+        id: versionTwoId,
+        moduleId,
+        version: "2.0.0",
+        status: "ok",
+        archivePath: moduleArchivePath,
+        metadata: { description: "Preserved metadata" },
+        createdAt: Date.now(),
+      },
       // Higher SemVer but older creation time: unpinned selection must use
       // release precedence, not insertion order.
-      { id: versionThreeId, moduleId, version: "3.0.0", status: "ok", archivePath: moduleArchivePath, createdAt: Date.now() - 1_000 },
+      {
+        id: versionThreeId,
+        moduleId,
+        version: "3.0.0",
+        status: "ok",
+        archivePath: moduleArchivePath,
+        createdAt: Date.now() - 1_000,
+      },
       { id: otherVersionId, moduleId: otherModuleId, version: "9.9.9", status: "ok", createdAt: Date.now() },
     ]);
   });
@@ -175,14 +197,16 @@ variable "enable_monitoring" {
     const created = await request(
       `/api/v2/organizations/${orgName}/no-code-modules`,
       "POST",
-      enablePayload(moduleId, "1.0.0", true, [{
-        type: "variable-options",
-        attributes: {
-          "variable-name": "environment",
-          "variable-type": "string",
-          options: ["development", "production"],
+      enablePayload(moduleId, "1.0.0", true, [
+        {
+          type: "variable-options",
+          attributes: {
+            "variable-name": "environment",
+            "variable-type": "string",
+            options: ["development", "production"],
+          },
         },
-      }]),
+      ]),
       teamToken,
     );
     expect(created.status).toBe(200);
@@ -198,12 +222,7 @@ variable "enable_monitoring" {
     });
     const noCodeId = createdBody.data.id as string;
 
-    const listed = await request(
-      `/api/v2/organizations/${orgName}/no-code-modules`,
-      "GET",
-      undefined,
-      orgToken,
-    );
+    const listed = await request(`/api/v2/organizations/${orgName}/no-code-modules`, "GET", undefined, orgToken);
     expect(listed.status).toBe(200);
     expect((await listed.json()).data.map((resource: { id: string }): string => resource.id)).toEqual([noCodeId]);
 
@@ -269,61 +288,80 @@ variable "enable_monitoring" {
     expect(read.status).toBe(200);
     const readBody = await read.json();
     expect(readBody.included).toHaveLength(3);
-    expect(readBody.included).toContainEqual(expect.objectContaining({
-      id: regionOption?.id,
-      type: "variable-options",
-      attributes: {
-        "variable-name": "region",
-        "variable-type": "string",
-        options: ["eu-west-1", "us-east-1"],
-      },
-    }));
+    expect(readBody.included).toContainEqual(
+      expect.objectContaining({
+        id: regionOption?.id,
+        type: "variable-options",
+        attributes: {
+          "variable-name": "region",
+          "variable-type": "string",
+          options: ["eu-west-1", "us-east-1"],
+        },
+      }),
+    );
 
     const replace = await request(`/api/v2/no-code-modules/${noCodeId}`, "PATCH", {
       data: {
         type: "no-code-modules",
         relationships: {
           "variable-options": {
-            data: [{
-              id: regionOption?.id,
-              type: "variable-options",
-              attributes: {
-                "variable-name": "region",
-                "variable-type": "string",
-                options: ["eu-west-1"],
+            data: [
+              {
+                id: regionOption?.id,
+                type: "variable-options",
+                attributes: {
+                  "variable-name": "region",
+                  "variable-type": "string",
+                  options: ["eu-west-1"],
+                },
               },
-            }],
+            ],
           },
         },
       },
     });
     expect(replace.status).toBe(200);
-    expect((await db.query.noCodeVariableOptions.findFirst({
-      where: eq(noCodeVariableOptions.id, regionOption?.id ?? ""),
-    }))?.options).toEqual(["eu-west-1"]);
+    expect(
+      (
+        await db.query.noCodeVariableOptions.findFirst({
+          where: eq(noCodeVariableOptions.id, regionOption?.id ?? ""),
+        })
+      )?.options,
+    ).toEqual(["eu-west-1"]);
 
     const invalidType = await request(`/api/v2/no-code-modules/${noCodeId}`, "PATCH", {
       data: {
         type: "no-code-modules",
         relationships: {
           "variable-options": {
-            data: [{
-              type: "variable-options",
-              attributes: {
-                "variable-name": "bad_count",
-                "variable-type": "number",
-                options: ["many"],
+            data: [
+              {
+                type: "variable-options",
+                attributes: {
+                  "variable-name": "bad_count",
+                  "variable-type": "number",
+                  options: ["many"],
+                },
               },
-            }],
+            ],
           },
         },
       },
     });
     expect(invalidType.status).toBe(422);
     expect((await request(`/api/v2/no-code-modules/${noCodeId}?include=unknown`)).status).toBe(400);
-    expect((await request(`/api/v2/no-code-modules/${noCodeId}`, "PATCH", {
-      data: { type: "no-code-modules", attributes: { enabled: false } },
-    }, orgToken)).status).toBe(404);
+    expect(
+      (
+        await request(
+          `/api/v2/no-code-modules/${noCodeId}`,
+          "PATCH",
+          {
+            data: { type: "no-code-modules", attributes: { enabled: false } },
+          },
+          orgToken,
+        )
+      ).status,
+    ).toBe(404);
   });
 
   it("only lets user and team principals delete resources in their organization", async () => {
@@ -331,7 +369,9 @@ variable "enable_monitoring" {
     const noCodeId = (await listed.json()).data[0].id as string;
 
     expect((await request(`/api/v2/no-code-modules/${noCodeId}`, "DELETE", undefined, orgToken)).status).toBe(404);
-    expect((await request(`/api/v2/no-code-modules/${noCodeId}`, "DELETE", undefined, otherUserToken)).status).toBe(404);
+    expect((await request(`/api/v2/no-code-modules/${noCodeId}`, "DELETE", undefined, otherUserToken)).status).toBe(
+      404,
+    );
     expect((await request(`/api/v2/no-code-modules/${noCodeId}`, "DELETE", undefined, teamToken)).status).toBe(204);
 
     const afterDelete = await request(`/api/v2/organizations/${orgName}/no-code-modules`);

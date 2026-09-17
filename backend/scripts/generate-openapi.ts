@@ -1,9 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const pkg = JSON.parse(
-  await Bun.file(join(import.meta.dir, "../../package.json")).text(),
-) as { version?: string };
+const pkg = JSON.parse(await Bun.file(join(import.meta.dir, "../../package.json")).text()) as { version?: string };
 
 const version = pkg.version ?? "0.0.0";
 
@@ -27,8 +25,14 @@ type Route = Readonly<{
   listener: "application" | "system";
 }>;
 const routes = [
-  ...(app as unknown as { routes: Omit<Route, "listener">[] }).routes.map((route) => ({ ...route, listener: "application" as const })),
-  ...(systemApiApp as unknown as { routes: Omit<Route, "listener">[] }).routes.map((route) => ({ ...route, listener: "system" as const })),
+  ...(app as unknown as { routes: Omit<Route, "listener">[] }).routes.map((route) => ({
+    ...route,
+    listener: "application" as const,
+  })),
+  ...(systemApiApp as unknown as { routes: Omit<Route, "listener">[] }).routes.map((route) => ({
+    ...route,
+    listener: "system" as const,
+  })),
 ];
 
 const statusDescriptions: Readonly<Record<number, string>> = {
@@ -99,7 +103,9 @@ function collectFunctionSources(value: unknown, seen = new Set<unknown>()): stri
  */
 function responseStatusCodes(source: string): Set<number> {
   const statuses = new Set<number>();
-  const add = (fragment: string): void => { addStatusCodes(statuses, fragment); };
+  const add = (fragment: string): void => {
+    addStatusCodes(statuses, fragment);
+  };
 
   // `===` must not be mistaken for an assignment. The negative lookahead is
   // important because composed hooks contain comparisons such as
@@ -155,7 +161,10 @@ function hasImplicitSuccessReturn(source: string): boolean {
       continue;
     }
     if (blockComment) {
-      if (character === "*" && next === "/") { blockComment = false; index += 1; }
+      if (character === "*" && next === "/") {
+        blockComment = false;
+        index += 1;
+      }
       continue;
     }
     if (quote !== null) {
@@ -164,12 +173,27 @@ function hasImplicitSuccessReturn(source: string): boolean {
       else if (character === quote) quote = null;
       continue;
     }
-    if (character === "/" && next === "/") { lineComment = true; index += 1; continue; }
-    if (character === "/" && next === "*") { blockComment = true; index += 1; continue; }
-    if (character === "'" || character === '"' || character === "`") { quote = character; continue; }
+    if (character === "/" && next === "/") {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (character === "/" && next === "*") {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") {
+      quote = character;
+      continue;
+    }
     if (character === "{") {
       const prefix = source.slice(Math.max(0, index - 8), index).replaceAll(/\s/g, "");
-      const isNestedFunction = prefix.endsWith("=>") || /function(?:[A-Za-z_$][A-Za-z0-9_$]*)?\([^)]*\)$/.test(source.slice(Math.max(0, index - 100), index).replaceAll(/\s/g, ""));
+      const isNestedFunction =
+        prefix.endsWith("=>") ||
+        /function(?:[A-Za-z_$][A-Za-z0-9_$]*)?\([^)]*\)$/.test(
+          source.slice(Math.max(0, index - 100), index).replaceAll(/\s/g, ""),
+        );
       functionBraces.push(isNestedFunction);
       if (isNestedFunction) functionDepth += 1;
       continue;
@@ -179,21 +203,26 @@ function hasImplicitSuccessReturn(source: string): boolean {
       continue;
     }
     if (functionDepth !== 1 || !source.startsWith("return", index)) continue;
-    const previous = index === 0 ? "" : source[index - 1] ?? "";
+    const previous = index === 0 ? "" : (source[index - 1] ?? "");
     if (/[A-Za-z0-9_$.]/.test(previous) || /[A-Za-z0-9_$]/.test(source[index + 6] ?? "")) continue;
     const remainder = source.slice(index + 6).trim();
     const expression = remainder.startsWith("{")
       ? "object"
       : remainder.startsWith(";") || remainder.startsWith("}")
         ? ""
-        : remainder.split(/[;}\n]/, 1)[0]?.trim() ?? "";
+        : (remainder.split(/[;}\n]/, 1)[0]?.trim() ?? "");
     routeReturns.push({ index, expression });
     index += 5;
   }
 
   return routeReturns.some(({ index, expression }) => {
     if (expression === "" || /^(?:new\s+Response\b)/.test(expression)) return false;
-    if (/\b[A-Za-z_$][A-Za-z0-9_$]*(?:Error|error|NotFound|Unauthorized|Conflict|unprocessable|hidden|denied|fencing)\s*\([^)]*\bset\b/.test(expression)) return false;
+    if (
+      /\b[A-Za-z_$][A-Za-z0-9_$]*(?:Error|error|NotFound|Unauthorized|Conflict|unprocessable|hidden|denied|fencing)\s*\([^)]*\bset\b/.test(
+        expression,
+      )
+    )
+      return false;
     const prefix = source.slice(Math.max(0, index - 180), index);
     if (/\b(?:set|mutableSet|context\.set)\.status\s*=(?!=)[^;\n}]*;\s*$/.test(prefix)) return false;
     return true;
@@ -215,9 +244,10 @@ const loopbackOrWildcardHosts = new Set(["127.0.0.1", "::1", "localhost", "0.0.0
 const configuredSystemHost = process.env.SYSTEM_API_HOST?.trim();
 const configuredSystemTlsCert = process.env.SYSTEM_API_TLS_CERT?.trim();
 const configuredSystemPort = process.env.SYSTEM_API_PORT?.trim();
-const systemServerUrl = configuredSystemHost === undefined || configuredSystemHost === "" || loopbackOrWildcardHosts.has(configuredSystemHost)
-  ? "/"
-  : `${configuredSystemTlsCert === undefined || configuredSystemTlsCert === "" ? "http" : "https"}://${configuredSystemHost.includes(":") && !configuredSystemHost.startsWith("[") ? `[${configuredSystemHost}]` : configuredSystemHost}:${configuredSystemPort === undefined || configuredSystemPort === "" ? "8443" : configuredSystemPort}`;
+const systemServerUrl =
+  configuredSystemHost === undefined || configuredSystemHost === "" || loopbackOrWildcardHosts.has(configuredSystemHost)
+    ? "/"
+    : `${configuredSystemTlsCert === undefined || configuredSystemTlsCert === "" ? "http" : "https"}://${configuredSystemHost.includes(":") && !configuredSystemHost.startsWith("[") ? `[${configuredSystemHost}]` : configuredSystemHost}:${configuredSystemPort === undefined || configuredSystemPort === "" ? "8443" : configuredSystemPort}`;
 const systemServer: Server = {
   // The default system listener is loopback-only and is not a client-reachable
   // URL. Use a same-origin relative server for reverse-proxied deployments;
@@ -303,7 +333,11 @@ for (const route of routes) {
       if (status >= 400) responseStatuses.add(status);
     }
   }
-  const isPlanArtifact = m === "get" && /^\/api\/v2\/(plans\/\{[^}]+\}|runs\/\{[^}]+\}\/plan)\/(json-output|json-output-redacted|sanitized-plan)$/.test(openApiPath);
+  const isPlanArtifact =
+    m === "get" &&
+    /^\/api\/v2\/(plans\/\{[^}]+\}|runs\/\{[^}]+\}\/plan)\/(json-output|json-output-redacted|sanitized-plan)$/.test(
+      openApiPath,
+    );
   const hasSuccessStatus = [...responseStatuses].some((status) => status >= 200 && status < 300);
   if ((hasImplicitSuccessReturn(handlerSource) && !hasSuccessStatus) || isPlanArtifact || !hasSuccessStatus) {
     responseStatuses.add(200);
@@ -318,14 +352,17 @@ for (const route of routes) {
   // If two handlers share the same path+method (overlapping plugins), keep the first.
   if (paths[openApiPath][m] !== undefined) continue;
 
-  const responses: Record<string, unknown> = Object.fromEntries(responseCodes.map((status) => [
-    String(status), {
-      description: statusDescriptions[status] ?? `HTTP ${String(status)}`,
-      ...(status >= 200 && status < 300 && status !== 204
-        ? { content: { "application/vnd.api+json": { schema: { type: "object" } } } }
-        : {}),
-    },
-  ]));
+  const responses: Record<string, unknown> = Object.fromEntries(
+    responseCodes.map((status) => [
+      String(status),
+      {
+        description: statusDescriptions[status] ?? `HTTP ${String(status)}`,
+        ...(status >= 200 && status < 300 && status !== 204
+          ? { content: { "application/vnd.api+json": { schema: { type: "object" } } } }
+          : {}),
+      },
+    ]),
+  );
   const operation: Record<string, unknown> = {
     operationId,
     ...(tags.length > 0 ? { tags } : {}),
@@ -344,9 +381,7 @@ for (const route of routes) {
     responses,
   };
   if (m === "get" && openApiPath === "/api/v2/admin/github-app/manifest/redirect") {
-    operation.parameters = [
-      { name: "state", in: "query", required: true, schema: { type: "string" } },
-    ];
+    operation.parameters = [{ name: "state", in: "query", required: true, schema: { type: "string" } }];
     const redirectResponse = responses["200"] as Record<string, unknown> | undefined;
     if (redirectResponse !== undefined) {
       redirectResponse.content = {
@@ -358,13 +393,12 @@ for (const route of routes) {
     const providerIconResponse = responses["200"] as Record<string, unknown> | undefined;
     if (providerIconResponse !== undefined) {
       providerIconResponse.description = "Provider icon image";
-      providerIconResponse.content = Object.fromEntries([
-        "image/gif",
-        "image/jpeg",
-        "image/png",
-        "image/svg+xml",
-        "image/webp",
-      ].map((mediaType) => [mediaType, { schema: { type: "string", format: "binary" } }]));
+      providerIconResponse.content = Object.fromEntries(
+        ["image/gif", "image/jpeg", "image/png", "image/svg+xml", "image/webp"].map((mediaType) => [
+          mediaType,
+          { schema: { type: "string", format: "binary" } },
+        ]),
+      );
     }
   }
   // Plan artifacts are ordinary JSON documents (terraform show sends
@@ -445,7 +479,8 @@ const document = {
   openapi: "3.1.0",
   info: {
     title: "Terrence API",
-    description: "Machine-readable contract generated from the registered route table. Per-route request/response schemas are added incrementally.",
+    description:
+      "Machine-readable contract generated from the registered route table. Per-route request/response schemas are added incrementally.",
     version,
   },
   servers: [applicationServer],

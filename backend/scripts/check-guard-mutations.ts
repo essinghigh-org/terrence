@@ -57,7 +57,8 @@ try {
   const copy = join(temporary, "backend");
   cpSync(backend, copy, {
     recursive: true,
-    filter: (path): boolean => !["node_modules", "storage", "bin", "coverage", ".env", ".env.local"].includes(basename(path)),
+    filter: (path): boolean =>
+      !["node_modules", "storage", "bin", "coverage", ".env", ".env.local"].includes(basename(path)),
   });
   symlinkSync(join(backend, "../node_modules"), join(temporary, "node_modules"), "dir");
   symlinkSync(join(backend, "node_modules"), join(copy, "node_modules"), "dir");
@@ -68,12 +69,20 @@ try {
     if (original.split(mutation.before).length - 1 !== mutation.occurrences) {
       throw new Error(`Mutation anchor changed: ${mutation.name}; review the guard and update its mutation`);
     }
-    const run = (): ReturnType<typeof spawnSync> => spawnSync(process.execPath, [
-      "test", mutation.testFile, "--test-name-pattern", mutation.testName, "--max-concurrency=1", "--no-orphans",
-    ], { cwd: copy, env: environment, encoding: "utf8", timeout: 30_000, maxBuffer: 2 * 1024 * 1024 });
+    const run = (): ReturnType<typeof spawnSync> =>
+      spawnSync(
+        process.execPath,
+        ["test", mutation.testFile, "--test-name-pattern", mutation.testName, "--max-concurrency=1", "--no-orphans"],
+        { cwd: copy, env: environment, encoding: "utf8", timeout: 30_000, maxBuffer: 2 * 1024 * 1024 },
+      );
     const baseline = run();
     const baselineOutput = `${String(baseline.stdout)}${String(baseline.stderr)}`;
-    if (baseline.error !== undefined || baseline.status !== 0 || !baselineOutput.includes(`(pass) ${mutation.testName}`) && !baselineOutput.split("\n").some((line) => line.includes("(pass)") && line.includes(mutation.testName))) {
+    if (
+      baseline.error !== undefined ||
+      baseline.status !== 0 ||
+      (!baselineOutput.includes(`(pass) ${mutation.testName}`) &&
+        !baselineOutput.split("\n").some((line) => line.includes("(pass)") && line.includes(mutation.testName)))
+    ) {
       throw new Error(`Baseline failed or did not execute: ${mutation.name}\n${baselineOutput}`);
     }
     writeFileSync(path, original.replaceAll(mutation.before, mutation.after));
@@ -82,9 +91,13 @@ try {
     const output = `${String(mutated.stdout)}${String(mutated.stderr)}`;
     // Syntax errors, startup failures, timeouts and output exhaustion are
     // infrastructure failures, never successful mutation detection.
-    if (mutated.error !== undefined || mutated.signal !== null || mutated.status === 0
-      || !output.includes("error: expect(")
-      || !output.split("\n").some((line) => line.includes("(fail)") && line.includes(mutation.testName))) {
+    if (
+      mutated.error !== undefined ||
+      mutated.signal !== null ||
+      mutated.status === 0 ||
+      !output.includes("error: expect(") ||
+      !output.split("\n").some((line) => line.includes("(fail)") && line.includes(mutation.testName))
+    ) {
       throw new Error(`Mutation survived or failed outside the named assertion: ${mutation.name}\n${output}`);
     }
     console.log(`Detected: ${mutation.name} — ${mutation.testFile}: ${mutation.testName}`);

@@ -21,14 +21,16 @@ describe("Notification destination ownership verification API (kanban 7.7)", () 
   const workspaceId = `ws-own-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   let echoServer: ReturnType<typeof Bun.serve> | undefined;
 
@@ -38,16 +40,19 @@ describe("Notification destination ownership verification API (kanban 7.7)", () 
       hostname: "127.0.0.1",
       port: 0,
       async fetch(req) {
-        const parsed = await req.json() as { ownership_challenge?: string };
-        return new Response(null, { status: 204, headers: { "X-Terrence-Ownership-Challenge": parsed.ownership_challenge ?? "" } });
+        const parsed = (await req.json()) as { ownership_challenge?: string };
+        return new Response(null, {
+          status: 204,
+          headers: { "X-Terrence-Ownership-Challenge": parsed.ownership_challenge ?? "" },
+        });
       },
     });
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
-    await db.insert(organizationMemberships).values([
-      { id: crypto.randomUUID(), userId, orgId, role: "owner" },
-    ]);
-    await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: createHash("sha256").update(token).digest("hex"), userId }]);
+    await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId, role: "owner" }]);
+    await db
+      .insert(apiTokens)
+      .values([{ id: crypto.randomUUID(), token: createHash("sha256").update(token).digest("hex"), userId }]);
     await db.insert(workspaces).values([{ id: workspaceId, name: `ws-own-${suffix}`, orgId }]);
   });
 
@@ -67,7 +72,7 @@ describe("Notification destination ownership verification API (kanban 7.7)", () 
         attributes: {
           name: `Own ${suffix}`,
           "destination-type": "generic",
-          url: (echoServer!).url.toString(),
+          url: echoServer!.url.toString(),
           triggers: ["run:errored"],
           enabled: true,
         },

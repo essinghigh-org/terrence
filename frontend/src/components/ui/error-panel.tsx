@@ -5,7 +5,15 @@ import { copyTextToClipboard } from "../../lib/utils";
 import { Button } from "./button";
 
 const SAFE_DIAGNOSTIC_KEYS = new Set([
-  "screen", "workspaceId", "projectId", "organizationId", "runId", "resourceId", "endpoint", "operation", "phase",
+  "screen",
+  "workspaceId",
+  "projectId",
+  "organizationId",
+  "runId",
+  "resourceId",
+  "endpoint",
+  "operation",
+  "phase",
 ]);
 
 function resolveErrorCode(code: string | undefined, apiError: ApiError | null): string {
@@ -94,9 +102,7 @@ export function ErrorPanel({
         <AlertTriangle data-icon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
         <div className="min-w-0">
           <p className="font-medium text-destructive">{title}</p>
-          {hasVisibleText(displayMessage) && (
-            <p className="mt-0.5 text-sm text-destructive/90">{displayMessage}</p>
-          )}
+          {hasVisibleText(displayMessage) && <p className="mt-0.5 text-sm text-destructive/90">{displayMessage}</p>}
           <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-xs text-destructive/80">
             <span data-testid="error-code">Code: {stableCode}</span>
             {hasReferenceText(requestReference) && (
@@ -107,13 +113,7 @@ export function ErrorPanel({
       </div>
       <div className="flex flex-wrap gap-2">
         {onRetry !== undefined && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onRetry}
-            className="gap-1.5 text-destructive"
-          >
+          <Button type="button" variant="outline" size="sm" onClick={onRetry} className="gap-1.5 text-destructive">
             <RotateCw data-icon="inline-start" className="size-3.5" />
             {retryLabel}
           </Button>
@@ -125,7 +125,11 @@ export function ErrorPanel({
           onClick={copyDiagnostics}
           className="gap-1.5 text-destructive hover:text-destructive"
         >
-          {copied ? <Check data-icon="inline-start" className="size-3.5" /> : <Copy data-icon="inline-start" className="size-3.5" />}
+          {copied ? (
+            <Check data-icon="inline-start" className="size-3.5" />
+          ) : (
+            <Copy data-icon="inline-start" className="size-3.5" />
+          )}
           {copied ? "Copied diagnostics" : "Copy diagnostic details"}
         </Button>
       </div>

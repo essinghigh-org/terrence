@@ -31,10 +31,16 @@ async function resolveOutcomeEvaluation(
   set: SetObj,
 ): Promise<{ found: true } | { error: unknown }> {
   const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
-  if (evalRecord === undefined) { (set as { status: number }).status = 404; return { error: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  if (evalRecord === undefined) {
+    (set as { status: number }).status = 404;
+    return { error: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
   if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
     const authorized = await findAuthorizedRun(evalRecord.runId, userId, orgId, teamId);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { error: { errors: [{ status: "404", title: "Not Found" }] } }; }
+    if (authorized === undefined) {
+      (set as { status: number }).status = 404;
+      return { error: { errors: [{ status: "404", title: "Not Found" }] } };
+    }
   }
   return { found: true };
 }
@@ -42,7 +48,8 @@ async function resolveOutcomeEvaluation(
 function parseOutcomeListParams(request: Readonly<{ url: string }>): OutcomeListQuery {
   const url = new URL(request.url);
   const filterStatus = url.searchParams.get("filter[status]");
-  const filterEnforcement = url.searchParams.get("filter[enforcement-level]") ?? url.searchParams.get("filter[enforcementLevel]");
+  const filterEnforcement =
+    url.searchParams.get("filter[enforcement-level]") ?? url.searchParams.get("filter[enforcementLevel]");
   const pageParam = Number.parseInt(url.searchParams.get("page[number]") ?? "1", 10);
   const sizeParam = Number.parseInt(url.searchParams.get("page[size]") ?? "20", 10);
   const pageNumber = Number.isSafeInteger(pageParam) && pageParam > 0 ? pageParam : 1;
@@ -55,11 +62,18 @@ async function fetchOutcomePage(
   query: OutcomeListQuery,
 ): Promise<{ rows: (typeof policySetOutcomes.$inferSelect)[]; totalCount: number; totalPages: number }> {
   const conditions = [eq(policySetOutcomes.policyEvaluationId, evalId)];
-  if (query.filterStatus !== null && query.filterStatus !== "") conditions.push(eq(policySetOutcomes.status, query.filterStatus));
-  if (query.filterEnforcement !== null && query.filterEnforcement !== "") conditions.push(eq(policySetOutcomes.enforcementLevel, query.filterEnforcement));
+  if (query.filterStatus !== null && query.filterStatus !== "")
+    conditions.push(eq(policySetOutcomes.status, query.filterStatus));
+  if (query.filterEnforcement !== null && query.filterEnforcement !== "")
+    conditions.push(eq(policySetOutcomes.enforcementLevel, query.filterEnforcement));
   const where = and(...conditions);
   const [rows, countRows] = await Promise.all([
-    db.select().from(policySetOutcomes).where(where).limit(query.pageSize).offset((query.pageNumber - 1) * query.pageSize),
+    db
+      .select()
+      .from(policySetOutcomes)
+      .where(where)
+      .limit(query.pageSize)
+      .offset((query.pageNumber - 1) * query.pageSize),
     db.select({ total: count() }).from(policySetOutcomes).where(where),
   ]);
   const totalCount = countRows[0]?.total ?? 0;
@@ -87,7 +101,9 @@ function evaluationResource(evalRecord: Readonly<typeof policyEvaluations.$infer
       },
     },
     relationships: {
-      "task-stage": evalRecord.taskStageId ? { data: { id: evalRecord.taskStageId, type: "task-stages" } } : { data: null },
+      "task-stage": evalRecord.taskStageId
+        ? { data: { id: evalRecord.taskStageId, type: "task-stages" } }
+        : { data: null },
       run: evalRecord.runId ? { data: { id: evalRecord.runId, type: "runs" } } : { data: null },
     },
   };
@@ -117,16 +133,18 @@ async function tfStageTypeForEvaluation(
 export async function tfStageTypesForEvaluations(
   evalRecords: readonly Readonly<typeof policyEvaluations.$inferSelect>[],
 ): Promise<ReadonlyMap<string, TFPolicyStageType>> {
-  const stageIds = [...new Set(evalRecords.flatMap((evalRecord): string[] =>
-    evalRecord.taskStageId === null ? [] : [evalRecord.taskStageId]))];
+  const stageIds = [
+    ...new Set(
+      evalRecords.flatMap((evalRecord): string[] => (evalRecord.taskStageId === null ? [] : [evalRecord.taskStageId])),
+    ),
+  ];
   if (stageIds.length === 0) return new Map();
   const stages = await db.select().from(taskStages).where(inArray(taskStages.id, stageIds));
   const stageById = new Map(stages.map((stage): [string, string] => [stage.id, stage.stage]));
   const result = new Map<string, TFPolicyStageType>();
   for (const evalRecord of evalRecords) {
-    const stageType = evalRecord.taskStageId === null
-      ? undefined
-      : tfStageTypeForTaskStage(stageById.get(evalRecord.taskStageId));
+    const stageType =
+      evalRecord.taskStageId === null ? undefined : tfStageTypeForTaskStage(stageById.get(evalRecord.taskStageId));
     if (stageType !== undefined) result.set(evalRecord.id, stageType);
   }
   return result;
@@ -181,140 +199,212 @@ export function tfPolicySetOutcomeResource(
 
 export const policyEvaluationRoutes = new Elysia({ name: "policyEvaluations" })
   .use(authPlugin)
-  .get("/api/v2/task-stages/:task_stage_id/policy-evaluations", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const stageId = params["task_stage_id"] ?? "";
-    const stage = (await db.select().from(taskStages).where(eq(taskStages.id, stageId)))[0];
-    if (stage === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const authorized = await findAuthorizedRun(stage.runId, user?.id, orgId, teamId);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  .get(
+    "/api/v2/task-stages/:task_stage_id/policy-evaluations",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const stageId = params["task_stage_id"] ?? "";
+      const stage = (await db.select().from(taskStages).where(eq(taskStages.id, stageId)))[0];
+      if (stage === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const authorized = await findAuthorizedRun(stage.runId, user?.id, orgId, teamId);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
 
-    const evals = await db.select().from(policyEvaluations).where(eq(policyEvaluations.taskStageId, stage.id));
-    return { data: evals.map(evaluationResource) };
-  })
-  .get("/api/v2/policy-evaluations/:policy_evaluation_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const evalId = params["policy_evaluation_id"] ?? "";
-    const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
-    if (evalRecord === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
-      const authorized = await findAuthorizedRun(evalRecord.runId, user?.id, orgId, teamId);
-      if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    }
+      const evals = await db.select().from(policyEvaluations).where(eq(policyEvaluations.taskStageId, stage.id));
+      return { data: evals.map(evaluationResource) };
+    },
+  )
+  .get(
+    "/api/v2/policy-evaluations/:policy_evaluation_id",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const evalId = params["policy_evaluation_id"] ?? "";
+      const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
+      if (evalRecord === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
+        const authorized = await findAuthorizedRun(evalRecord.runId, user?.id, orgId, teamId);
+        if (authorized === undefined) {
+          (set as { status: number }).status = 404;
+          return { errors: [{ status: "404", title: "Not Found" }] };
+        }
+      }
 
-    return { data: evaluationResource(evalRecord) };
-  })
-  .get("/api/v2/policy-evaluations/:policy_evaluation_id/policy-set-outcomes", async ({ params, request, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const evalId = params["policy_evaluation_id"] ?? "";
-    const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
-    if (evalRecord === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
-      const authorized = await findAuthorizedRun(evalRecord.runId, user?.id, orgId, teamId);
-      if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    }
+      return { data: evaluationResource(evalRecord) };
+    },
+  )
+  .get(
+    "/api/v2/policy-evaluations/:policy_evaluation_id/policy-set-outcomes",
+    async ({ params, request, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const evalId = params["policy_evaluation_id"] ?? "";
+      const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
+      if (evalRecord === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
+        const authorized = await findAuthorizedRun(evalRecord.runId, user?.id, orgId, teamId);
+        if (authorized === undefined) {
+          (set as { status: number }).status = 404;
+          return { errors: [{ status: "404", title: "Not Found" }] };
+        }
+      }
 
-    const url = new URL(request.url);
-    const filterStatus = url.searchParams.get("filter[status]") ?? url.searchParams.get("filter[0][status]");
-    const filterEnforcement = url.searchParams.get("filter[enforcementLevel]") ?? url.searchParams.get("filter[0][enforcementLevel]");
+      const url = new URL(request.url);
+      const filterStatus = url.searchParams.get("filter[status]") ?? url.searchParams.get("filter[0][status]");
+      const filterEnforcement =
+        url.searchParams.get("filter[enforcementLevel]") ?? url.searchParams.get("filter[0][enforcementLevel]");
 
-    let outcomes = await db.select().from(policySetOutcomes).where(eq(policySetOutcomes.policyEvaluationId, evalId));
-    if (filterStatus) outcomes = outcomes.filter((o) => o.status === filterStatus);
-    if (filterEnforcement) outcomes = outcomes.filter((o) => o.enforcementLevel === filterEnforcement);
+      let outcomes = await db.select().from(policySetOutcomes).where(eq(policySetOutcomes.policyEvaluationId, evalId));
+      if (filterStatus) outcomes = outcomes.filter((o) => o.status === filterStatus);
+      if (filterEnforcement) outcomes = outcomes.filter((o) => o.enforcementLevel === filterEnforcement);
 
-    return {
-      data: outcomes.map((o) => ({
-        id: o.id,
-        type: "policy-set-outcomes",
-        attributes: {
-          "policy-set-name": o.policySetName ?? "default-policy-set",
-          "policy-name": o.policyName ?? "default-policy",
-          "enforcement-level": o.enforcementLevel,
-          status: o.status,
-          query: o.query ?? "",
-          description: o.description ?? "",
-          error: o.error ?? null,
-          overridable: Boolean(o.overridable),
-          "result-count": o.resultCount ?? { passed: 1 },
+      return {
+        data: outcomes.map((o) => ({
+          id: o.id,
+          type: "policy-set-outcomes",
+          attributes: {
+            "policy-set-name": o.policySetName ?? "default-policy-set",
+            "policy-name": o.policyName ?? "default-policy",
+            "enforcement-level": o.enforcementLevel,
+            status: o.status,
+            query: o.query ?? "",
+            description: o.description ?? "",
+            error: o.error ?? null,
+            overridable: Boolean(o.overridable),
+            "result-count": o.resultCount ?? { passed: 1 },
+          },
+        })),
+      };
+    },
+  )
+  .get(
+    "/api/v2/policy-set-outcomes/:policy_set_outcome_id",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const outcomeId = params["policy_set_outcome_id"] ?? "";
+      const outcome = (await db.select().from(policySetOutcomes).where(eq(policySetOutcomes.id, outcomeId)))[0];
+      if (outcome === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const evaluation = (
+        await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, outcome.policyEvaluationId))
+      )[0];
+      if (
+        evaluation === undefined ||
+        evaluation.runId === null ||
+        (await findAuthorizedRun(evaluation.runId, user?.id, orgId, teamId)) === undefined
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return {
+        data: {
+          id: outcome.id,
+          type: "policy-set-outcomes",
+          attributes: {
+            "policy-set-name": outcome.policySetName ?? "default-policy-set",
+            "policy-name": outcome.policyName ?? "default-policy",
+            "enforcement-level": outcome.enforcementLevel,
+            status: outcome.status,
+            query: outcome.query ?? "",
+            description: outcome.description ?? "",
+            error: outcome.error ?? null,
+            overridable: Boolean(outcome.overridable),
+            "result-count": outcome.resultCount ?? { passed: 1 },
+          },
+          relationships: { "policy-evaluation": { data: { id: evaluation.id, type: "policy-evaluations" } } },
         },
-      })),
-    };
-  })
-  .get("/api/v2/policy-set-outcomes/:policy_set_outcome_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const outcomeId = params["policy_set_outcome_id"] ?? "";
-    const outcome = (await db.select().from(policySetOutcomes).where(eq(policySetOutcomes.id, outcomeId)))[0];
-    if (outcome === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const evaluation = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, outcome.policyEvaluationId)))[0];
-    if (evaluation === undefined || evaluation.runId === null || (await findAuthorizedRun(evaluation.runId, user?.id, orgId, teamId)) === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    return {
-      data: {
-        id: outcome.id,
-        type: "policy-set-outcomes",
-        attributes: {
-          "policy-set-name": outcome.policySetName ?? "default-policy-set",
-          "policy-name": outcome.policyName ?? "default-policy",
-          "enforcement-level": outcome.enforcementLevel,
-          status: outcome.status,
-          query: outcome.query ?? "",
-          description: outcome.description ?? "",
-          error: outcome.error ?? null,
-          overridable: Boolean(outcome.overridable),
-          "result-count": outcome.resultCount ?? { passed: 1 },
+      };
+    },
+  )
+  .get(
+    "/api/v2/tf-policy-evaluations/:tf_policy_evaluation_id",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const evalId = params["tf_policy_evaluation_id"] ?? "";
+      const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
+      if (evalRecord === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
+        const authorized = await findAuthorizedRun(evalRecord.runId, user?.id, orgId, teamId);
+        if (authorized === undefined) {
+          (set as { status: number }).status = 404;
+          return { errors: [{ status: "404", title: "Not Found" }] };
+        }
+      }
+      return { data: tfPolicyEvaluationResource(evalRecord, await tfStageTypeForEvaluation(evalRecord)) };
+    },
+  )
+  .get(
+    "/api/v2/tf-policy-evaluations/:tf_policy_evaluation_id/tf-policy-set-outcomes",
+    async ({ params, request, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      // Audit finding 3: the exact path go-tfe TFPolicyEvaluationOutcomes.List
+      // GETs (with page + filter[status]/filter[enforcement-level] support) so
+      // the CLI renders per-stage TF policy outcomes instead of skipping them.
+      const evalId = params["tf_policy_evaluation_id"] ?? "";
+      const resolved = await resolveOutcomeEvaluation(evalId, user?.id, orgId, teamId, set);
+      if ("error" in resolved) return resolved.error;
+      const query = parseOutcomeListParams(request);
+      const page = await fetchOutcomePage(evalId, query);
+      return {
+        data: page.rows.map(tfPolicySetOutcomeResource),
+        meta: {
+          pagination: {
+            "current-page": query.pageNumber,
+            "page-size": query.pageSize,
+            "total-pages": page.totalPages,
+            "total-count": page.totalCount,
+          },
         },
-        relationships: { "policy-evaluation": { data: { id: evaluation.id, type: "policy-evaluations" } } },
-      },
-    };
-  })
-  .get("/api/v2/tf-policy-evaluations/:tf_policy_evaluation_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const evalId = params["tf_policy_evaluation_id"] ?? "";
-    const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
-    if (evalRecord === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
-      const authorized = await findAuthorizedRun(evalRecord.runId, user?.id, orgId, teamId);
-      if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    }
-    return { data: tfPolicyEvaluationResource(evalRecord, await tfStageTypeForEvaluation(evalRecord)) };
-  })
-  .get("/api/v2/tf-policy-evaluations/:tf_policy_evaluation_id/tf-policy-set-outcomes", async ({ params, request, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    // Audit finding 3: the exact path go-tfe TFPolicyEvaluationOutcomes.List
-    // GETs (with page + filter[status]/filter[enforcement-level] support) so
-    // the CLI renders per-stage TF policy outcomes instead of skipping them.
-    const evalId = params["tf_policy_evaluation_id"] ?? "";
-    const resolved = await resolveOutcomeEvaluation(evalId, user?.id, orgId, teamId, set);
-    if ("error" in resolved) return resolved.error;
-    const query = parseOutcomeListParams(request);
-    const page = await fetchOutcomePage(evalId, query);
-    return {
-      data: page.rows.map(tfPolicySetOutcomeResource),
-      meta: {
-        pagination: {
-          "current-page": query.pageNumber,
-          "page-size": query.pageSize,
-          "total-pages": page.totalPages,
-          "total-count": page.totalCount,
-        },
-      },
-    };
-  })
-  .get("/api/v2/runs/:run_id/tf-policy-evaluations", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId, teamId);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const evals = await db.select().from(policyEvaluations).where(eq(policyEvaluations.runId, runId));
-    const stageTypes = await tfStageTypesForEvaluations(evals);
-    return {
-      data: evals.map((evalRecord): Record<string, unknown> =>
-        tfPolicyEvaluationResource(evalRecord, stageTypes.get(evalRecord.id))),
-    };
-  })
-  .get("/api/v2/tf-policy-set-outcomes/:tf_policy_set_outcome_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const outcomeId = params["tf_policy_set_outcome_id"] ?? "";
-    const outcome = (await db.select().from(policySetOutcomes).where(eq(policySetOutcomes.id, outcomeId)))[0];
-    if (outcome === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const evaluation = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, outcome.policyEvaluationId)))[0];
-    if (evaluation === undefined || evaluation.runId === null || (await findAuthorizedRun(evaluation.runId, user?.id, orgId, teamId)) === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    return { data: tfPolicySetOutcomeResource(outcome) };
-  });
+      };
+    },
+  )
+  .get(
+    "/api/v2/runs/:run_id/tf-policy-evaluations",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId, teamId);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const evals = await db.select().from(policyEvaluations).where(eq(policyEvaluations.runId, runId));
+      const stageTypes = await tfStageTypesForEvaluations(evals);
+      return {
+        data: evals.map(
+          (evalRecord): Record<string, unknown> =>
+            tfPolicyEvaluationResource(evalRecord, stageTypes.get(evalRecord.id)),
+        ),
+      };
+    },
+  )
+  .get(
+    "/api/v2/tf-policy-set-outcomes/:tf_policy_set_outcome_id",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const outcomeId = params["tf_policy_set_outcome_id"] ?? "";
+      const outcome = (await db.select().from(policySetOutcomes).where(eq(policySetOutcomes.id, outcomeId)))[0];
+      if (outcome === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const evaluation = (
+        await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, outcome.policyEvaluationId))
+      )[0];
+      if (
+        evaluation === undefined ||
+        evaluation.runId === null ||
+        (await findAuthorizedRun(evaluation.runId, user?.id, orgId, teamId)) === undefined
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: tfPolicySetOutcomeResource(outcome) };
+    },
+  );

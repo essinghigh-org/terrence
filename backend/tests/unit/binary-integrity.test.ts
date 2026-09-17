@@ -30,10 +30,7 @@ afterEach(async (): Promise<void> => {
 test("unexpectedZipMembers accepts only the expected binary (kanban 6.7)", (): void => {
   expect(unexpectedZipMembers(["tofu", "./tofu"], "tofu")).toEqual([]);
   expect(unexpectedZipMembers(["terraform"], "terraform")).toEqual([]);
-  expect(unexpectedZipMembers(["tofu", "evil.sh", "tofu/LICENSE"], "tofu")).toEqual([
-    "evil.sh",
-    "tofu/LICENSE",
-  ]);
+  expect(unexpectedZipMembers(["tofu", "evil.sh", "tofu/LICENSE"], "tofu")).toEqual(["evil.sh", "tofu/LICENSE"]);
   // Backslash separators normalize like forward slashes when matched.
   expect(unexpectedZipMembers(["tofu\\..\\evil"], "tofu")).toEqual(["tofu\\..\\evil"]);
 });
@@ -135,8 +132,12 @@ test("streamed binary hashes cover chunk boundaries and reject missing files", a
       await file.writeFile(chunk);
       expected.update(chunk);
     }
-  } finally { await file.close(); }
+  } finally {
+    await file.close();
+  }
   expect(await sha256File(path)).toBe(expected.digest("hex"));
   await rm(path);
-  expect(await verifyBinaryIntegrity(path, { tool: "tofu", version: "1.9.3", binarySha256: "0".repeat(64) })).toBe(false);
+  expect(await verifyBinaryIntegrity(path, { tool: "tofu", version: "1.9.3", binarySha256: "0".repeat(64) })).toBe(
+    false,
+  );
 });

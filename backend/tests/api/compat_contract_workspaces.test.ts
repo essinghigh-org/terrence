@@ -91,10 +91,9 @@ describe("remote-workflow workspaces contract", () => {
   });
 
   it("lists workspaces with pagination metadata", async () => {
-    const response = await request(
-      `/api/v2/organizations/${seed.orgName}/workspaces?page[number]=1&page[size]=20`,
-      { headers },
-    );
+    const response = await request(`/api/v2/organizations/${seed.orgName}/workspaces?page[number]=1&page[size]=20`, {
+      headers,
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     const items = expectCollection(body, "workspaces");
@@ -103,10 +102,9 @@ describe("remote-workflow workspaces contract", () => {
   });
 
   it("filters workspaces with search[name]", async () => {
-    const response = await request(
-      `/api/v2/organizations/${seed.orgName}/workspaces?search[name]=${workspaceName}`,
-      { headers },
-    );
+    const response = await request(`/api/v2/organizations/${seed.orgName}/workspaces?search[name]=${workspaceName}`, {
+      headers,
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     const items = expectCollection(body, "workspaces");

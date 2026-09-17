@@ -15,7 +15,8 @@ import { Disclosure } from "../ui/disclosure";
 export function PhaseIcon({ status }: Readonly<{ status: string }>): React.JSX.Element {
   const accent = TONE_ACCENT[phaseTone(status)];
   if (status === "finished") return <CheckCircle2 className={cn("size-5", accent)} aria-hidden="true" />;
-  if (status === "errored" || status === "unreachable") return <XCircle className={cn("size-5", accent)} aria-hidden="true" />;
+  if (status === "errored" || status === "unreachable")
+    return <XCircle className={cn("size-5", accent)} aria-hidden="true" />;
   if (status === "canceled") return <AlertCircle className={cn("size-5", accent)} aria-hidden="true" />;
   if (status === "running") {
     return (
@@ -42,10 +43,7 @@ export function ResourceCounts({
   status: string;
 }>): React.JSX.Element {
   const pending = ["pending", "queued", "running"].includes(status);
-  if (pending
-    || !isNumber(additions)
-    || !isNumber(changes)
-    || !isNumber(destructions)) {
+  if (pending || !isNumber(additions) || !isNumber(changes) || !isNumber(destructions)) {
     return (
       <span className="text-xs font-medium text-muted-foreground">
         {pending ? "Resources pending" : "Resources unavailable"}
@@ -79,17 +77,35 @@ export function PhaseMeta({
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
       {started !== undefined && (
-        <span>Started <time dateTime={started} title={formatDateTime(started)}>{formatRelativeTime(started)}</time></span>
+        <span>
+          Started{" "}
+          <time dateTime={started} title={formatDateTime(started)}>
+            {formatRelativeTime(started)}
+          </time>
+        </span>
       )}
       {completed !== undefined && (
-        <span>{completedLabel} <time dateTime={completed} title={formatDateTime(completed)}>{formatRelativeTime(completed)}</time>{phaseDurationLabel !== null && phaseDurationLabel !== "Unavailable" && (<span title="Phase duration"> · {phaseDurationLabel}</span>)}</span>
+        <span>
+          {completedLabel}{" "}
+          <time dateTime={completed} title={formatDateTime(completed)}>
+            {formatRelativeTime(completed)}
+          </time>
+          {phaseDurationLabel !== null && phaseDurationLabel !== "Unavailable" && (
+            <span title="Phase duration"> · {phaseDurationLabel}</span>
+          )}
+        </span>
       )}
       {hasLogUrl && <span>Raw log available</span>}
     </div>
   );
 }
 
-export function RunLogDisclosure({ label, status, children, autoExpand = true }: Readonly<{
+export function RunLogDisclosure({
+  label,
+  status,
+  children,
+  autoExpand = true,
+}: Readonly<{
   label: string;
   status: string;
   children: React.ReactNode;
@@ -98,9 +114,15 @@ export function RunLogDisclosure({ label, status, children, autoExpand = true }:
   const [expanded, setExpanded] = useState<boolean | null>(null);
   const open = expanded ?? (autoExpand && ["running", "errored", "unreachable"].includes(status));
   return (
-    <Disclosure label={label} open={open}
-      onToggle={(next: boolean): void => { if (next !== open) setExpanded(next); }}
-      className="rounded-none border-0" summaryClassName="pr-16" bodyClassName="border-0"
+    <Disclosure
+      label={label}
+      open={open}
+      onToggle={(next: boolean): void => {
+        if (next !== open) setExpanded(next);
+      }}
+      className="rounded-none border-0"
+      summaryClassName="pr-16"
+      bodyClassName="border-0"
     >
       {children}
     </Disclosure>

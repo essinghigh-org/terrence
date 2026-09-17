@@ -27,7 +27,7 @@ export type Stage = Readonly<{
 
 const STAGE_ORDER = ["queue", "plan", "policy", "apply"] as const;
 
-const STAGE_LABELS: Readonly<Record<typeof STAGE_ORDER[number], string>> = {
+const STAGE_LABELS: Readonly<Record<(typeof STAGE_ORDER)[number], string>> = {
   queue: "Queued",
   plan: "Plan",
   policy: "Checks",
@@ -37,34 +37,29 @@ const STAGE_LABELS: Readonly<Record<typeof STAGE_ORDER[number], string>> = {
 /** Statuses grouped by the stage they belong to, in lifecycle order. */
 const FAILED_STATUSES = new Set(["errored", "failed", "unreachable", "policy_hard_failed"]);
 const STOPPED_STATUSES = new Set(["canceled", "force_canceled", "discarded"]);
-const TERMINAL_STAGE_OF_STATUS: Readonly<Record<string, typeof STAGE_ORDER[number]>> = {
+const TERMINAL_STAGE_OF_STATUS: Readonly<Record<string, (typeof STAGE_ORDER)[number]>> = {
   // A hard policy failure is the only terminal status that carries its own
   // stage; the other terminal outcomes need timestamps to locate the stop.
   policy_hard_failed: "policy",
 };
 
 /** First recorded timestamp key wins, in lifecycle order. */
-const STAGE_START_KEYS: Readonly<Record<typeof STAGE_ORDER[number], readonly string[]>> = {
+const STAGE_START_KEYS: Readonly<Record<(typeof STAGE_ORDER)[number], readonly string[]>> = {
   queue: ["pending-at"],
   plan: ["pre-plan-running-at", "planning-at"],
   policy: ["cost-estimating-at", "policy-checking-at"],
   apply: ["confirmed-at", "applying-at"],
 };
 
-const STAGE_FINISH_KEYS: Readonly<Record<typeof STAGE_ORDER[number], readonly string[]>> = {
+const STAGE_FINISH_KEYS: Readonly<Record<(typeof STAGE_ORDER)[number], readonly string[]>> = {
   queue: ["pre-plan-running-at", "planning-at"],
   plan: ["cost-estimating-at", "policy-checking-at", "planned-at", "planned-and-finished-at", "planned-and-saved-at"],
   policy: ["confirmed-at", "apply-queued-at", "applying-at", "policy-checked-at", "post-plan-completed-at"],
   apply: ["applied-at", "errored-at", "unreachable-at", "canceled-at", "force-canceled-at"],
 };
 
-function firstTimestamp(
-  timestamps: Readonly<Record<string, string>>,
-  keys: readonly string[],
-): string | undefined {
-  return keys
-    .map((key): string | undefined => timestamps[key])
-    .find((value): value is string => value !== undefined);
+function firstTimestamp(timestamps: Readonly<Record<string, string>>, keys: readonly string[]): string | undefined {
+  return keys.map((key): string | undefined => timestamps[key]).find((value): value is string => value !== undefined);
 }
 
 type StageReachedFlags = Readonly<{
@@ -85,9 +80,9 @@ function stageReachedFlags(timestamps: Readonly<Record<string, string>>): StageR
 }
 
 function furthestStage(
-  currentStage: typeof STAGE_ORDER[number] | undefined,
+  currentStage: (typeof STAGE_ORDER)[number] | undefined,
   flags: StageReachedFlags,
-): typeof STAGE_ORDER[number] {
+): (typeof STAGE_ORDER)[number] {
   if (currentStage !== undefined) return currentStage;
   if (flags.applyReached) return "apply";
   if (flags.policyReached) return "policy";
@@ -95,17 +90,15 @@ function furthestStage(
   return "queue";
 }
 
-function policyStageDone(
-  status: string,
-  applyReached: boolean,
-  reached: (key: string) => boolean,
-): boolean {
+function policyStageDone(status: string, applyReached: boolean, reached: (key: string) => boolean): boolean {
   if (["policy_checking", "cost_estimating", "post_plan_running"].includes(status)) return false;
-  return applyReached
-    || status === "planned_and_finished"
-    || reached("policy-checked-at")
-    || reached("post-plan-completed-at")
-    || ["policy_checked", "post_plan_completed", "needs_confirmation", "planned_and_saved"].includes(status);
+  return (
+    applyReached ||
+    status === "planned_and_finished" ||
+    reached("policy-checked-at") ||
+    reached("post-plan-completed-at") ||
+    ["policy_checked", "post_plan_completed", "needs_confirmation", "planned_and_saved"].includes(status)
+  );
 }
 
 /**
@@ -140,7 +133,7 @@ export function resolveStages(
   // The reader-facing model calls this phase "Checks" while the strip keeps
   // its historical internal id, "policy". Keep the mapping at this boundary
   // so waits still land on the visible checks stage.
-  const displayStage: typeof STAGE_ORDER[number] = display.stage === "checks" ? "policy" : display.stage;
+  const displayStage: (typeof STAGE_ORDER)[number] = display.stage === "checks" ? "policy" : display.stage;
   const reached = (key: string): boolean => typeof timestamps[key] === "string";
   const flags = stageReachedFlags(timestamps);
   const { planReached, planDone, policyReached, applyReached } = flags;
@@ -154,7 +147,7 @@ export function resolveStages(
   // Where the run got to, for a terminal status with no stage of its own.
   const furthest = furthestStage(currentStage, flags);
 
-  const stageDone: Readonly<Record<typeof STAGE_ORDER[number], boolean>> = {
+  const stageDone: Readonly<Record<(typeof STAGE_ORDER)[number], boolean>> = {
     queue: planReached || planDone || policyReached || applyReached,
     plan: resolvePhaseStatus(status, "plan", timestamps) === "finished",
     policy: policyStageDone(status, applyReached, reached),
@@ -164,7 +157,7 @@ export function resolveStages(
   const currentIndex = currentStage === undefined ? 0 : STAGE_ORDER.indexOf(currentStage);
   const furthestIndex = STAGE_ORDER.indexOf(furthest);
 
-  const stateFor = (id: typeof STAGE_ORDER[number]): StageState => {
+  const stateFor = (id: (typeof STAGE_ORDER)[number]): StageState => {
     const index = STAGE_ORDER.indexOf(id);
     if (stopped) {
       if (stageDone[id] || index < furthestIndex) return "done";
@@ -181,7 +174,9 @@ export function resolveStages(
     return index < currentIndex ? "done" : "pending";
   };
 
-  const timeFor = (id: typeof STAGE_ORDER[number]): Readonly<{ startedAt: string | null; finishedAt: string | null }> => {
+  const timeFor = (
+    id: (typeof STAGE_ORDER)[number],
+  ): Readonly<{ startedAt: string | null; finishedAt: string | null }> => {
     const startedAt = firstTimestamp(timestamps, STAGE_START_KEYS[id]);
     const finishedAt = firstTimestamp(timestamps, STAGE_FINISH_KEYS[id]);
     return { startedAt: startedAt ?? null, finishedAt: finishedAt ?? null };
@@ -189,7 +184,8 @@ export function resolveStages(
   const durationFor = (startedAt: string | null, finishedAt: string | null, state: StageState): string | null => {
     if (startedAt === null) return null;
     const start = Date.parse(startedAt);
-    const end = finishedAt === null && state === "active" ? Date.now() : finishedAt === null ? null : Date.parse(finishedAt);
+    const end =
+      finishedAt === null && state === "active" ? Date.now() : finishedAt === null ? null : Date.parse(finishedAt);
     if (!Number.isFinite(start) || end === null || !Number.isFinite(end) || end < start) return null;
     const minutes = Math.floor((end - start) / 60_000);
     if (minutes < 1) return "Less than a minute";
@@ -199,26 +195,29 @@ export function resolveStages(
     return `${hours} hour${hours === 1 ? "" : "s"}${remainder === 0 ? "" : ` ${remainder} min`}`;
   };
 
-  return STAGE_ORDER
-    // The policy stage is noise on an instance with no policies configured and
-    // no cost estimation: it would sit permanently grey between two real
-    // stages. Show it only once something has actually run there.
-    .filter((id: typeof STAGE_ORDER[number]): boolean =>
-      id !== "policy" || options.hasPolicyChecks || policyReached || currentStage === "policy")
-    .filter((id: typeof STAGE_ORDER[number]): boolean =>
-      id !== "apply" || !options.planOnly)
-    .map((id: typeof STAGE_ORDER[number]): Stage => {
-      const state = stateFor(id);
-      const times = timeFor(id);
-      return {
-        id,
-        label: STAGE_LABELS[id],
-        state,
-        ...times,
-        durationLabel: durationFor(times.startedAt, times.finishedAt, state),
-        waitingReason: display.waitingReason !== null && displayStage === id ? display.waitingLabel : null,
-      };
-    });
+  return (
+    STAGE_ORDER
+      // The policy stage is noise on an instance with no policies configured and
+      // no cost estimation: it would sit permanently grey between two real
+      // stages. Show it only once something has actually run there.
+      .filter(
+        (id: (typeof STAGE_ORDER)[number]): boolean =>
+          id !== "policy" || options.hasPolicyChecks || policyReached || currentStage === "policy",
+      )
+      .filter((id: (typeof STAGE_ORDER)[number]): boolean => id !== "apply" || !options.planOnly)
+      .map((id: (typeof STAGE_ORDER)[number]): Stage => {
+        const state = stateFor(id);
+        const times = timeFor(id);
+        return {
+          id,
+          label: STAGE_LABELS[id],
+          state,
+          ...times,
+          durationLabel: durationFor(times.startedAt, times.finishedAt, state),
+          waitingReason: display.waitingReason !== null && displayStage === id ? display.waitingLabel : null,
+        };
+      })
+  );
 }
 
 function StageIcon({ state }: Readonly<{ state: StageState }>): React.JSX.Element {
@@ -227,7 +226,8 @@ function StageIcon({ state }: Readonly<{ state: StageState }>): React.JSX.Elemen
   if (state === "active") return <CircleDot className={cn(base, "text-primary")} aria-hidden="true" />;
   if (state === "waiting") return <PauseCircle className={cn(base, "text-warning")} aria-hidden="true" />;
   if (state === "failed") return <X className={cn(base, "text-destructive")} aria-hidden="true" />;
-  if (state === "skipped" || state === "stopped") return <Minus className={cn(base, "text-muted-foreground/50")} aria-hidden="true" />;
+  if (state === "skipped" || state === "stopped")
+    return <Minus className={cn(base, "text-muted-foreground/50")} aria-hidden="true" />;
   return <Circle className={cn(base, "text-muted-foreground/40")} aria-hidden="true" />;
 }
 
@@ -258,27 +258,48 @@ export function RunStageStrip({
   return (
     <ol
       aria-label="Run progress"
-      className={cn("grid grid-flow-col auto-cols-fr overflow-hidden rounded-lg border border-border bg-card text-sm", className)}
+      className={cn(
+        "grid grid-flow-col auto-cols-fr overflow-hidden rounded-lg border border-border bg-card text-sm",
+        className,
+      )}
     >
-      {stages.map((stage: Stage, index: number): React.JSX.Element => (
-        <li key={stage.id} aria-current={stage.state === "active" || stage.state === "waiting" ? "step" : undefined}
-          className={cn("relative flex min-w-0 flex-col items-center gap-2 px-2 py-3 sm:flex-row sm:gap-3 sm:px-5 sm:py-4",
-            index > 0 && "border-l border-border",
-            stage.state === "active" && "bg-primary/5 after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary")}
-        >
-          <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-background",
-            stage.state === "active" && "border-primary/30",
-            stage.state === "done" && "border-success/20 bg-success/5")}
-          ><StageIcon state={stage.state} /></span>
-          <span className="min-w-0">
-            <span className={cn("block", STAGE_TEXT[stage.state])}>{stage.label}</span>
-            <span className="hidden text-xs capitalize text-muted-foreground sm:block">{STAGE_STATE_WORDS[stage.state]}</span>
-            <span className="sr-only sm:hidden">{STAGE_STATE_WORDS[stage.state]}</span>
-            {stage.durationLabel !== null && <span className="hidden text-xs text-muted-foreground sm:block">Duration · {stage.durationLabel}</span>}
-            {stage.waitingReason !== null && <span className="block text-xs text-warning sm:max-w-44">{stage.waitingReason}</span>}
-          </span>
-        </li>
-      ))}
+      {stages.map(
+        (stage: Stage, index: number): React.JSX.Element => (
+          <li
+            key={stage.id}
+            aria-current={stage.state === "active" || stage.state === "waiting" ? "step" : undefined}
+            className={cn(
+              "relative flex min-w-0 flex-col items-center gap-2 px-2 py-3 sm:flex-row sm:gap-3 sm:px-5 sm:py-4",
+              index > 0 && "border-l border-border",
+              stage.state === "active" &&
+                "bg-primary/5 after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary",
+            )}
+          >
+            <span
+              className={cn(
+                "flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-background",
+                stage.state === "active" && "border-primary/30",
+                stage.state === "done" && "border-success/20 bg-success/5",
+              )}
+            >
+              <StageIcon state={stage.state} />
+            </span>
+            <span className="min-w-0">
+              <span className={cn("block", STAGE_TEXT[stage.state])}>{stage.label}</span>
+              <span className="hidden text-xs capitalize text-muted-foreground sm:block">
+                {STAGE_STATE_WORDS[stage.state]}
+              </span>
+              <span className="sr-only sm:hidden">{STAGE_STATE_WORDS[stage.state]}</span>
+              {stage.durationLabel !== null && (
+                <span className="hidden text-xs text-muted-foreground sm:block">Duration · {stage.durationLabel}</span>
+              )}
+              {stage.waitingReason !== null && (
+                <span className="block text-xs text-warning sm:max-w-44">{stage.waitingReason}</span>
+              )}
+            </span>
+          </li>
+        ),
+      )}
     </ol>
   );
 }

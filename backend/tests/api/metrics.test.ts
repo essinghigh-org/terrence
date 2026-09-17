@@ -73,7 +73,12 @@ describe("instance metrics", () => {
     await db.insert(users).values([
       { id: userId, username: `metrics-${suffix}@test`, passwordHash: "hash" },
       { id: otherUserId, username: `metrics-other-${suffix}@test`, passwordHash: "hash" },
-      { id: `metrics-admin-${suffix}`, username: `metrics-admin-${suffix}@test`, passwordHash: "hash", isSiteAdmin: true },
+      {
+        id: `metrics-admin-${suffix}`,
+        username: `metrics-admin-${suffix}@test`,
+        passwordHash: "hash",
+        isSiteAdmin: true,
+      },
     ]);
     await db.insert(organizations).values([
       { id: orgA, name: `metrics-a-${suffix}` },
@@ -109,10 +114,39 @@ describe("instance metrics", () => {
       { id: agentB1, agentPoolId: poolB, name: "agent-b1", status: "idle", lastPingAt: now },
     ]);
     await db.insert(agentJobs).values([
-      { id: `metrics-job-aq-${suffix}`, runId: runAApplied, agentPoolId: poolA, phase: "plan", status: "queued", createdAt: now - 30_000 },
-      { id: `metrics-job-ac-${suffix}`, runId: runAPending, agentPoolId: poolA, phase: "apply", status: "claimed", claimedAt: now, createdAt: now - 10_000 },
-      { id: `metrics-job-ae-${suffix}`, runId: runAApplied, agentPoolId: poolA, phase: "apply", status: "errored", createdAt: now - 20_000 },
-      { id: `metrics-job-bq-${suffix}`, runId: runBApplied, agentPoolId: poolB, phase: "plan", status: "queued", createdAt: now - 5_000 },
+      {
+        id: `metrics-job-aq-${suffix}`,
+        runId: runAApplied,
+        agentPoolId: poolA,
+        phase: "plan",
+        status: "queued",
+        createdAt: now - 30_000,
+      },
+      {
+        id: `metrics-job-ac-${suffix}`,
+        runId: runAPending,
+        agentPoolId: poolA,
+        phase: "apply",
+        status: "claimed",
+        claimedAt: now,
+        createdAt: now - 10_000,
+      },
+      {
+        id: `metrics-job-ae-${suffix}`,
+        runId: runAApplied,
+        agentPoolId: poolA,
+        phase: "apply",
+        status: "errored",
+        createdAt: now - 20_000,
+      },
+      {
+        id: `metrics-job-bq-${suffix}`,
+        runId: runBApplied,
+        agentPoolId: poolB,
+        phase: "plan",
+        status: "queued",
+        createdAt: now - 5_000,
+      },
     ]);
 
     legacyToken = `metrics-legacy-${suffix}`;
@@ -128,9 +162,19 @@ describe("instance metrics", () => {
       { id: `metrics-tok-legacy-${suffix}`, token: createHash("sha256").update(legacyToken).digest("hex"), userId },
       // Browser session access token: no scopes, but tracked in
       // refresh_sessions. Must NOT see instance-wide metrics.
-      { id: sessionTokenId, token: createHash("sha256").update(sessionToken).digest("hex"), userId, description: "Browser session access token" },
+      {
+        id: sessionTokenId,
+        token: createHash("sha256").update(sessionToken).digest("hex"),
+        userId,
+        description: "Browser session access token",
+      },
       // Site admin's browser session access token: accepted for instance-wide metrics.
-      { id: adminSessionTokenId, token: createHash("sha256").update(adminSessionToken).digest("hex"), userId: `metrics-admin-${suffix}`, description: "Browser session access token" },
+      {
+        id: adminSessionTokenId,
+        token: createHash("sha256").update(adminSessionToken).digest("hex"),
+        userId: `metrics-admin-${suffix}`,
+        description: "Browser session access token",
+      },
       // Fine-grained: full org A coverage, both grants.
       {
         id: `metrics-tok-scoped-${suffix}`,
@@ -215,27 +259,37 @@ describe("instance metrics", () => {
     }
     await db.delete(refreshSessions).where(inArray(refreshSessions.id, [sessionRefreshId, adminSessionRefreshId]));
     await db.delete(systemApiTokens).where(inArray(systemApiTokens.id, [monitoringTokenId]));
-    await db.delete(apiTokens).where(inArray(apiTokens.id, [
-      `metrics-tok-legacy-${suffix}`,
-      sessionTokenId,
-      adminSessionTokenId,
-      `metrics-tok-scoped-${suffix}`,
-      `metrics-tok-ws-${suffix}`,
-      `metrics-tok-noagent-${suffix}`,
-      `metrics-tok-other-${suffix}`,
-    ]));
-    await db.delete(agentJobs).where(inArray(agentJobs.id, [
-      `metrics-job-aq-${suffix}`,
-      `metrics-job-ac-${suffix}`,
-      `metrics-job-ae-${suffix}`,
-      `metrics-job-bq-${suffix}`,
-    ]));
+    await db
+      .delete(apiTokens)
+      .where(
+        inArray(apiTokens.id, [
+          `metrics-tok-legacy-${suffix}`,
+          sessionTokenId,
+          adminSessionTokenId,
+          `metrics-tok-scoped-${suffix}`,
+          `metrics-tok-ws-${suffix}`,
+          `metrics-tok-noagent-${suffix}`,
+          `metrics-tok-other-${suffix}`,
+        ]),
+      );
+    await db
+      .delete(agentJobs)
+      .where(
+        inArray(agentJobs.id, [
+          `metrics-job-aq-${suffix}`,
+          `metrics-job-ac-${suffix}`,
+          `metrics-job-ae-${suffix}`,
+          `metrics-job-bq-${suffix}`,
+        ]),
+      );
     await db.delete(agents).where(inArray(agents.id, [agentA1, agentA2, agentB1]));
     await db.delete(agentPools).where(inArray(agentPools.id, [poolA, poolB]));
     await db.delete(runs).where(inArray(runs.id, [runAApplied, runAPending, runBApplied]));
     await db.delete(workspaces).where(inArray(workspaces.id, [wsA1, wsA2, wsB1]));
     await db.delete(projects).where(inArray(projects.id, [`metrics-prj-a-${suffix}`, `metrics-prj-b-${suffix}`]));
-    await db.delete(organizationMemberships).where(inArray(organizationMemberships.id, [`metrics-mem-a-${suffix}`, `metrics-mem-b-${suffix}`]));
+    await db
+      .delete(organizationMemberships)
+      .where(inArray(organizationMemberships.id, [`metrics-mem-a-${suffix}`, `metrics-mem-b-${suffix}`]));
     await db.delete(organizations).where(inArray(organizations.id, [orgA, orgB]));
     await db.delete(users).where(inArray(users.id, [userId, otherUserId, `metrics-admin-${suffix}`]));
   });
@@ -253,14 +307,14 @@ describe("instance metrics", () => {
   test("rejects a browser session access token from a non-admin (no instance metrics)", async () => {
     const res = await fetch(`${baseUrl}metrics`, { headers: auth(sessionToken) });
     expect(res.status).toBe(403);
-    const body = await readJson(res) as { errors: { status: string }[] };
+    const body = (await readJson(res)) as { errors: { status: string }[] };
     expect(body.errors[0]?.status).toBe("403");
   });
 
   test("accepts a site admin's browser session access token for instance-wide metrics", async () => {
     const res = await fetch(`${baseUrl}metrics`, { headers: auth(adminSessionToken) });
     expect(res.status).toBe(200);
-    const { metrics } = await readJson(res) as { metrics: Record<string, unknown> };
+    const { metrics } = (await readJson(res)) as { metrics: Record<string, unknown> };
     // Instance-wide counters are present (not the scoped-org shape).
     expect(typeof metrics["terrence_users_total"]).toBe("number");
   });
@@ -268,7 +322,7 @@ describe("instance metrics", () => {
   test("legacy token sees instance-wide metrics plus agent queue depth", async () => {
     const res = await fetch(`${baseUrl}metrics`, { headers: auth(monitoringToken) });
     expect(res.status).toBe(200);
-    const { metrics } = await readJson(res) as { metrics: Record<string, unknown> };
+    const { metrics } = (await readJson(res)) as { metrics: Record<string, unknown> };
 
     expect(metrics["terrence_users_total"]).toBeGreaterThanOrEqual(2);
     expect(metrics["terrence_organizations_total"]).toBeGreaterThanOrEqual(2);
@@ -283,10 +337,19 @@ describe("instance metrics", () => {
     expect(metrics["terrence_database_size_bytes"]).toEqual(expect.any(Number));
     // WAL size can be null when the WAL has been folded into the main DB file
     // (graceful shutdown checkpoints it); both shapes are valid.
-    expect(metrics["terrence_database_wal_size_bytes"] === null || typeof metrics["terrence_database_wal_size_bytes"] === "number").toBe(true);
+    expect(
+      metrics["terrence_database_wal_size_bytes"] === null ||
+        typeof metrics["terrence_database_wal_size_bytes"] === "number",
+    ).toBe(true);
     expect(metrics["terrence_database_page_count"]).toEqual(expect.any(Number));
-    expect(metrics["terrence_database_cache_size_bytes"] === null || typeof metrics["terrence_database_cache_size_bytes"] === "number").toBe(true);
-    expect(metrics["terrence_database_freelist_bytes"] === null || typeof metrics["terrence_database_freelist_bytes"] === "number").toBe(true);
+    expect(
+      metrics["terrence_database_cache_size_bytes"] === null ||
+        typeof metrics["terrence_database_cache_size_bytes"] === "number",
+    ).toBe(true);
+    expect(
+      metrics["terrence_database_freelist_bytes"] === null ||
+        typeof metrics["terrence_database_freelist_bytes"] === "number",
+    ).toBe(true);
     expect(metrics["terrence_agent_pools_total"]).toBeGreaterThanOrEqual(2);
 
     // Process-level runtime observability (legacy tier only).
@@ -303,7 +366,10 @@ describe("instance metrics", () => {
     expect(typeof requests.in_flight).toBe("number");
     expect(typeof requests.errors5xx).toBe("number");
     expect(requests.total).toBeGreaterThanOrEqual(1);
-    const journeyLatency = metrics["terrence_request_latency"] as Record<string, { requests: number; sample_count: number; p50_ms: number | null; p95_ms: number | null; max_ms: number | null }>;
+    const journeyLatency = metrics["terrence_request_latency"] as Record<
+      string,
+      { requests: number; sample_count: number; p50_ms: number | null; p95_ms: number | null; max_ms: number | null }
+    >;
     expect(Object.keys(journeyLatency).sort()).toEqual([
       "log-retrieval",
       "other",
@@ -314,19 +380,42 @@ describe("instance metrics", () => {
     ]);
     expect(journeyLatency["workspace-list"]?.requests).toBeGreaterThanOrEqual(0);
     expect(metrics["terrence_event_loop_delay"]).toMatchObject({ sample_count: expect.any(Number) });
-    const worker = metrics["terrence_worker"] as { polls: number; last_poll_at: number | null; last_poll_duration_ms: number | null; last_poll_ok: boolean | null };
+    const worker = metrics["terrence_worker"] as {
+      polls: number;
+      last_poll_at: number | null;
+      last_poll_duration_ms: number | null;
+      last_poll_ok: boolean | null;
+    };
     expect(typeof worker.polls).toBe("number");
     expect(worker.last_poll_at === null || typeof worker.last_poll_at === "number").toBe(true);
     expect(worker.last_poll_duration_ms === null || typeof worker.last_poll_duration_ms === "number").toBe(true);
     expect(worker.last_poll_ok === null || typeof worker.last_poll_ok === "boolean").toBe(true);
-    const history = metrics["terrence_process_history"] as { interval_ms: number; max_samples: number; samples: unknown[]; stats: { rss: { min: number; max: number; latest: number | null; growth_per_hour: number | null }; heap_used: { min: number; max: number; latest: number | null; growth_per_hour: number | null } } };
+    const history = metrics["terrence_process_history"] as {
+      interval_ms: number;
+      max_samples: number;
+      samples: unknown[];
+      stats: {
+        rss: { min: number; max: number; latest: number | null; growth_per_hour: number | null };
+        heap_used: { min: number; max: number; latest: number | null; growth_per_hour: number | null };
+      };
+    };
     expect(history.interval_ms).toBeGreaterThan(0);
     expect(history.max_samples).toBeGreaterThan(0);
     expect(Array.isArray(history.samples)).toBe(true);
     expect(history.stats.rss.min).toBeGreaterThanOrEqual(0);
-    expect(history.stats.rss.growth_per_hour === null || typeof history.stats.rss.growth_per_hour === "number").toBe(true);
+    expect(history.stats.rss.growth_per_hour === null || typeof history.stats.rss.growth_per_hour === "number").toBe(
+      true,
+    );
 
-    const pools = metrics["agent_pools"] as { id: string; agents_by_status: Record<string, number>; agents_stale: number; jobs_queued: number; jobs_claimed: number; jobs_errored: number; oldest_queued_wait_seconds: number }[];
+    const pools = metrics["agent_pools"] as {
+      id: string;
+      agents_by_status: Record<string, number>;
+      agents_stale: number;
+      jobs_queued: number;
+      jobs_claimed: number;
+      jobs_errored: number;
+      oldest_queued_wait_seconds: number;
+    }[];
     expect(pools.some((pool): boolean => pool.id === poolA)).toBe(true);
     const poolA_ = pools.find((pool): boolean => pool.id === poolA)!;
     expect(poolA_.agents_by_status).toMatchObject({ idle: 1, busy: 1 });
@@ -345,7 +434,7 @@ describe("instance metrics", () => {
   test("fine-grained token sees only its org, no instance counters", async () => {
     const res = await fetch(`${baseUrl}metrics`, { headers: auth(scopedToken) });
     expect(res.status).toBe(200);
-    const { metrics } = await readJson(res) as { metrics: Record<string, unknown> };
+    const { metrics } = (await readJson(res)) as { metrics: Record<string, unknown> };
 
     // Instance-wide counters must NOT leak to a scoped token.
     expect(metrics["terrence_users_total"]).toBeUndefined();
@@ -355,7 +444,11 @@ describe("instance metrics", () => {
     expect(metrics["terrence_process_rss_bytes"]).toBeUndefined();
     expect(metrics["terrence_process_history"]).toBeUndefined();
 
-    const orgs = metrics["organizations"] as { org_id: string; workspaces: number; runs_by_status: Record<string, number> }[];
+    const orgs = metrics["organizations"] as {
+      org_id: string;
+      workspaces: number;
+      runs_by_status: Record<string, number>;
+    }[];
     const orgA_ = orgs.find((org): boolean => org.org_id === orgA);
     expect(orgA_).toBeDefined();
     // ws-a1, ws-a2 (all workspaces in org A; no project/workspace/tag selector).
@@ -370,8 +463,12 @@ describe("instance metrics", () => {
   test("workspace-restricted scope counts only eligible workspaces", async () => {
     const res = await fetch(`${baseUrl}metrics`, { headers: auth(workspaceRestrictedToken) });
     expect(res.status).toBe(200);
-    const { metrics } = await readJson(res) as { metrics: Record<string, unknown> };
-    const orgs = metrics["organizations"] as { org_id: string; workspaces: number; runs_by_status: Record<string, number> }[];
+    const { metrics } = (await readJson(res)) as { metrics: Record<string, unknown> };
+    const orgs = metrics["organizations"] as {
+      org_id: string;
+      workspaces: number;
+      runs_by_status: Record<string, number>;
+    }[];
     const orgA_ = orgs.find((org): boolean => org.org_id === orgA);
     expect(orgA_!.workspaces).toBe(1); // only ws-a1
     expect(orgA_!.runs_by_status).toMatchObject({ applied: 1 });
@@ -381,7 +478,7 @@ describe("instance metrics", () => {
   test("scope without agent-pools:read sees no pool metrics", async () => {
     const res = await fetch(`${baseUrl}metrics`, { headers: auth(noAgentGrantToken) });
     expect(res.status).toBe(200);
-    const { metrics } = await readJson(res) as { metrics: Record<string, unknown> };
+    const { metrics } = (await readJson(res)) as { metrics: Record<string, unknown> };
     expect(metrics["agent_pools"]).toEqual([]);
     expect(metrics["terrence_agent_pools_total"]).toBe(0);
   });
@@ -389,7 +486,7 @@ describe("instance metrics", () => {
   test("scoped token never sees another org's data", async () => {
     const res = await fetch(`${baseUrl}metrics`, { headers: auth(otherOrgToken) });
     expect(res.status).toBe(200);
-    const { metrics } = await readJson(res) as { metrics: Record<string, unknown> };
+    const { metrics } = (await readJson(res)) as { metrics: Record<string, unknown> };
     const orgs = metrics["organizations"] as { org_id: string; workspaces: number }[];
     expect(orgs.some((org): boolean => org.org_id === orgB)).toBe(true);
     expect(orgs.some((org): boolean => org.org_id === orgA)).toBe(false);
@@ -413,7 +510,9 @@ describe("instance metrics", () => {
     expect(body).toContain("# TYPE terrence_runs_total gauge");
     expect(body).toMatch(/terrence_runs_total \d+/);
     expect(body).toContain("# TYPE terrence_agent_jobs_queued_total gauge");
-    expect(body).toMatch(new RegExp(`terrence_agent_jobs_queued_total\\{pool_id="${poolA}",pool="pool-a",org="${orgA}"\\} 1`));
+    expect(body).toMatch(
+      new RegExp(`terrence_agent_jobs_queued_total\\{pool_id="${poolA}",pool="pool-a",org="${orgA}"\\} 1`),
+    );
     expect(body).toMatch(/terrence_agents_stale_total\{[^}]*pool-a[^}]*\} 1/);
     expect(body).toMatch(/terrence_agent_queue_oldest_wait_seconds\{[^}]*pool-a[^}]*\} [1-9]\d*/);
     // Process gauges (legacy tier).

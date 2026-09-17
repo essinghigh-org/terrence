@@ -27,13 +27,18 @@ describe("route param fuzzing (470-475)", () => {
     await mkdtemp(join(tmpdir(), "terrence-fuzz-"));
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: `org-${suffix}`, name: orgName }]);
-    await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId: `org-${suffix}`, role: "owner" }]);
-    await db.insert(apiTokens).values([{ id: crypto.randomUUID() as string, token: hashAuthenticationToken(token), userId }]);
+    await db
+      .insert(organizationMemberships)
+      .values([{ id: crypto.randomUUID(), userId, orgId: `org-${suffix}`, role: "owner" }]);
+    await db
+      .insert(apiTokens)
+      .values([{ id: crypto.randomUUID() as string, token: hashAuthenticationToken(token), userId }]);
   });
 
   async function fuzzPath(path: string, method = "GET"): Promise<number | null> {
-
-    const resp = await (app as any).handle(new Request(`http://terrence.test${path}`, { method, headers: { Authorization: `Bearer ${token}` } }));
+    const resp = await (app as any).handle(
+      new Request(`http://terrence.test${path}`, { method, headers: { Authorization: `Bearer ${token}` } }),
+    );
     return statusOf(resp as Response | { errors?: unknown[] });
   }
 
@@ -51,7 +56,12 @@ describe("route param fuzzing (470-475)", () => {
   });
 
   it("invalid UTF-8 / malformed percent (473 / 475) maps to 400/404/422", async () => {
-    for (const path of ["/api/v2/organizations/%FF", "/api/v2/organizations/%ZZ", "/api/v2/organizations/%2", "/api/v2/organizations/helloworld"]) {
+    for (const path of [
+      "/api/v2/organizations/%FF",
+      "/api/v2/organizations/%ZZ",
+      "/api/v2/organizations/%2",
+      "/api/v2/organizations/helloworld",
+    ]) {
       const s = await fuzzPath(path);
       expect(s ?? 400).toBeGreaterThanOrEqual(400);
       expect(s === null || [400, 404, 422].includes(s)).toBe(true);

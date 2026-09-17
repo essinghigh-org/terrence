@@ -36,14 +36,16 @@ const adminToken = `scim-admin-token-${suffix}`;
 const ownerToken = `scim-owner-token-${suffix}`;
 
 function request(method: string, path: string, token?: string, body?: unknown): Promise<Response> {
-  return app.handle(new Request(`http://terrence.test${path}`, {
-    method,
-    headers: {
-      ...(token === undefined ? {} : { Authorization: `Bearer ${token}` }),
-      ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
+  return app.handle(
+    new Request(`http://terrence.test${path}`, {
+      method,
+      headers: {
+        ...(token === undefined ? {} : { Authorization: `Bearer ${token}` }),
+        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
 }
 
 beforeAll(async () => {
@@ -52,7 +54,13 @@ beforeAll(async () => {
   await db.insert(users).values([
     { id: adminId, username: adminId, passwordHash: "unused", isSiteAdmin: true },
     { id: ownerId, username: ownerId, passwordHash: "unused" },
-    { id: groupUserId, username: groupUserId, email: `scim-before-${suffix}@example.com`, emailVerifiedAt: Date.now(), passwordHash: "unused" },
+    {
+      id: groupUserId,
+      username: groupUserId,
+      email: `scim-before-${suffix}@example.com`,
+      emailVerifiedAt: Date.now(),
+      passwordHash: "unused",
+    },
     { id: replacedUserId, username: replacedUserId, passwordHash: "unused" },
   ]);
   await db.insert(organizations).values({ id: orgId, name: `scim-${suffix}` });
@@ -114,7 +122,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await db.delete(teamScimGroupMappings).where(inArray(teamScimGroupMappings.teamId, [teamId, ownersTeamId]));
-  await db.delete(scimGroupMemberships).where(inArray(scimGroupMemberships.groupId, [engineeringGroupId, adminGroupId]));
+  await db
+    .delete(scimGroupMemberships)
+    .where(inArray(scimGroupMemberships.groupId, [engineeringGroupId, adminGroupId]));
   await db.delete(scimUserIdentities).where(eq(scimUserIdentities.userId, groupUserId));
   await db.delete(scimGroups).where(inArray(scimGroups.id, [engineeringGroupId, adminGroupId]));
   await db.delete(scimTokens);
@@ -165,15 +175,23 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
     groupId: adminGroupId,
     scimUserId: `scim-user-${suffix}`,
   });
-  expect((await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
-    data: { type: "scim-settings", attributes: { paused: false } },
-  })).status).toBe(200);
+  expect(
+    (
+      await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+        data: { type: "scim-settings", attributes: { paused: false } },
+      })
+    ).status,
+  ).toBe(200);
   const grantedScimAdmin = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
   expect(grantedScimAdmin?.isSiteAdmin).toBeTrue();
   expect(grantedScimAdmin?.scimSiteAdmin).toBeTrue();
-  expect((await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
-    data: { type: "scim-settings", attributes: { enabled: false } },
-  })).status).toBe(422);
+  expect(
+    (
+      await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+        data: { type: "scim-settings", attributes: { enabled: false } },
+      })
+    ).status,
+  ).toBe(422);
 
   const listedGroups = await request(
     "GET",
@@ -182,11 +200,13 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
   );
   expect(listedGroups.status).toBe(200);
   const listedGroupsBody = await listedGroups.json();
-  expect(listedGroupsBody.data).toEqual([{
-    id: engineeringGroupId,
-    type: "scim-groups",
-    attributes: { name: `Engineering ${suffix}` },
-  }]);
+  expect(listedGroupsBody.data).toEqual([
+    {
+      id: engineeringGroupId,
+      type: "scim-groups",
+      attributes: { name: `Engineering ${suffix}` },
+    },
+  ]);
   expect(listedGroupsBody.meta.pagination).toMatchObject({
     "current-page": 1,
     "page-size": 1,
@@ -198,7 +218,7 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
       type: "authentication-tokens",
       attributes: {
         description,
-        "expired-at": new Date(Date.now() + (30 * DAY_MS)).toISOString(),
+        "expired-at": new Date(Date.now() + 30 * DAY_MS).toISOString(),
       },
     },
   });
@@ -216,12 +236,16 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
   const listedTokens = await request("GET", "/api/v2/admin/scim-tokens", adminToken);
   expect((await listedTokens.json()).data).toHaveLength(2);
   expect((await request("DELETE", `/api/v2/admin/scim-tokens/${firstToken.id}`, adminToken)).status).toBe(204);
-  expect((await request("POST", "/api/v2/admin/scim-tokens", adminToken, {
-    data: {
-      type: "authentication-tokens",
-      attributes: { "expired-at": new Date(Date.now() + (10 * DAY_MS)).toISOString() },
-    },
-  })).status).toBe(400);
+  expect(
+    (
+      await request("POST", "/api/v2/admin/scim-tokens", adminToken, {
+        data: {
+          type: "authentication-tokens",
+          attributes: { "expired-at": new Date(Date.now() + 10 * DAY_MS).toISOString() },
+        },
+      })
+    ).status,
+  ).toBe(400);
 
   const mappingPayload = (groupId: string) => ({
     data: {
@@ -234,33 +258,44 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
   });
   expect(updatedSsoId.status).toBe(200);
   expect((await updatedSsoId.json()).data.attributes["sso-team-id"]).toBe("saml-engineering-updated");
-  expect((await request(
-    "POST",
-    `/api/v2/admin/teams/${teamId}/scim-group-mapping`,
-    adminToken,
-    mappingPayload(adminGroupId),
-  )).status).toBe(422);
-  expect((await request(
-    "POST",
-    `/api/v2/admin/teams/${ownersTeamId}/scim-group-mapping`,
-    adminToken,
-    mappingPayload(engineeringGroupId),
-  )).status).toBe(422);
-  expect((await request(
-    "POST",
-    `/api/v2/admin/teams/${teamId}/scim-group-mapping`,
-    adminToken,
-    mappingPayload(engineeringGroupId),
-  )).status).toBe(204);
+  expect(
+    (
+      await request(
+        "POST",
+        `/api/v2/admin/teams/${teamId}/scim-group-mapping`,
+        adminToken,
+        mappingPayload(adminGroupId),
+      )
+    ).status,
+  ).toBe(422);
+  expect(
+    (
+      await request(
+        "POST",
+        `/api/v2/admin/teams/${ownersTeamId}/scim-group-mapping`,
+        adminToken,
+        mappingPayload(engineeringGroupId),
+      )
+    ).status,
+  ).toBe(422);
+  expect(
+    (
+      await request(
+        "POST",
+        `/api/v2/admin/teams/${teamId}/scim-group-mapping`,
+        adminToken,
+        mappingPayload(engineeringGroupId),
+      )
+    ).status,
+  ).toBe(204);
 
   const syncedMembers = await db.query.teamMemberships.findMany({ where: eq(teamMemberships.teamId, teamId) });
   expect(syncedMembers.map((membership) => membership.userId).sort()).toEqual([groupUserId, replacedUserId].sort());
-  expect(await db.query.organizationMemberships.findFirst({
-    where: and(
-      eq(organizationMemberships.orgId, orgId),
-      eq(organizationMemberships.userId, groupUserId),
-    ),
-  })).toBeDefined();
+  expect(
+    await db.query.organizationMemberships.findFirst({
+      where: and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.userId, groupUserId)),
+    }),
+  ).toBeDefined();
 
   let shownTeam = await request("GET", `/api/v2/teams/${teamId}`, ownerToken);
   expect((await shownTeam.json()).data.attributes).toMatchObject({
@@ -269,9 +304,13 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
     "scim-group-name": `Engineering ${suffix}`,
     "scim-sync-paused": false,
   });
-  expect((await request("PATCH", `/api/v2/teams/${teamId}`, ownerToken, {
-    data: { type: "teams", attributes: { name: "blocked" } },
-  })).status).toBe(422);
+  expect(
+    (
+      await request("PATCH", `/api/v2/teams/${teamId}`, ownerToken, {
+        data: { type: "teams", attributes: { name: "blocked" } },
+      })
+    ).status,
+  ).toBe(422);
   const ignoredSsoChange = await request("PATCH", `/api/v2/teams/${teamId}`, ownerToken, {
     data: { type: "teams", attributes: { "sso-team-id": "ignored", visibility: "secret" } },
   });
@@ -280,55 +319,65 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
     "sso-team-id": "saml-engineering-updated",
     visibility: "secret",
   });
-  expect((await request("POST", `/api/v2/teams/${teamId}/relationships/users`, ownerToken, {
-    data: [{ id: replacedUserId, type: "users" }],
-  })).status).toBe(403);
+  expect(
+    (
+      await request("POST", `/api/v2/teams/${teamId}/relationships/users`, ownerToken, {
+        data: [{ id: replacedUserId, type: "users" }],
+      })
+    ).status,
+  ).toBe(403);
   expect((await request("DELETE", `/api/v2/teams/${teamId}`, ownerToken)).status).toBe(404);
 
   const pausePayload = {
     data: { type: "scim-group-mapping", attributes: { "scim-sync-paused": true } },
   };
-  expect((await request(
-    "PATCH",
-    `/api/v2/admin/teams/${teamId}/scim-group-mapping`,
-    adminToken,
-    pausePayload,
-  )).status).toBe(204);
+  expect(
+    (await request("PATCH", `/api/v2/admin/teams/${teamId}/scim-group-mapping`, adminToken, pausePayload)).status,
+  ).toBe(204);
   shownTeam = await request("GET", `/api/v2/teams/${teamId}`, ownerToken);
   expect((await shownTeam.json()).data.attributes["scim-sync-paused"]).toBeTrue();
   await db.delete(scimGroupMemberships).where(eq(scimGroupMemberships.groupId, engineeringGroupId));
-  expect(await db.query.teamMemberships.findFirst({
-    where: and(eq(teamMemberships.teamId, teamId), eq(teamMemberships.userId, groupUserId)),
-  })).toBeDefined();
-  expect((await request(
-    "PATCH",
-    `/api/v2/admin/teams/${teamId}/scim-group-mapping`,
-    adminToken,
-    { data: { type: "scim-group-mapping", attributes: { "scim-sync-paused": false } } },
-  )).status).toBe(204);
-  expect(await db.query.teamMemberships.findFirst({
-    where: and(eq(teamMemberships.teamId, teamId), eq(teamMemberships.userId, replacedUserId)),
-  })).toBeDefined();
+  expect(
+    await db.query.teamMemberships.findFirst({
+      where: and(eq(teamMemberships.teamId, teamId), eq(teamMemberships.userId, groupUserId)),
+    }),
+  ).toBeDefined();
+  expect(
+    (
+      await request("PATCH", `/api/v2/admin/teams/${teamId}/scim-group-mapping`, adminToken, {
+        data: { type: "scim-group-mapping", attributes: { "scim-sync-paused": false } },
+      })
+    ).status,
+  ).toBe(204);
+  expect(
+    await db.query.teamMemberships.findFirst({
+      where: and(eq(teamMemberships.teamId, teamId), eq(teamMemberships.userId, replacedUserId)),
+    }),
+  ).toBeDefined();
   await db.insert(scimGroupMemberships).values({
     id: `scim-group-member-${suffix}`,
     groupId: engineeringGroupId,
     scimUserId: `scim-user-${suffix}`,
   });
-  expect((await request(
-    "DELETE",
-    `/api/v2/admin/teams/${teamId}/scim-group-mapping`,
-    adminToken,
-  )).status).toBe(204);
-  expect((await request("POST", `/api/v2/teams/${teamId}/relationships/users`, ownerToken, {
-    data: [{ id: replacedUserId, type: "users" }],
-  })).status).toBe(204);
+  expect((await request("DELETE", `/api/v2/admin/teams/${teamId}/scim-group-mapping`, adminToken)).status).toBe(204);
+  expect(
+    (
+      await request("POST", `/api/v2/teams/${teamId}/relationships/users`, ownerToken, {
+        data: [{ id: replacedUserId, type: "users" }],
+      })
+    ).status,
+  ).toBe(204);
 
-  expect((await request(
-    "POST",
-    `/api/v2/admin/teams/${teamId}/scim-group-mapping`,
-    adminToken,
-    mappingPayload(engineeringGroupId),
-  )).status).toBe(204);
+  expect(
+    (
+      await request(
+        "POST",
+        `/api/v2/admin/teams/${teamId}/scim-group-mapping`,
+        adminToken,
+        mappingPayload(engineeringGroupId),
+      )
+    ).status,
+  ).toBe(204);
   const scimUserUpdate = await request("PUT", `/scim/v2/Users/scim-user-${suffix}`, secondToken.attributes.token, {
     userName: groupUserId,
     emails: [{ value: `scim-after-${suffix}@example.com`, primary: true }],
@@ -347,9 +396,11 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
   });
   expect(await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, engineeringGroupId) })).toBeUndefined();
   expect(await db.query.scimTokens.findFirst({ where: eq(scimTokens.id, secondToken.id) })).toBeUndefined();
-  expect(await db.query.teamScimGroupMappings.findFirst({
-    where: eq(teamScimGroupMappings.teamId, teamId),
-  })).toBeUndefined();
+  expect(
+    await db.query.teamScimGroupMappings.findFirst({
+      where: eq(teamScimGroupMappings.teamId, teamId),
+    }),
+  ).toBeUndefined();
   expect(await db.query.teams.findFirst({ where: eq(teams.id, teamId) })).toBeDefined();
   expect(await db.query.users.findFirst({ where: eq(users.id, groupUserId) })).toBeDefined();
   const revokedScimAdmin = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });

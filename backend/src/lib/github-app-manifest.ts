@@ -14,21 +14,31 @@ export function githubAppCredentialStorage(
 }> {
   const configuration = record?.configuration ?? null;
   return {
-    "credential-storage": record === null
-      ? hasEnvironmentConfiguration ? "environment" : "none"
-      : configuration === null ? "none" : "database",
-    "environment-removable": record?.status === "active"
-      && configuration !== null
-      && configuration.privateKey.trim() !== ""
-      && configuration.webhookSecret !== null
-      && configuration.webhookSecret.trim() !== "",
+    "credential-storage":
+      record === null
+        ? hasEnvironmentConfiguration
+          ? "environment"
+          : "none"
+        : configuration === null
+          ? "none"
+          : "database",
+    "environment-removable":
+      record?.status === "active" &&
+      configuration !== null &&
+      configuration.privateKey.trim() !== "" &&
+      configuration.webhookSecret !== null &&
+      configuration.webhookSecret.trim() !== "",
   };
 }
 
 function githubHttpUrl(value: string): URL {
   const url = new URL(value);
-  if ((url.protocol !== "https:" && url.protocol !== "http:")
-    || url.username !== "" || url.password !== "" || url.hash !== "") {
+  if (
+    (url.protocol !== "https:" && url.protocol !== "http:") ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.hash !== ""
+  ) {
     throw new Error("Invalid GitHub URL");
   }
   return url;
@@ -43,9 +53,10 @@ export function githubAppRegistrationUrl(httpUrl: string, organization: string):
   }
   const base = githubHttpUrl(httpUrl);
   if (base.search !== "") throw new Error("Invalid GitHub URL");
-  return new URL(owner === ""
-    ? "/settings/apps/new"
-    : `/organizations/${encodeURIComponent(owner)}/settings/apps/new`, base);
+  return new URL(
+    owner === "" ? "/settings/apps/new" : `/organizations/${encodeURIComponent(owner)}/settings/apps/new`,
+    base,
+  );
 }
 
 export function githubAppSettingsUrl(
@@ -54,16 +65,18 @@ export function githubAppSettingsUrl(
   owner: string | null,
   ownerType: string | undefined,
 ): string {
-  const path = ownerType === "Organization" && owner !== null
-    ? `/organizations/${encodeURIComponent(owner)}/settings/apps/${encodeURIComponent(slug)}`
-    : ownerType === "User"
-      ? `/settings/apps/${encodeURIComponent(slug)}`
-      : `/apps/${encodeURIComponent(slug)}`;
+  const path =
+    ownerType === "Organization" && owner !== null
+      ? `/organizations/${encodeURIComponent(owner)}/settings/apps/${encodeURIComponent(slug)}`
+      : ownerType === "User"
+        ? `/settings/apps/${encodeURIComponent(slug)}`
+        : `/apps/${encodeURIComponent(slug)}`;
   return new URL(path, githubHttpUrl(httpUrl)).toString();
 }
 
 function escapeHtml(value: string): string {
-  return value.replaceAll("&", "&amp;")
+  return value
+    .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
@@ -78,9 +91,11 @@ export function githubAppManifestDocument(
   manifest: Readonly<Record<string, unknown>>,
 ): Readonly<{ html: string; headers: Readonly<Record<string, string>> }> {
   const destination = githubHttpUrl(action);
-  if (!/^\/(?:organizations\/[^/]+\/)?settings\/apps\/new$/.test(destination.pathname)
-    || destination.searchParams.has("manifest")
-    || !destination.searchParams.get("state")) {
+  if (
+    !/^\/(?:organizations\/[^/]+\/)?settings\/apps\/new$/.test(destination.pathname) ||
+    destination.searchParams.has("manifest") ||
+    !destination.searchParams.get("state")
+  ) {
     throw new Error("Invalid GitHub App manifest destination");
   }
   const nonce = crypto.randomUUID().replaceAll("-", "");

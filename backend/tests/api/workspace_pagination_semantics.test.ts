@@ -3,9 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens, organizationMemberships, organizations, users, workspaces,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, users, workspaces } from "../../src/db/schema";
 
 /**
  * NOT-013: Optional pagination semantics parity.
@@ -26,9 +24,11 @@ describe("Workspace list pagination semantics (NOT-013)", () => {
   const workspaceIds: string[] = [];
 
   const request = (path: string) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+    );
 
   const createdNames = Array.from({ length: 45 }, (_, i) => `ws-${String(i).padStart(2, "0")}-${suffix}`);
 
@@ -36,7 +36,11 @@ describe("Workspace list pagination semantics (NOT-013)", () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({
-      id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
+      id: `mem-${suffix}`,
+      userId,
+      orgId,
+      role: "owner",
+      status: "active",
     });
     await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
     for (const name of createdNames) {
@@ -110,7 +114,9 @@ describe("Workspace list pagination semantics (NOT-013)", () => {
   });
 
   it("falls back to defaults for non-positive / non-numeric pagination values", async () => {
-    const nonPositive = await request(`/api/v2/organizations/${orgName}/workspaces?page%5Bnumber%5D=0&page%5Bsize%5D=-5`);
+    const nonPositive = await request(
+      `/api/v2/organizations/${orgName}/workspaces?page%5Bnumber%5D=0&page%5Bsize%5D=-5`,
+    );
     expect(nonPositive.status).toBe(200);
     const body = await nonPositive.json();
     expect(body.data).toHaveLength(20);
@@ -118,7 +124,9 @@ describe("Workspace list pagination semantics (NOT-013)", () => {
     expect(body.meta.pagination["page-size"]).toBe(20);
 
     // Non-numeric values must also fall back to the defaults rather than 5xx.
-    const nonNumeric = await request(`/api/v2/organizations/${orgName}/workspaces?page%5Bnumber%5D=abc&page%5Bsize%5D=xyz`);
+    const nonNumeric = await request(
+      `/api/v2/organizations/${orgName}/workspaces?page%5Bnumber%5D=abc&page%5Bsize%5D=xyz`,
+    );
     expect(nonNumeric.status).toBe(200);
     const body2 = await nonNumeric.json();
     expect(body2.meta.pagination["current-page"]).toBe(1);

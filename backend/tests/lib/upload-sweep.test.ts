@@ -49,9 +49,13 @@ describe("sweepUploadTemps", (): void => {
     const keptModuleArchive = join(modulesDir, "kept.tar.gz");
     await db.insert(organizations).values({ id: orgId, name: orgId });
     await db.insert(workspaces).values({ id: workspaceId, name: workspaceId, orgId });
-    await db.insert(configurationVersions).values({ id: cvId, workspaceId, status: "uploaded", archivePath: keptCvArchive });
+    await db
+      .insert(configurationVersions)
+      .values({ id: cvId, workspaceId, status: "uploaded", archivePath: keptCvArchive });
     await db.insert(registryModules).values({ id: moduleId, orgId, namespace: orgId, name: "kept", provider: "aws" });
-    await db.insert(registryModuleVersions).values({ id: versionId, moduleId, version: "1.0.0", archivePath: keptModuleArchive });
+    await db
+      .insert(registryModuleVersions)
+      .values({ id: versionId, moduleId, version: "1.0.0", archivePath: keptModuleArchive });
 
     // Crash leftovers the sweep must remove.
     const stateTemp = join(stateUploadsDir, "state-abc123.json");
@@ -86,7 +90,15 @@ describe("sweepUploadTemps", (): void => {
 
     // Model files stranded before startup, independent of filesystem clock precision.
     const old = new Date(Date.now() - 60_000);
-    for (const path of [stateTemp, cvTmp, moduleUpload, orphanCvArchive, orphanModuleArchive, partialExport, garbageExport]) {
+    for (const path of [
+      stateTemp,
+      cvTmp,
+      moduleUpload,
+      orphanCvArchive,
+      orphanModuleArchive,
+      partialExport,
+      garbageExport,
+    ]) {
       await utimes(path, old, old);
     }
     const result = await sweepUploadTemps(root);
@@ -98,7 +110,15 @@ describe("sweepUploadTemps", (): void => {
       invalidExports: 2,
       orphanedModuleArchives: 1,
     });
-    for (const gone of [stateTemp, cvTmp, moduleUpload, orphanCvArchive, orphanModuleArchive, partialExport, garbageExport]) {
+    for (const gone of [
+      stateTemp,
+      cvTmp,
+      moduleUpload,
+      orphanCvArchive,
+      orphanModuleArchive,
+      partialExport,
+      garbageExport,
+    ]) {
       expect(await Bun.file(gone).exists()).toBe(false);
     }
     for (const kept of [stateKeep, cvKeep, keptCvArchive, keptModuleArchive, validExport]) {

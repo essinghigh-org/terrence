@@ -48,7 +48,10 @@ describe("pageRequest (query parser)", () => {
   test("valid values round-trip", () => {
     expect(pageRequest(requestWithQuery("page[number]=3&page[size]=50"))).toEqual({ number: 3, size: 50 });
     expect(pageRequest(requestWithQuery("page[number]=1&page[size]=1"))).toEqual({ number: 1, size: 1 });
-    expect(pageRequest(requestWithQuery("page[number]=1000000&page[size]=100"))).toEqual({ number: 1_000_000, size: 100 });
+    expect(pageRequest(requestWithQuery("page[number]=1000000&page[size]=100"))).toEqual({
+      number: 1_000_000,
+      size: 100,
+    });
   });
 
   test("size above the 100 cap is clamped, never rejected", () => {

@@ -8,7 +8,7 @@ type Report = {
   commit: string;
   iterations: number;
   results: { name: string; status: number; avgMs: number; p95Ms: number; reqPerSec: number; queriesPerReq: number }[];
-}
+};
 
 function load(path: string): Report {
   return JSON.parse(readFileSync(path, "utf8")) as Report;
@@ -34,7 +34,9 @@ const afterByName = new Map(after.results.map((r): [string, typeof r] => [r.name
 const names = [...new Set([...beforeByName.keys(), ...afterByName.keys()])].sort();
 
 console.log(`before: ${before.commit}  after: ${after.commit}  (iterations ${after.iterations})\n`);
-console.log(`${"scenario".padEnd(32)} ${"lat Δ%".padStart(8)} ${"avg b→a".padStart(14)} ${"p95 b→a".padStart(14)} ${"queries Δ%".padStart(10)} ${"sql b→a".padStart(14)}`);
+console.log(
+  `${"scenario".padEnd(32)} ${"lat Δ%".padStart(8)} ${"avg b→a".padStart(14)} ${"p95 b→a".padStart(14)} ${"queries Δ%".padStart(10)} ${"sql b→a".padStart(14)}`,
+);
 console.log("-".repeat(96));
 
 let regressed = false;
@@ -62,11 +64,11 @@ for (const name of names) {
   const flagged = a.avgMs > b.avgMs * 1.1 && a.queriesPerReq > b.queriesPerReq * 1.1;
   if (flagged) regressed = true;
   console.log(
-    `${name.padEnd(32)} ${latencyDelta.padStart(8)} `
-    + `${`${b.avgMs.toFixed(1)}→${a.avgMs.toFixed(1)}`.padStart(14)} `
-    + `${`${b.p95Ms.toFixed(1)}→${a.p95Ms.toFixed(1)}`.padStart(14)} `
-    + `${queryDelta.padStart(8)} ${`${b.queriesPerReq.toFixed(0)}→${a.queriesPerReq.toFixed(0)}`.padStart(14)} `
-    + (flagged ? "  ← REGRESSION" : ""),
+    `${name.padEnd(32)} ${latencyDelta.padStart(8)} ` +
+      `${`${b.avgMs.toFixed(1)}→${a.avgMs.toFixed(1)}`.padStart(14)} ` +
+      `${`${b.p95Ms.toFixed(1)}→${a.p95Ms.toFixed(1)}`.padStart(14)} ` +
+      `${queryDelta.padStart(8)} ${`${b.queriesPerReq.toFixed(0)}→${a.queriesPerReq.toFixed(0)}`.padStart(14)} ` +
+      (flagged ? "  ← REGRESSION" : ""),
   );
 }
 console.log("-".repeat(96));

@@ -74,7 +74,17 @@ describe("AvatarService.resolveVcsUrl", (): void => {
 
 describe("address classification (SSRF)", (): void => {
   it("rejects loopback / RFC1918 / link-local / CGNAT / metadata IPv4", (): void => {
-    for (const ip of ["127.0.0.1", "127.0.0.0", "10.0.0.5", "172.16.0.1", "172.31.255.255", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0"]) {
+    for (const ip of [
+      "127.0.0.1",
+      "127.0.0.0",
+      "10.0.0.5",
+      "172.16.0.1",
+      "172.31.255.255",
+      "192.168.1.1",
+      "169.254.169.254",
+      "100.64.0.1",
+      "0.0.0.0",
+    ]) {
       expect(isNonPublicIpv4(ip)).toBeTrue();
     }
   });
@@ -86,10 +96,10 @@ describe("address classification (SSRF)", (): void => {
   });
 
   it("allows public IPv4", (): void => {
-      for (const ip of ["8.8.8.8", "1.1.1.1", "140.82.112.5"]) {
-        expect(isNonPublicIpv4(ip)).toBeFalse();
-      }
-    });
+    for (const ip of ["8.8.8.8", "1.1.1.1", "140.82.112.5"]) {
+      expect(isNonPublicIpv4(ip)).toBeFalse();
+    }
+  });
 
   it("rejects IPv6 loopback, ULA, and multicast ff00::/8", (): void => {
     expect(isNonPublicIpv6("::1")).toBeTrue();
@@ -101,18 +111,18 @@ describe("address classification (SSRF)", (): void => {
 
   it("rejects IPv6 link-local fe80::/10 and deprecated site-local fec0::/10", (): void => {
     expect(isNonPublicIpv6("fe80::1")).toBeTrue();
-    expect(isNonPublicIpv6("fe9f::1")).toBeTrue();   // top hextet 0xfe9f still /10
-    expect(isNonPublicIpv6("febf::1")).toBeTrue();   // top of fe80::/10
-    expect(isNonPublicIpv6("fec0::1")).toBeTrue();   // deprecated site-local (RFC 3879)
-    expect(isNonPublicIpv6("feff::1")).toBeTrue();   // top of fec0::/10
+    expect(isNonPublicIpv6("fe9f::1")).toBeTrue(); // top hextet 0xfe9f still /10
+    expect(isNonPublicIpv6("febf::1")).toBeTrue(); // top of fe80::/10
+    expect(isNonPublicIpv6("fec0::1")).toBeTrue(); // deprecated site-local (RFC 3879)
+    expect(isNonPublicIpv6("feff::1")).toBeTrue(); // top of fec0::/10
   });
 
   it("classifies hex-form IPv4-mapped and IPv4-compatible addresses by the embedded IPv4", (): void => {
     expect(isNonPublicIpv6("::ffff:127.0.0.1")).toBeTrue();
-    expect(isNonPublicIpv6("::ffff:7f00:1")).toBeTrue();   // hex form of ::ffff:127.0.0.1
+    expect(isNonPublicIpv6("::ffff:7f00:1")).toBeTrue(); // hex form of ::ffff:127.0.0.1
     expect(isNonPublicIpv6("::ffff:8.8.8.8")).toBeFalse();
     expect(isNonPublicIpv6("::ffff:0808:808")).toBeFalse(); // hex form of ::ffff:8.8.8.8
-    expect(isNonPublicIpv6("::7f00:1")).toBeTrue();         // IPv4-compatible private
+    expect(isNonPublicIpv6("::7f00:1")).toBeTrue(); // IPv4-compatible private
   });
 
   it("allows public IPv6", (): void => {
@@ -152,10 +162,22 @@ describe("AvatarService.sweepCache (bounded cache GC)", (): void => {
     const shard = join(avatarDir(), key.slice(0, 2));
     mkdirSync(shard, { recursive: true });
     writeFileSync(imgPath(key), Buffer.alloc(120, 1));
-    writeFileSync(metaPath(key), JSON.stringify({
-      key, providerId: "gc", url: `https://x${fetchedAt}.example.com/a.png`, state: "fetched",
-      contentType: "image/png", etag: null, lastModified: null, fetchedAt, expiresAt: fetchedAt + 3_600_000, bytes: 120, contentHash: "f".repeat(64),
-    }));
+    writeFileSync(
+      metaPath(key),
+      JSON.stringify({
+        key,
+        providerId: "gc",
+        url: `https://x${fetchedAt}.example.com/a.png`,
+        state: "fetched",
+        contentType: "image/png",
+        etag: null,
+        lastModified: null,
+        fetchedAt,
+        expiresAt: fetchedAt + 3_600_000,
+        bytes: 120,
+        contentHash: "f".repeat(64),
+      }),
+    );
     // Give the fabricated files the entry's "last fetched" mtime so the sweep's
     // recency (max(mtime, fetchedAt)) reflects the age we intend.
     const stamp = new Date(fetchedAt);

@@ -20,7 +20,7 @@ describe("the reference format API Authentication - Tokens", () => {
         body: JSON.stringify({
           data: { type: "users", attributes: { username, password: "securepassword" } },
         }),
-      })
+      }),
     );
     expect(res.status).toBe(201);
 
@@ -32,7 +32,7 @@ describe("the reference format API Authentication - Tokens", () => {
         body: JSON.stringify({
           data: { attributes: { username, password: "securepassword" } },
         }),
-      })
+      }),
     );
     expect(loginRes.status).toBe(200);
     const loginData = await loginRes.json();
@@ -44,12 +44,12 @@ describe("the reference format API Authentication - Tokens", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
-          data: { type: "organizations", attributes: { name: orgName } }
-        })
-      })
+          data: { type: "organizations", attributes: { name: orgName } },
+        }),
+      }),
     );
     expect(orgRes.status).toBe(201);
     orgId = (await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) }))?.id ?? "";
@@ -63,10 +63,10 @@ describe("the reference format API Authentication - Tokens", () => {
         body: JSON.stringify({
           data: {
             type: "tokens",
-            relationships: { organization: { data: { id: orgId, type: "organizations" } } }
-          }
-        })
-      })
+            relationships: { organization: { data: { id: orgId, type: "organizations" } } },
+          },
+        }),
+      }),
     );
     expect(res.status).toBe(401);
   });
@@ -77,16 +77,16 @@ describe("the reference format API Authentication - Tokens", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "authorization": `Bearer ${userToken}`
+          authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: {
             type: "tokens",
             attributes: { description: "CI Token" },
-            relationships: { organization: { data: { id: orgId, type: "organizations" } } }
-          }
-        })
-      })
+            relationships: { organization: { data: { id: orgId, type: "organizations" } } },
+          },
+        }),
+      }),
     );
     expect(res.status).toBe(201);
     const data = await res.json();
@@ -95,7 +95,7 @@ describe("the reference format API Authentication - Tokens", () => {
 
     const tokenHash = hashAuthenticationToken(data.data.attributes.token as string);
     const tokenInDb = await db.query.apiTokens.findFirst({
-        where: eq(apiTokens.token, tokenHash)
+      where: eq(apiTokens.token, tokenHash),
     });
     expect(tokenInDb).toBeDefined();
     expect(tokenInDb?.description).toBe("CI Token");

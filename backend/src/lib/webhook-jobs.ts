@@ -40,7 +40,7 @@ export type VcsWebhookJobPayload = Readonly<{
 
 function objectValue(value: unknown): Readonly<Record<string, unknown>> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Readonly<Record<string, unknown>>
+    ? (value as Readonly<Record<string, unknown>>)
     : undefined;
 }
 
@@ -56,9 +56,11 @@ function encodedEventIdentity(parts: readonly string[]): string {
 
 function gitlabRef(payload: Readonly<Record<string, unknown>>): string | undefined {
   const attributes = objectValue(payload["object_attributes"]);
-  return nonEmptyString(payload["ref"])
-    ?? nonEmptyString(attributes?.["source_branch"])
-    ?? nonEmptyString(attributes?.["target_branch"]);
+  return (
+    nonEmptyString(payload["ref"]) ??
+    nonEmptyString(attributes?.["source_branch"]) ??
+    nonEmptyString(attributes?.["target_branch"])
+  );
 }
 
 function gitlabEventIdentity(eventName: string, payload: Readonly<Record<string, unknown>>): string | null {
@@ -106,7 +108,11 @@ function bitbucketEventIdentity(eventName: string, payload: Readonly<Record<stri
   return encodedEventIdentity(["bitbucket", repo, eventName, ...changeIdentities]);
 }
 
-function stableEventIdentity(provider: VcsWebhookProvider, eventName: string, payload: Readonly<Record<string, unknown>>): string | null {
+function stableEventIdentity(
+  provider: VcsWebhookProvider,
+  eventName: string,
+  payload: Readonly<Record<string, unknown>>,
+): string | null {
   // Light extraction mirroring the provider parsers. Ref and before/after
   // identity distinguish legitimate same-SHA ref updates; malformed shapes
   // fall back to no dedupe rather than collapsing unrelated deliveries.
@@ -133,14 +139,16 @@ export function vcsWebhookDeliveryId(
 }
 
 /** Enqueue one delivery onto the durable queue; resolves after the DB insert. */
-export async function enqueueVcsWebhookJob(input: DeepReadonly<{
-  provider: VcsWebhookProvider;
-  eventName: string;
-  payload: Record<string, unknown>;
-  deliveryId: string | null;
-  /** Re-arm a terminal/running job (admin retry or failed-delivery redelivery). */
-  rescheduleRunning?: boolean;
-}>): Promise<void> {
+export async function enqueueVcsWebhookJob(
+  input: DeepReadonly<{
+    provider: VcsWebhookProvider;
+    eventName: string;
+    payload: Record<string, unknown>;
+    deliveryId: string | null;
+    /** Re-arm a terminal/running job (admin retry or failed-delivery redelivery). */
+    rescheduleRunning?: boolean;
+  }>,
+): Promise<void> {
   const body: VcsWebhookJobPayload = {
     provider: input.provider,
     eventName: input.eventName,
@@ -156,13 +164,22 @@ export async function enqueueVcsWebhookJob(input: DeepReadonly<{
   );
 }
 
-async function setDeliveryStatus(deliveryId: string, status: string, extra: Readonly<{ processedAt?: number }> = {}): Promise<void> {
-  await db.update(githubWebhookDeliveries)
+async function setDeliveryStatus(
+  deliveryId: string,
+  status: string,
+  extra: Readonly<{ processedAt?: number }> = {},
+): Promise<void> {
+  await db
+    .update(githubWebhookDeliveries)
     .set({ status, ...(extra.processedAt !== undefined ? { processedAt: extra.processedAt } : {}) })
     .where(eq(githubWebhookDeliveries.id, deliveryId));
 }
 
-async function dispatch(provider: VcsWebhookProvider, eventName: string, payload: Readonly<Record<string, unknown>>): Promise<void> {
+async function dispatch(
+  provider: VcsWebhookProvider,
+  eventName: string,
+  payload: Readonly<Record<string, unknown>>,
+): Promise<void> {
   if (provider === "github") {
     await handleGithubWebhook(eventName, payload);
     return;
@@ -203,7 +220,12 @@ export async function processVcsWebhookPayload(body: DeepReadonly<VcsWebhookJobP
 
 /** Durable-job handler registered in worker.ts. */
 export async function handleVcsWebhookJob(job: DeepReadonly<DurableJob>): Promise<void> {
-  const body = parsePersistedJobPayload("vcs-webhook", job.payload, job.payloadSchemaVersion, job.id) as unknown as VcsWebhookJobPayload;
+  const body = parsePersistedJobPayload(
+    "vcs-webhook",
+    job.payload,
+    job.payloadSchemaVersion,
+    job.id,
+  ) as unknown as VcsWebhookJobPayload;
   await processVcsWebhookPayload(body, job.attempts);
 }
 
@@ -218,10 +240,12 @@ export type WebhookQueueMetrics = Readonly<{
 /** Queue depth / oldest-age / dead-letter gauges for /metrics (todo 192-194). */
 export async function collectWebhookQueueMetrics(now = Date.now()): Promise<WebhookQueueMetrics> {
   const [byStatus, oldestRows] = await Promise.all([
-    db.select({ status: githubWebhookDeliveries.status, value: count() })
+    db
+      .select({ status: githubWebhookDeliveries.status, value: count() })
       .from(githubWebhookDeliveries)
       .groupBy(githubWebhookDeliveries.status),
-    db.select({ oldest: min(githubWebhookDeliveries.receivedAt) })
+    db
+      .select({ oldest: min(githubWebhookDeliveries.receivedAt) })
       .from(githubWebhookDeliveries)
       .where(inArray(githubWebhookDeliveries.status, ["queued", "processing"])),
   ]);
@@ -237,17 +261,21 @@ export async function collectWebhookQueueMetrics(now = Date.now()): Promise<Webh
 
 /** Re-arm a dead-lettered delivery; preserves idempotency via the same key. */
 export async function retryFailedVcsWebhookDelivery(deliveryId: string): Promise<boolean> {
-  const delivery = await db.query.githubWebhookDeliveries.findFirst({ where: eq(githubWebhookDeliveries.id, deliveryId) });
+  const delivery = await db.query.githubWebhookDeliveries.findFirst({
+    where: eq(githubWebhookDeliveries.id, deliveryId),
+  });
   if (delivery === undefined || delivery.status !== "failed") return false;
   const existing = await db.query.durableJobs.findFirst({
-    where: and(
-      eq(durableJobs.kind, VCS_WEBHOOK_KIND),
-      eq(durableJobs.dedupeKey, deliveryId),
-    ),
+    where: and(eq(durableJobs.kind, VCS_WEBHOOK_KIND), eq(durableJobs.dedupeKey, deliveryId)),
   });
   if (existing === undefined) return false;
   await setDeliveryStatus(deliveryId, "queued");
-  const body = parsePersistedJobPayload("vcs-webhook", existing.payload, existing.payloadSchemaVersion, existing.id) as unknown as VcsWebhookJobPayload;
+  const body = parsePersistedJobPayload(
+    "vcs-webhook",
+    existing.payload,
+    existing.payloadSchemaVersion,
+    existing.id,
+  ) as unknown as VcsWebhookJobPayload;
   await enqueueVcsWebhookJob({
     provider: body.provider,
     eventName: body.eventName,

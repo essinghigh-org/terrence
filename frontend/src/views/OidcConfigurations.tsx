@@ -6,7 +6,14 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "../components/ui/dialog";
 import { Spinner } from "../components/ui/spinner";
 import { Select, SelectItem } from "../components/ui/select";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -37,7 +44,12 @@ type DoctorResult = Readonly<{
   attributes: Readonly<{
     provider: string;
     status: "passed" | "warning" | "failed";
-    "execution-context": Readonly<{ kind: string; node: string; "agent-pool-id": string | null; "agent-id": string | null }>;
+    "execution-context": Readonly<{
+      kind: string;
+      node: string;
+      "agent-pool-id": string | null;
+      "agent-id": string | null;
+    }>;
     claims: Readonly<Record<string, unknown>>;
     checks: readonly DoctorCheck[];
     identity: Readonly<Record<string, unknown>> | null;
@@ -109,40 +121,62 @@ function ConfigTableBody({
         </TableRow>
       ) : error !== "" ? (
         <TableRow>
-          <TableCell colSpan={3} className="h-32 text-center text-sm text-muted-foreground">{error}</TableCell>
+          <TableCell colSpan={3} className="h-32 text-center text-sm text-muted-foreground">
+            {error}
+          </TableCell>
         </TableRow>
       ) : configs.length === 0 ? (
         <TableRow>
           <TableCell colSpan={3} className="h-32 text-center text-muted-foreground">
-            <EmptyState compact title="No OIDC configurations." description="Configure short-lived cloud credentials for your runs." docsHref="/app/docs/oidc-runs" />
+            <EmptyState
+              compact
+              title="No OIDC configurations."
+              description="Configure short-lived cloud credentials for your runs."
+              docsHref="/app/docs/oidc-runs"
+            />
           </TableCell>
         </TableRow>
-      ) : configs.map((config): React.JSX.Element => {
-        return (
-        <TableRow key={config.id}>
-          <TableCell className="font-medium">
-            <div className="flex items-center gap-2">
-              <Fingerprint className="h-4 w-4 text-muted-foreground" />
-              {typeLabelFor(config.type)}
-            </div>
-          </TableCell>
-          <TableCell className="font-mono text-xs text-muted-foreground">{displayValue(config)}</TableCell>
-          <TableCell>
-            {canManage && (
-              <div className="flex justify-end gap-1">
-                <Button variant="outline" size="sm" onClick={(): void => { onCheckAccess(config); }}>
-                  <Stethoscope className="mr-2 h-4 w-4" aria-hidden="true" />
-                  Check access
-                </Button>
-                <Button variant="ghost" size="icon" onClick={(): void => { onDelete(config); }} aria-label="Delete configuration">
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            )}
-          </TableCell>
-        </TableRow>
-        );
-      })}
+      ) : (
+        configs.map((config): React.JSX.Element => {
+          return (
+            <TableRow key={config.id}>
+              <TableCell className="font-medium">
+                <div className="flex items-center gap-2">
+                  <Fingerprint className="h-4 w-4 text-muted-foreground" />
+                  {typeLabelFor(config.type)}
+                </div>
+              </TableCell>
+              <TableCell className="font-mono text-xs text-muted-foreground">{displayValue(config)}</TableCell>
+              <TableCell>
+                {canManage && (
+                  <div className="flex justify-end gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={(): void => {
+                        onCheckAccess(config);
+                      }}
+                    >
+                      <Stethoscope className="mr-2 h-4 w-4" aria-hidden="true" />
+                      Check access
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={(): void => {
+                        onDelete(config);
+                      }}
+                      aria-label="Delete configuration"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                )}
+              </TableCell>
+            </TableRow>
+          );
+        })
+      )}
     </TableBody>
   );
 }
@@ -180,48 +214,98 @@ function DoctorDialog({
         <DialogHeader>
           <DialogTitle>Credential doctor</DialogTitle>
           <DialogDescription>
-            Issue a short-lived workload token, check its trust claims, test provider reachability, and make one harmless identity/read call from the selected execution context.
+            Issue a short-lived workload token, check its trust claims, test provider reachability, and make one
+            harmless identity/read call from the selected execution context.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="credential-doctor-target">Run from</label>
-            <Select id="credential-doctor-target" name="credential-doctor-target" value={doctorTarget} onValueChange={onDoctorTargetChange} disabled={doctorRunning}>
-              <SelectItem value="worker">Terrence worker ({typeof window === "undefined" ? "local" : "control plane"})</SelectItem>
-              {pools.map((pool): React.JSX.Element => <SelectItem key={pool.id} value={pool.id}>{pool.attributes.name} (agent pool)</SelectItem>)}
+            <label className="text-sm font-medium" htmlFor="credential-doctor-target">
+              Run from
+            </label>
+            <Select
+              id="credential-doctor-target"
+              name="credential-doctor-target"
+              value={doctorTarget}
+              onValueChange={onDoctorTargetChange}
+              disabled={doctorRunning}
+            >
+              <SelectItem value="worker">
+                Terrence worker ({typeof window === "undefined" ? "local" : "control plane"})
+              </SelectItem>
+              {pools.map(
+                (pool): React.JSX.Element => (
+                  <SelectItem key={pool.id} value={pool.id}>
+                    {pool.attributes.name} (agent pool)
+                  </SelectItem>
+                ),
+              )}
             </Select>
             {poolsError !== "" && <p className="text-xs text-muted-foreground">{poolsError}</p>}
           </div>
-          {doctorError !== "" && <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{doctorError}</div>}
+          {doctorError !== "" && (
+            <div
+              role="alert"
+              className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            >
+              {doctorError}
+            </div>
+          )}
           {doctorResult !== null && (
             <div className="space-y-4 rounded-md border p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="font-medium">{doctorResult.attributes.provider.toUpperCase()} credential check</p>
-                  <p className="text-xs text-muted-foreground">{doctorResult.attributes["execution-context"].kind === "agent_pool" ? `Agent ${doctorResult.attributes["execution-context"]["agent-id"] ?? "pool"}` : "Terrence worker"} · {new Date(doctorResult.attributes["completed-at"]).toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {doctorResult.attributes["execution-context"].kind === "agent_pool"
+                      ? `Agent ${doctorResult.attributes["execution-context"]["agent-id"] ?? "pool"}`
+                      : "Terrence worker"}{" "}
+                    · {new Date(doctorResult.attributes["completed-at"]).toLocaleString()}
+                  </p>
                 </div>
-                <span className={doctorResult.attributes.status === "failed" ? "text-sm font-medium text-destructive" : doctorResult.attributes.status === "warning" ? "text-sm font-medium text-amber-700" : "text-sm font-medium text-emerald-700"}>
+                <span
+                  className={
+                    doctorResult.attributes.status === "failed"
+                      ? "text-sm font-medium text-destructive"
+                      : doctorResult.attributes.status === "warning"
+                        ? "text-sm font-medium text-amber-700"
+                        : "text-sm font-medium text-emerald-700"
+                  }
+                >
                   {doctorResult.attributes.status}
                 </span>
               </div>
               <ul className="space-y-2" aria-label="Credential doctor checks">
-                {doctorResult.attributes.checks.map((check): React.JSX.Element => (
-                  <li key={check.name} className="flex items-start gap-2 text-sm">
-                    <span className="mt-0.5">{doctorIcon(check.status)}</span>
-                    <span className="min-w-0"><span className="font-medium">{check.name.split("_").join(" ")}</span><span className="ml-2 text-xs text-muted-foreground">{check.code}</span><span className="block text-xs text-muted-foreground">{check.guidance}</span></span>
-                  </li>
-                ))}
+                {doctorResult.attributes.checks.map(
+                  (check): React.JSX.Element => (
+                    <li key={check.name} className="flex items-start gap-2 text-sm">
+                      <span className="mt-0.5">{doctorIcon(check.status)}</span>
+                      <span className="min-w-0">
+                        <span className="font-medium">{check.name.split("_").join(" ")}</span>
+                        <span className="ml-2 text-xs text-muted-foreground">{check.code}</span>
+                        <span className="block text-xs text-muted-foreground">{check.guidance}</span>
+                      </span>
+                    </li>
+                  ),
+                )}
               </ul>
               <div className="rounded-md bg-muted/60 p-3 text-xs">
                 <p className="font-medium">Safe token claims</p>
-                <p className="mt-1 break-all text-muted-foreground">aud: {safeDisplayValue(doctorResult.attributes.claims["aud"])} · sub: {safeDisplayValue(doctorResult.attributes.claims["sub"])}</p>
-                <p className="mt-1 text-muted-foreground">A successful identity/read probe does not prove authorization for every later resource operation.</p>
+                <p className="mt-1 break-all text-muted-foreground">
+                  aud: {safeDisplayValue(doctorResult.attributes.claims["aud"])} · sub:{" "}
+                  {safeDisplayValue(doctorResult.attributes.claims["sub"])}
+                </p>
+                <p className="mt-1 text-muted-foreground">
+                  A successful identity/read probe does not prove authorization for every later resource operation.
+                </p>
               </div>
             </div>
           )}
         </div>
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={onClose} disabled={doctorRunning}>Close</Button>
+          <Button type="button" variant="outline" onClick={onClose} disabled={doctorRunning}>
+            Close
+          </Button>
           <Button type="button" onClick={onRun} disabled={runDisabled}>
             {doctorRunning && <Spinner data-icon="inline-start" />}
             {doctorRunning ? "Checking…" : doctorResult === null ? "Run credential doctor" : "Run again"}
@@ -270,23 +354,46 @@ function CreateConfigDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Add OIDC configuration</DialogTitle>
-          <DialogDescription>
-            Configure the identity provider credentials for this organization.
-          </DialogDescription>
+          <DialogDescription>Configure the identity provider credentials for this organization.</DialogDescription>
         </DialogHeader>
-        <form id="oidc-create-form" onSubmit={(event): void => { event.preventDefault(); onSubmit(); }} className="space-y-4">
+        <form
+          id="oidc-create-form"
+          onSubmit={(event): void => {
+            event.preventDefault();
+            onSubmit();
+          }}
+          className="space-y-4"
+        >
           <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="oidc-provider-type">Provider</label>
+            <label className="text-sm font-medium" htmlFor="oidc-provider-type">
+              Provider
+            </label>
             <Select id="oidc-provider-type" name="provider-type" value={configType} onValueChange={onConfigTypeChange}>
-              {Object.entries(TYPE_LABELS).map(([value, label]): React.JSX.Element => (
-                <SelectItem key={value} value={value}>{label}</SelectItem>
-              ))}
+              {Object.entries(TYPE_LABELS).map(
+                ([value, label]): React.JSX.Element => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ),
+              )}
             </Select>
           </div>
           {configType === "aws-oidc-configurations" && (
             <div className="space-y-2">
-              <label className="text-sm font-medium" htmlFor="oidc-role-arn">Role ARN</label>
-              <Input id="oidc-role-arn" name="role-arn" autoComplete="off" spellCheck={false} value={roleArn} onChange={(e): void => { onRoleArnChange(e.target.value); }} placeholder="arn:aws:iam::123456789012:role/my-role" />
+              <label className="text-sm font-medium" htmlFor="oidc-role-arn">
+                Role ARN
+              </label>
+              <Input
+                id="oidc-role-arn"
+                name="role-arn"
+                autoComplete="off"
+                spellCheck={false}
+                value={roleArn}
+                onChange={(e): void => {
+                  onRoleArnChange(e.target.value);
+                }}
+                placeholder="arn:aws:iam::123456789012:role/my-role"
+              />
             </div>
           )}
           {(configType === "azure-oidc-configurations" || configType === "gcp-oidc-configurations") && (
@@ -294,25 +401,74 @@ function CreateConfigDialog({
               <label className="text-sm font-medium" htmlFor="oidc-identity">
                 {configType === "azure-oidc-configurations" ? "Identity (client ID)" : "Workload identity provider ID"}
               </label>
-              <Input id="oidc-identity" name="identity" autoComplete="off" spellCheck={false} value={identity} onChange={(e): void => { onIdentityChange(e.target.value); }} placeholder={configType === "azure-oidc-configurations" ? "client-id" : "projects/123/locations/global/workloadIdentityPools/pool/providers/provider"} />
+              <Input
+                id="oidc-identity"
+                name="identity"
+                autoComplete="off"
+                spellCheck={false}
+                value={identity}
+                onChange={(e): void => {
+                  onIdentityChange(e.target.value);
+                }}
+                placeholder={
+                  configType === "azure-oidc-configurations"
+                    ? "client-id"
+                    : "projects/123/locations/global/workloadIdentityPools/pool/providers/provider"
+                }
+              />
             </div>
           )}
           {configType === "vault-oidc-configurations" && (
             <>
               <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="oidc-address">Address</label>
-                <Input id="oidc-address" name="vault-address" autoComplete="url" value={address} onChange={(e): void => { onAddressChange(e.target.value); }} placeholder="https://vault.example.com" />
+                <label className="text-sm font-medium" htmlFor="oidc-address">
+                  Address
+                </label>
+                <Input
+                  id="oidc-address"
+                  name="vault-address"
+                  autoComplete="url"
+                  value={address}
+                  onChange={(e): void => {
+                    onAddressChange(e.target.value);
+                  }}
+                  placeholder="https://vault.example.com"
+                />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="oidc-namespace">Namespace</label>
-                <Input id="oidc-namespace" name="vault-namespace" autoComplete="off" spellCheck={false} value={namespace} onChange={(e): void => { onNamespaceChange(e.target.value); }} placeholder="admin" />
+                <label className="text-sm font-medium" htmlFor="oidc-namespace">
+                  Namespace
+                </label>
+                <Input
+                  id="oidc-namespace"
+                  name="vault-namespace"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={namespace}
+                  onChange={(e): void => {
+                    onNamespaceChange(e.target.value);
+                  }}
+                  placeholder="admin"
+                />
               </div>
             </>
           )}
-          {formError !== "" && <div role="alert" className="text-sm text-destructive">{formError}</div>}
+          {formError !== "" && (
+            <div role="alert" className="text-sm text-destructive">
+              {formError}
+            </div>
+          )}
         </form>
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={(): void => { onOpenChange(false); }}>Cancel</Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={(): void => {
+              onOpenChange(false);
+            }}
+          >
+            Cancel
+          </Button>
           <Button type="submit" form="oidc-create-form" disabled={creating}>
             {creating && <Spinner data-icon="inline-start" />}
             {creating ? "Creating configuration…" : "Create configuration"}
@@ -374,7 +530,9 @@ export function OidcConfigurations(): React.JSX.Element {
         void loadConfigs();
       }
     } else {
-      setError(orgPermissions.error ?? "You do not have permission to manage OIDC configurations for this organization.");
+      setError(
+        orgPermissions.error ?? "You do not have permission to manage OIDC configurations for this organization.",
+      );
     }
   }, [orgPermissions.loaded, orgPermissions.has]);
 
@@ -387,10 +545,10 @@ export function OidcConfigurations(): React.JSX.Element {
       return;
     }
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/oidc-configurations`,
-      ) as { data: OidcConfig[] };
+      )) as { data: OidcConfig[] };
       if (activeOrganizationName.current !== requestedOrganizationName) return;
       setConfigs(response.data);
     } catch (reason) {
@@ -463,7 +621,7 @@ export function OidcConfigurations(): React.JSX.Element {
     setDoctorError("");
     setDoctorResult(null);
     try {
-      const response = await fetchApi(
+      const response = (await fetchApi(
         `/organizations/${encodeURIComponent(orgName)}/oidc-configurations/${encodeURIComponent(doctorConfig.id)}/credential-doctor`,
         {
           method: "POST",
@@ -474,7 +632,7 @@ export function OidcConfigurations(): React.JSX.Element {
             },
           }),
         },
-      ) as { data: DoctorResult };
+      )) as { data: DoctorResult };
       setDoctorResult(response.data);
     } catch (reason) {
       setDoctorError(reason instanceof Error ? reason.message : "Credential doctor failed to run.");
@@ -493,12 +651,18 @@ export function OidcConfigurations(): React.JSX.Element {
         ]}
         title="OIDC configurations"
         description="Let a run prove who it is to AWS, Azure or GCP without storing long-lived keys as variables. The cloud provider trusts a short-lived token signed by this instance instead."
-        action={canManage ? (
-          <Button onClick={(): void => { setCreateDialogOpen(true); }}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add configuration
-          </Button>
-        ) : undefined}
+        action={
+          canManage ? (
+            <Button
+              onClick={(): void => {
+                setCreateDialogOpen(true);
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add configuration
+            </Button>
+          ) : undefined
+        }
       />
 
       <Card>
@@ -522,7 +686,9 @@ export function OidcConfigurations(): React.JSX.Element {
                 setDoctorError("");
                 setDoctorTarget("worker");
               }}
-              onDelete={(config: OidcConfig): void => { setConfigToDelete(config); }}
+              onDelete={(config: OidcConfig): void => {
+                setConfigToDelete(config);
+              }}
             />
           </Table>
         </CardContent>
@@ -530,40 +696,68 @@ export function OidcConfigurations(): React.JSX.Element {
 
       <DoctorDialog
         open={doctorConfig !== null}
-        onOpenChange={(open): void => { if (!open && !doctorRunning) { setDoctorConfig(null); setDoctorResult(null); setDoctorError(""); } }}
+        onOpenChange={(open): void => {
+          if (!open && !doctorRunning) {
+            setDoctorConfig(null);
+            setDoctorResult(null);
+            setDoctorError("");
+          }
+        }}
         doctorTarget={doctorTarget}
-        onDoctorTargetChange={(value: string): void => { setDoctorTarget(value); }}
+        onDoctorTargetChange={(value: string): void => {
+          setDoctorTarget(value);
+        }}
         pools={agentPoolsState.pools}
         poolsError={agentPoolsState.error}
         doctorError={doctorError}
         doctorResult={doctorResult}
         doctorRunning={doctorRunning}
         runDisabled={doctorRunning || doctorConfig === null}
-        onClose={(): void => { setDoctorConfig(null); setDoctorResult(null); setDoctorError(""); }}
-        onRun={(): void => { void runDoctor(); }}
+        onClose={(): void => {
+          setDoctorConfig(null);
+          setDoctorResult(null);
+          setDoctorError("");
+        }}
+        onRun={(): void => {
+          void runDoctor();
+        }}
       />
 
       <CreateConfigDialog
         open={createDialogOpen}
         onOpenChange={setCreateDialogOpen}
         configType={configType}
-        onConfigTypeChange={(value: string): void => { setConfigType(value); }}
+        onConfigTypeChange={(value: string): void => {
+          setConfigType(value);
+        }}
         roleArn={roleArn}
-        onRoleArnChange={(value: string): void => { setRoleArn(value); }}
+        onRoleArnChange={(value: string): void => {
+          setRoleArn(value);
+        }}
         identity={identity}
-        onIdentityChange={(value: string): void => { setIdentity(value); }}
+        onIdentityChange={(value: string): void => {
+          setIdentity(value);
+        }}
         address={address}
-        onAddressChange={(value: string): void => { setAddress(value); }}
+        onAddressChange={(value: string): void => {
+          setAddress(value);
+        }}
         namespace={namespace}
-        onNamespaceChange={(value: string): void => { setNamespace(value); }}
+        onNamespaceChange={(value: string): void => {
+          setNamespace(value);
+        }}
         formError={formError}
         creating={creating}
-        onSubmit={(): void => { void createConfig(); }}
+        onSubmit={(): void => {
+          void createConfig();
+        }}
       />
 
       <ConfirmDialog
         open={configToDelete !== null}
-        onOpenChange={(open): void => { if (!open) setConfigToDelete(null); }}
+        onOpenChange={(open): void => {
+          if (!open) setConfigToDelete(null);
+        }}
         title="Delete OIDC configuration"
         description="Are you sure you want to delete this OIDC configuration? Runs that depend on it may fail."
         confirmText="Delete"

@@ -113,9 +113,9 @@ type ResolvedFk = {
 /** Find a pg table column by its DATABASE name (pg tables key columns by
  * property name, e.g. `orgId`, while indexes/FKs reference `org_id`). */
 function pgColumnByDbName(table: unknown, dbName: string): unknown {
-  const columnsRecord = (table as Record<PropertyKey, unknown> | null | undefined)?.[
-    Symbol.for("drizzle:Columns")
-  ] as Record<string, { name: string }> | undefined;
+  const columnsRecord = (table as Record<PropertyKey, unknown> | null | undefined)?.[Symbol.for("drizzle:Columns")] as
+    | Record<string, { name: string }>
+    | undefined;
   if (columnsRecord === undefined) return undefined;
   for (const column of Object.values(columnsRecord)) {
     if (column.name === dbName) return column;
@@ -190,9 +190,7 @@ function buildColumn(column: DeepReadonly<AnyColumn>): unknown {
     case undefined:
       throw new Error(`pg-convert: missing column dataType on "${name}"`);
     default:
-      throw new Error(
-        `pg-convert: unsupported column dataType "${config.dataType}" on "${name}"`,
-      );
+      throw new Error(`pg-convert: unsupported column dataType "${config.dataType}" on "${name}"`);
   }
 
   const b = builder as {
@@ -235,24 +233,27 @@ function resolveExtraColumn(ctx: ExtraColumnContext, c: DeepReadonly<AnyColumn>)
   const target = ctx.pg[tableName(columnTable(c))];
   const column = pgColumnByDbName(target, name);
   if (column === undefined) {
-    throw new Error(
-      `pg-convert: index/PK references unknown column "${tableName(columnTable(c))}.${name}"`,
-    );
+    throw new Error(`pg-convert: index/PK references unknown column "${tableName(columnTable(c))}.${name}"`);
   }
   return column;
 }
 
-function resolvePartialIndexWhere(cfg: DeepReadonly<IndexConfig>, tableColumns: Readonly<Record<string, unknown>>): SQL {
+function resolvePartialIndexWhere(
+  cfg: DeepReadonly<IndexConfig>,
+  tableColumns: Readonly<Record<string, unknown>>,
+): SQL {
   const override = PARTIAL_INDEX_WHERE[cfg.name];
   if (override === undefined) {
-    throw new Error(
-      `pg-convert: partial index "${cfg.name}" has no pg WHERE override; add one to PARTIAL_INDEX_WHERE`,
-    );
+    throw new Error(`pg-convert: partial index "${cfg.name}" has no pg WHERE override; add one to PARTIAL_INDEX_WHERE`);
   }
   return override(tableColumns);
 }
 
-function buildIndexItem(cfg: DeepReadonly<IndexConfig>, tableColumns: Readonly<Record<string, unknown>>, resolve: (c: DeepReadonly<AnyColumn>) => unknown): unknown {
+function buildIndexItem(
+  cfg: DeepReadonly<IndexConfig>,
+  tableColumns: Readonly<Record<string, unknown>>,
+  resolve: (c: DeepReadonly<AnyColumn>) => unknown,
+): unknown {
   if (cfg.type !== undefined && cfg.type !== null) {
     throw new Error(`pg-convert: unsupported index type "${cfg.type}" on "${cfg.name}"`);
   }
@@ -278,11 +279,13 @@ type CompositeFkReference = {
 };
 
 const isCompositeFkItem = (item: unknown): item is CompositeFkReference =>
-  item !== null &&
-  typeof item === "object" &&
-  typeof (item as { reference?: unknown }).reference === "function";
+  item !== null && typeof item === "object" && typeof (item as { reference?: unknown }).reference === "function";
 
-function buildCompositeFkItem(item: DeepReadonly<CompositeFkReference>, ctx: ExtraColumnContext, resolve: (c: DeepReadonly<AnyColumn>) => unknown): unknown {
+function buildCompositeFkItem(
+  item: DeepReadonly<CompositeFkReference>,
+  ctx: ExtraColumnContext,
+  resolve: (c: DeepReadonly<AnyColumn>) => unknown,
+): unknown {
   // Composite foreign key expressed through the table's extra-config
   // callback (foreignKey({ ... })). Inline column-level foreign keys are
   // consumed separately from table[FKS]; the composite form only appears
@@ -293,16 +296,12 @@ function buildCompositeFkItem(item: DeepReadonly<CompositeFkReference>, ctx: Ext
   const isSelfReference = foreignTable === tableName(ctx.table);
   const target = isSelfReference ? ctx.tableColumns : ctx.pg[foreignTable];
   if (target === undefined) {
-    throw new Error(
-      `pg-convert: composite FK on "${tableName(ctx.table)}" references unknown table "${foreignTable}"`,
-    );
+    throw new Error(`pg-convert: composite FK on "${tableName(ctx.table)}" references unknown table "${foreignTable}"`);
   }
   const foreign = ref.foreignColumns.map((c): unknown => {
     const column = isSelfReference ? ctx.columnsByDbName[columnName(c)] : pgColumnByDbName(target, columnName(c));
     if (column === undefined) {
-      throw new Error(
-        `pg-convert: composite FK column "${foreignTable}.${columnName(c)}" not found`,
-      );
+      throw new Error(`pg-convert: composite FK column "${foreignTable}.${columnName(c)}" not found`);
     }
     return column;
   });
@@ -313,10 +312,7 @@ function buildCompositeFkItem(item: DeepReadonly<CompositeFkReference>, ctx: Ext
 }
 
 const isPrimaryKeyItem = (item: unknown): item is { columns: readonly AnyColumn[] } =>
-  item !== null &&
-  typeof item === "object" &&
-  "columns" in item &&
-  Array.isArray((item).columns);
+  item !== null && typeof item === "object" && "columns" in item && Array.isArray(item.columns);
 
 function buildExtraConfig(
   table: DeepReadonly<SqliteTable>,
@@ -358,7 +354,9 @@ function inventorySqliteTables(sqliteSchema: Readonly<Record<string, unknown>>):
   return sqliteTables;
 }
 
-function resolveTableFks(sqliteTables: Readonly<Pick<ReadonlyMap<string, DeepReadonly<SqliteTable>>, "get" | "keys" | typeof Symbol.iterator>>): Map<string, readonly ResolvedFk[]> {
+function resolveTableFks(
+  sqliteTables: Readonly<Pick<ReadonlyMap<string, DeepReadonly<SqliteTable>>, "get" | "keys" | typeof Symbol.iterator>>,
+): Map<string, readonly ResolvedFk[]> {
   // 2. Resolve foreign keys up front (the metadata callbacks are deferred,
   // so reading them needs no construction order).
   const fksByTable = new Map<string, readonly ResolvedFk[]>();
@@ -390,7 +388,10 @@ function resolveTableFks(sqliteTables: Readonly<Pick<ReadonlyMap<string, DeepRea
   return fksByTable;
 }
 
-function orderTablesByDependency(sqliteTables: Readonly<Pick<ReadonlyMap<string, DeepReadonly<SqliteTable>>, "get" | "keys" | typeof Symbol.iterator>>, fksByTable: Readonly<Pick<ReadonlyMap<string, readonly DeepReadonly<ResolvedFk>[]>, "get">>): string[] {
+function orderTablesByDependency(
+  sqliteTables: Readonly<Pick<ReadonlyMap<string, DeepReadonly<SqliteTable>>, "get" | "keys" | typeof Symbol.iterator>>,
+  fksByTable: Readonly<Pick<ReadonlyMap<string, readonly DeepReadonly<ResolvedFk>[]>, "get">>,
+): string[] {
   // 3. Topologically order tables so referenced tables exist before
   // referencing tables are constructed (pg-core resolves .references() at
   // table construction time).
@@ -431,9 +432,11 @@ function attachSimpleFks(
   for (const fk of simpleFks) {
     const localColumn = fk.localColumns[0];
     if (localColumn === undefined) throw new Error(`pg-convert: foreign key on "${name}" has no local column`);
-    const column = columnsByDbName[localColumn] as {
-      references?: (ref: () => unknown, actions?: Readonly<{ onDelete?: string; onUpdate?: string }>) => unknown;
-    } | undefined;
+    const column = columnsByDbName[localColumn] as
+      | {
+          references?: (ref: () => unknown, actions?: Readonly<{ onDelete?: string; onUpdate?: string }>) => unknown;
+        }
+      | undefined;
     if (column === undefined || typeof column.references !== "function") {
       throw new Error(`pg-convert: foreign key on "${name}.${localColumn}" cannot be attached`);
     }
@@ -466,12 +469,15 @@ function compositeFkBuilders(
   for (const fk of compositeFks) {
     const local = fk.localColumns.map((columnName): unknown => {
       const column = builtByDbName[columnName];
-      if (column === undefined) throw new Error(`pg-convert: composite FK column "${columnName}" not found on "${name}"`);
+      if (column === undefined)
+        throw new Error(`pg-convert: composite FK column "${columnName}" not found on "${name}"`);
       return column;
     });
     const foreign = fk.foreignColumns.map((columnName): unknown => {
-      const column = fk.foreignTable === name ? builtByDbName[columnName] : pgColumnByDbName(pg[fk.foreignTable], columnName);
-      if (column === undefined) throw new Error(`pg-convert: composite FK column "${fk.foreignTable}.${columnName}" not found`);
+      const column =
+        fk.foreignTable === name ? builtByDbName[columnName] : pgColumnByDbName(pg[fk.foreignTable], columnName);
+      if (column === undefined)
+        throw new Error(`pg-convert: composite FK column "${fk.foreignTable}.${columnName}" not found`);
       return column;
     });
     const builder = foreignKey({ columns: local as never, foreignColumns: foreign as never });
@@ -525,9 +531,12 @@ function buildOnePgTable(
   // Extra-config callbacks receive built columns. Column builders have no
   // table identity, so using them here loses self-referencing FK targets.
   const buildExtra = (builtColumns: Readonly<Record<string, unknown>>): unknown[] => {
-    const builtByDbName = Object.fromEntries(Object.entries(sqliteTable[COLS]).map(
-      ([property, column]): [string, unknown] => [columnName(column), builtColumns[property]],
-    ));
+    const builtByDbName = Object.fromEntries(
+      Object.entries(sqliteTable[COLS]).map(([property, column]): [string, unknown] => [
+        columnName(column),
+        builtColumns[property],
+      ]),
+    );
     const extra = buildExtraConfig(sqliteTable, pg, builtColumns, builtByDbName);
     extra.push(...compositeFkBuilders(name, compositeFks, builtByDbName, pg));
     return extra;

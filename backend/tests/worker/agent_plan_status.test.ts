@@ -25,24 +25,24 @@ describe("resolvePlanStatus (#587)", () => {
 
   it("queues apply only for explicit autoApply", () => {
     expect(resolvePlanStatus(CLEAN_VERDICT, { ...PLAIN_RUN, autoApply: true })).toBe("apply_queued");
-    expect(
-      resolvePlanStatus(CLEAN_VERDICT, { ...PLAIN_RUN, autoApply: true, allowEmptyApply: true }),
-    ).toBe("apply_queued");
+    expect(resolvePlanStatus(CLEAN_VERDICT, { ...PLAIN_RUN, autoApply: true, allowEmptyApply: true })).toBe(
+      "apply_queued",
+    );
   });
 
   it("keeps policy and plan-mode verdicts ahead of the apply decision", () => {
-    expect(
-      resolvePlanStatus({ hardFailed: true, softFailed: false }, { ...PLAIN_RUN, autoApply: true }),
-    ).toBe("errored");
-    expect(
-      resolvePlanStatus({ hardFailed: false, softFailed: true }, { ...PLAIN_RUN, autoApply: true }),
-    ).toBe("policy_soft_failed");
-    expect(
-      resolvePlanStatus(CLEAN_VERDICT, { ...PLAIN_RUN, savePlan: true, autoApply: true }),
-    ).toBe("planned_and_saved");
-    expect(
-      resolvePlanStatus(CLEAN_VERDICT, { ...PLAIN_RUN, planOnly: true, autoApply: true }),
-    ).toBe("planned_and_finished");
+    expect(resolvePlanStatus({ hardFailed: true, softFailed: false }, { ...PLAIN_RUN, autoApply: true })).toBe(
+      "errored",
+    );
+    expect(resolvePlanStatus({ hardFailed: false, softFailed: true }, { ...PLAIN_RUN, autoApply: true })).toBe(
+      "policy_soft_failed",
+    );
+    expect(resolvePlanStatus(CLEAN_VERDICT, { ...PLAIN_RUN, savePlan: true, autoApply: true })).toBe(
+      "planned_and_saved",
+    );
+    expect(resolvePlanStatus(CLEAN_VERDICT, { ...PLAIN_RUN, planOnly: true, autoApply: true })).toBe(
+      "planned_and_finished",
+    );
   });
 
   it("stops a plain run at planned", () => {
@@ -67,7 +67,14 @@ describe("resolvePlanStatus (#587)", () => {
       }
     }
     expect(outcomes).toEqual(
-      new Set(["planned", "apply_queued", "planned_and_saved", "planned_and_finished", "policy_soft_failed", "errored"]),
+      new Set([
+        "planned",
+        "apply_queued",
+        "planned_and_saved",
+        "planned_and_finished",
+        "policy_soft_failed",
+        "errored",
+      ]),
     );
     for (const outcome of outcomes) {
       expect(canTransitionRunStatus("planning", outcome), `planning -> ${outcome}`).toBe(true);

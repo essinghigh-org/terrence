@@ -18,20 +18,14 @@ export function NotFound(): React.JSX.Element {
       <p className="mt-3 font-mono text-sm tracking-widest text-muted-foreground">404 / UNCHARTED TERRITORY</p>
       <h1 className="mt-4 font-heading text-3xl font-bold tracking-tight text-foreground">Page not found</h1>
       <p className="mt-2 max-w-md text-sm text-muted-foreground">
-        <code className="break-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{location.pathname}</code>{" "}
-        does not exist or may have moved.
+        <code className="break-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{location.pathname}</code> does not
+        exist or may have moved.
       </p>
       <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-        <Link
-          to={insideApp ? "/app" : "/"}
-          className={cn(buttonVariants({ variant: "default", size: "default" }))}
-        >
+        <Link to={insideApp ? "/app" : "/"} className={cn(buttonVariants({ variant: "default", size: "default" }))}>
           {insideApp ? "Go to dashboard" : "Go home"}
         </Link>
-        <Link
-          to="/app/docs"
-          className={cn(buttonVariants({ variant: "outline", size: "default" }))}
-        >
+        <Link to="/app/docs" className={cn(buttonVariants({ variant: "outline", size: "default" }))}>
           Read the docs
         </Link>
       </div>

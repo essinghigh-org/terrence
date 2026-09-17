@@ -19,14 +19,14 @@ function urlOf(input: string | URL | Request): string {
 }
 
 beforeEach((): void => {
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations?page[size]=20" || url.startsWith("/api/v2/organizations?page%5Bsize%5D=20&q=")) {
       return json({ data: [{ id: "org-acme", attributes: { name: "acme" } }] });
     }
     if (url === "/api/v2/docs") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 });
 
 afterEach((): void => {
@@ -62,14 +62,7 @@ function renderPalette(props: Partial<Parameters<typeof CommandPalette>[0]> = {}
       <Routes>
         <Route
           path="/app"
-          element={
-            <CommandPalette
-              open
-              onOpenChange={(): void => undefined}
-              canManageWorkspaces={false}
-              {...props}
-            />
-          }
+          element={<CommandPalette open onOpenChange={(): void => undefined} canManageWorkspaces={false} {...props} />}
         />
         <Route path="*" element={<p>navigated</p>} />
       </Routes>
@@ -96,7 +89,9 @@ test("arrow keys move the highlight and Enter activates the selection", async ()
   const input = await waitFor((): HTMLElement => view.getByRole("combobox"));
   // Wait for the async organization row too, so the result set is complete
   // before keyboard events are dispatched.
-  await waitFor((): void => { expect(view.getAllByRole("option")).toHaveLength(3); });
+  await waitFor((): void => {
+    expect(view.getAllByRole("option")).toHaveLength(3);
+  });
   const listboxId = input.getAttribute("aria-controls") ?? "";
 
   fireEvent.keyDown(input, { key: "ArrowDown" });
@@ -108,7 +103,9 @@ test("arrow keys move the highlight and Enter activates the selection", async ()
   expect(input.getAttribute("aria-activedescendant")).toBe(`${listboxId}-option-2`);
 
   fireEvent.keyDown(input, { key: "Enter" });
-  await waitFor((): void => { expect(capturedPathname).toBe("/app/acme/workspaces"); });
+  await waitFor((): void => {
+    expect(capturedPathname).toBe("/app/acme/workspaces");
+  });
   expect(onOpenChange).toHaveBeenCalledWith(false);
 });
 
@@ -116,7 +113,9 @@ test("the highlight wraps around at both ends of the list", async () => {
   const view = renderPalette();
 
   const input = await waitFor((): HTMLElement => view.getByRole("combobox"));
-  await waitFor((): void => { expect(view.getAllByRole("option")).toHaveLength(3); });
+  await waitFor((): void => {
+    expect(view.getAllByRole("option")).toHaveLength(3);
+  });
   const listboxId = input.getAttribute("aria-controls") ?? "";
 
   // Up from the first row lands on the last one.

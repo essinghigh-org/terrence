@@ -35,7 +35,11 @@ export type ApplySectionProps = Readonly<{
   onApplyExpandedChange: (open: boolean) => void;
 }>;
 
-function ApplyResourceCounts({ applyCounts, planImportCount, applyStatus }: Readonly<{
+function ApplyResourceCounts({
+  applyCounts,
+  planImportCount,
+  applyStatus,
+}: Readonly<{
   applyCounts: PlanCountSource | undefined;
   planImportCount: number | null;
   applyStatus: string;
@@ -52,7 +56,10 @@ function ApplyResourceCounts({ applyCounts, planImportCount, applyStatus }: Read
   );
 }
 
-function ApplyDiagnosticsFallback({ applyErrors, applyStatus }: Readonly<{
+function ApplyDiagnosticsFallback({
+  applyErrors,
+  applyStatus,
+}: Readonly<{
   applyErrors: readonly TerraformDiagnostic[];
   applyStatus: string;
 }>): React.JSX.Element | null {
@@ -61,8 +68,13 @@ function ApplyDiagnosticsFallback({ applyErrors, applyStatus }: Readonly<{
   }
   if (["errored", "unreachable"].includes(applyStatus)) {
     return (
-      <section aria-labelledby="apply-diagnostics-heading" className="border-t border-destructive/30 bg-destructive/10 px-5 py-4">
-        <h4 id="apply-diagnostics-heading" className="text-sm font-semibold text-destructive">Diagnostics</h4>
+      <section
+        aria-labelledby="apply-diagnostics-heading"
+        className="border-t border-destructive/30 bg-destructive/10 px-5 py-4"
+      >
+        <h4 id="apply-diagnostics-heading" className="text-sm font-semibold text-destructive">
+          Diagnostics
+        </h4>
         <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap rounded-md border border-destructive/30 bg-background p-4 font-mono text-xs leading-5 text-destructive">
           The apply failed before diagnostic output became available.
         </pre>
@@ -90,7 +102,10 @@ export function ApplySection(props: ApplySectionProps): React.JSX.Element {
       <summary className="cursor-pointer list-none px-5 py-4 group-open:border-b group-open:border-border hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-3">
-            <ChevronRight className="size-4 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
+            <ChevronRight
+              className="size-4 text-muted-foreground/70 transition-transform group-open:rotate-90"
+              aria-hidden="true"
+            />
             <PhaseIcon status={applyStatus} />
             <h3 id="apply-heading" className="font-semibold text-foreground">
               Apply{" "}
@@ -146,17 +161,9 @@ export function ApplySection(props: ApplySectionProps): React.JSX.Element {
         <DiagnosticsBanner severity="warning" diagnostics={props.applyWarnings} collapsible />
       )}
 
-      <ApplyDiagnosticsFallback
-        applyErrors={props.applyErrors}
-        applyStatus={applyStatus}
-      />
+      <ApplyDiagnosticsFallback applyErrors={props.applyErrors} applyStatus={applyStatus} />
       {applyStatus !== "pending" && (
-        <ApplyOutput
-          runId={props.runId}
-          status={props.status}
-          applyStatus={applyStatus}
-          applyLogs={props.applyLogs}
-        />
+        <ApplyOutput runId={props.runId} status={props.status} applyStatus={applyStatus} applyLogs={props.applyLogs} />
       )}
 
       <div id="apply-log-viewer" className="relative">

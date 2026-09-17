@@ -29,14 +29,16 @@ describe("organization variable set API contract", () => {
   const detachedWorkspaceId = `detached-workspace-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([
@@ -70,9 +72,13 @@ describe("organization variable set API contract", () => {
   });
 
   it("creates, manages, scopes, and deletes organization variable sets", async () => {
-    expect((await request(`/api/v2/organizations/${orgName}/varsets`, "POST", {
-      data: { type: "varsets", attributes: { name: "unsupported", foobar: true } },
-    })).status).toBe(422);
+    expect(
+      (
+        await request(`/api/v2/organizations/${orgName}/varsets`, "POST", {
+          data: { type: "varsets", attributes: { name: "unsupported", foobar: true } },
+        })
+      ).status,
+    ).toBe(422);
 
     const created = await request(`/api/v2/organizations/${orgName}/varsets`, "POST", {
       data: {
@@ -116,32 +122,41 @@ describe("organization variable set API contract", () => {
     });
 
     const workspaceRelationships = {
-      data: workspaceIds.map(id => ({ id, type: "workspaces" })),
+      data: workspaceIds.map((id) => ({ id, type: "workspaces" })),
     };
-    expect((await request(
-      `/api/v2/varsets/${variableSetId}/relationships/workspaces`,
-      "POST",
-      workspaceRelationships,
-    )).status).toBe(204);
-    expect((await request(
-      `/api/v2/varsets/${variableSetId}/relationships/workspaces`,
-      "POST",
-      { data: [{ id: workspaceIds[0], type: "workspaces" }] },
-    )).status).toBe(204);
-    expect((await request(
-      `/api/v2/varsets/${variableSetId}/relationships/workspaces`,
-      "POST",
-      { data: [{ id: unrelatedWorkspaceId, type: "workspaces" }] },
-    )).status).toBe(422);
-    expect(await db.query.variableSetWorkspaces.findMany({
-      where: eq(variableSetWorkspaces.variableSetId, variableSetId),
-    })).toHaveLength(2);
+    expect(
+      (await request(`/api/v2/varsets/${variableSetId}/relationships/workspaces`, "POST", workspaceRelationships))
+        .status,
+    ).toBe(204);
+    expect(
+      (
+        await request(`/api/v2/varsets/${variableSetId}/relationships/workspaces`, "POST", {
+          data: [{ id: workspaceIds[0], type: "workspaces" }],
+        })
+      ).status,
+    ).toBe(204);
+    expect(
+      (
+        await request(`/api/v2/varsets/${variableSetId}/relationships/workspaces`, "POST", {
+          data: [{ id: unrelatedWorkspaceId, type: "workspaces" }],
+        })
+      ).status,
+    ).toBe(422);
+    expect(
+      await db.query.variableSetWorkspaces.findMany({
+        where: eq(variableSetWorkspaces.variableSetId, variableSetId),
+      }),
+    ).toHaveLength(2);
 
     const related = await request(`/api/v2/varsets/${variableSetId}/relationships/workspaces`, "GET");
     expect(related.status).toBe(200);
-    expect(((await related.json()).data as { id: string; type: string }[]))
-      .toEqual([...workspaceIds].sort().map(id => ({ id, type: "workspaces" })));
-    expect((await request(`/api/v2/varsets/${variableSetId}/relationships/workspaces`, "GET", undefined, unrelatedToken)).status).toBe(404);
+    expect((await related.json()).data as { id: string; type: string }[]).toEqual(
+      [...workspaceIds].sort().map((id) => ({ id, type: "workspaces" })),
+    );
+    expect(
+      (await request(`/api/v2/varsets/${variableSetId}/relationships/workspaces`, "GET", undefined, unrelatedToken))
+        .status,
+    ).toBe(404);
 
     // Workspace side: attached variable sets are listed per workspace. Inherited
     // variables are never flattened into the workspace-variable collection.
@@ -150,17 +165,20 @@ describe("organization variable set API contract", () => {
     const workspaceSetsData = (await workspaceSets.json()).data as { id: string }[];
     expect(workspaceSetsData).toHaveLength(1);
     expect(workspaceSetsData[0]!.id).toBe(variableSetId);
-    expect((await request(`/api/v2/workspaces/${workspaceIds[0]}/varsets`, "GET", undefined, unrelatedToken)).status).toBe(404);
+    expect(
+      (await request(`/api/v2/workspaces/${workspaceIds[0]}/varsets`, "GET", undefined, unrelatedToken)).status,
+    ).toBe(404);
     expect((await request(`/api/v2/workspaces/${unrelatedWorkspaceId}/varsets`)).status).toBe(404);
     const noSetWorkspace = await request(`/api/v2/workspaces/${detachedWorkspaceId}/varsets`);
     expect(noSetWorkspace.status).toBe(200);
-    expect(((await noSetWorkspace.json()).data as unknown[])).toEqual([]);
+    expect((await noSetWorkspace.json()).data as unknown[]).toEqual([]);
 
     const shown = await request(`/api/v2/varsets/${variableSetId}`);
     const shownData = (await shown.json()).data;
     expect(shownData.attributes["workspace-count"]).toBe(2);
-    expect(shownData.relationships.workspaces.data.map((item: any) => item.id).sort())
-      .toEqual([...workspaceIds].sort());
+    expect(shownData.relationships.workspaces.data.map((item: any) => item.id).sort()).toEqual(
+      [...workspaceIds].sort(),
+    );
 
     const addedVariable = await request(`/api/v2/varsets/${variableSetId}/relationships/vars`, "POST", {
       data: {
@@ -180,23 +198,27 @@ describe("organization variable set API contract", () => {
     const variableId = variableData.id as string;
     expect(variableData.attributes.value).toBeNull();
     expect(variableData.attributes.sensitive).toBe(true);
-    expect((await db.query.variableSetVariables.findFirst({
-      where: eq(variableSetVariables.id, variableId),
-    }))?.valueEncrypted).not.toBeNull();
-    const listedVariables = await request(
-      `/api/v2/varsets/${variableSetId}/relationships/vars?page[size]=1`,
-    );
+    expect(
+      (
+        await db.query.variableSetVariables.findFirst({
+          where: eq(variableSetVariables.id, variableId),
+        })
+      )?.valueEncrypted,
+    ).not.toBeNull();
+    const listedVariables = await request(`/api/v2/varsets/${variableSetId}/relationships/vars?page[size]=1`);
     expect(listedVariables.status).toBe(200);
     expect((await listedVariables.json()).data[0].attributes.value).toBeNull();
-    expect((await request(
-      `/api/v2/varsets/${variableSetId}/relationships/vars/${variableId}`,
-    )).status).toBe(200);
-    expect((await request(
-      `/api/v2/varsets/${variableSetId}/relationships/vars/${variableId}`,
-      "GET",
-      undefined,
-      unrelatedToken,
-    )).status).toBe(404);
+    expect((await request(`/api/v2/varsets/${variableSetId}/relationships/vars/${variableId}`)).status).toBe(200);
+    expect(
+      (
+        await request(
+          `/api/v2/varsets/${variableSetId}/relationships/vars/${variableId}`,
+          "GET",
+          undefined,
+          unrelatedToken,
+        )
+      ).status,
+    ).toBe(404);
 
     const hclVariable = await request(`/api/v2/varsets/${variableSetId}/relationships/vars`, "POST", {
       data: { type: "vars", attributes: { key: "HCL", value: "true", hcl: true } },
@@ -212,11 +234,9 @@ describe("organization variable set API contract", () => {
     expect(hclToggle.status).toBe(200);
     expect((await hclToggle.json()).data.attributes.hcl).toBe(false);
 
-    const stillSensitive = await request(
-      `/api/v2/varsets/${variableSetId}/relationships/vars`,
-      "PATCH",
-      { data: { id: variableId, type: "vars", attributes: { sensitive: false, description: "renamed" } } },
-    );
+    const stillSensitive = await request(`/api/v2/varsets/${variableSetId}/relationships/vars`, "PATCH", {
+      data: { id: variableId, type: "vars", attributes: { sensitive: false, description: "renamed" } },
+    });
     expect(stillSensitive.status).toBe(200);
     expect((await stillSensitive.json()).data.attributes).toMatchObject({
       value: null,
@@ -224,11 +244,9 @@ describe("organization variable set API contract", () => {
       description: "renamed",
     });
 
-    const revealed = await request(
-      `/api/v2/varsets/${variableSetId}/relationships/vars`,
-      "PATCH",
-      { data: [{ id: variableId, type: "vars", attributes: { value: "replacement", sensitive: false } }] },
-    );
+    const revealed = await request(`/api/v2/varsets/${variableSetId}/relationships/vars`, "PATCH", {
+      data: [{ id: variableId, type: "vars", attributes: { value: "replacement", sensitive: false } }],
+    });
     expect(revealed.status).toBe(200);
     expect((await revealed.json()).data[0].attributes).toMatchObject({
       value: "replacement",
@@ -239,45 +257,69 @@ describe("organization variable set API contract", () => {
       data: { type: "vars", attributes: { key: "TF_TOKEN", value: "duplicate" } },
     });
     expect(duplicate.status, await duplicate.clone().text()).toBe(422);
-    expect((await request(
-      `/api/v2/varsets/${variableSetId}/relationships/vars`,
-      "PATCH",
-      { data: { id: variableId, type: "vars", attributes: { value: "cross-org" } } },
-      unrelatedToken,
-    )).status).toBe(404);
+    expect(
+      (
+        await request(
+          `/api/v2/varsets/${variableSetId}/relationships/vars`,
+          "PATCH",
+          { data: { id: variableId, type: "vars", attributes: { value: "cross-org" } } },
+          unrelatedToken,
+        )
+      ).status,
+    ).toBe(404);
 
-    expect((await request(
-      `/api/v2/varsets/${variableSetId}/relationships/workspaces`,
-      "DELETE",
-      { data: [{ id: workspaceIds[1], type: "workspaces" }] },
-    )).status).toBe(204);
-    expect(await db.query.variableSetWorkspaces.findMany({
-      where: eq(variableSetWorkspaces.variableSetId, variableSetId),
-    })).toHaveLength(1);
+    expect(
+      (
+        await request(`/api/v2/varsets/${variableSetId}/relationships/workspaces`, "DELETE", {
+          data: [{ id: workspaceIds[1], type: "workspaces" }],
+        })
+      ).status,
+    ).toBe(204);
+    expect(
+      await db.query.variableSetWorkspaces.findMany({
+        where: eq(variableSetWorkspaces.variableSetId, variableSetId),
+      }),
+    ).toHaveLength(1);
 
-    expect((await request(
-      `/api/v2/varsets/${variableSetId}/relationships/vars`,
-      "DELETE",
-      { data: [{ id: variableId, type: "vars" }] },
-    )).status).toBe(204);
-    expect(await db.query.variableSetVariables.findFirst({
-      where: eq(variableSetVariables.id, variableId),
-    })).toBeUndefined();
+    expect(
+      (
+        await request(`/api/v2/varsets/${variableSetId}/relationships/vars`, "DELETE", {
+          data: [{ id: variableId, type: "vars" }],
+        })
+      ).status,
+    ).toBe(204);
+    expect(
+      await db.query.variableSetVariables.findFirst({
+        where: eq(variableSetVariables.id, variableId),
+      }),
+    ).toBeUndefined();
 
-    expect((await request(`/api/v2/varsets/${variableSetId}/relationships/vars`, "POST", {
-      data: { type: "vars", attributes: { key: "CASCADE", value: "yes" } },
-    })).status).toBe(201);
+    expect(
+      (
+        await request(`/api/v2/varsets/${variableSetId}/relationships/vars`, "POST", {
+          data: { type: "vars", attributes: { key: "CASCADE", value: "yes" } },
+        })
+      ).status,
+    ).toBe(201);
 
     // VAR-007: JSON:API empty bulk relationship arrays are no-ops, not 422s
     // (the reference format parity). Only endpoints that exist for each relation type are
     // exercised; the property under test is the empty-array handling.
-    const emptyWorkspacePost = await request(`/api/v2/varsets/${variableSetId}/relationships/workspaces`, "POST", { data: [] });
+    const emptyWorkspacePost = await request(`/api/v2/varsets/${variableSetId}/relationships/workspaces`, "POST", {
+      data: [],
+    });
     expect(emptyWorkspacePost.status, await emptyWorkspacePost.clone().text()).toBe(204);
-    const emptyDeleteVars = await request(`/api/v2/varsets/${variableSetId}/relationships/vars`, "DELETE", { data: [] });
+    const emptyDeleteVars = await request(`/api/v2/varsets/${variableSetId}/relationships/vars`, "DELETE", {
+      data: [],
+    });
     expect(emptyDeleteVars.status, await emptyDeleteVars.clone().text()).toBe(204);
-    const emptyDeleteProjects = await request(`/api/v2/varsets/${variableSetId}/relationships/projects`, "DELETE", { data: [] });
+    const emptyDeleteProjects = await request(`/api/v2/varsets/${variableSetId}/relationships/projects`, "DELETE", {
+      data: [],
+    });
     expect(emptyDeleteProjects.status, await emptyDeleteProjects.clone().text()).toBe(204);
-    const emptyDeleteStacks = await request(`/api/v2/varsets/${variableSetId}/relationships/stacks`, "DELETE", { data: [] });
+    const emptyDeleteStacks = await request(`/api/v2/varsets/${variableSetId}/relationships/stacks`, "DELETE", {
+      data: [],
+    });
     expect(emptyDeleteStacks.status, await emptyDeleteStacks.clone().text()).toBe(204);
 
     // Missing data field (not an empty array) is still rejected.
@@ -295,11 +337,15 @@ describe("organization variable set API contract", () => {
 
     expect((await request(`/api/v2/varsets/${variableSetId}`, "DELETE")).status).toBe(204);
     expect(await db.query.variableSets.findFirst({ where: eq(variableSets.id, variableSetId) })).toBeUndefined();
-    expect(await db.query.variableSetVariables.findMany({
-      where: eq(variableSetVariables.variableSetId, variableSetId),
-    })).toHaveLength(0);
-    expect(await db.query.variableSetWorkspaces.findMany({
-      where: eq(variableSetWorkspaces.variableSetId, variableSetId),
-    })).toHaveLength(0);
+    expect(
+      await db.query.variableSetVariables.findMany({
+        where: eq(variableSetVariables.variableSetId, variableSetId),
+      }),
+    ).toHaveLength(0);
+    expect(
+      await db.query.variableSetWorkspaces.findMany({
+        where: eq(variableSetWorkspaces.variableSetId, variableSetId),
+      }),
+    ).toHaveLength(0);
   });
 });

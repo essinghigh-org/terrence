@@ -129,9 +129,7 @@ function quality(parameters: Readonly<ReadonlyMap<string, Readonly<{ value: stri
 
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parameters is already a ReadonlyMap; preserve its complete iterable contract
 function rangeSupportsJsonApi(parsed: ParsedMediaType): boolean {
-  const withoutQuality = new Map(
-    [...parsed.parameters.entries()].filter(([name]): boolean => name !== "q"),
-  );
+  const withoutQuality = new Map([...parsed.parameters.entries()].filter(([name]): boolean => name !== "q"));
   if ((parsed.type === "*/*" || parsed.type === "application/*") && withoutQuality.size === 0) return true;
   if (parsed.type !== JSON_API_MEDIA_TYPE) return false;
   for (const [name, parameter] of withoutQuality) {

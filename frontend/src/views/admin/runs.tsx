@@ -3,14 +3,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { fetchApi } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
-import { type DataItem, } from "./types";
+import { type DataItem } from "./types";
 // Live run-concurrency surface (issue #632), best-effort: the queue table
 // renders without it when system-info is unreachable.
 type QueueStats = { limit: number; executing: number; queued: number | null };
 type JsonRecord = Record<string, unknown>;
 
 function record(value: unknown): JsonRecord | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : null;
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : null;
 }
 
 function numberValue(value: unknown): number {
@@ -34,8 +34,13 @@ function QueueExplanationCell({
   return (
     <div className="space-y-1">
       <div className="font-medium text-foreground">{reason ?? "Queue state unavailable"}</div>
-      <div>{state ?? "unknown"}{positionQualified ? ` · position ${String(position)}` : ""}</div>
-      {typeof inspection["reason-code"] === "string" && <div className="font-mono text-[11px]">{inspection["reason-code"]}</div>}
+      <div>
+        {state ?? "unknown"}
+        {positionQualified ? ` · position ${String(position)}` : ""}
+      </div>
+      {typeof inspection["reason-code"] === "string" && (
+        <div className="font-mono text-[11px]">{inspection["reason-code"]}</div>
+      )}
     </div>
   );
 }
@@ -74,12 +79,24 @@ function RunQueueRow({
         {r.attributes.actions !== undefined && (
           <div className="flex gap-2">
             {r.attributes.actions["is-cancelable"] === true && (
-              <Button size="sm" variant="outline" onClick={(): void => { void onCancelRun(r.id, false); }}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(): void => {
+                  void onCancelRun(r.id, false);
+                }}
+              >
                 Cancel
               </Button>
             )}
             {r.attributes.actions["is-force-cancelable"] === true && (
-              <Button size="sm" variant="destructive" onClick={(): void => { void onCancelRun(r.id, true); }}>
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={(): void => {
+                  void onCancelRun(r.id, true);
+                }}
+              >
                 Force Cancel
               </Button>
             )}
@@ -90,7 +107,13 @@ function RunQueueRow({
   );
 }
 
-export function RunsAdmin(props: Readonly<{ runs: DataItem[]; queueMeta?: JsonRecord | null; handleCancelRun: (runId: string, force?: boolean) => Promise<void>; }>): React.JSX.Element {
+export function RunsAdmin(
+  props: Readonly<{
+    runs: DataItem[];
+    queueMeta?: JsonRecord | null;
+    handleCancelRun: (runId: string, force?: boolean) => Promise<void>;
+  }>,
+): React.JSX.Element {
   const { runs, queueMeta = null, handleCancelRun } = props;
   const [queue, setQueue] = useState<QueueStats | null>(null);
   useEffect((): (() => void) => {
@@ -112,7 +135,9 @@ export function RunsAdmin(props: Readonly<{ runs: DataItem[]; queueMeta?: JsonRe
       .catch((): void => {
         // Advisory summary only; the table below stands on its own.
       });
-    return (): void => { cancelled = true; };
+    return (): void => {
+      cancelled = true;
+    };
   }, []);
   return (
     <Card>
@@ -120,27 +145,39 @@ export function RunsAdmin(props: Readonly<{ runs: DataItem[]; queueMeta?: JsonRe
         <CardTitle className="text-lg">System run queue</CardTitle>
         <CardDescription>Monitor and control active execution runs</CardDescription>
         {queue !== null && (
-          <p className="mt-2 text-sm text-muted-foreground">Concurrency limit {queue.limit} · {queue.executing} executing · {queue.queued === null ? "queued unknown" : `${String(queue.queued)} queued`} (limit from TERRENCE_RUN_CONCURRENCY)</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Concurrency limit {queue.limit} · {queue.executing} executing ·{" "}
+            {queue.queued === null ? "queued unknown" : `${String(queue.queued)} queued`} (limit from
+            TERRENCE_RUN_CONCURRENCY)
+          </p>
         )}
-        {queueMeta !== null && ((): React.JSX.Element => {
-          const capacity = record(queueMeta["capacity"]);
-          const pools = capacity !== null && Array.isArray(capacity["pools"])
-            ? capacity["pools"].map(record).filter((pool): pool is JsonRecord => pool !== null)
-            : [];
-          const available = pools.reduce((total, pool): number => total + numberValue(pool["available-agents"]), 0);
-          const queuedJobs = pools.reduce((total, pool): number => total + numberValue(pool["queued-jobs"]), 0);
-          const snapshot = typeof queueMeta["snapshot-at"] === "string" ? queueMeta["snapshot-at"] : null;
-          const controls = record(queueMeta["controls"]);
-          return (
-            <div className="mt-3 rounded-md border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-              <div className="font-medium text-foreground">Capacity snapshot</div>
-              <div>{available} available agent{available === 1 ? "" : "s"} · {queuedJobs} queued agent job{queuedJobs === 1 ? "" : "s"}{snapshot === null ? "" : ` · observed ${new Date(snapshot).toLocaleTimeString()}`}</div>
-              {controls?.["reprioritize-supported"] === false && (
-                <div className="mt-1 text-xs">Queued work keeps scheduler order; reprioritization is unavailable.</div>
-              )}
-            </div>
-          );
-        })()}
+        {queueMeta !== null &&
+          ((): React.JSX.Element => {
+            const capacity = record(queueMeta["capacity"]);
+            const pools =
+              capacity !== null && Array.isArray(capacity["pools"])
+                ? capacity["pools"].map(record).filter((pool): pool is JsonRecord => pool !== null)
+                : [];
+            const available = pools.reduce((total, pool): number => total + numberValue(pool["available-agents"]), 0);
+            const queuedJobs = pools.reduce((total, pool): number => total + numberValue(pool["queued-jobs"]), 0);
+            const snapshot = typeof queueMeta["snapshot-at"] === "string" ? queueMeta["snapshot-at"] : null;
+            const controls = record(queueMeta["controls"]);
+            return (
+              <div className="mt-3 rounded-md border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+                <div className="font-medium text-foreground">Capacity snapshot</div>
+                <div>
+                  {available} available agent{available === 1 ? "" : "s"} · {queuedJobs} queued agent job
+                  {queuedJobs === 1 ? "" : "s"}
+                  {snapshot === null ? "" : ` · observed ${new Date(snapshot).toLocaleTimeString()}`}
+                </div>
+                {controls?.["reprioritize-supported"] === false && (
+                  <div className="mt-1 text-xs">
+                    Queued work keeps scheduler order; reprioritization is unavailable.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
       </CardHeader>
       <CardContent>
         <div className="rounded-md border overflow-x-auto">
@@ -162,9 +199,7 @@ export function RunsAdmin(props: Readonly<{ runs: DataItem[]; queueMeta?: JsonRe
                   </TableCell>
                 </TableRow>
               ) : (
-                runs.map((r): React.JSX.Element => (
-                  <RunQueueRow key={r.id} r={r} onCancelRun={handleCancelRun} />
-                ))
+                runs.map((r): React.JSX.Element => <RunQueueRow key={r.id} r={r} onCancelRun={handleCancelRun} />)
               )}
             </TableBody>
           </Table>
@@ -172,4 +207,4 @@ export function RunsAdmin(props: Readonly<{ runs: DataItem[]; queueMeta?: JsonRe
       </CardContent>
     </Card>
   );
-};
+}

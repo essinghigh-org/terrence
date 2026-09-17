@@ -4,8 +4,12 @@ import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
-  apiTokens, githubAppInstallations, organizationMemberships,
-  organizations, users, workspaces,
+  apiTokens,
+  githubAppInstallations,
+  organizationMemberships,
+  organizations,
+  users,
+  workspaces,
 } from "../../src/db/schema";
 
 /**
@@ -25,14 +29,16 @@ describe("Organization rename & downstream links (ORG-012)", () => {
   const user = `owner-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   const ghInstallationId = `ghain-${suffix}`;
   const oldName = `rename-from-${suffix}`;
@@ -42,19 +48,30 @@ describe("Organization rename & downstream links (ORG-012)", () => {
     await db.insert(users).values({ id: userId, username: user, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: oldName });
     await db.insert(organizationMemberships).values({
-      id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
+      id: `mem-${suffix}`,
+      userId,
+      orgId,
+      role: "owner",
+      status: "active",
     });
     await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
     await db.insert(githubAppInstallations).values({
-      id: ghInstallationId, orgId, name: "App", installationId: 1,
+      id: ghInstallationId,
+      orgId,
+      name: "App",
+      installationId: 1,
     });
     // Two workspaces: one plain, one with VCS.
     await db.insert(workspaces).values({
-      id: `ws-plain-${suffix}`, orgId, name: "plain-ws",
+      id: `ws-plain-${suffix}`,
+      orgId,
+      name: "plain-ws",
       executionMode: "remote",
     });
     await db.insert(workspaces).values({
-      id: `ws-vcs-${suffix}`, orgId, name: "vcs-ws",
+      id: `ws-vcs-${suffix}`,
+      orgId,
+      name: "vcs-ws",
       executionMode: "remote",
       vcsRepo: { identifier: "hashicorp/terraform", githubAppInstallationId: ghInstallationId },
     });

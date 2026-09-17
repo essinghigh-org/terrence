@@ -53,7 +53,11 @@ function LogToolbar({
   onPhaseChange: ((phase: LogPhase) => void) | undefined;
 }>): React.JSX.Element {
   return (
-    <div role="toolbar" aria-label={toolbarLabel} className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/40 px-3 py-2 text-xs">
+    <div
+      role="toolbar"
+      aria-label={toolbarLabel}
+      className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/40 px-3 py-2 text-xs"
+    >
       {onPhaseChange !== undefined && (
         <label className="inline-flex items-center gap-1.5 font-medium text-muted-foreground">
           <span>Phase</span>
@@ -78,7 +82,11 @@ function LogToolbar({
         onClick={onToggleFollowing}
         className="inline-flex h-7 items-center gap-1.5 rounded border border-input bg-background px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        {following ? <Pause className="size-3.5" aria-hidden="true" /> : <Play className="size-3.5" aria-hidden="true" />}
+        {following ? (
+          <Pause className="size-3.5" aria-hidden="true" />
+        ) : (
+          <Play className="size-3.5" aria-hidden="true" />
+        )}
         {following ? "Following" : "Paused"}
       </button>
       <button
@@ -95,7 +103,9 @@ function LogToolbar({
         <input
           type="search"
           value={search}
-          onInput={(event): void => { onSearchChange(event.currentTarget.value); }}
+          onInput={(event): void => {
+            onSearchChange(event.currentTarget.value);
+          }}
           placeholder="Search loaded output…"
           aria-label="Search loaded log output"
           className="h-7 w-full rounded border border-input bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -134,7 +144,10 @@ function LogToolbar({
           >
             Download raw log
           </a>
-          <span className="text-warning-text" title="Provider output may contain secrets; Terrence applies best-effort masking.">
+          <span
+            className="text-warning-text"
+            title="Provider output may contain secrets; Terrence applies best-effort masking."
+          >
             May contain secrets
           </span>
         </>
@@ -176,11 +189,9 @@ export function RunLogOutput({
   const [search, setSearch] = useState("");
   const [copied, setCopied] = useState(false);
 
-  const lineCount = (text: string): number => text === "" ? 0 : text.split("\n").length;
+  const lineCount = (text: string): number => (text === "" ? 0 : text.split("\n").length);
   const normalizedSearch = search.trim().toLocaleLowerCase();
-  const matchCount = normalizedSearch === ""
-    ? 0
-    : children.toLocaleLowerCase().split(normalizedSearch).length - 1;
+  const matchCount = normalizedSearch === "" ? 0 : children.toLocaleLowerCase().split(normalizedSearch).length - 1;
 
   useLayoutEffect((): (() => void) | undefined => {
     const pane = element.current;
@@ -195,7 +206,9 @@ export function RunLogOutput({
     // A log may mount inside a closed disclosure; follow when it becomes visible.
     const observer = new ResizeObserver(follow);
     observer.observe(pane);
-    return (): void => { observer.disconnect(); };
+    return (): void => {
+      observer.disconnect();
+    };
   }, [active, children]);
 
   useLayoutEffect((): void => {
@@ -229,7 +242,9 @@ export function RunLogOutput({
     void copyTextToClipboard(children).then((didCopy): void => {
       if (didCopy) {
         setCopied(true);
-        window.setTimeout((): void => { setCopied(false); }, 1_500);
+        window.setTimeout((): void => {
+          setCopied(false);
+        }, 1_500);
       }
     });
   };
@@ -247,7 +262,9 @@ export function RunLogOutput({
           following={following}
           newLines={newLines}
           search={search}
-          onSearchChange={(value: string): void => { setSearch(value); }}
+          onSearchChange={(value: string): void => {
+            setSearch(value);
+          }}
           matchSummary={matchSummary}
           copied={copied}
           onCopy={copyLog}
@@ -261,7 +278,8 @@ export function RunLogOutput({
       )}
       {truncated && (
         <p role="status" className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning-text">
-          Earlier log ranges are unavailable because this output exceeded the retention limit. Showing the retained tail.
+          Earlier log ranges are unavailable because this output exceeded the retention limit. Showing the retained
+          tail.
         </p>
       )}
       <pre

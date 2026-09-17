@@ -91,55 +91,60 @@ export async function loadOrganizationVcsConnections(
 ): Promise<VcsConnection[]> {
   const requestOptions = signal === undefined ? {} : { signal };
   // SAFETY: both endpoints return the JSON:API envelope per contract.
-  const [githubResponse, oauthResponse] = await Promise.all([
+  const [githubResponse, oauthResponse] = (await Promise.all([
     fetchApi(`/organizations/${encodeURIComponent(orgName)}/github-app/installations`, requestOptions),
     fetchApi(`/organizations/${encodeURIComponent(orgName)}/oauth-clients`, requestOptions),
-  ]) as [
-    { data?: GitHubAppInstallation[] },
-    { data?: OAuthClient[] },
-  ];
+  ])) as [{ data?: GitHubAppInstallation[] }, { data?: OAuthClient[] }];
   const installations = Array.isArray(githubResponse.data) ? githubResponse.data : [];
-  const clients = (Array.isArray(oauthResponse.data) ? oauthResponse.data : [])
-    .filter((client): boolean => options?.supportedProviders === undefined || options.supportedProviders.includes(client.attributes["service-provider"] ?? ""));
-  const oauthConnections = await Promise.all(clients.map(async (client: OAuthClient): Promise<VcsConnection[]> => {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-    const response = await fetchApi(`/oauth-clients/${encodeURIComponent(client.id)}/oauth-tokens`, requestOptions) as {
-      data?: OAuthToken[];
-    };
-    const tokens = Array.isArray(response.data) ? response.data : [];
-    const provider = client.attributes["service-provider-display-name"]
-      ?? client.attributes["service-provider"]
-      ?? "OAuth";
-    return tokens.map((token: OAuthToken): VcsConnection => {
-      const user = token.attributes["service-provider-user"];
-      return {
-        id: token.id,
-        kind: "oauth-token",
-        label: `${client.attributes.name} — ${provider}${isString(user) && user !== "" ? ` (${user})` : ""}`,
-        value: `oauth-token:${token.id}`,
+  const clients = (Array.isArray(oauthResponse.data) ? oauthResponse.data : []).filter(
+    (client): boolean =>
+      options?.supportedProviders === undefined ||
+      options.supportedProviders.includes(client.attributes["service-provider"] ?? ""),
+  );
+  const oauthConnections = await Promise.all(
+    clients.map(async (client: OAuthClient): Promise<VcsConnection[]> => {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(
+        `/oauth-clients/${encodeURIComponent(client.id)}/oauth-tokens`,
+        requestOptions,
+      )) as {
+        data?: OAuthToken[];
       };
-    });
-  }));
+      const tokens = Array.isArray(response.data) ? response.data : [];
+      const provider =
+        client.attributes["service-provider-display-name"] ?? client.attributes["service-provider"] ?? "OAuth";
+      return tokens.map((token: OAuthToken): VcsConnection => {
+        const user = token.attributes["service-provider-user"];
+        return {
+          id: token.id,
+          kind: "oauth-token",
+          label: `${client.attributes.name} — ${provider}${isString(user) && user !== "" ? ` (${user})` : ""}`,
+          value: `oauth-token:${token.id}`,
+        };
+      });
+    }),
+  );
   return [
-    ...installations.map((installation: GitHubAppInstallation): VcsConnection => ({
-      id: installation.id,
-      kind: "github-app",
-      label: `${installation.attributes.name} — GitHub App`,
-      value: `github-app:${installation.id}`,
-    })),
+    ...installations.map(
+      (installation: GitHubAppInstallation): VcsConnection => ({
+        id: installation.id,
+        kind: "github-app",
+        label: `${installation.attributes.name} — GitHub App`,
+        value: `github-app:${installation.id}`,
+      }),
+    ),
     ...oauthConnections.flat(),
   ];
 }
 
 const entries = (value: string): string[] =>
-  value.split(/[\r\n,]+/).map((entry: string): string => entry.trim()).filter(Boolean);
+  value
+    .split(/[\r\n,]+/)
+    .map((entry: string): string => entry.trim())
+    .filter(Boolean);
 
 function VcsConnectionBadge({ connected }: Readonly<{ connected: boolean }>): React.JSX.Element {
-  return (
-    <Badge variant={connected ? "success" : "secondary"}>
-      {connected ? "Connected" : "Not connected"}
-    </Badge>
-  );
+  return <Badge variant={connected ? "success" : "secondary"}>{connected ? "Connected" : "Not connected"}</Badge>;
 }
 
 function VcsConnectionFields({
@@ -179,11 +184,13 @@ function VcsConnectionFields({
           <SelectItem value="">
             {connectionsLoading ? "Loading registered connections…" : "Select a registered connection"}
           </SelectItem>
-          {displayedConnections.map((connection: VcsConnection): React.JSX.Element => (
-            <SelectItem key={connection.value} value={connection.value}>
-              {connection.label}
-            </SelectItem>
-          ))}
+          {displayedConnections.map(
+            (connection: VcsConnection): React.JSX.Element => (
+              <SelectItem key={connection.value} value={connection.value}>
+                {connection.label}
+              </SelectItem>
+            ),
+          )}
         </Select>
         {connectionsError !== "" ? (
           <p role="alert" className="text-sm text-destructive">
@@ -210,7 +217,9 @@ function VcsConnectionFields({
           disabled={!canUpdate}
           placeholder="e.g. organization/repository"
         />
-        <FieldDescription>Search by organization or repository name, then select the full repository path.</FieldDescription>
+        <FieldDescription>
+          Search by organization or repository name, then select the full repository path.
+        </FieldDescription>
       </Field>
     </>
   );
@@ -274,7 +283,9 @@ function VcsTriggerFields({
           />
           <FieldContent>
             <FieldLabel htmlFor="vcs-file-triggers">Filter runs by changed files</FieldLabel>
-            <FieldDescription>Only trigger runs when changes match the prefixes or glob patterns below.</FieldDescription>
+            <FieldDescription>
+              Only trigger runs when changes match the prefixes or glob patterns below.
+            </FieldDescription>
           </FieldContent>
         </Field>
 
@@ -316,7 +327,10 @@ function VcsTriggerFields({
                 placeholder="modules/**/*.tf, shared/**/*.tf"
                 disabled={!canUpdate}
               />
-              <FieldDescription>Separate glob patterns with commas. Entries must be non-blank; a pattern that matches no changed files never triggers a run.</FieldDescription>
+              <FieldDescription>
+                Separate glob patterns with commas. Entries must be non-blank; a pattern that matches no changed files
+                never triggers a run.
+              </FieldDescription>
             </Field>
           </FieldGroup>
         )}
@@ -359,12 +373,7 @@ function VcsRunBehaviorFields({
           </FieldContent>
         </Field>
         <Field orientation="horizontal" data-disabled={!canUpdate}>
-          <Checkbox
-            id="vcs-auto-apply"
-            checked={autoApply}
-            onCheckedChange={onAutoApplyChange}
-            disabled={!canUpdate}
-          />
+          <Checkbox id="vcs-auto-apply" checked={autoApply} onCheckedChange={onAutoApplyChange} disabled={!canUpdate} />
           <FieldContent>
             <FieldLabel htmlFor="vcs-auto-apply">Auto-apply successful plans</FieldLabel>
             <FieldDescription>Apply VCS runs without waiting for manual confirmation.</FieldDescription>
@@ -486,7 +495,10 @@ function displayedVcsConnections(
   initialConnection: VcsConnection | null,
   connections: VcsConnection[],
 ): VcsConnection[] {
-  if (initialConnection !== null && !connections.some((connection: VcsConnection): boolean => connection.value === initialConnection.value)) {
+  if (
+    initialConnection !== null &&
+    !connections.some((connection: VcsConnection): boolean => connection.value === initialConnection.value)
+  ) {
     return [initialConnection, ...connections];
   }
   return connections;
@@ -543,7 +555,9 @@ export function WorkspaceVcs({
         if (Array.isArray(list)) setVcsRepositories(list.map((item) => item.attributes));
       })
       .catch((): void => undefined)
-      .finally((): void => { if (!controller.signal.aborted) setVcsRepositoriesLoading(false); });
+      .finally((): void => {
+        if (!controller.signal.aborted) setVcsRepositoriesLoading(false);
+      });
     return (): void => {
       controller.abort();
     };
@@ -593,8 +607,8 @@ export function WorkspaceVcs({
     setSaved(false);
     setError("");
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(`/workspaces/${workspace.id}`, {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(`/workspaces/${workspace.id}`, {
         method: "PATCH",
         body: JSON.stringify({
           data: {
@@ -604,12 +618,8 @@ export function WorkspaceVcs({
               "vcs-repo": {
                 identifier: normalizedIdentifier,
                 branch: branch.trim() === "" ? null : branch.trim(),
-                "github-app-installation-id": selectedConnection.kind === "github-app"
-                  ? selectedConnection.id
-                  : null,
-                "oauth-token-id": selectedConnection.kind === "oauth-token"
-                  ? selectedConnection.id
-                  : null,
+                "github-app-installation-id": selectedConnection.kind === "github-app" ? selectedConnection.id : null,
+                "oauth-token-id": selectedConnection.kind === "oauth-token" ? selectedConnection.id : null,
                 "ingress-submodules": ingressSubmodules,
                 "tags-regex": tagsRegex.trim() === "" ? null : tagsRegex.trim(),
               },
@@ -622,7 +632,7 @@ export function WorkspaceVcs({
             },
           },
         }),
-      }) as { data: VcsWorkspace };
+      })) as { data: VcsWorkspace };
       onSaved(response.data);
       setConnected(true);
       setSaved(true);
@@ -639,8 +649,8 @@ export function WorkspaceVcs({
     setSaved(false);
     setError("");
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(`/workspaces/${workspace.id}`, {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(`/workspaces/${workspace.id}`, {
         method: "PATCH",
         body: JSON.stringify({
           data: {
@@ -649,7 +659,7 @@ export function WorkspaceVcs({
             attributes: { "vcs-repo": null },
           },
         }),
-      }) as { data: VcsWorkspace };
+      })) as { data: VcsWorkspace };
       onSaved(response.data);
       setConnected(false);
       setSaved(true);
@@ -710,7 +720,9 @@ export function WorkspaceVcs({
                     />
                   </Field>
                   <Field data-disabled={!canUpdate}>
-                    <FieldLabel htmlFor="vcs-working-directory">{iacWorkingDirectoryLabel(workspace.attributes["iac-binary"])}</FieldLabel>
+                    <FieldLabel htmlFor="vcs-working-directory">
+                      {iacWorkingDirectoryLabel(workspace.attributes["iac-binary"])}
+                    </FieldLabel>
                     <Input
                       id="vcs-working-directory"
                       name="vcs-working-directory"
@@ -760,7 +772,9 @@ export function WorkspaceVcs({
           saving={saving}
           canUpdate={canUpdate}
           saved={saved}
-          onDisconnect={(): void => { void disconnect(); }}
+          onDisconnect={(): void => {
+            void disconnect();
+          }}
         />
       </Card>
     </form>

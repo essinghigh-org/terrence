@@ -27,14 +27,16 @@ describe("Notification Discord template and last-delivery surface", () => {
   let echoBodies: string[] = [];
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: "Bearer " + auth,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: "Bearer " + auth,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     process.env["TERRENCE_ALLOW_PRIVATE_URLS"] = "true";
@@ -48,10 +50,10 @@ describe("Notification Discord template and last-delivery surface", () => {
     });
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
-    await db.insert(organizationMemberships).values([
-      { id: crypto.randomUUID(), userId, orgId, role: "owner" },
-    ]);
-    await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: createHash("sha256").update(token).digest("hex"), userId }]);
+    await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId, role: "owner" }]);
+    await db
+      .insert(apiTokens)
+      .values([{ id: crypto.randomUUID(), token: createHash("sha256").update(token).digest("hex"), userId }]);
     await db.insert(workspaces).values([{ id: workspaceId, name: `ws-discord-${suffix}`, orgId }]);
   });
 
@@ -85,7 +87,7 @@ describe("Notification Discord template and last-delivery surface", () => {
   }
 
   it("accepts discord configs and reports an unknown last delivery", async () => {
-    const ncId = await createConfig((echoServer!).url.toString());
+    const ncId = await createConfig(echoServer!.url.toString());
     try {
       const show = await request(`/api/v2/notification-configurations/${ncId}`);
       expect(show.status).toBe(200);
@@ -98,7 +100,7 @@ describe("Notification Discord template and last-delivery surface", () => {
   });
 
   it("posts the fixture as Discord embeds and records the success", async () => {
-    const ncId = await createConfig((echoServer!).url.toString());
+    const ncId = await createConfig(echoServer!.url.toString());
     try {
       echoBodies = [];
       const verifyRes = await request(`/api/v2/notification-configurations/${ncId}/actions/verify`, "POST");
@@ -109,7 +111,9 @@ describe("Notification Discord template and last-delivery surface", () => {
       expect(posted.embeds?.[0]?.title).toBe("Run Errored");
 
       const show = await request(`/api/v2/notification-configurations/${ncId}`);
-      const last = ((await show.json()) as { data: { attributes: { "last-delivery": { successful: boolean; code: string } } } }).data.attributes["last-delivery"];
+      const last = (
+        (await show.json()) as { data: { attributes: { "last-delivery": { successful: boolean; code: string } } } }
+      ).data.attributes["last-delivery"];
       expect(last.successful).toBe(true);
     } finally {
       await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, ncId));
@@ -122,7 +126,11 @@ describe("Notification Discord template and last-delivery surface", () => {
       const verifyRes = await request(`/api/v2/notification-configurations/${ncId}/actions/verify`, "POST");
       expect(verifyRes.status).toBe(400);
       const show = await request(`/api/v2/notification-configurations/${ncId}`);
-      const last = ((await show.json()) as { data: { attributes: { "last-delivery": { successful: boolean; code: string; error: string | null } } } }).data.attributes["last-delivery"];
+      const last = (
+        (await show.json()) as {
+          data: { attributes: { "last-delivery": { successful: boolean; code: string; error: string | null } } };
+        }
+      ).data.attributes["last-delivery"];
       expect(last.successful).toBe(false);
       expect(typeof last.error).toBe("string");
     } finally {

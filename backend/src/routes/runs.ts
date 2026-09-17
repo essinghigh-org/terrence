@@ -8,17 +8,47 @@ import { join } from "node:path";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { storageDir } from "../db/driver";
-import { agentJobs, agentPools, runs, runProvenanceCapsules, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users, organizations, notificationConfigurations, notificationConfigurationWorkspaceExclusions } from "../db/schema";
+import {
+  agentJobs,
+  agentPools,
+  runs,
+  runProvenanceCapsules,
+  workspaces,
+  configurationVersions,
+  logs,
+  stateVersions,
+  policyChecks,
+  policyEvaluations,
+  taskStages,
+  runComments,
+  auditLogs,
+  users,
+  organizations,
+  notificationConfigurations,
+  notificationConfigurationWorkspaceExclusions,
+} from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
-import { runResource, planResource, applyResource, userResource, taskStageResource, type RunRelationshipLinkage } from "../lib/response";
+import {
+  runResource,
+  planResource,
+  applyResource,
+  userResource,
+  taskStageResource,
+  type RunRelationshipLinkage,
+} from "../lib/response";
 import { tfPolicyEvaluationResource, tfStageTypesForEvaluations } from "./policy-evaluations";
 import { configurationVersionResource, configurationVersionIngressResource } from "./configuration-versions";
 import { costEstimateResource } from "./misc";
 import { validateVersion, auditLog } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, parseLogSliceParams, readRunLogSlice, readRunLogsPage } from "../lib/run-logs";
-import { deletePlanJsonArtifact, readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../lib/plan-json";
+import {
+  deletePlanJsonArtifact,
+  readPlanJsonArtifact,
+  readPlanJsonSideArtifact,
+  sanitizePlanJson,
+} from "../lib/plan-json";
 import { readCostEstimateArtifact } from "../lib/cost-estimate";
 import { costEstimationEnabledForOrganization } from "../lib/settings";
 import { applyGateBlockReason } from "../lib/operations";
@@ -46,11 +76,28 @@ import { pageRequest, pagination, cursorPagination } from "../lib/pagination";
 import type { RequestWithUrl } from "../lib/types";
 import { checkOrgPermission, checkWorkspacePermission, workspaceIdsForPermission } from "../lib/authorization";
 import { findAuthorizedWorkspace, findAuthorizedRun } from "../lib/authorized-resources";
-import { workspaceRunHistoryWhere, organizationRunHistoryWhere, FINAL_RUN_STATUSES, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, DISCARDABLE_RUN_STATUSES } from "../lib/run-history";
+import {
+  workspaceRunHistoryWhere,
+  organizationRunHistoryWhere,
+  FINAL_RUN_STATUSES,
+  CAPACITY_PENDING_STATUSES,
+  CAPACITY_RUNNING_STATUSES,
+  WORKSPACE_BLOCKING_RUN_STATUSES,
+  DISCARDABLE_RUN_STATUSES,
+} from "../lib/run-history";
 import type { WorkspacePermission } from "../lib/authorization";
 import type { DeepReadonly } from "../lib/types";
 import { inspectRecoveryCopy } from "../lib/recovery-files";
-import { abandonIdempotency, beginIdempotency, completeIdempotency, idempotencyContext, idempotencyError, idempotencyPrincipal, type IdempotencyBegin, type IdempotencyContext } from "../lib/idempotency";
+import {
+  abandonIdempotency,
+  beginIdempotency,
+  completeIdempotency,
+  idempotencyContext,
+  idempotencyError,
+  idempotencyPrincipal,
+  type IdempotencyBegin,
+  type IdempotencyContext,
+} from "../lib/idempotency";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
 
@@ -58,15 +105,29 @@ function provenanceDiff(
   before: Readonly<Record<string, unknown>>,
   after: Readonly<Record<string, unknown>>,
 ): readonly string[] {
-  return ["configuration", "engine", "workspace", "inputState", "variables", "policy", "runTasks", "executionTarget", "sandbox"]
-    .filter((key): boolean => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
+  return [
+    "configuration",
+    "engine",
+    "workspace",
+    "inputState",
+    "variables",
+    "policy",
+    "runTasks",
+    "executionTarget",
+    "sandbox",
+  ].filter((key): boolean => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
 }
 
 // Statuses whose timestamps contain a terminal plan/apply marker that can be
 // measured as "run duration". Speculative runs (plan_only) finish at
 // planned_and_finished; applying runs finish at applied (or errored/failed).
 const BASELINE_TERMINAL_STATUSES = [
-  "applied", "planned_and_finished", "planned_and_saved", "errored", "failed", "canceled",
+  "applied",
+  "planned_and_finished",
+  "planned_and_saved",
+  "errored",
+  "failed",
+  "canceled",
 ];
 
 /**
@@ -75,9 +136,7 @@ const BASELINE_TERMINAL_STATUSES = [
  * there is not enough history to be meaningful (fewer than 3 comparable runs
  * or this run has no measurable duration).
  */
-export async function runDurationBaseline(
-  run: DeepReadonly<typeof runs.$inferSelect>,
-): Promise<Readonly<{
+export async function runDurationBaseline(run: DeepReadonly<typeof runs.$inferSelect>): Promise<Readonly<{
   "duration-seconds": number;
   "median-duration-seconds": number;
   "is-slow": boolean;
@@ -127,17 +186,25 @@ type ParamCtx = Readonly<{
   readonly orgId?: string | null;
   readonly teamId?: string | null;
   readonly run?: { runId: string; workspaceId: string; organizationId: string } | null;
-  readonly request: Readonly<{ readonly url: string; readonly headers: Readonly<{ readonly get: (h: string) => string | null }> }>;
+  readonly request: Readonly<{
+    readonly url: string;
+    readonly headers: Readonly<{ readonly get: (h: string) => string | null }>;
+  }>;
   readonly set: SetObj;
 }>;
-
-
-
 
 type RunItem = DeepReadonly<typeof runs.$inferSelect>;
 type ConfigurationVersionItem = DeepReadonly<typeof configurationVersions.$inferSelect>;
 const VCS_RUN_SOURCES = new Set(["bitbucket", "github", "gitlab"]);
-type RunOrigin = Readonly<{ source: string; triggerReason: string; branch?: string; commitSha?: string; triggeredBy?: string; triggeredByAvatarUrl?: string; triggeredByProviderId?: string }>;
+type RunOrigin = Readonly<{
+  source: string;
+  triggerReason: string;
+  branch?: string;
+  commitSha?: string;
+  triggeredBy?: string;
+  triggeredByAvatarUrl?: string;
+  triggeredByProviderId?: string;
+}>;
 type LogItem = DeepReadonly<typeof logs.$inferSelect>;
 type CommentItem = DeepReadonly<typeof runComments.$inferSelect>;
 type AuditItem = DeepReadonly<typeof auditLogs.$inferSelect>;
@@ -182,12 +249,8 @@ function resolveTriggerReason(source: string, ingress: ConfigurationVersionItem[
   if (!VCS_RUN_SOURCES.has(source)) return "manual";
   // manualTrigger is written at runtime (see webhooks ingestion) but is not
   // part of the column type; `in`-narrowing reads it without an assertion.
-  if (
-    typeof ingress === "object" &&
-    ingress !== null &&
-    "manualTrigger" in ingress &&
-    ingress.manualTrigger === true
-  ) return "manual";
+  if (typeof ingress === "object" && ingress !== null && "manualTrigger" in ingress && ingress.manualTrigger === true)
+    return "manual";
   if (typeof ingress?.pullRequestNumber === "number") return "pull_request";
   if (typeof ingress?.tag === "string" && ingress.tag !== "") return "tag";
   return "push";
@@ -202,9 +265,7 @@ function ingressStringFields(ingress: ConfigurationVersionItem["ingressAttribute
   return fields;
 }
 
-function originForConfiguration(
-  configuration: ConfigurationVersionItem | undefined,
-): RunOrigin | undefined {
+function originForConfiguration(configuration: ConfigurationVersionItem | undefined): RunOrigin | undefined {
   if (configuration === undefined) return undefined;
   const source = configuration.source ?? "tfe-api";
   const ingress = configuration.ingressAttributes;
@@ -231,10 +292,12 @@ const SUPPORTED_RUN_INCLUDES = new Set([
 function requestedRunIncludes(request: ParamCtx["request"]): ReadonlySet<string> {
   const values = new URL(request.url).searchParams.getAll("include");
   if (values.length === 0) return new Set(["created_by"]);
-  return new Set(values
-    .flatMap((value: string): string[] => value.split(","))
-    .map((item: string): string => item.trim())
-    .filter((item: string): boolean => SUPPORTED_RUN_INCLUDES.has(item)));
+  return new Set(
+    values
+      .flatMap((value: string): string[] => value.split(","))
+      .map((item: string): string => item.trim())
+      .filter((item: string): boolean => SUPPORTED_RUN_INCLUDES.has(item)),
+  );
 }
 
 function includedWorkspaceResource(workspace: Readonly<typeof workspaces.$inferSelect>): Record<string, unknown> {
@@ -257,42 +320,57 @@ function includedWorkspaceResource(workspace: Readonly<typeof workspaces.$inferS
 }
 
 async function originsForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<string, RunOrigin>> {
-  const configurationIds = [...new Set(runList.flatMap((run): string[] =>
-    run.configurationVersionId === null ? [] : [run.configurationVersionId]))];
+  const configurationIds = [
+    ...new Set(
+      runList.flatMap((run): string[] => (run.configurationVersionId === null ? [] : [run.configurationVersionId])),
+    ),
+  ];
   if (configurationIds.length === 0) return new Map();
   const configurations = await db.query.configurationVersions.findMany({
     where: inArray(configurationVersions.id, configurationIds),
   });
-  const byId = new Map(configurations.map((configuration): [string, ConfigurationVersionItem] =>
-    [configuration.id, configuration]));
-  return new Map(runList.flatMap((run): [string, RunOrigin][] => {
-    const configuration = run.configurationVersionId === null
-      ? undefined
-      : byId.get(run.configurationVersionId);
-    const origin = originForConfiguration(configuration);
-    return origin === undefined ? [] : [[run.id, origin]];
-  }));
+  const byId = new Map(
+    configurations.map((configuration): [string, ConfigurationVersionItem] => [configuration.id, configuration]),
+  );
+  return new Map(
+    runList.flatMap((run): [string, RunOrigin][] => {
+      const configuration = run.configurationVersionId === null ? undefined : byId.get(run.configurationVersionId);
+      const origin = originForConfiguration(configuration);
+      return origin === undefined ? [] : [[run.id, origin]];
+    }),
+  );
 }
 
-async function usernamesById(userIds: readonly (string | null)[]): Promise<ReadonlyMap<string, { username: string; email: string | null }>> {
+async function usernamesById(
+  userIds: readonly (string | null)[],
+): Promise<ReadonlyMap<string, { username: string; email: string | null }>> {
   const ids = [...new Set(userIds.filter((id): id is string => id !== null))];
   if (ids.length === 0) return new Map();
   const actors = await db.query.users.findMany({
     where: inArray(users.id, ids),
     columns: { id: true, username: true, email: true },
   });
-  return new Map(actors.map((actor): [string, { username: string; email: string | null }] => [actor.id, { username: actor.username, email: actor.email }]));
+  return new Map(
+    actors.map((actor): [string, { username: string; email: string | null }] => [
+      actor.id,
+      { username: actor.username, email: actor.email },
+    ]),
+  );
 }
 
 function gravatarUrl(email: string | null | undefined): string | null {
-  const raw = typeof email === "string" && email !== ""
-    ? `https://www.gravatar.com/avatar/${createHash('md5').update(email.toLowerCase().trim()).digest('hex')}?d=mp&s=80`
-    : `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
+  const raw =
+    typeof email === "string" && email !== ""
+      ? `https://www.gravatar.com/avatar/${createHash("md5").update(email.toLowerCase().trim()).digest("hex")}?d=mp&s=80`
+      : `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
   return AvatarService.resolveUrl("user-gravatar", raw);
 }
 
 function commentResource(
-  comment: CommentItem | Readonly<{ id: string; runId: string; body: string; userId: string | null; createdAt: number }> & Readonly<{ username?: string | null; avatarUrl?: string | null }>,
+  comment:
+    | CommentItem
+    | (Readonly<{ id: string; runId: string; body: string; userId: string | null; createdAt: number }> &
+        Readonly<{ username?: string | null; avatarUrl?: string | null }>),
 ): Record<string, unknown> {
   const runEventId = `re-${comment.id}`;
   const username = (comment as Record<string, unknown>)["username"];
@@ -318,9 +396,14 @@ function commentResource(
 }
 
 async function enrichCommentsWithActors(
-  comments: readonly (CommentItem | Readonly<{ id: string; runId: string; body: string; userId: string | null; createdAt: number }>)[],
+  comments: readonly (
+    | CommentItem
+    | Readonly<{ id: string; runId: string; body: string; userId: string | null; createdAt: number }>
+  )[],
 ): Promise<readonly (CommentItem & { username?: string | null; avatarUrl?: string | null })[]> {
-  const userIds = [...new Set(comments.map((c): string | null => c.userId).filter((v): v is string => v !== null && v !== ""))];
+  const userIds = [
+    ...new Set(comments.map((c): string | null => c.userId).filter((v): v is string => v !== null && v !== "")),
+  ];
   if (userIds.length === 0) return comments;
   const userList = await db.query.users.findMany({
     where: inArray(users.id, userIds),
@@ -330,7 +413,7 @@ async function enrichCommentsWithActors(
   return comments.map((c): CommentItem & { username?: string | null; avatarUrl?: string | null } => {
     const u = c.userId !== null ? byId.get(c.userId) : undefined;
     return {
-      ...(c),
+      ...c,
       username: u?.username ?? null,
       avatarUrl: u !== undefined ? gravatarUrl(u.email) : null,
     };
@@ -356,13 +439,15 @@ function invalidRunInput(set: SetObj, detail: string): { errors: { status: strin
  * the tfvars file, or the database.
  */
 function isValidRunAddress(value: unknown): boolean {
-  return typeof value === "string"
-    && value !== ""
-    && value.length <= 1024
-    && !value.startsWith("-")
-    && !RUN_CONTROL_CHARS.test(value)
-    && !/\s/.test(value)
-    && RUN_ADDRESS_PATTERN.test(value);
+  return (
+    typeof value === "string" &&
+    value !== "" &&
+    value.length <= 1024 &&
+    !value.startsWith("-") &&
+    !RUN_CONTROL_CHARS.test(value) &&
+    !/\s/.test(value) &&
+    RUN_ADDRESS_PATTERN.test(value)
+  );
 }
 
 function invalidRunInputShape(
@@ -371,19 +456,24 @@ function invalidRunInputShape(
   replaceAddrs: unknown,
   set: SetObj,
 ): { errors: { status: string; title: string; detail: string }[] } | null {
-  if (targetAddrs !== null && targetAddrs !== undefined && !Array.isArray(targetAddrs)) return invalidRunInput(set, "target-addrs must be an array");
-  if (replaceAddrs !== null && replaceAddrs !== undefined && !Array.isArray(replaceAddrs)) return invalidRunInput(set, "replace-addrs must be an array");
-  if (variables !== null && variables !== undefined && !Array.isArray(variables)) return invalidRunInput(set, "variables must be an array");
+  if (targetAddrs !== null && targetAddrs !== undefined && !Array.isArray(targetAddrs))
+    return invalidRunInput(set, "target-addrs must be an array");
+  if (replaceAddrs !== null && replaceAddrs !== undefined && !Array.isArray(replaceAddrs))
+    return invalidRunInput(set, "replace-addrs must be an array");
+  if (variables !== null && variables !== undefined && !Array.isArray(variables))
+    return invalidRunInput(set, "variables must be an array");
   return null;
 }
 
 function isValidRunVariableKey(key: unknown): boolean {
-  return typeof key === "string"
-    && key !== ""
-    && key.length <= 256
-    && !key.startsWith("-")
-    && !RUN_CONTROL_CHARS.test(key)
-    && RUN_VARIABLE_KEY_PATTERN.test(key);
+  return (
+    typeof key === "string" &&
+    key !== "" &&
+    key.length <= 256 &&
+    !key.startsWith("-") &&
+    !RUN_CONTROL_CHARS.test(key) &&
+    RUN_VARIABLE_KEY_PATTERN.test(key)
+  );
 }
 
 function runVariableError(rawVariable: unknown): string | null {
@@ -394,14 +484,17 @@ function runVariableError(rawVariable: unknown): string | null {
   if (!isValidRunVariableKey(variable["key"])) return "variables contains an invalid variable key";
   const value = variable["value"];
   if (
-    typeof value !== "string"
-    || Buffer.byteLength(value, "utf8") > MAX_RUN_VARIABLE_VALUE_BYTES
-    || RUN_CONTROL_CHARS.test(value)
-  ) return "variables contains an invalid variable value";
+    typeof value !== "string" ||
+    Buffer.byteLength(value, "utf8") > MAX_RUN_VARIABLE_VALUE_BYTES ||
+    RUN_CONTROL_CHARS.test(value)
+  )
+    return "variables contains an invalid variable value";
   const category = variable["category"];
-  if (category !== undefined && category !== "terraform" && category !== "env") return "variables contains an invalid category";
+  if (category !== undefined && category !== "terraform" && category !== "env")
+    return "variables contains an invalid category";
   const sensitive = variable["sensitive"];
-  if (sensitive !== undefined && typeof sensitive !== "boolean") return "variables contains an invalid sensitivity flag";
+  if (sensitive !== undefined && typeof sensitive !== "boolean")
+    return "variables contains an invalid sensitivity flag";
   return null;
 }
 
@@ -433,13 +526,15 @@ function validateRunInputs(
  * inserts route through here so the event can never be missed. Returns the
  * persisted id and timestamp (callers that echo them in a response).
  */
-async function createRunComment(input: Readonly<{
-  runId: string;
-  userId: string | null;
-  body: string;
-  workspaceId: string;
-  orgId: string;
-}>): Promise<Readonly<{ id: string; createdAt: number }>> {
+async function createRunComment(
+  input: Readonly<{
+    runId: string;
+    userId: string | null;
+    body: string;
+    workspaceId: string;
+    orgId: string;
+  }>,
+): Promise<Readonly<{ id: string; createdAt: number }>> {
   const id = newResourceId("rc");
   const createdAt = Date.now();
   await db.insert(runComments).values({ id, runId: input.runId, userId: input.userId, body: input.body, createdAt });
@@ -458,17 +553,20 @@ async function createRunComment(input: Readonly<{
 }
 
 function actionComment(body: unknown): string {
-  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"] as Record<string, unknown> | undefined;
-  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null
-    ? data["attributes"] as Record<string, unknown>
-    : {};
+  const attributes =
+    typeof data?.["attributes"] === "object" && data["attributes"] !== null
+      ? (data["attributes"] as Record<string, unknown>)
+      : {};
   const value = payload["comment"] ?? attributes["comment"];
   return typeof value === "string" ? value.trim() : "";
 }
 
-async function includedUsersForRuns(runList: readonly (RunItem)[]): Promise<Record<string, unknown>[]> {
-  const ids = [...new Set(runList.map((r: RunItem): string | null => r.createdBy).filter((id): id is string => id !== null))];
+async function includedUsersForRuns(runList: readonly RunItem[]): Promise<Record<string, unknown>[]> {
+  const ids = [
+    ...new Set(runList.map((r: RunItem): string | null => r.createdBy).filter((id): id is string => id !== null)),
+  ];
   if (ids.length === 0) return [];
   const userList = await db.query.users.findMany({
     where: inArray(users.id, ids),
@@ -487,9 +585,7 @@ function configurationVersionHasIngressData(configuration: ConfigurationVersionI
   const ingress = (configuration.ingressAttributes ?? {}) as Record<string, unknown>;
   return Object.values(ingress).some(
     (value): boolean =>
-      (typeof value === "string" && value !== "")
-      || typeof value === "number"
-      || typeof value === "boolean",
+      (typeof value === "string" && value !== "") || typeof value === "number" || typeof value === "boolean",
   );
 }
 
@@ -498,14 +594,20 @@ async function includedConfigurationVersionsForRuns(
   request: ParamCtx["request"],
   includes: ReadonlySet<string>,
 ): Promise<Record<string, unknown>[]> {
-  const ids = [...new Set(runList
-    .map((run: RunItem): string | null => run.configurationVersionId)
-    .filter((id): id is string => id !== null))];
+  const ids = [
+    ...new Set(
+      runList
+        .map((run: RunItem): string | null => run.configurationVersionId)
+        .filter((id): id is string => id !== null),
+    ),
+  ];
   if (ids.length === 0) return [];
   const configurations = await db.query.configurationVersions.findMany({
     where: inArray(configurationVersions.id, ids),
   });
-  const byId = new Map(configurations.map((configuration): [string, ConfigurationVersionItem] => [configuration.id, configuration]));
+  const byId = new Map(
+    configurations.map((configuration): [string, ConfigurationVersionItem] => [configuration.id, configuration]),
+  );
   const resources: Record<string, unknown>[] = [];
   for (const run of runList) {
     if (run.configurationVersionId === null) continue;
@@ -523,22 +625,30 @@ async function includedCostEstimatesForRuns(
   runList: readonly RunItem[],
   workspaceList: readonly (typeof workspaces.$inferSelect)[],
 ): Promise<Record<string, unknown>[]> {
-  const workspacesById = new Map(workspaceList.map((workspace): [string, typeof workspace] => [workspace.id, workspace]));
+  const workspacesById = new Map(
+    workspaceList.map((workspace): [string, typeof workspace] => [workspace.id, workspace]),
+  );
   const organizationIds = [...new Set(workspaceList.map((workspace): string => workspace.orgId))];
-  const enabledEntries = await Promise.all(organizationIds.map(async (organizationId): Promise<readonly [string, boolean]> => [
-    organizationId,
-    await costEstimationEnabledForOrganization(organizationId),
-  ]));
+  const enabledEntries = await Promise.all(
+    organizationIds.map(
+      async (organizationId): Promise<readonly [string, boolean]> => [
+        organizationId,
+        await costEstimationEnabledForOrganization(organizationId),
+      ],
+    ),
+  );
   const enabledByOrganization = new Map(enabledEntries);
-  const resources = await Promise.all(runList.map(async (run): Promise<Record<string, unknown> | undefined> => {
-    const workspace = workspacesById.get(run.workspaceId);
-    if (workspace === undefined) return undefined;
-    return costEstimateResource(
-      run,
-      await readCostEstimateArtifact(run.id),
-      enabledByOrganization.get(workspace.orgId) ?? false,
-    );
-  }));
+  const resources = await Promise.all(
+    runList.map(async (run): Promise<Record<string, unknown> | undefined> => {
+      const workspace = workspacesById.get(run.workspaceId);
+      if (workspace === undefined) return undefined;
+      return costEstimateResource(
+        run,
+        await readCostEstimateArtifact(run.id),
+        enabledByOrganization.get(workspace.orgId) ?? false,
+      );
+    }),
+  );
   return resources.filter((resource): resource is Record<string, unknown> => resource !== undefined);
 }
 
@@ -561,31 +671,40 @@ async function includedRunResources(
   includes: ReadonlySet<string>,
 ): Promise<Record<string, unknown>[]> {
   const needsWorkspaceRows = includes.has("workspace") || includes.has("cost_estimate");
-  const includeConfiguration = includes.has("configuration_version") || includes.has("configuration_version.ingress_attributes");
-  const [usersIncluded, workspaceList, configurationsIncluded, stagesIncluded, evaluationsIncluded] = await Promise.all([
-    includes.has("created_by") ? includedUsersForRuns(runList) : Promise.resolve([] as Record<string, unknown>[]),
-    needsWorkspaceRows ? workspacesForRuns(runList) : Promise.resolve([] as (typeof workspaces.$inferSelect)[]),
-    includeConfiguration
-      ? includedConfigurationVersionsForRuns(runList, request, includes)
-      : Promise.resolve([] as Record<string, unknown>[]),
-    includes.has("task_stages")
-      ? includedTaskStagesForRuns(runList)
-      : Promise.resolve([] as Record<string, unknown>[]),
-    includes.has("tf_policy_evaluations")
-      ? includedTFPolicyEvaluationsForRuns(runList)
-      : Promise.resolve([] as Record<string, unknown>[]),
-  ]);
-  const plans = includes.has("plan") ? runList.map((run): Record<string, unknown> => planResource(run, request, authorizedRunCapability(run, "run-read"))) : [];
-  const applies = includes.has("apply") ? runList.map((run): Record<string, unknown> => applyResource(run, request, authorizedRunCapability(run, "run-read"))) : [];
+  const includeConfiguration =
+    includes.has("configuration_version") || includes.has("configuration_version.ingress_attributes");
+  const [usersIncluded, workspaceList, configurationsIncluded, stagesIncluded, evaluationsIncluded] = await Promise.all(
+    [
+      includes.has("created_by") ? includedUsersForRuns(runList) : Promise.resolve([] as Record<string, unknown>[]),
+      needsWorkspaceRows ? workspacesForRuns(runList) : Promise.resolve([] as (typeof workspaces.$inferSelect)[]),
+      includeConfiguration
+        ? includedConfigurationVersionsForRuns(runList, request, includes)
+        : Promise.resolve([] as Record<string, unknown>[]),
+      includes.has("task_stages")
+        ? includedTaskStagesForRuns(runList)
+        : Promise.resolve([] as Record<string, unknown>[]),
+      includes.has("tf_policy_evaluations")
+        ? includedTFPolicyEvaluationsForRuns(runList)
+        : Promise.resolve([] as Record<string, unknown>[]),
+    ],
+  );
+  const plans = includes.has("plan")
+    ? runList.map(
+        (run): Record<string, unknown> => planResource(run, request, authorizedRunCapability(run, "run-read")),
+      )
+    : [];
+  const applies = includes.has("apply")
+    ? runList.map(
+        (run): Record<string, unknown> => applyResource(run, request, authorizedRunCapability(run, "run-read")),
+      )
+    : [];
   const workspacesIncluded = includes.has("workspace")
     ? runList.flatMap((run): Record<string, unknown>[] => {
-      const workspace = workspaceList.find((candidate): boolean => candidate.id === run.workspaceId);
-      return workspace === undefined ? [] : [includedWorkspaceResource(workspace)];
-    })
+        const workspace = workspaceList.find((candidate): boolean => candidate.id === run.workspaceId);
+        return workspace === undefined ? [] : [includedWorkspaceResource(workspace)];
+      })
     : [];
-  const costEstimates = includes.has("cost_estimate")
-    ? await includedCostEstimatesForRuns(runList, workspaceList)
-    : [];
+  const costEstimates = includes.has("cost_estimate") ? await includedCostEstimatesForRuns(runList, workspaceList) : [];
   return deduplicateIncludedResources([
     ...usersIncluded,
     ...plans,
@@ -601,7 +720,9 @@ async function includedRunResources(
 /** Audit finding 6: batch-load relationship linkage IDs for a run page (one
  * query per relation, no N+1) so the CLI hydrates policy checks, cost
  * estimates, and task stages from run reads. */
-async function notificationConfigurationIdsForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<string, readonly string[]>> {
+async function notificationConfigurationIdsForRuns(
+  runList: readonly RunItem[],
+): Promise<ReadonlyMap<string, readonly string[]>> {
   const workspaceIds = [...new Set(runList.map((run): string => run.workspaceId))];
   if (workspaceIds.length === 0) return new Map();
 
@@ -609,15 +730,18 @@ async function notificationConfigurationIdsForRuns(runList: readonly RunItem[]):
     where: inArray(workspaces.id, workspaceIds),
     columns: { id: true, projectId: true },
   });
-  const projectIds = [...new Set(workspaceRows.flatMap((workspace): string[] =>
-    workspace.projectId === null ? [] : [workspace.projectId],
-  ))];
-  const configurationWhere = projectIds.length === 0
-    ? inArray(notificationConfigurations.workspaceId, workspaceIds)
-    : or(
-        inArray(notificationConfigurations.workspaceId, workspaceIds),
-        inArray(notificationConfigurations.projectId, projectIds),
-      );
+  const projectIds = [
+    ...new Set(
+      workspaceRows.flatMap((workspace): string[] => (workspace.projectId === null ? [] : [workspace.projectId])),
+    ),
+  ];
+  const configurationWhere =
+    projectIds.length === 0
+      ? inArray(notificationConfigurations.workspaceId, workspaceIds)
+      : or(
+          inArray(notificationConfigurations.workspaceId, workspaceIds),
+          inArray(notificationConfigurations.projectId, projectIds),
+        );
   const configurations = await db.query.notificationConfigurations.findMany({
     where: configurationWhere,
     orderBy: [asc(notificationConfigurations.createdAt), asc(notificationConfigurations.id)],
@@ -626,17 +750,20 @@ async function notificationConfigurationIdsForRuns(runList: readonly RunItem[]):
   const projectConfigurationIds = configurations
     .filter((configuration): boolean => configuration.projectId !== null)
     .map((configuration): string => configuration.id);
-  const exclusions = projectConfigurationIds.length === 0
-    ? []
-    : await db.query.notificationConfigurationWorkspaceExclusions.findMany({
-        where: and(
-          inArray(notificationConfigurationWorkspaceExclusions.notificationConfigurationId, projectConfigurationIds),
-          inArray(notificationConfigurationWorkspaceExclusions.workspaceId, workspaceIds),
-        ),
-        columns: { notificationConfigurationId: true, workspaceId: true },
-      });
+  const exclusions =
+    projectConfigurationIds.length === 0
+      ? []
+      : await db.query.notificationConfigurationWorkspaceExclusions.findMany({
+          where: and(
+            inArray(notificationConfigurationWorkspaceExclusions.notificationConfigurationId, projectConfigurationIds),
+            inArray(notificationConfigurationWorkspaceExclusions.workspaceId, workspaceIds),
+          ),
+          columns: { notificationConfigurationId: true, workspaceId: true },
+        });
   const excluded = new Set(exclusions.map((row): string => `${row.notificationConfigurationId}:${row.workspaceId}`));
-  const workspaceById = new Map(workspaceRows.map((workspace): [string, typeof workspace] => [workspace.id, workspace]));
+  const workspaceById = new Map(
+    workspaceRows.map((workspace): [string, typeof workspace] => [workspace.id, workspace]),
+  );
   const configurationIdsByRun = new Map<string, readonly string[]>();
   for (const run of runList) {
     const workspace = workspaceById.get(run.workspaceId);
@@ -646,12 +773,19 @@ async function notificationConfigurationIdsForRuns(runList: readonly RunItem[]):
     }
     const ids = configurations
       .filter((configuration): boolean => {
-        if (configuration.enabled !== true
-          || !configuration.triggers.some((trigger): boolean => (RUN_NOTIFICATION_TRIGGERS as readonly string[]).includes(trigger))) return false;
+        if (
+          configuration.enabled !== true ||
+          !configuration.triggers.some((trigger): boolean =>
+            (RUN_NOTIFICATION_TRIGGERS as readonly string[]).includes(trigger),
+          )
+        )
+          return false;
         if (configuration.workspaceId === workspace.id) return true;
-        return configuration.projectId !== null
-          && configuration.projectId === workspace.projectId
-          && !excluded.has(`${configuration.id}:${workspace.id}`);
+        return (
+          configuration.projectId !== null &&
+          configuration.projectId === workspace.projectId &&
+          !excluded.has(`${configuration.id}:${workspace.id}`)
+        );
       })
       .map((configuration): string => configuration.id);
     configurationIdsByRun.set(run.id, ids);
@@ -659,22 +793,39 @@ async function notificationConfigurationIdsForRuns(runList: readonly RunItem[]):
   return configurationIdsByRun;
 }
 
-export async function linkageForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<string, RunRelationshipLinkage>> {
+export async function linkageForRuns(
+  runList: readonly RunItem[],
+): Promise<ReadonlyMap<string, RunRelationshipLinkage>> {
   const ids = runList.map((r: RunItem): string => r.id);
   if (ids.length === 0) return new Map();
   const [checks, stages, evals, notificationConfigurationIdsByRun] = await Promise.all([
-    db.query.policyChecks.findMany({ where: inArray(policyChecks.runId, [...ids]), columns: { id: true, runId: true } }),
+    db.query.policyChecks.findMany({
+      where: inArray(policyChecks.runId, [...ids]),
+      columns: { id: true, runId: true },
+    }),
     db.query.taskStages.findMany({ where: inArray(taskStages.runId, [...ids]), columns: { id: true, runId: true } }),
-    db.query.policyEvaluations.findMany({ where: inArray(policyEvaluations.runId, [...ids]), columns: { id: true, runId: true } }),
+    db.query.policyEvaluations.findMany({
+      where: inArray(policyEvaluations.runId, [...ids]),
+      columns: { id: true, runId: true },
+    }),
     notificationConfigurationIdsForRuns(runList),
   ]);
-  const linkage = new Map<string, { policyCheckIds: string[]; taskStageIds: string[]; tfPolicyEvaluationIds: string[]; notificationConfigurationIds: readonly string[] }>();
-  for (const id of ids) linkage.set(id, {
-    policyCheckIds: [],
-    taskStageIds: [],
-    tfPolicyEvaluationIds: [],
-    notificationConfigurationIds: notificationConfigurationIdsByRun.get(id) ?? [],
-  });
+  const linkage = new Map<
+    string,
+    {
+      policyCheckIds: string[];
+      taskStageIds: string[];
+      tfPolicyEvaluationIds: string[];
+      notificationConfigurationIds: readonly string[];
+    }
+  >();
+  for (const id of ids)
+    linkage.set(id, {
+      policyCheckIds: [],
+      taskStageIds: [],
+      tfPolicyEvaluationIds: [],
+      notificationConfigurationIds: notificationConfigurationIdsByRun.get(id) ?? [],
+    });
   for (const check of checks) linkage.get(check.runId)?.policyCheckIds.push(check.id);
   for (const stage of stages) linkage.get(stage.runId)?.taskStageIds.push(stage.id);
   for (const evalRecord of evals) {
@@ -698,15 +849,7 @@ async function actionRunResource(
     runDurationBaseline(run),
     linkageForRuns([run]),
   ]);
-  return runResource(
-    run,
-    canApply,
-    canOverridePolicy,
-    origins.get(run.id),
-    baseline,
-    canAdmin,
-    linkage.get(run.id),
-  );
+  return runResource(run, canApply, canOverridePolicy, origins.get(run.id), baseline, canAdmin, linkage.get(run.id));
 }
 
 /** Audit finding 6: task-stage resources for include=task_stages sideloads
@@ -725,8 +868,9 @@ async function includedTFPolicyEvaluationsForRuns(runList: readonly RunItem[]): 
   if (ids.length === 0) return [];
   const evals = await db.query.policyEvaluations.findMany({ where: inArray(policyEvaluations.runId, [...ids]) });
   const stageTypes = await tfStageTypesForEvaluations(evals);
-  return evals.map((evalRecord): Record<string, unknown> =>
-    tfPolicyEvaluationResource(evalRecord, stageTypes.get(evalRecord.id)));
+  return evals.map(
+    (evalRecord): Record<string, unknown> => tfPolicyEvaluationResource(evalRecord, stageTypes.get(evalRecord.id)),
+  );
 }
 
 function safeRunEventDetails(event: AuditItem): Readonly<Record<string, string>> {
@@ -735,11 +879,28 @@ function safeRunEventDetails(event: AuditItem): Readonly<Record<string, string>>
   const source = details as Readonly<Record<string, unknown>>;
   return Object.fromEntries(
     [
-      "fromStatus", "toStatus", "workspaceId", "status", "source", "triggerReason", "actorUsername", "actorAvatarUrl", "actorProviderId",
-      "schemaVersion", "result", "requestId", "correlationId", "credentialClass", "effectiveUserId", "impersonatorUserId", "immutable",
+      "fromStatus",
+      "toStatus",
+      "workspaceId",
+      "status",
+      "source",
+      "triggerReason",
+      "actorUsername",
+      "actorAvatarUrl",
+      "actorProviderId",
+      "schemaVersion",
+      "result",
+      "requestId",
+      "correlationId",
+      "credentialClass",
+      "effectiveUserId",
+      "impersonatorUserId",
+      "immutable",
     ].flatMap((key): readonly [string, string][] => {
       const value = source[key];
-      return typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? [[key, String(value)]] : [];
+      return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+        ? [[key, String(value)]]
+        : [];
     }),
   );
 }
@@ -759,9 +920,10 @@ async function authorizedOrgWorkspaces(
   const ids = await workspaceIdsForPermission(organizationId, userId, orgId, teamId, required);
   if (ids !== null && ids.length === 0) return [];
   return db.query.workspaces.findMany({
-    where: ids === null
-      ? eq(workspaces.orgId, organizationId)
-      : and(eq(workspaces.orgId, organizationId), inArray(workspaces.id, [...ids])),
+    where:
+      ids === null
+        ? eq(workspaces.orgId, organizationId)
+        : and(eq(workspaces.orgId, organizationId), inArray(workspaces.id, [...ids])),
   });
 }
 
@@ -776,20 +938,42 @@ function parseRunOperationRequest(
   set: SetObj,
 ): Readonly<{ request: RunOperationRequest } | { failure: Record<string, unknown> }> {
   const requestedOperation = typeof attributes["operation"] === "string" ? attributes["operation"] : undefined;
-  const allowedOperations = new Set(["plan", "plan_and_apply", "plan_only", "save_plan", "empty_apply", "action_only", "destroy", "refresh_only"]);
+  const allowedOperations = new Set([
+    "plan",
+    "plan_and_apply",
+    "plan_only",
+    "save_plan",
+    "empty_apply",
+    "action_only",
+    "destroy",
+    "refresh_only",
+  ]);
   if (requestedOperation !== undefined && !allowedOperations.has(requestedOperation)) {
     (set as { status: number }).status = 422;
     return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid operation" }] } };
   }
-  const isDestroy = requestedOperation === "destroy"
-    || (typeof attributes["is-destroy"] === "boolean" ? attributes["is-destroy"] : false);
+  const isDestroy =
+    requestedOperation === "destroy" ||
+    (typeof attributes["is-destroy"] === "boolean" ? attributes["is-destroy"] : false);
   const invokeActionAddrs = Array.isArray(attributes["invoke-action-addrs"])
-    ? attributes["invoke-action-addrs"].filter((value: unknown): value is string => typeof value === "string" && value.trim() !== "").map((value: string): string => value.trim())
+    ? attributes["invoke-action-addrs"]
+        .filter((value: unknown): value is string => typeof value === "string" && value.trim() !== "")
+        .map((value: string): string => value.trim())
     : [];
   const targetAddrsCount = Array.isArray(attributes["target-addrs"]) ? attributes["target-addrs"].length : 0;
   if (invokeActionAddrs.length > 1 || (invokeActionAddrs.length > 0 && (isDestroy || targetAddrsCount > 0))) {
     (set as { status: number }).status = 422;
-    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "invoke-action-addrs accepts one address and cannot be combined with destroy or target addresses" }] } };
+    return {
+      failure: {
+        errors: [
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail: "invoke-action-addrs accepts one address and cannot be combined with destroy or target addresses",
+          },
+        ],
+      },
+    };
   }
   return { request: { requestedOperation, isDestroy, invokeActionAddrs } };
 }
@@ -809,18 +993,29 @@ function parseRunPlanFlags(
 ): RunPlanFlags {
   return {
     requestedAutoApply: typeof attributes["auto-apply"] === "boolean" ? attributes["auto-apply"] : undefined,
-    requestedPlanOnly: requestedOperation === "plan" || requestedOperation === "plan_only"
-      ? true
-      : typeof attributes["plan-only"] === "boolean" ? attributes["plan-only"] : undefined,
+    requestedPlanOnly:
+      requestedOperation === "plan" || requestedOperation === "plan_only"
+        ? true
+        : typeof attributes["plan-only"] === "boolean"
+          ? attributes["plan-only"]
+          : undefined,
     refresh: typeof attributes["refresh"] === "boolean" ? attributes["refresh"] : true,
-    refreshOnly: requestedOperation === "refresh_only" || requestedOperation === "action_only"
-      || (typeof attributes["refresh-only"] === "boolean" ? attributes["refresh-only"] : false),
-    allowEmptyApply: requestedOperation === "empty_apply"
-      ? true
-      : typeof attributes["allow-empty-apply"] === "boolean" ? attributes["allow-empty-apply"] : false,
-    savePlan: requestedOperation === "save_plan"
-      ? true
-      : typeof attributes["save-plan"] === "boolean" ? attributes["save-plan"] : false,
+    refreshOnly:
+      requestedOperation === "refresh_only" ||
+      requestedOperation === "action_only" ||
+      (typeof attributes["refresh-only"] === "boolean" ? attributes["refresh-only"] : false),
+    allowEmptyApply:
+      requestedOperation === "empty_apply"
+        ? true
+        : typeof attributes["allow-empty-apply"] === "boolean"
+          ? attributes["allow-empty-apply"]
+          : false,
+    savePlan:
+      requestedOperation === "save_plan"
+        ? true
+        : typeof attributes["save-plan"] === "boolean"
+          ? attributes["save-plan"]
+          : false,
   };
 }
 
@@ -832,8 +1027,9 @@ function resolveRunOperation(
   savePlan: boolean,
   allowEmptyApply: boolean,
 ): string {
-  return requestedOperation
-    ?? (invokeActionCount > 0
+  return (
+    requestedOperation ??
+    (invokeActionCount > 0
       ? "action_only"
       : isDestroy
         ? "destroy"
@@ -843,7 +1039,8 @@ function resolveRunOperation(
             ? "save_plan"
             : allowEmptyApply
               ? "empty_apply"
-              : "plan_and_apply");
+              : "plan_and_apply")
+  );
 }
 
 type RunConfigurationSelection = Readonly<{
@@ -865,22 +1062,44 @@ async function resolveRunConfigurationVersion(
   let configurationVersion: typeof configurationVersions.$inferSelect | undefined;
   let resolvedCvId = cvId;
   if (resolvedCvId !== undefined) {
-    configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, resolvedCvId) });
+    configurationVersion = await db.query.configurationVersions.findFirst({
+      where: eq(configurationVersions.id, resolvedCvId),
+    });
     if (configurationVersion === undefined) {
       await abandonReservedIdempotency(begin);
       (set as { status: number }).status = 422;
-      return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version was not found" }] } };
+      return {
+        failure: {
+          errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version was not found" }],
+        },
+      };
     }
     if (configurationVersion?.workspaceId !== workspaceId) {
       await abandonReservedIdempotency(begin);
       (set as { status: number }).status = 422;
-      return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version does not belong to workspace" }] } };
+      return {
+        failure: {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "Configuration version does not belong to workspace",
+            },
+          ],
+        },
+      };
     }
-    const pendingVcs = configurationVersion.status === "pending" && ["github", "gitlab", "bitbucket"].includes(configurationVersion.source ?? "");
+    const pendingVcs =
+      configurationVersion.status === "pending" &&
+      ["github", "gitlab", "bitbucket"].includes(configurationVersion.source ?? "");
     if (configurationVersion.status !== "uploaded" && !pendingVcs) {
       await abandonReservedIdempotency(begin);
       (set as { status: number }).status = 409;
-      return { failure: { errors: [{ status: "409", title: "Conflict", detail: "Configuration version is not ready for a run" }] } };
+      return {
+        failure: {
+          errors: [{ status: "409", title: "Conflict", detail: "Configuration version is not ready for a run" }],
+        },
+      };
     }
   } else if (workspace.vcsRepo?.identifier !== undefined) {
     // Auto-create a configuration version from VCS for manual runs
@@ -891,7 +1110,9 @@ async function resolveRunConfigurationVersion(
       return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: result.error }] } };
     }
     resolvedCvId = result;
-    configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, resolvedCvId) });
+    configurationVersion = await db.query.configurationVersions.findFirst({
+      where: eq(configurationVersions.id, resolvedCvId),
+    });
   } else {
     // Manual runs without an explicit configuration version use the workspace's
     // latest uploaded configuration version (matches the reference format behaviour; tfe_workspace_run
@@ -969,7 +1190,17 @@ async function findAuthorizedRunWorkspace(
   }
   if (orgId !== null && orgId !== undefined) {
     (set as { status: number }).status = 403;
-    return { failure: { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create runs. Use a team token or user token." }] } };
+    return {
+      failure: {
+        errors: [
+          {
+            status: "403",
+            title: "Forbidden",
+            detail: "Organization tokens cannot create runs. Use a team token or user token.",
+          },
+        ],
+      },
+    };
   }
   if (!(await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "plan"))) {
     (set as { status: number }).status = 403;
@@ -982,7 +1213,12 @@ async function checkRunCreationGuards(
   workspace: typeof workspaces.$inferSelect,
   userId: string | undefined,
   teamId: string | null | undefined,
-  guards: Readonly<{ isDestroy: boolean; requestedAutoApply: boolean | undefined; allowEmptyApply: boolean; operation: string }>,
+  guards: Readonly<{
+    isDestroy: boolean;
+    requestedAutoApply: boolean | undefined;
+    allowEmptyApply: boolean;
+    operation: string;
+  }>,
   begin: IdempotencyBegin,
   set: SetObj,
 ): Promise<Readonly<{ canApply: boolean } | { failure: Record<string, unknown> }>> {
@@ -991,7 +1227,13 @@ async function checkRunCreationGuards(
   if (workspace.locked === true) {
     await abandonReservedIdempotency(begin);
     (set as { status: number }).status = 422;
-    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(workspace.lockedReason) }] } };
+    return {
+      failure: {
+        errors: [
+          { status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(workspace.lockedReason) },
+        ],
+      },
+    };
   }
   // Local-execution workspaces never run remotely (issue #567): the CLI
   // plans and applies on the operator machine and the server only stores
@@ -999,15 +1241,34 @@ async function checkRunCreationGuards(
   if (workspace.executionMode === "local") {
     await abandonReservedIdempotency(begin);
     (set as { status: number }).status = 422;
-    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote runs cannot be created for workspaces with local execution mode" }] } };
+    return {
+      failure: {
+        errors: [
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail: "Remote runs cannot be created for workspaces with local execution mode",
+          },
+        ],
+      },
+    };
   }
   if (guards.isDestroy && workspace.allowDestroyPlan === false) {
     await abandonReservedIdempotency(begin);
     (set as { status: number }).status = 422;
-    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Destroy plans are disabled for this workspace" }] } };
+    return {
+      failure: {
+        errors: [
+          { status: "422", title: "Unprocessable Entity", detail: "Destroy plans are disabled for this workspace" },
+        ],
+      },
+    };
   }
   const canApply = await checkWorkspacePermission(workspace, userId, null, teamId ?? null, "apply");
-  if (!canApply && (guards.requestedAutoApply === true || guards.allowEmptyApply || guards.operation === "action_only")) {
+  if (
+    !canApply &&
+    (guards.requestedAutoApply === true || guards.allowEmptyApply || guards.operation === "action_only")
+  ) {
     await abandonReservedIdempotency(begin);
     (set as { status: number }).status = 403;
     return { failure: { errors: [{ status: "403", title: "Forbidden" }] } };
@@ -1046,7 +1307,8 @@ function resolveRunDisplayFields(
   const message = typeof attributes["message"] === "string" ? attributes["message"] : "";
   return {
     planOnly: requestedPlanOnly ?? configurationVersion?.speculative ?? false,
-    finalMsg: message !== "" ? message : (configurationVersion?.source === "tfe-cli" ? "Triggered via CLI" : "Triggered via UI"),
+    finalMsg:
+      message !== "" ? message : configurationVersion?.source === "tfe-cli" ? "Triggered via CLI" : "Triggered via UI",
   };
 }
 
@@ -1067,8 +1329,10 @@ function parseRunScalarAttributes(attributes: Readonly<Record<string, unknown>>)
     runVariablesInput: Array.isArray(attributes["variables"]) ? attributes["variables"] : null,
     terraformVersion: typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : undefined,
     debuggingMode: typeof attributes["debugging-mode"] === "boolean" ? attributes["debugging-mode"] : false,
-    allowConfigGeneration: typeof attributes["allow-config-generation"] === "boolean" ? attributes["allow-config-generation"] : false,
-    generatedConfiguration: typeof attributes["generated-configuration"] === "boolean" ? attributes["generated-configuration"] : false,
+    allowConfigGeneration:
+      typeof attributes["allow-config-generation"] === "boolean" ? attributes["allow-config-generation"] : false,
+    generatedConfiguration:
+      typeof attributes["generated-configuration"] === "boolean" ? attributes["generated-configuration"] : false,
   };
 }
 
@@ -1100,19 +1364,22 @@ function resolveRunAutoApply(
   // on the created run so planners see why their run waits for confirmation.
   return {
     autoApply: operation === "action_only" ? canApply : canApply && (requestedAutoApply ?? workspaceAutoApply),
-    autoApplySuppressed: !canApply && requestedAutoApply === undefined && workspaceAutoApply && operation !== "action_only",
+    autoApplySuppressed:
+      !canApply && requestedAutoApply === undefined && workspaceAutoApply && operation !== "action_only",
   };
 }
 
 function provenanceConfigurationDigest(
   configurationVersion: typeof configurationVersions.$inferSelect | undefined,
 ): string {
-  return sha256Hex(canonicalJson({
-    id: configurationVersion?.id ?? null,
-    status: configurationVersion?.status ?? null,
-    ingressAttributes: configurationVersion?.ingressAttributes ?? null,
-    createdAt: configurationVersion?.createdAt ?? null,
-  }));
+  return sha256Hex(
+    canonicalJson({
+      id: configurationVersion?.id ?? null,
+      status: configurationVersion?.status ?? null,
+      ingressAttributes: configurationVersion?.ingressAttributes ?? null,
+      createdAt: configurationVersion?.createdAt ?? null,
+    }),
+  );
 }
 
 async function completeRunCreationResponse(
@@ -1169,10 +1436,12 @@ async function assembleRunProvenance(
   id: string,
   createdAt: number,
   runVariablesInput: Parameters<typeof runVariablesForWrite>[0] | null,
-): Promise<Readonly<{
-  provenance: Awaited<ReturnType<typeof buildRunProvenanceCapsule>>;
-  runVariables: Awaited<ReturnType<typeof runVariablesForWrite>> | null;
-}>> {
+): Promise<
+  Readonly<{
+    provenance: Awaited<ReturnType<typeof buildRunProvenanceCapsule>>;
+    runVariables: Awaited<ReturnType<typeof runVariablesForWrite>> | null;
+  }>
+> {
   const [effectiveVariables, inputState] = await Promise.all([
     effectiveWorkspaceVariables(workspace.id, workspace.orgId, workspace.projectId ?? null),
     db.query.stateVersions.findFirst({
@@ -1234,19 +1503,17 @@ async function resolveApplyAgentPool(
   set: SetObj,
 ): Promise<Readonly<{ agentPoolId: string | null } | { failure: Record<string, unknown> }>> {
   if (workspace.executionMode !== "agent") return { agentPoolId: null };
-  const pool = workspace.agentPoolId === null
-    ? undefined
-    : await db.query.agentPools.findFirst({ where: eq(agentPools.id, workspace.agentPoolId) });
-  if (
-    pool?.orgId !== workspace.orgId
-    || !(await agentPoolAllowsWorkspace(
-      pool,
-      workspace.id,
-      workspace.projectId,
-    ))
-  ) {
+  const pool =
+    workspace.agentPoolId === null
+      ? undefined
+      : await db.query.agentPools.findFirst({ where: eq(agentPools.id, workspace.agentPoolId) });
+  if (pool?.orgId !== workspace.orgId || !(await agentPoolAllowsWorkspace(pool, workspace.id, workspace.projectId))) {
     (set as { status: number }).status = 409;
-    return { failure: { errors: [{ status: "409", title: "Conflict", detail: "The workspace does not have an allowed agent pool" }] } };
+    return {
+      failure: {
+        errors: [{ status: "409", title: "Conflict", detail: "The workspace does not have an allowed agent pool" }],
+      },
+    };
   }
   return { agentPoolId: pool.id };
 }
@@ -1269,7 +1536,8 @@ async function logApplyConfirmation(
     ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
   });
   const commentStr = actionComment(body);
-  if (commentStr !== "") await createRunComment({ runId, userId, body: commentStr, workspaceId: workspace.id, orgId: workspace.orgId });
+  if (commentStr !== "")
+    await createRunComment({ runId, userId, body: commentStr, workspaceId: workspace.id, orgId: workspace.orgId });
 }
 
 async function rejectMissingConfiguration(
@@ -1285,7 +1553,18 @@ async function rejectMissingConfiguration(
   if (cvId === undefined && workspace.vcsRepo?.identifier === undefined && workspace.source !== "local") {
     await abandonReservedIdempotency(begin);
     (set as { status: number }).status = 422;
-    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No configuration version is available for this workspace. Upload a configuration version or connect a VCS repository first." }] } };
+    return {
+      failure: {
+        errors: [
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail:
+              "No configuration version is available for this workspace. Upload a configuration version or connect a VCS repository first.",
+          },
+        ],
+      },
+    };
   }
   return null;
 }
@@ -1316,27 +1595,25 @@ function runQueueWhere(
     base,
     where: and(
       base,
-      cursor === null ? undefined : or(
-        gt(runs.createdAt, cursor.createdAt),
-        and(eq(runs.createdAt, cursor.createdAt), gt(runs.id, cursor.id)),
-      ),
+      cursor === null
+        ? undefined
+        : or(gt(runs.createdAt, cursor.createdAt), and(eq(runs.createdAt, cursor.createdAt), gt(runs.id, cursor.id))),
     ),
   };
 }
 
-async function countPendingBeforeQueue(
-  workspaceIds: readonly string[],
-  first: RunItem | undefined,
-): Promise<number> {
+async function countPendingBeforeQueue(workspaceIds: readonly string[], first: RunItem | undefined): Promise<number> {
   if (first === undefined) return 0;
-  const rowsBefore = await db.select({ total: count() }).from(runs).where(and(
-    inArray(runs.workspaceId, [...workspaceIds]),
-    inArray(runs.status, [...CAPACITY_PENDING_STATUSES]),
-    or(
-      lt(runs.createdAt, first.createdAt),
-      and(eq(runs.createdAt, first.createdAt), lt(runs.id, first.id)),
-    ),
-  ));
+  const rowsBefore = await db
+    .select({ total: count() })
+    .from(runs)
+    .where(
+      and(
+        inArray(runs.workspaceId, [...workspaceIds]),
+        inArray(runs.status, [...CAPACITY_PENDING_STATUSES]),
+        or(lt(runs.createdAt, first.createdAt), and(eq(runs.createdAt, first.createdAt), lt(runs.id, first.id))),
+      ),
+    );
   return rowsBefore[0]?.total ?? 0;
 }
 
@@ -1346,11 +1623,20 @@ async function queueTotalQuery(cursorMode: boolean, base: SQL | undefined): Prom
 }
 
 function parseRerunMode(body: unknown, set: SetObj): Readonly<{ mode: "original" | "current" } | { failure: unknown }> {
-  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const mode = payload["mode"] === "original" ? "original" : payload["mode"] === "current" || payload["mode"] === undefined ? "current" : null;
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const mode =
+    payload["mode"] === "original"
+      ? "original"
+      : payload["mode"] === "current" || payload["mode"] === undefined
+        ? "current"
+        : null;
   if (mode === null) {
     (set as { status: number }).status = 422;
-    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "mode must be original or current" }] } };
+    return {
+      failure: {
+        errors: [{ status: "422", title: "Unprocessable Entity", detail: "mode must be original or current" }],
+      },
+    };
   }
   return { mode };
 }
@@ -1360,20 +1646,35 @@ async function restoreRerunOriginal(
   engine: Readonly<Record<string, unknown>> | undefined,
   executionMaterial: string,
   set: SetObj,
-): Promise<Readonly<{ configurationId: string | undefined; attributes: Record<string, unknown> } | { failure: unknown }>> {
+): Promise<
+  Readonly<{ configurationId: string | undefined; attributes: Record<string, unknown> } | { failure: unknown }>
+> {
   const configurationId = typeof configuration?.["versionId"] === "string" ? configuration["versionId"] : undefined;
   if (configurationId === undefined) {
     (set as { status: number }).status = 409;
-    return { failure: { errors: [{ status: "409", title: "Conflict", detail: "The original configuration version is no longer available" }] } };
+    return {
+      failure: {
+        errors: [
+          { status: "409", title: "Conflict", detail: "The original configuration version is no longer available" },
+        ],
+      },
+    };
   }
   const restored: Record<string, unknown> = {};
   try {
-    const material = JSON.parse(await decryptSecret(executionMaterial)) as { effectiveVariables?: unknown; variables?: unknown };
+    const material = JSON.parse(await decryptSecret(executionMaterial)) as {
+      effectiveVariables?: unknown;
+      variables?: unknown;
+    };
     restored["variables"] = normalizeRunVariables(material.effectiveVariables ?? material.variables ?? []);
     if (typeof engine?.["version"] === "string") restored["terraform-version"] = engine["version"];
   } catch {
     (set as { status: number }).status = 409;
-    return { failure: { errors: [{ status: "409", title: "Conflict", detail: "Original encrypted execution material is unavailable" }] } };
+    return {
+      failure: {
+        errors: [{ status: "409", title: "Conflict", detail: "Original encrypted execution material is unavailable" }],
+      },
+    };
   }
   return { configurationId, attributes: restored };
 }
@@ -1395,9 +1696,10 @@ async function stampRerunManifest(
   sourceRunId: string,
   mode: "original" | "current",
 ): Promise<void> {
-  const afterCapsule = newRunId === null
-    ? undefined
-    : await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, newRunId) });
+  const afterCapsule =
+    newRunId === null
+      ? undefined
+      : await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, newRunId) });
   const createdAttributes = data["attributes"];
   if (createdAttributes === null || typeof createdAttributes !== "object" || afterCapsule === undefined) return;
   const changedSinceSource = provenanceDiff(manifest, afterCapsule.publicManifest);
@@ -1406,10 +1708,13 @@ async function stampRerunManifest(
     rerun: { mode, sourceRunId, changedSinceSource },
   };
   const rerunSha256 = sha256Hex(canonicalJson(rerunManifest));
-  await db.update(runProvenanceCapsules).set({
-    publicManifest: rerunManifest,
-    manifestSha256: rerunSha256,
-  }).where(eq(runProvenanceCapsules.id, afterCapsule.id));
+  await db
+    .update(runProvenanceCapsules)
+    .set({
+      publicManifest: rerunManifest,
+      manifestSha256: rerunSha256,
+    })
+    .where(eq(runProvenanceCapsules.id, afterCapsule.id));
   const createdProvenance = (createdAttributes as Record<string, unknown>)["provenance"];
   if (createdProvenance !== null && typeof createdProvenance === "object") {
     (createdProvenance as Record<string, unknown>)["sha256"] = rerunSha256;
@@ -1431,7 +1736,10 @@ async function authorizeOrgRunsAccess(
   set: SetObj,
 ): Promise<Readonly<{ organization: OrgRow } | { failure: unknown }>> {
   const organization = await cachedOrgByName(orgName);
-  if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) {
+  if (
+    organization === undefined ||
+    !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))
+  ) {
     (set as { status: number }).status = 404;
     return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
   }
@@ -1469,11 +1777,12 @@ function runLockAttributes(
 ): Readonly<{ "workspace-locked": boolean; "workspace-locked-reason": string | null }> {
   return {
     "workspace-locked": locked,
-    "workspace-locked-reason": locked !== true
-      ? null
-      : lockedReason !== undefined && lockedReason !== null && lockedReason !== ""
-        ? lockedReason
-        : "Locked manually",
+    "workspace-locked-reason":
+      locked !== true
+        ? null
+        : lockedReason !== undefined && lockedReason !== null && lockedReason !== ""
+          ? lockedReason
+          : "Locked manually",
   };
 }
 
@@ -1484,9 +1793,8 @@ async function runRecoveryAttributes(storageRoot: string, runId: string): Promis
     const recovery = await inspectRecoveryCopy(storageRoot, runId);
     const parsedRecovery = recovery.status === "candidate" || recovery.status === "promoted";
     attributes["recovery-state-format-supported"] = parsedRecovery;
-    attributes["recovery-state-representation"] = recovery.status === "opaque"
-      ? "opentofu-encrypted"
-      : parsedRecovery ? "terraform-v4" : "invalid";
+    attributes["recovery-state-representation"] =
+      recovery.status === "opaque" ? "opentofu-encrypted" : parsedRecovery ? "terraform-v4" : "invalid";
     attributes["recovery-state-unavailable-reason"] = parsedRecovery
       ? null
       : recovery.status === "opaque"
@@ -1500,20 +1808,24 @@ async function runRecoveryAttributes(storageRoot: string, runId: string): Promis
 
 async function runProvenanceAttribute(runId: string): Promise<Record<string, unknown> | null> {
   const provenance = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
-  return provenance === undefined ? null : {
-    "schema-version": provenance.schemaVersion,
-    sha256: provenance.manifestSha256,
-    "manifest-url": `/api/v2/runs/${runId}/provenance`,
-  };
+  return provenance === undefined
+    ? null
+    : {
+        "schema-version": provenance.schemaVersion,
+        sha256: provenance.manifestSha256,
+        "manifest-url": `/api/v2/runs/${runId}/provenance`,
+      };
 }
 
 function parseScheduleApplyAt(body: unknown, set: SetObj): Readonly<{ applyAtMs: number } | { failure: unknown }> {
-  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const attributes = payload["data"] !== null && typeof payload["data"] === "object"
-    && (payload["data"] as Record<string, unknown>)["attributes"] !== null
-    && typeof (payload["data"] as Record<string, unknown>)["attributes"] === "object"
-    ? (payload["data"] as Record<string, unknown>)["attributes"] as Record<string, unknown>
-    : {};
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const attributes =
+    payload["data"] !== null &&
+    typeof payload["data"] === "object" &&
+    (payload["data"] as Record<string, unknown>)["attributes"] !== null &&
+    typeof (payload["data"] as Record<string, unknown>)["attributes"] === "object"
+      ? ((payload["data"] as Record<string, unknown>)["attributes"] as Record<string, unknown>)
+      : {};
   const applyAtRaw = attributes["apply-at"];
   if (typeof applyAtRaw !== "string" || applyAtRaw === "") {
     (set as { status: number }).status = 422;
@@ -1522,11 +1834,15 @@ function parseScheduleApplyAt(body: unknown, set: SetObj): Readonly<{ applyAtMs:
   const applyAtMs = Date.parse(applyAtRaw);
   if (!Number.isFinite(applyAtMs)) {
     (set as { status: number }).status = 422;
-    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "apply-at must be a valid date" }] } };
+    return {
+      failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "apply-at must be a valid date" }] },
+    };
   }
   if (applyAtMs <= Date.now()) {
     (set as { status: number }).status = 422;
-    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "apply-at must be in the future" }] } };
+    return {
+      failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "apply-at must be in the future" }] },
+    };
   }
   return { applyAtMs };
 }
@@ -1551,7 +1867,8 @@ async function publishScheduleConfirmation(
   // Match the manual apply action: an optional comment is persisted with
   // the confirmation.
   const commentStr = actionComment(body);
-  if (commentStr !== "") await createRunComment({ runId, userId, body: commentStr, workspaceId: workspace.id, orgId: workspace.orgId });
+  if (commentStr !== "")
+    await createRunComment({ runId, userId, body: commentStr, workspaceId: workspace.id, orgId: workspace.orgId });
   publish("run.status", {
     "run-id": runId,
     "workspace-id": workspace.id,
@@ -1572,21 +1889,39 @@ async function confirmDirectApply(
   authorized: AuthorizedRun,
   set: SetObj,
 ): Promise<unknown> {
-  const confirmed = await db.update(runs).set({
-    status: "confirmed",
-    scheduledAt: null,
-    statusTimestamps: {
-      ...(before.statusTimestamps ?? {}),
-      "confirmed-at": new Date().toISOString(),
-    },
-  }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+  const confirmed = await db
+    .update(runs)
+    .set({
+      status: "confirmed",
+      scheduledAt: null,
+      statusTimestamps: {
+        ...(before.statusTimestamps ?? {}),
+        "confirmed-at": new Date().toISOString(),
+      },
+    })
+    .where(and(eq(runs.id, runId), eq(runs.status, before.status)))
+    .returning({ id: runs.id });
   if (confirmed.length === 0) {
     (set as { status: number }).status = 409;
     return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] };
   }
-  await logApplyConfirmation(runId, userId, authorized.workspace.orgId, authorized.workspace.id, teamId, before.status, "confirmed", body, authorized.workspace);
+  await logApplyConfirmation(
+    runId,
+    userId,
+    authorized.workspace.orgId,
+    authorized.workspace.id,
+    teamId,
+    before.status,
+    "confirmed",
+    body,
+    authorized.workspace,
+  );
   const { executeApply } = await import("../worker");
-  executeApply(authorized.run.id).catch((err: unknown): void => { if (err !== null && err !== undefined) { console.error(err); } });
+  executeApply(authorized.run.id).catch((err: unknown): void => {
+    if (err !== null && err !== undefined) {
+      console.error(err);
+    }
+  });
   (set as { status: number }).status = 202;
   return new Response(null, { status: 202 });
 }
@@ -1601,17 +1936,36 @@ type RunCreateEnvelope = Readonly<{
 function parseRunCreateEnvelope(body: unknown): RunCreateEnvelope {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"] as Record<string, unknown> | undefined;
-  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-  const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-  const cvRel = typeof rels["configuration-version"] === "object" && rels["configuration-version"] !== null ? (rels["configuration-version"] as Record<string, unknown>) : {};
-  const cvData = typeof cvRel["data"] === "object" && cvRel["data"] !== null ? (cvRel["data"] as Record<string, unknown>) : {};
-  const cvId = typeof cvData["id"] === "string" ? cvData["id"] : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
+  const attributes =
+    typeof data?.["attributes"] === "object" && data["attributes"] !== null
+      ? (data["attributes"] as Record<string, unknown>)
+      : {};
+  const rels =
+    typeof data?.["relationships"] === "object" && data["relationships"] !== null
+      ? (data["relationships"] as Record<string, unknown>)
+      : {};
+  const cvRel =
+    typeof rels["configuration-version"] === "object" && rels["configuration-version"] !== null
+      ? (rels["configuration-version"] as Record<string, unknown>)
+      : {};
+  const cvData =
+    typeof cvRel["data"] === "object" && cvRel["data"] !== null ? (cvRel["data"] as Record<string, unknown>) : {};
+  const cvId =
+    typeof cvData["id"] === "string"
+      ? cvData["id"]
+      : typeof attributes["configuration-version-id"] === "string"
+        ? attributes["configuration-version-id"]
+        : undefined;
   return { payload, attributes, rels, cvId };
 }
 
 function runCreateWorkspaceId(rels: Record<string, unknown>): string {
-  const wsRel = typeof rels["workspace"] === "object" && rels["workspace"] !== null ? (rels["workspace"] as Record<string, unknown>) : {};
-  const wsData = typeof wsRel["data"] === "object" && wsRel["data"] !== null ? (wsRel["data"] as Record<string, unknown>) : {};
+  const wsRel =
+    typeof rels["workspace"] === "object" && rels["workspace"] !== null
+      ? (rels["workspace"] as Record<string, unknown>)
+      : {};
+  const wsData =
+    typeof wsRel["data"] === "object" && wsRel["data"] !== null ? (wsRel["data"] as Record<string, unknown>) : {};
   return typeof wsData["id"] === "string" ? wsData["id"] : "";
 }
 
@@ -1624,15 +1978,15 @@ function resolveRunCreateIdempotency(
   payload: Record<string, unknown>,
   set: SetObj,
 ): Readonly<{ idempotency: IdempotencyContext | null } | { failure: unknown }> {
-  const idempotency = idempotencyContext(
-    request,
-    scope,
-    idempotencyPrincipal({ userId, orgId, teamId }),
-    payload,
-    set,
-  );
+  const idempotency = idempotencyContext(request, scope, idempotencyPrincipal({ userId, orgId, teamId }), payload, set);
   if (idempotency === "invalid") {
-    return { failure: { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] } };
+    return {
+      failure: {
+        errors: [
+          { status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" },
+        ],
+      },
+    };
   }
   return { idempotency };
 }
@@ -1648,10 +2002,31 @@ async function authorizeCommentDelete(
   set: SetObj,
 ): Promise<Readonly<{ isAuthor: boolean } | { failure: unknown }>> {
   const isAuthor = comment.userId !== null && comment.userId === user?.id && orgId === null && teamId === null;
-  if (!isAuthor && !(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) {
-    await auditLog("delete", "run-comments", comment.id, user?.id ?? null, authorized.workspace.orgId, { runId: comment.runId, reason: "requires-author-or-administrator" }, { result: "denied", immutable: true });
+  if (
+    !isAuthor &&
+    !(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))
+  ) {
+    await auditLog(
+      "delete",
+      "run-comments",
+      comment.id,
+      user?.id ?? null,
+      authorized.workspace.orgId,
+      { runId: comment.runId, reason: "requires-author-or-administrator" },
+      { result: "denied", immutable: true },
+    );
     (set as { status: number }).status = 403;
-    return { failure: { errors: [{ status: "403", title: "Forbidden", detail: "Only the comment author or a workspace administrator can delete it." }] } };
+    return {
+      failure: {
+        errors: [
+          {
+            status: "403",
+            title: "Forbidden",
+            detail: "Only the comment author or a workspace administrator can delete it.",
+          },
+        ],
+      },
+    };
   }
   return { isAuthor };
 }
@@ -1664,21 +2039,26 @@ async function deleteCommentWithAudit(
 ): Promise<boolean> {
   return db.transaction(async (transaction): Promise<boolean> => {
     const tx = transaction as unknown as typeof db;
-    const removed = await tx.delete(runComments).where(eq(runComments.id, comment.id)).returning({ id: runComments.id });
+    const removed = await tx
+      .delete(runComments)
+      .where(eq(runComments.id, comment.id))
+      .returning({ id: runComments.id });
     if (removed.length === 0) return false;
-    await tx.insert(auditLogs).values(auditLogValues({
-      action: "delete",
-      resourceType: "run-comments",
-      resourceId: comment.id,
-      userId,
-      orgId: authorized.workspace.orgId,
-      details: {
-        runId: comment.runId,
-        workspaceId: authorized.workspace.id,
-        bodyBytes: Buffer.byteLength(comment.body, "utf8"),
-        deletedByAuthor: isAuthor,
-      },
-    }) as typeof auditLogs.$inferInsert);
+    await tx.insert(auditLogs).values(
+      auditLogValues({
+        action: "delete",
+        resourceType: "run-comments",
+        resourceId: comment.id,
+        userId,
+        orgId: authorized.workspace.orgId,
+        details: {
+          runId: comment.runId,
+          workspaceId: authorized.workspace.id,
+          bodyBytes: Buffer.byteLength(comment.body, "utf8"),
+          deletedByAuthor: isAuthor,
+        },
+      }) as typeof auditLogs.$inferInsert,
+    );
     return true;
   });
 }
@@ -1688,9 +2068,14 @@ function parseCommentCreateBody(body: unknown, set: SetObj): Readonly<{ text: st
   const data = payload["data"] as Record<string, unknown> | undefined;
   if (data?.["type"] !== "comments") {
     (set as { status: number }).status = 422;
-    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be comments" }] } };
+    return {
+      failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be comments" }] },
+    };
   }
-  const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  const attrs =
+    typeof data?.["attributes"] === "object" && data["attributes"] !== null
+      ? (data["attributes"] as Record<string, unknown>)
+      : {};
   const textVal = attrs["body"] ?? payload["body"];
   const text = typeof textVal === "string" ? textVal : "";
   if (text === "") {
@@ -1707,8 +2092,12 @@ function commentActor(user: ParamCtx["user"]): { username?: string | null; avata
 
 function forceExecuteStatusLists(): Readonly<{ blocking: string[]; resting: string[] }> {
   return {
-    blocking: WORKSPACE_BLOCKING_RUN_STATUSES.filter((status): boolean => !(DISCARDABLE_RUN_STATUSES as readonly string[]).includes(status)),
-    resting: WORKSPACE_BLOCKING_RUN_STATUSES.filter((status): boolean => (DISCARDABLE_RUN_STATUSES as readonly string[]).includes(status)),
+    blocking: WORKSPACE_BLOCKING_RUN_STATUSES.filter(
+      (status): boolean => !(DISCARDABLE_RUN_STATUSES as readonly string[]).includes(status),
+    ),
+    resting: WORKSPACE_BLOCKING_RUN_STATUSES.filter((status): boolean =>
+      (DISCARDABLE_RUN_STATUSES as readonly string[]).includes(status),
+    ),
   };
 }
 
@@ -1720,11 +2109,7 @@ async function stopForceExecuteBlockers(
   set: SetObj,
 ): Promise<Readonly<{ ok: true } | { failure: unknown }>> {
   const restingBlockers = await db.query.runs.findMany({
-    where: and(
-      eq(runs.workspaceId, workspaceId),
-      inArray(runs.status, [...restingStatuses]),
-      ne(runs.id, runId),
-    ),
+    where: and(eq(runs.workspaceId, workspaceId), inArray(runs.status, [...restingStatuses]), ne(runs.id, runId)),
     columns: { id: true, status: true, planOnly: true, savePlan: true },
     orderBy: [asc(runs.createdAt), asc(runs.id)],
   });
@@ -1734,7 +2119,17 @@ async function stopForceExecuteBlockers(
   // save-plan runs never hold the queue, so they are excluded.
   if (resting !== undefined) {
     (set as { status: number }).status = 409;
-    return { failure: { errors: [{ status: "409", title: "Conflict", detail: `Run ${resting.id} is ${resting.status}; discard it before force-executing this run` }] } };
+    return {
+      failure: {
+        errors: [
+          {
+            status: "409",
+            title: "Conflict",
+            detail: `Run ${resting.id} is ${resting.status}; discard it before force-executing this run`,
+          },
+        ],
+      },
+    };
   }
   const blockers = await db.query.runs.findMany({
     where: and(eq(runs.workspaceId, workspaceId), inArray(runs.status, [...blockingStatuses]), ne(runs.id, runId)),
@@ -1743,23 +2138,42 @@ async function stopForceExecuteBlockers(
   const blockingRuns = blockers.filter((run): boolean => run.planOnly !== true && run.savePlan !== true);
   if (blockingRuns.length === 0) {
     (set as { status: number }).status = 409;
-    return { failure: { errors: [{ status: "409", title: "Conflict", detail: "No blocking run is available to force-execute" }] } };
+    return {
+      failure: {
+        errors: [{ status: "409", title: "Conflict", detail: "No blocking run is available to force-execute" }],
+      },
+    };
   }
-  const blockerCanceled = await db.update(runs).set({ status: "force_canceled" }).where(and(
-    inArray(runs.id, blockingRuns.map((run): string => run.id)),
-    inArray(runs.status, [...blockingStatuses]),
-  )).returning({ id: runs.id });
+  const blockerCanceled = await db
+    .update(runs)
+    .set({ status: "force_canceled" })
+    .where(
+      and(
+        inArray(
+          runs.id,
+          blockingRuns.map((run): string => run.id),
+        ),
+        inArray(runs.status, [...blockingStatuses]),
+      ),
+    )
+    .returning({ id: runs.id });
   if (blockerCanceled.length === 0) {
     (set as { status: number }).status = 409;
-    return { failure: { errors: [{ status: "409", title: "Conflict", detail: "The blocking run changed before it could be stopped" }] } };
+    return {
+      failure: {
+        errors: [{ status: "409", title: "Conflict", detail: "The blocking run changed before it could be stopped" }],
+      },
+    };
   }
   const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
-  await Promise.all(blockerCanceled.map(async ({ id }): Promise<void> => {
-    await revokeRunTokens(id);
-    cancelRunExecution(id, true);
-    await cleanupSavedPlan(id);
-    await cancelAgentJobsForRun(id);
-  }));
+  await Promise.all(
+    blockerCanceled.map(async ({ id }): Promise<void> => {
+      await revokeRunTokens(id);
+      cancelRunExecution(id, true);
+      await cleanupSavedPlan(id);
+      await cancelAgentJobsForRun(id);
+    }),
+  );
   return { ok: true as const };
 }
 
@@ -1770,7 +2184,11 @@ async function transitionForceExecutedRun(
   teamId: string | null | undefined,
   set: SetObj,
 ): Promise<Readonly<{ ok: true } | { failure: unknown }>> {
-  const updated = await db.update(runs).set({ status: "pending" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status))).returning();
+  const updated = await db
+    .update(runs)
+    .set({ status: "pending" })
+    .where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status)))
+    .returning();
   if (updated.length === 0) {
     (set as { status: number }).status = 409;
     return { failure: { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-executable" }] } };
@@ -1803,11 +2221,17 @@ async function queuePendingRun(
   teamId: string | null | undefined,
   set: SetObj,
 ): Promise<Readonly<{ data: unknown } | { failure: unknown }>> {
-  const updated = await db.update(runs).set({ status: "pending" }).where(and(
-    eq(runs.id, runId),
-    eq(runs.status, authorized.run.status),
-    inArray(runs.status, ["pending", "plan_queued", "apply_queued"]),
-  )).returning();
+  const updated = await db
+    .update(runs)
+    .set({ status: "pending" })
+    .where(
+      and(
+        eq(runs.id, runId),
+        eq(runs.status, authorized.run.status),
+        inArray(runs.status, ["pending", "plan_queued", "apply_queued"]),
+      ),
+    )
+    .returning();
   if (updated.length === 0) {
     (set as { status: number }).status = 409;
     return { failure: { errors: [{ status: "409", title: "Conflict", detail: "Run is not queued" }] } };
@@ -1826,7 +2250,27 @@ async function queuePendingRun(
   return { data: await actionRunResource(updatedRun, authorized.workspace, user?.id, orgId ?? null, teamId ?? null) };
 }
 
-const FORCE_CANCELABLE_RUN_STATUSES: readonly string[] = ["pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed", "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated", "policy_checking", "policy_override", "policy_checked", "post_plan_running", "post_plan_completed", "confirmed", "apply_queued", "applying", "canceled"];
+const FORCE_CANCELABLE_RUN_STATUSES: readonly string[] = [
+  "pending",
+  "fetching",
+  "fetching_completed",
+  "pre_plan_running",
+  "pre_plan_completed",
+  "queuing",
+  "plan_queued",
+  "planning",
+  "cost_estimating",
+  "cost_estimated",
+  "policy_checking",
+  "policy_override",
+  "policy_checked",
+  "post_plan_running",
+  "post_plan_completed",
+  "confirmed",
+  "apply_queued",
+  "applying",
+  "canceled",
+];
 
 function requiresCancelBeforeForceCancel(
   statusTimestamps: AuthorizedRun["run"]["statusTimestamps"],
@@ -1843,11 +2287,17 @@ async function forceCancelActiveRun(
   teamId: string | null | undefined,
   set: SetObj,
 ): Promise<Readonly<{ ok: true } | { failure: unknown }>> {
-  const updated = await db.update(runs).set({ status: "force_canceled" }).where(and(
-    eq(runs.id, runId),
-    eq(runs.status, authorized.run.status),
-    inArray(runs.status, [...FORCE_CANCELABLE_RUN_STATUSES]),
-  )).returning();
+  const updated = await db
+    .update(runs)
+    .set({ status: "force_canceled" })
+    .where(
+      and(
+        eq(runs.id, runId),
+        eq(runs.status, authorized.run.status),
+        inArray(runs.status, [...FORCE_CANCELABLE_RUN_STATUSES]),
+      ),
+    )
+    .returning();
   if (updated.length === 0) {
     (set as { status: number }).status = 409;
     return { failure: { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-cancelable" }] } };
@@ -1879,20 +2329,24 @@ function eventHistoryResource(
   const event = eventById.get(rowId);
   if (event === undefined) return [];
   const details = safeRunEventDetails(event);
-  return [{
-    id: event.id,
-    type: "run-events",
-    createdAt: event.createdAt,
-    attributes: {
-      action: event.action,
-      "created-at": new Date(event.createdAt).toISOString(),
-      "actor-username": event.userId === null ? details["actorUsername"] ?? null : usernames.get(event.userId)?.username ?? null,
-      "actor-avatar-url": event.userId === null
-        ? AvatarService.resolveVcsUrl(details["actorProviderId"], details["actorAvatarUrl"] ?? null)
-        : gravatarUrl(usernames.get(event.userId)?.email ?? null),
-      details,
+  return [
+    {
+      id: event.id,
+      type: "run-events",
+      createdAt: event.createdAt,
+      attributes: {
+        action: event.action,
+        "created-at": new Date(event.createdAt).toISOString(),
+        "actor-username":
+          event.userId === null ? (details["actorUsername"] ?? null) : (usernames.get(event.userId)?.username ?? null),
+        "actor-avatar-url":
+          event.userId === null
+            ? AvatarService.resolveVcsUrl(details["actorProviderId"], details["actorAvatarUrl"] ?? null)
+            : gravatarUrl(usernames.get(event.userId)?.email ?? null),
+        details,
+      },
     },
-  }];
+  ];
 }
 
 function commentHistoryResource(
@@ -1902,19 +2356,21 @@ function commentHistoryResource(
 ): Record<string, unknown>[] {
   const comment = commentById.get(rowId);
   if (comment === undefined) return [];
-  return [{
-    id: `re-${comment.id}`,
-    type: "run-events",
-    createdAt: comment.createdAt,
-    attributes: {
-      action: "comment",
-      "created-at": new Date(comment.createdAt).toISOString(),
-      "actor-username": comment.userId === null ? null : usernames.get(comment.userId)?.username ?? null,
-      "actor-avatar-url": comment.userId === null ? null : gravatarUrl(usernames.get(comment.userId)?.email ?? null),
-      details: { "comment-id": comment.id },
+  return [
+    {
+      id: `re-${comment.id}`,
+      type: "run-events",
+      createdAt: comment.createdAt,
+      attributes: {
+        action: "comment",
+        "created-at": new Date(comment.createdAt).toISOString(),
+        "actor-username": comment.userId === null ? null : (usernames.get(comment.userId)?.username ?? null),
+        "actor-avatar-url": comment.userId === null ? null : gravatarUrl(usernames.get(comment.userId)?.email ?? null),
+        details: { "comment-id": comment.id },
+      },
+      relationships: { comment: { data: { id: comment.id, type: "comments" } } },
     },
-    relationships: { comment: { data: { id: comment.id, type: "comments" } } },
-  }];
+  ];
 }
 
 async function authorizePolicyOverride(
@@ -1927,14 +2383,40 @@ async function authorizePolicyOverride(
 ): Promise<Readonly<{ authorized: AuthorizedRun; justification: string } | { failure: unknown }>> {
   const runId = params["run_id"] ?? "";
   const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-  if (authorized === undefined) { (set as { status: number }).status = 404; return { failure: { errors: [{ status: "404", title: "Not Found" }] } }; }
-  if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"))) { (set as { status: number }).status = 403; return { failure: { errors: [{ status: "403", title: "Forbidden" }] } }; }
-  if (authorized.run.status !== "policy_soft_failed") { (set as { status: number }).status = 409; return { failure: { errors: [{ status: "409", title: "Conflict", detail: "Run must be policy_soft_failed to override" }] } }; }
+  if (authorized === undefined) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
+  if (
+    !(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"))
+  ) {
+    (set as { status: number }).status = 403;
+    return { failure: { errors: [{ status: "403", title: "Forbidden" }] } };
+  }
+  if (authorized.run.status !== "policy_soft_failed") {
+    (set as { status: number }).status = 409;
+    return {
+      failure: { errors: [{ status: "409", title: "Conflict", detail: "Run must be policy_soft_failed to override" }] },
+    };
+  }
   // An override is an audited exception: the justification comment is
   // required and persisted, so the audit trail states the reason at the
   // moment it matters (CodeRabbit review).
   const justification = actionComment(body);
-  if (justification === "") { (set as { status: number }).status = 422; return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Overriding a policy check requires a justification comment" }] } }; }
+  if (justification === "") {
+    (set as { status: number }).status = 422;
+    return {
+      failure: {
+        errors: [
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail: "Overriding a policy check requires a justification comment",
+          },
+        ],
+      },
+    };
+  }
   return { authorized, justification };
 }
 
@@ -1948,7 +2430,7 @@ type PolicyOverrideInput = Readonly<{
   now: number;
 }>;
 
-async function commitPolicyOverride(input: PolicyOverrideInput): Promise<typeof runs.$inferSelect[]> {
+async function commitPolicyOverride(input: PolicyOverrideInput): Promise<(typeof runs.$inferSelect)[]> {
   const { runId, justification, commentId, actorId, workspace, teamId, now } = input;
   // One transaction for the whole override (CodeRabbit review): committing
   // the status change before the justification comment, the policy-check
@@ -1957,26 +2439,35 @@ async function commitPolicyOverride(input: PolicyOverrideInput): Promise<typeof 
   // nothing left to override. Events publish only after commit.
   return db.transaction(async (tx: unknown) => {
     const t = tx as typeof db;
-    const rows = await t.update(runs).set({ status: "planned" }).where(and(eq(runs.id, runId), eq(runs.status, "policy_soft_failed"))).returning();
+    const rows = await t
+      .update(runs)
+      .set({ status: "planned" })
+      .where(and(eq(runs.id, runId), eq(runs.status, "policy_soft_failed")))
+      .returning();
     if (rows.length === 0) return rows;
     await t.insert(runComments).values({ id: commentId, runId, userId: actorId, body: justification, createdAt: now });
-    await t.update(policyChecks).set({ status: "overridden" }).where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
-    await t.insert(auditLogs).values(auditLogValues({
-      orgId: workspace.orgId,
-      userId: actorId,
-      action: "override-policy",
-      resourceType: "runs",
-      resourceId: runId,
-      details: {
-        workspaceId: workspace.id,
-        fromStatus: "policy_soft_failed",
-        toStatus: "planned",
-        justification,
-        justificationBytes: Buffer.byteLength(justification, "utf8"),
-        ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
-      },
-      createdAt: now,
-    }) as typeof auditLogs.$inferInsert);
+    await t
+      .update(policyChecks)
+      .set({ status: "overridden" })
+      .where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
+    await t.insert(auditLogs).values(
+      auditLogValues({
+        orgId: workspace.orgId,
+        userId: actorId,
+        action: "override-policy",
+        resourceType: "runs",
+        resourceId: runId,
+        details: {
+          workspaceId: workspace.id,
+          fromStatus: "policy_soft_failed",
+          toStatus: "planned",
+          justification,
+          justificationBytes: Buffer.byteLength(justification, "utf8"),
+          ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+        },
+        createdAt: now,
+      }) as typeof auditLogs.$inferInsert,
+    );
     return rows;
   });
 }
@@ -1991,10 +2482,23 @@ function queuePositionResources(
   let position = startPosition;
   const applySet = new Set(applyIds ?? []);
   return queue.map((r: RunItem): Record<string, unknown> => {
-    const resource = runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id), undefined, undefined, linkage.get(r.id));
+    const resource = runResource(
+      r,
+      applyIds === null || applySet.has(r.workspaceId),
+      false,
+      origins.get(r.id),
+      undefined,
+      undefined,
+      linkage.get(r.id),
+    );
     const isPending = CAPACITY_PENDING_STATUSES.some((s: string): boolean => s === r.status);
-    if (isPending) { position += 1; }
-    const attrs = typeof resource["attributes"] === "object" && resource["attributes"] !== null ? (resource["attributes"] as Record<string, unknown>) : {};
+    if (isPending) {
+      position += 1;
+    }
+    const attrs =
+      typeof resource["attributes"] === "object" && resource["attributes"] !== null
+        ? (resource["attributes"] as Record<string, unknown>)
+        : {};
     return { ...resource, attributes: { ...attrs, "position-in-queue": isPending ? position : 0 } };
   });
 }
@@ -2028,7 +2532,13 @@ async function resolveOrgRunsScope(
   set: SetObj,
 ): Promise<OrgRunsScope | { failure: unknown }> {
   const organization = await cachedOrgByName(orgName);
-  if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { failure: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  if (
+    organization === undefined ||
+    !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))
+  ) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
   const [orgWorkspaces, applyIds] = await Promise.all([
     authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null),
     workspaceIdsForPermission(organization.id, user?.id, orgId ?? null, teamId ?? null, "apply"),
@@ -2044,7 +2554,18 @@ function orgRunsResources(
   linkage: ReadonlyMap<string, RunRelationshipLinkage>,
 ): Record<string, unknown>[] {
   const applySet = new Set(applyIds ?? []);
-  return orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id), undefined, undefined, linkage.get(r.id)));
+  return orgRuns.map(
+    (r: RunItem): Record<string, unknown> =>
+      runResource(
+        r,
+        applyIds === null || applySet.has(r.workspaceId),
+        false,
+        origins.get(r.id),
+        undefined,
+        undefined,
+        linkage.get(r.id),
+      ),
+  );
 }
 
 export async function createRun(
@@ -2060,24 +2581,56 @@ export async function createRun(
   const operationRequest = parseRunOperationRequest(attributes, set);
   if ("failure" in operationRequest) return operationRequest.failure;
   const { requestedOperation, isDestroy, invokeActionAddrs } = operationRequest.request;
-  const { requestedAutoApply, requestedPlanOnly, refresh, refreshOnly, allowEmptyApply, savePlan } = parseRunPlanFlags(attributes, requestedOperation);
-  const { targetAddrs, replaceAddrs, runVariablesInput, terraformVersion, debuggingMode, allowConfigGeneration, generatedConfiguration } = parseRunScalarAttributes(attributes);
-  const operation = resolveRunOperation(requestedOperation, invokeActionAddrs.length, isDestroy, refreshOnly, savePlan, allowEmptyApply);
+  const { requestedAutoApply, requestedPlanOnly, refresh, refreshOnly, allowEmptyApply, savePlan } = parseRunPlanFlags(
+    attributes,
+    requestedOperation,
+  );
+  const {
+    targetAddrs,
+    replaceAddrs,
+    runVariablesInput,
+    terraformVersion,
+    debuggingMode,
+    allowConfigGeneration,
+    generatedConfiguration,
+  } = parseRunScalarAttributes(attributes);
+  const operation = resolveRunOperation(
+    requestedOperation,
+    invokeActionAddrs.length,
+    isDestroy,
+    refreshOnly,
+    savePlan,
+    allowEmptyApply,
+  );
   const invalidInputs = validateRunCreateAttributes(attributes, workspaceId, terraformVersion, set);
   if (invalidInputs !== null) return invalidInputs;
   const workspaceAccess = await findAuthorizedRunWorkspace(workspaceId, user, orgId, teamId, set);
   if ("failure" in workspaceAccess) return workspaceAccess.failure;
   const { workspace } = workspaceAccess;
-  const idempotencyBegin = await beginIdempotency(
-    idempotency,
-    "runs",
+  const idempotencyBegin = await beginIdempotency(idempotency, "runs", set);
+  const guardCheck = await checkRunCreationGuards(
+    workspace,
+    user?.id,
+    teamId,
+    { isDestroy, requestedAutoApply, allowEmptyApply, operation },
+    idempotencyBegin,
     set,
   );
-  const guardCheck = await checkRunCreationGuards(workspace, user?.id, teamId, { isDestroy, requestedAutoApply, allowEmptyApply, operation }, idempotencyBegin, set);
   if ("failure" in guardCheck) return guardCheck.failure;
   const { canApply } = guardCheck;
-  const { autoApply, autoApplySuppressed } = resolveRunAutoApply(canApply, requestedAutoApply, workspace.autoApply === true, operation);
-  const configurationSelection = await resolveRunConfigurationVersion(workspace, workspaceId, cvId, idempotencyBegin, set);
+  const { autoApply, autoApplySuppressed } = resolveRunAutoApply(
+    canApply,
+    requestedAutoApply,
+    workspace.autoApply === true,
+    operation,
+  );
+  const configurationSelection = await resolveRunConfigurationVersion(
+    workspace,
+    workspaceId,
+    cvId,
+    idempotencyBegin,
+    set,
+  );
   if ("failure" in configurationSelection) return configurationSelection.failure;
   const { configurationVersion } = configurationSelection.selection;
   cvId = configurationSelection.selection.cvId;
@@ -2093,7 +2646,16 @@ export async function createRun(
   const { planOnly, finalMsg } = resolveRunDisplayFields(attributes, requestedPlanOnly, configurationVersion);
   const nowIso = new Date(createdAt).toISOString();
   const origin = originForConfiguration(configurationVersion);
-  const { provenance, runVariables } = await assembleRunProvenance(workspace, cvId, configurationVersion, effectiveTool, effectiveVersion, id, createdAt, runVariablesInput);
+  const { provenance, runVariables } = await assembleRunProvenance(
+    workspace,
+    cvId,
+    configurationVersion,
+    effectiveTool,
+    effectiveVersion,
+    id,
+    createdAt,
+    runVariablesInput,
+  );
   // The lock was validated above, but that check and the insert below are
   // separate statements; re-validate inside the insert transaction so a
   // concurrent workspace lock can never slip a queued run past the 422.
@@ -2103,7 +2665,37 @@ export async function createRun(
       columns: { locked: true, lockedReason: true },
     });
     if (fresh?.locked === true) return { lockedReason: fresh.lockedReason ?? null };
-    await tx.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, inputSchemaVersion: 1, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, statusMetadataSchemaVersion: 1, createdBy: actorId, appliedAt: null, createdAt });
+    await tx.insert(runs).values({
+      id,
+      workspaceId,
+      configurationVersionId: cvId ?? null,
+      message: finalMsg,
+      status: "pending",
+      operation,
+      generatedConfiguration,
+      executionMode: workspace.executionMode,
+      isDestroy,
+      autoApply,
+      planOnly,
+      refresh,
+      refreshOnly,
+      invokeActionAddrs,
+      targetAddrs,
+      replaceAddrs,
+      variables: runVariables,
+      inputSchemaVersion: 1,
+      logToken,
+      terraformVersion: terraformVersion ?? null,
+      debuggingMode,
+      allowEmptyApply,
+      savePlan,
+      allowConfigGeneration,
+      statusTimestamps: { "pending-at": nowIso },
+      statusMetadataSchemaVersion: 1,
+      createdBy: actorId,
+      appliedAt: null,
+      createdAt,
+    });
     await tx.insert(runProvenanceCapsules).values({
       id: newResourceId("rpc"),
       runId: id,
@@ -2118,12 +2710,70 @@ export async function createRun(
   if (lockConflict !== null) {
     await abandonReservedIdempotency(idempotencyBegin);
     (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(lockConflict.lockedReason) }] };
+    return {
+      errors: [
+        { status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(lockConflict.lockedReason) },
+      ],
+    };
   }
   scheduleExplorerInventory(workspaceId);
-  const createdRun = { id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, agentVersion: null, agentProtocolVersion: null, agentCapabilities: null, agentExecutionPolicy: null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, inputSchemaVersion: 1, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, statusMetadataSchemaVersion: 1, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: actorId, appliedAt: null, scheduledAt: null, softDeletedAt: null, createdAt };
+  const createdRun = {
+    id,
+    workspaceId,
+    configurationVersionId: cvId ?? null,
+    agentPoolId: null,
+    agentId: null,
+    agentVersion: null,
+    agentProtocolVersion: null,
+    agentCapabilities: null,
+    agentExecutionPolicy: null,
+    message: finalMsg,
+    status: "pending",
+    operation,
+    generatedConfiguration,
+    executionMode: workspace.executionMode,
+    isDestroy,
+    autoApply,
+    planOnly,
+    refresh,
+    refreshOnly,
+    invokeActionAddrs,
+    targetAddrs,
+    replaceAddrs,
+    variables: runVariables,
+    inputSchemaVersion: 1,
+    logToken,
+    terraformVersion: terraformVersion ?? null,
+    debuggingMode,
+    allowEmptyApply,
+    savePlan,
+    allowConfigGeneration,
+    statusTimestamps: { "pending-at": nowIso },
+    statusMetadataSchemaVersion: 1,
+    planResourceAdditions: null,
+    planResourceChanges: null,
+    planResourceDestructions: null,
+    planResourceImports: null,
+    applyResourceAdditions: null,
+    applyResourceChanges: null,
+    applyResourceDestructions: null,
+    applyResourceImports: null,
+    createdBy: actorId,
+    appliedAt: null,
+    scheduledAt: null,
+    softDeletedAt: null,
+    createdAt,
+  };
   const createdLinkage = await linkageForRuns([createdRun]);
-  const createdResource = runResource(createdRun, canApply, false, origin, undefined, undefined, createdLinkage.get(id));
+  const createdResource = runResource(
+    createdRun,
+    canApply,
+    false,
+    origin,
+    undefined,
+    undefined,
+    createdLinkage.get(id),
+  );
   return await completeRunCreationResponse({
     id,
     workspaceId,
@@ -2178,7 +2828,10 @@ type RunCursor = Readonly<{ createdAt: number; id: string }>;
 function decodeRunCursor(value: string): RunCursor | null {
   try {
     const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
-    return typeof decoded["createdAt"] === "number" && Number.isSafeInteger(decoded["createdAt"]) && typeof decoded["id"] === "string" && decoded["id"] !== ""
+    return typeof decoded["createdAt"] === "number" &&
+      Number.isSafeInteger(decoded["createdAt"]) &&
+      typeof decoded["id"] === "string" &&
+      decoded["id"] !== ""
       ? { createdAt: decoded["createdAt"], id: decoded["id"] }
       : null;
   } catch {
@@ -2228,8 +2881,10 @@ async function authorizedRawPlanWorkspace(
       where: and(eq(workspaces.id, run.workspaceId), eq(workspaces.orgId, runContext.organizationId)),
     });
   }
-  return (await findAuthorizedWorkspace(run.workspaceId, userId, tokenOrgId, tokenTeamId, "state-read"))
-    ?? (await findAuthorizedWorkspace(run.workspaceId, userId, tokenOrgId, tokenTeamId, "admin"));
+  return (
+    (await findAuthorizedWorkspace(run.workspaceId, userId, tokenOrgId, tokenTeamId, "state-read")) ??
+    (await findAuthorizedWorkspace(run.workspaceId, userId, tokenOrgId, tokenTeamId, "admin"))
+  );
 }
 
 /**
@@ -2245,122 +2900,193 @@ async function sanitizedPlanArtifactResponse(
   run: Readonly<typeof runs.$inferSelect>,
   set: SetObj,
 ): Promise<unknown> {
-  const planJson = await readPlanJsonSideArtifact(runId, "sanitized") ?? await readPlanJsonArtifact(runId);
+  const planJson = (await readPlanJsonSideArtifact(runId, "sanitized")) ?? (await readPlanJsonArtifact(runId));
   if (planJson !== undefined) return sanitizePlanJson(planJson);
-  if (isPlanIncompleteRunStatus(run.status)) { (set as { status: number }).status = 204; return null; }
+  if (isPlanIncompleteRunStatus(run.status)) {
+    (set as { status: number }).status = 204;
+    return null;
+  }
   (set as { status: number }).status = 404;
   return { errors: [{ status: "404", title: "Not Found" }] };
 }
 
 export const runRoutes = new Elysia({ name: "runs" })
   .use(authPlugin)
-  .get("/api/v2/workspaces/:workspace_id/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
-    if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const canApply = await checkWorkspacePermission(workspace, user?.id, orgId ?? null, teamId ?? null, "apply");
-    const { number, size } = pageRequest(request);
-    const where = workspaceRunHistoryWhere(request, workspaceId);
-    const [workspaceRuns, countRows] = await Promise.all([
-      db.query.runs.findMany({ where, orderBy: parseRunSort(request), limit: size, offset: (number - 1) * size }),
-      db.select({ total: count() }).from(runs).where(where),
-    ]);
-    const totalCount = countRows[0]?.total ?? 0;
-    const [origins, linkage] = await Promise.all([originsForRuns(workspaceRuns), linkageForRuns(workspaceRuns)]);
-    const data = workspaceRuns.map((r: RunItem): Record<string, unknown> => runResource(r, canApply, false, origins.get(r.id), undefined, undefined, linkage.get(r.id)));
-    const included = await includedRunResources(workspaceRuns, request, requestedRunIncludes(request));
-    return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
-  })
-  .get("/api/v2/organizations/:org_name/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const scope = await resolveOrgRunsScope(params["org_name"] ?? "", user, orgId, teamId, request, set);
-    if ("failure" in scope) return scope.failure;
-    const { orgWorkspaces, applyIds, number, size } = scope;
-    if (orgWorkspaces.length === 0) { return { data: [], ...pagination(request, number, size, 0) }; }
-    const where = organizationRunHistoryWhere(request, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id));
-    const [orgRuns, countRows] = await Promise.all([
-      db.query.runs.findMany({ where, orderBy: parseRunSort(request), limit: size, offset: (number - 1) * size }),
-      db.select({ total: count() }).from(runs).where(where),
-    ]);
-    const totalCount = countRows[0]?.total ?? 0;
-    const [origins, linkage] = await Promise.all([originsForRuns(orgRuns), linkageForRuns(orgRuns)]);
-    const data = orgRunsResources(orgRuns, applyIds, origins, linkage);
-    const included = await includedRunResources(orgRuns, request, requestedRunIncludes(request));
-    return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
-  })
-  .get("/api/v2/organizations/:org_name/runs/queue", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const access = await authorizeOrgRunsAccess(params["org_name"] ?? "", user, orgId, teamId, set);
-    if ("failure" in access) return access.failure;
-    const { organization } = access;
-    const tokenOrgId = orgId ?? null;
-    const tokenTeamId = teamId ?? null;
-    const [orgWorkspaces, applyIds] = await Promise.all([
-      authorizedOrgWorkspaces(organization.id, user?.id, tokenOrgId, tokenTeamId),
-      workspaceIdsForPermission(organization.id, user?.id, tokenOrgId, tokenTeamId, "apply"),
-    ]);
-    const { number, size } = pageRequest(request);
-    const parsedCursor = parseRunQueueCursor(request, set);
-    if ("failure" in parsedCursor) return parsedCursor.failure;
-    const { cursorMode, cursor } = parsedCursor;
-    if (orgWorkspaces.length === 0) {
-      return emptyOrgQueueResponse(request, cursorMode, number, size);
-    }
-    const workspaceIds = orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id);
-    const { base: baseQueueWhere, where: queueWhere } = runQueueWhere(workspaceIds, cursor);
-    const window = queuePageWindow(cursorMode, size, number);
-    const [queueWithCursor, countRows, runningRows] = await Promise.all([
-      db.query.runs.findMany({
-        where: queueWhere,
-        orderBy: [asc(runs.createdAt), asc(runs.id)],
-        limit: window.limit,
-        offset: window.offset,
-      }),
-      queueTotalQuery(cursorMode, baseQueueWhere),
-      db.select({ total: count() }).from(runs).where(and(
-        baseQueueWhere,
-        inArray(runs.status, [...CAPACITY_RUNNING_STATUSES]),
-      )),
-    ]);
-    const hasMore = cursorMode && queueWithCursor.length > size;
-    const queue = hasMore ? queueWithCursor.slice(0, size) : queueWithCursor;
-    const pendingBefore = await countPendingBeforeQueue(workspaceIds, queue[0]);
-    const [origins, linkage] = await Promise.all([originsForRuns(queue), linkageForRuns(queue)]);
-    const data = queuePositionResources(queue, applyIds, origins, linkage, (runningRows[0]?.total ?? 0) + pendingBefore);
-    const included = await includedRunResources(queue, request, requestedRunIncludes(request));
-    const pageMeta = runQueuePageMeta(request, cursorMode, hasMore, queue.at(-1), size, number, countRows);
-    return { data, ...(included.length > 0 ? { included } : {}), ...pageMeta };
-  })
-  .get("/api/v2/organizations/:org_name/capacity", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const access = await authorizeOrgRunsAccess(params["org_name"] ?? "", user, orgId, teamId, set);
-    if ("failure" in access) return access.failure;
-    const { organization } = access;
-    const orgWorkspaces = await authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null);
-    const counts = orgWorkspaces.length === 0 ? [] : await db.select({ status: runs.status, total: count() }).from(runs).where(and(
-      inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)),
-      inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES]),
-    )).groupBy(runs.status);
-    const totalFor = (statuses: readonly string[]): number => counts
-      .filter((row): boolean => statuses.includes(row.status))
-      .reduce((sum, row): number => sum + row.total, 0);
-    return { data: { id: organization.name, type: "organization-capacity", attributes: { pending: totalFor(CAPACITY_PENDING_STATUSES), running: totalFor(CAPACITY_RUNNING_STATUSES) } } };
-  })
-  .post("/api/v2/workspaces/:workspace_id/runs", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const wsId = params["workspace_id"] ?? "";
-    const envelope = parseRunCreateEnvelope(body);
-    const resolved = resolveRunCreateIdempotency(request, `runs:workspace:${wsId}`, user?.id, orgId, teamId, envelope.payload, set);
-    if ("failure" in resolved) return resolved.failure;
-    return createRun(wsId, envelope.attributes, envelope.cvId, user, orgId, teamId, set, resolved.idempotency);
-  })
+  .get(
+    "/api/v2/workspaces/:workspace_id/runs",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
+      if (workspace === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const canApply = await checkWorkspacePermission(workspace, user?.id, orgId ?? null, teamId ?? null, "apply");
+      const { number, size } = pageRequest(request);
+      const where = workspaceRunHistoryWhere(request, workspaceId);
+      const [workspaceRuns, countRows] = await Promise.all([
+        db.query.runs.findMany({ where, orderBy: parseRunSort(request), limit: size, offset: (number - 1) * size }),
+        db.select({ total: count() }).from(runs).where(where),
+      ]);
+      const totalCount = countRows[0]?.total ?? 0;
+      const [origins, linkage] = await Promise.all([originsForRuns(workspaceRuns), linkageForRuns(workspaceRuns)]);
+      const data = workspaceRuns.map(
+        (r: RunItem): Record<string, unknown> =>
+          runResource(r, canApply, false, origins.get(r.id), undefined, undefined, linkage.get(r.id)),
+      );
+      const included = await includedRunResources(workspaceRuns, request, requestedRunIncludes(request));
+      return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/runs",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const scope = await resolveOrgRunsScope(params["org_name"] ?? "", user, orgId, teamId, request, set);
+      if ("failure" in scope) return scope.failure;
+      const { orgWorkspaces, applyIds, number, size } = scope;
+      if (orgWorkspaces.length === 0) {
+        return { data: [], ...pagination(request, number, size, 0) };
+      }
+      const where = organizationRunHistoryWhere(
+        request,
+        orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id),
+      );
+      const [orgRuns, countRows] = await Promise.all([
+        db.query.runs.findMany({ where, orderBy: parseRunSort(request), limit: size, offset: (number - 1) * size }),
+        db.select({ total: count() }).from(runs).where(where),
+      ]);
+      const totalCount = countRows[0]?.total ?? 0;
+      const [origins, linkage] = await Promise.all([originsForRuns(orgRuns), linkageForRuns(orgRuns)]);
+      const data = orgRunsResources(orgRuns, applyIds, origins, linkage);
+      const included = await includedRunResources(orgRuns, request, requestedRunIncludes(request));
+      return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/runs/queue",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const access = await authorizeOrgRunsAccess(params["org_name"] ?? "", user, orgId, teamId, set);
+      if ("failure" in access) return access.failure;
+      const { organization } = access;
+      const tokenOrgId = orgId ?? null;
+      const tokenTeamId = teamId ?? null;
+      const [orgWorkspaces, applyIds] = await Promise.all([
+        authorizedOrgWorkspaces(organization.id, user?.id, tokenOrgId, tokenTeamId),
+        workspaceIdsForPermission(organization.id, user?.id, tokenOrgId, tokenTeamId, "apply"),
+      ]);
+      const { number, size } = pageRequest(request);
+      const parsedCursor = parseRunQueueCursor(request, set);
+      if ("failure" in parsedCursor) return parsedCursor.failure;
+      const { cursorMode, cursor } = parsedCursor;
+      if (orgWorkspaces.length === 0) {
+        return emptyOrgQueueResponse(request, cursorMode, number, size);
+      }
+      const workspaceIds = orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id);
+      const { base: baseQueueWhere, where: queueWhere } = runQueueWhere(workspaceIds, cursor);
+      const window = queuePageWindow(cursorMode, size, number);
+      const [queueWithCursor, countRows, runningRows] = await Promise.all([
+        db.query.runs.findMany({
+          where: queueWhere,
+          orderBy: [asc(runs.createdAt), asc(runs.id)],
+          limit: window.limit,
+          offset: window.offset,
+        }),
+        queueTotalQuery(cursorMode, baseQueueWhere),
+        db
+          .select({ total: count() })
+          .from(runs)
+          .where(and(baseQueueWhere, inArray(runs.status, [...CAPACITY_RUNNING_STATUSES]))),
+      ]);
+      const hasMore = cursorMode && queueWithCursor.length > size;
+      const queue = hasMore ? queueWithCursor.slice(0, size) : queueWithCursor;
+      const pendingBefore = await countPendingBeforeQueue(workspaceIds, queue[0]);
+      const [origins, linkage] = await Promise.all([originsForRuns(queue), linkageForRuns(queue)]);
+      const data = queuePositionResources(
+        queue,
+        applyIds,
+        origins,
+        linkage,
+        (runningRows[0]?.total ?? 0) + pendingBefore,
+      );
+      const included = await includedRunResources(queue, request, requestedRunIncludes(request));
+      const pageMeta = runQueuePageMeta(request, cursorMode, hasMore, queue.at(-1), size, number, countRows);
+      return { data, ...(included.length > 0 ? { included } : {}), ...pageMeta };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/capacity",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const access = await authorizeOrgRunsAccess(params["org_name"] ?? "", user, orgId, teamId, set);
+      if ("failure" in access) return access.failure;
+      const { organization } = access;
+      const orgWorkspaces = await authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null);
+      const counts =
+        orgWorkspaces.length === 0
+          ? []
+          : await db
+              .select({ status: runs.status, total: count() })
+              .from(runs)
+              .where(
+                and(
+                  inArray(
+                    runs.workspaceId,
+                    orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id),
+                  ),
+                  inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES]),
+                ),
+              )
+              .groupBy(runs.status);
+      const totalFor = (statuses: readonly string[]): number =>
+        counts.filter((row): boolean => statuses.includes(row.status)).reduce((sum, row): number => sum + row.total, 0);
+      return {
+        data: {
+          id: organization.name,
+          type: "organization-capacity",
+          attributes: { pending: totalFor(CAPACITY_PENDING_STATUSES), running: totalFor(CAPACITY_RUNNING_STATUSES) },
+        },
+      };
+    },
+  )
+  .post(
+    "/api/v2/workspaces/:workspace_id/runs",
+    async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const wsId = params["workspace_id"] ?? "";
+      const envelope = parseRunCreateEnvelope(body);
+      const resolved = resolveRunCreateIdempotency(
+        request,
+        `runs:workspace:${wsId}`,
+        user?.id,
+        orgId,
+        teamId,
+        envelope.payload,
+        set,
+      );
+      if ("failure" in resolved) return resolved.failure;
+      return createRun(wsId, envelope.attributes, envelope.cvId, user, orgId, teamId, set, resolved.idempotency);
+    },
+  )
   .post("/api/v2/runs", async ({ body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const envelope = parseRunCreateEnvelope(body);
     const workspaceId = runCreateWorkspaceId(envelope.rels);
-    const resolved = resolveRunCreateIdempotency(request, `runs:generic:${workspaceId}`, user?.id, orgId, teamId, envelope.payload, set);
+    const resolved = resolveRunCreateIdempotency(
+      request,
+      `runs:generic:${workspaceId}`,
+      user?.id,
+      orgId,
+      teamId,
+      envelope.payload,
+      set,
+    );
     if ("failure" in resolved) return resolved.failure;
     return createRun(workspaceId, envelope.attributes, envelope.cvId, user, orgId, teamId, set, resolved.idempotency);
   })
   .get("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (authorized === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const tokenOrgId = orgId ?? null;
     const tokenTeamId = teamId ?? null;
     const [canApply, canOverridePolicy, canAdmin, origins, baseline] = await Promise.all([
@@ -2371,11 +3097,22 @@ export const runRoutes = new Elysia({ name: "runs" })
       runDurationBaseline(authorized.run),
     ]);
     const linkage = await linkageForRuns([authorized.run]);
-    const data = runResource(authorized.run, canApply, canOverridePolicy, origins.get(authorized.run.id), baseline, canAdmin, linkage.get(authorized.run.id));
+    const data = runResource(
+      authorized.run,
+      canApply,
+      canOverridePolicy,
+      origins.get(authorized.run.id),
+      baseline,
+      canAdmin,
+      linkage.get(authorized.run.id),
+    );
     const detailAttributes = data["attributes"] as Record<string, unknown>;
     // Mirror lockedWorkspaceDetail: an absent or empty reason reads as
     // manually locked rather than leaking a bare empty string.
-    Object.assign(detailAttributes, runLockAttributes(authorized.workspace.locked === true, authorized.workspace.lockedReason));
+    Object.assign(
+      detailAttributes,
+      runLockAttributes(authorized.workspace.locked === true, authorized.workspace.lockedReason),
+    );
     // Issue #580/#761: run-page recovery signal. A verified recovery copy
     // (capture completion marker present) may be the only record of the
     // infrastructure state after an interrupted apply.
@@ -2388,9 +3125,15 @@ export const runRoutes = new Elysia({ name: "runs" })
   .get("/api/v2/runs/:run_id/provenance", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (authorized === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const capsule = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
-    if (capsule === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (capsule === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     return {
       data: {
         id: capsule.id,
@@ -2405,61 +3148,93 @@ export const runRoutes = new Elysia({ name: "runs" })
       },
     };
   })
-  .get("/api/v2/runs/:run_id/provenance/download", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Response | Record<string, unknown>> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const capsule = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
-    if (capsule === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return new Response(`${JSON.stringify(capsule.publicManifest, null, 2)}\n`, {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Disposition": `attachment; filename="terrence-run-${runId}-provenance.json"`,
-        "Cache-Control": "no-store",
-        "X-Content-SHA256": capsule.manifestSha256,
-      },
-    });
-  })
-  .post("/api/v2/runs/:run_id/actions/rerun", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "plan");
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const parsedMode = parseRerunMode(body, set);
-    if ("failure" in parsedMode) return parsedMode.failure;
-    const { mode } = parsedMode;
-    const capsule = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
-    if (capsule === undefined) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "This run has no provenance capsule to rerun" }] };
-    }
-    const manifest = capsule.publicManifest as Readonly<Record<string, unknown>>;
-    const configuration = manifest["configuration"] as Readonly<Record<string, unknown>> | undefined;
-    const engine = manifest["engine"] as Readonly<Record<string, unknown>> | undefined;
-    const attributes: Record<string, unknown> = { message: `Re-run of ${runId}` };
-    let configurationId: string | undefined;
-    if (mode === "original") {
-      const restored = await restoreRerunOriginal(configuration, engine, capsule.executionMaterial, set);
-      if ("failure" in restored) return restored.failure;
-      configurationId = restored.configurationId;
-      Object.assign(attributes, restored.attributes);
-    }
-    const created = await createRun(authorized.workspace.id, attributes, configurationId, user, null, teamId ?? null, set);
-    const extracted = extractCreatedRunData(created);
-    if (extracted === null) return created;
-    await stampRerunManifest(extracted.data, extracted.newRunId, manifest, runId, mode);
-    return created;
-  })
+  .get(
+    "/api/v2/runs/:run_id/provenance/download",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Response | Record<string, unknown>> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const capsule = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
+      if (capsule === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return new Response(`${JSON.stringify(capsule.publicManifest, null, 2)}\n`, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Disposition": `attachment; filename="terrence-run-${runId}-provenance.json"`,
+          "Cache-Control": "no-store",
+          "X-Content-SHA256": capsule.manifestSha256,
+        },
+      });
+    },
+  )
+  .post(
+    "/api/v2/runs/:run_id/actions/rerun",
+    async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "plan");
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const parsedMode = parseRerunMode(body, set);
+      if ("failure" in parsedMode) return parsedMode.failure;
+      const { mode } = parsedMode;
+      const capsule = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
+      if (capsule === undefined) {
+        (set as { status: number }).status = 409;
+        return {
+          errors: [{ status: "409", title: "Conflict", detail: "This run has no provenance capsule to rerun" }],
+        };
+      }
+      const manifest = capsule.publicManifest as Readonly<Record<string, unknown>>;
+      const configuration = manifest["configuration"] as Readonly<Record<string, unknown>> | undefined;
+      const engine = manifest["engine"] as Readonly<Record<string, unknown>> | undefined;
+      const attributes: Record<string, unknown> = { message: `Re-run of ${runId}` };
+      let configurationId: string | undefined;
+      if (mode === "original") {
+        const restored = await restoreRerunOriginal(configuration, engine, capsule.executionMaterial, set);
+        if ("failure" in restored) return restored.failure;
+        configurationId = restored.configurationId;
+        Object.assign(attributes, restored.attributes);
+      }
+      const created = await createRun(
+        authorized.workspace.id,
+        attributes,
+        configurationId,
+        user,
+        null,
+        teamId ?? null,
+        set,
+      );
+      const extracted = extractCreatedRunData(created);
+      if (extracted === null) return created;
+      await stampRerunManifest(extracted.data, extracted.newRunId, manifest, runId, mode);
+      return created;
+    },
+  )
   .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "admin");
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (authorized === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const { hasActiveRunExecution } = await import("../worker");
     const deleted = await db.transaction(async (tx): Promise<boolean> => {
       // Fence the status read used for authorization before deleting any data.
-      const current = await tx.update(runs).set({ status: authorized.run.status }).where(and(
-        eq(runs.id, runId), eq(runs.status, authorized.run.status), inArray(runs.status, FINAL_RUN_STATUSES),
-      )).returning({ id: runs.id });
+      const current = await tx
+        .update(runs)
+        .set({ status: authorized.run.status })
+        .where(
+          and(eq(runs.id, runId), eq(runs.status, authorized.run.status), inArray(runs.status, FINAL_RUN_STATUSES)),
+        )
+        .returning({ id: runs.id });
       if (current.length === 0) return false;
       const activeJob = await tx.query.agentJobs.findFirst({
         where: and(eq(agentJobs.runId, runId), inArray(agentJobs.status, ["queued", "claimed"])),
@@ -2472,13 +3247,22 @@ export const runRoutes = new Elysia({ name: "runs" })
     });
     if (!deleted) {
       (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Cancel the run and wait for execution to stop before deleting it." }] };
+      return {
+        errors: [
+          {
+            status: "409",
+            title: "Conflict",
+            detail: "Cancel the run and wait for execution to stop before deleting it.",
+          },
+        ],
+      };
     }
     // Filesystem deletion cannot roll back with SQL. Remove artifacts only
     // after the database commits; a rejected deletion must preserve them.
     const cleanup = await Promise.allSettled([deleteRunLogArchive(runId), deletePlanJsonArtifact(runId)]);
     for (const result of cleanup) {
-      if (result.status === "rejected") log.warn("Artifact cleanup failed after run deletion", { runId, error: result.reason });
+      if (result.status === "rejected")
+        log.warn("Artifact cleanup failed after run deletion", { runId, error: result.reason });
     }
     (set as { status: number }).status = 204;
     return new Response(null, { status: 204 });
@@ -2489,511 +3273,855 @@ export const runRoutes = new Elysia({ name: "runs" })
     // only, so Terrence acknowledges and discards it. tfc-agent 1.30.1 fails
     // the run unless the response status is 201 (verified in traffic capture).
     const runId = params["run_id"] ?? "";
-    if ((run === undefined || run === null || run.runId !== runId)) {
+    if (run === undefined || run === null || run.runId !== runId) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     (set as { status: number }).status = 201;
     return { data: { modules: [] } };
   })
-  .get("/api/v2/runs/:run_id/plan", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: planResource(authorized.run, request, authorizedRunCapability(authorized.run, "run-read")) };
-  })
+  .get(
+    "/api/v2/runs/:run_id/plan",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: planResource(authorized.run, request, authorizedRunCapability(authorized.run, "run-read")) };
+    },
+  )
   .get("/api/v2/plans/:plan_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const rawPlanId = params["plan_id"] ?? "";
     const runId = rawPlanId.replace(/^plan-/, "");
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (authorized === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     return { data: planResource(authorized.run, request, authorizedRunCapability(authorized.run, "run-read")) };
   })
-  .get("/api/v2/applies/:apply_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const rawApplyId = params["apply_id"] ?? "";
-    const runId = rawApplyId.replace(/^apply-/, "");
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: applyResource(authorized.run, request, authorizedRunCapability(authorized.run, "run-read")) };
-  })
-  .get("/api/v2/applies/:apply_id/errored-state", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = (params["apply_id"] ?? "").replace(/^apply-/, "");
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "state-read");
-    if (authorized === undefined || authorized.run.status !== "errored") {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const state = await db.query.stateVersions.findFirst({
-      where: and(eq(stateVersions.runId, runId), eq(stateVersions.workspaceId, authorized.run.workspaceId)),
-      orderBy: [desc(stateVersions.createdAt)],
-    });
-    if (state === undefined || typeof state.statePayload !== "string" || state.statePayload === "") {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const location = signedApiURL(request, `/api/v2/state-versions/${state.id}/download`, "GET");
-    return new Response(null, { status: 307, headers: { Location: location } });
-  })
-  .get("/api/v2/runs/:run_id/run-events", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const page = pageRequest(request);
-    const eventWhere = and(eq(auditLogs.resourceType, "runs"), eq(auditLogs.resourceId, runId));
-    const commentWhere = eq(runComments.runId, runId);
-    const [[eventCountRow], [commentCountRow]] = await Promise.all([
-      db.select({ total: count() }).from(auditLogs).where(eventWhere),
-      db.select({ total: count() }).from(runComments).where(commentWhere),
-    ]);
-    const totalCount = (eventCountRow?.total ?? 0) + (commentCountRow?.total ?? 0);
-    const offset = runHistoryPageOffset(page, totalCount);
-    const historyRows: readonly { id: string; kind: string; createdAt: number }[] = offset === null
-      ? []
-      : await (async (): Promise<readonly { id: string; kind: string; createdAt: number }[]> => {
-        const eventIndex = db.select({
-          id: auditLogs.id,
-          kind: sql<string>`'event'`.as("kind"),
-          createdAt: auditLogs.createdAt,
-        }).from(auditLogs).where(eventWhere);
-        const commentIndex = db.select({
-          id: runComments.id,
-          kind: sql<string>`'comment'`.as("kind"),
-          createdAt: runComments.createdAt,
-        }).from(runComments).where(commentWhere);
-        const history = eventIndex.unionAll(commentIndex).as("run_history");
-        return db.select({ id: history.id, kind: history.kind, createdAt: history.createdAt })
-          .from(history)
-          .orderBy(asc(history.createdAt), asc(history.id))
-          .limit(page.size)
-          .offset(offset);
-      })();
-    const eventIds = historyRows.filter((row): boolean => row.kind === "event").map((row): string => row.id);
-    const commentIds = historyRows.filter((row): boolean => row.kind === "comment").map((row): string => row.id);
-    const [events, comments] = await Promise.all([
-      eventIds.length === 0
-        ? Promise.resolve([] as AuditItem[])
-        : db.query.auditLogs.findMany({ where: and(eventWhere, inArray(auditLogs.id, eventIds)) }),
-      commentIds.length === 0
-        ? Promise.resolve([] as CommentItem[])
-        : db.query.runComments.findMany({ where: and(commentWhere, inArray(runComments.id, commentIds)) }),
-    ]);
-    const usernames = await usernamesById([
-      ...events.map((event: AuditItem): string | null => event.userId),
-      ...comments.map((comment: CommentItem): string | null => comment.userId),
-    ]);
-    const eventById = new Map(events.map((event): [string, AuditItem] => [event.id, event]));
-    const commentById = new Map(comments.map((comment): [string, CommentItem] => [comment.id, comment]));
-    const eventResources = historyRows.flatMap((row): Record<string, unknown>[] => {
-      if (row.kind === "event") return eventHistoryResource(row.id, eventById, usernames);
-      if (row.kind !== "comment") return [];
-      return commentHistoryResource(row.id, commentById, usernames);
-    }).map((resource): Record<string, unknown> => Object.fromEntries(
-      Object.entries(resource).filter(([key]): boolean => key !== "createdAt"),
-    ));
-    return {
-      data: eventResources,
-      ...pagination(request, page.number, page.size, totalCount),
-    };
-  })
-  .get("/api/v2/runs/:run_id/input-state-version", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "state-read");
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const inputStateId = authorized.run.statusTimestamps?.["input-state-version-id"];
-    if (typeof inputStateId !== "string" || inputStateId === "") return { data: null };
-    const currentSV = await db.query.stateVersions.findFirst({
-      where: and(eq(stateVersions.id, inputStateId), eq(stateVersions.workspaceId, authorized.run.workspaceId)),
-    });
-    if (currentSV === undefined) return { data: null };
-    const { stateVersionResource } = await import("../lib/response");
-    return { data: stateVersionResource(currentSV, request, false, undefined, authorizedStateAccess(authorized.workspace.id, "state-read")) };
-  })
-  .post("/api/v2/runs/:run_id/actions/revoke-log-links", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "admin");
-    if (authorized === undefined || authorized.run.softDeletedAt !== null) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.update(runs).set({ logToken: crypto.randomUUID() }).where(eq(runs.id, runId));
-    await auditLog("revoke-log-links", "runs", runId, user?.id ?? null, authorized.workspace.orgId);
-    set.status = 204;
-    return null;
-  })
-  .get("/api/v2/runs/:run_id/logs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const page = pageRequest(request);
-    const { logs: runLogs, totalCount, truncated } = await readRunLogsPage(runId, page);
-    const paging = pagination(request, page.number, page.size, totalCount);
-    return {
-      data: runLogs.map((l: LogItem): Record<string, unknown> => ({ id: l.id, type: "logs", attributes: { phase: l.phase, "output-text": l.outputText, "created-at": l.createdAt } })),
-      links: paging.links,
-      meta: { ...paging.meta, truncated },
-    };
-  })
+  .get(
+    "/api/v2/applies/:apply_id",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const rawApplyId = params["apply_id"] ?? "";
+      const runId = rawApplyId.replace(/^apply-/, "");
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: applyResource(authorized.run, request, authorizedRunCapability(authorized.run, "run-read")) };
+    },
+  )
+  .get(
+    "/api/v2/applies/:apply_id/errored-state",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const runId = (params["apply_id"] ?? "").replace(/^apply-/, "");
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "state-read");
+      if (authorized === undefined || authorized.run.status !== "errored") {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const state = await db.query.stateVersions.findFirst({
+        where: and(eq(stateVersions.runId, runId), eq(stateVersions.workspaceId, authorized.run.workspaceId)),
+        orderBy: [desc(stateVersions.createdAt)],
+      });
+      if (state === undefined || typeof state.statePayload !== "string" || state.statePayload === "") {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const location = signedApiURL(request, `/api/v2/state-versions/${state.id}/download`, "GET");
+      return new Response(null, { status: 307, headers: { Location: location } });
+    },
+  )
+  .get(
+    "/api/v2/runs/:run_id/run-events",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const page = pageRequest(request);
+      const eventWhere = and(eq(auditLogs.resourceType, "runs"), eq(auditLogs.resourceId, runId));
+      const commentWhere = eq(runComments.runId, runId);
+      const [[eventCountRow], [commentCountRow]] = await Promise.all([
+        db.select({ total: count() }).from(auditLogs).where(eventWhere),
+        db.select({ total: count() }).from(runComments).where(commentWhere),
+      ]);
+      const totalCount = (eventCountRow?.total ?? 0) + (commentCountRow?.total ?? 0);
+      const offset = runHistoryPageOffset(page, totalCount);
+      const historyRows: readonly { id: string; kind: string; createdAt: number }[] =
+        offset === null
+          ? []
+          : await (async (): Promise<readonly { id: string; kind: string; createdAt: number }[]> => {
+              const eventIndex = db
+                .select({
+                  id: auditLogs.id,
+                  kind: sql<string>`'event'`.as("kind"),
+                  createdAt: auditLogs.createdAt,
+                })
+                .from(auditLogs)
+                .where(eventWhere);
+              const commentIndex = db
+                .select({
+                  id: runComments.id,
+                  kind: sql<string>`'comment'`.as("kind"),
+                  createdAt: runComments.createdAt,
+                })
+                .from(runComments)
+                .where(commentWhere);
+              const history = eventIndex.unionAll(commentIndex).as("run_history");
+              return db
+                .select({ id: history.id, kind: history.kind, createdAt: history.createdAt })
+                .from(history)
+                .orderBy(asc(history.createdAt), asc(history.id))
+                .limit(page.size)
+                .offset(offset);
+            })();
+      const eventIds = historyRows.filter((row): boolean => row.kind === "event").map((row): string => row.id);
+      const commentIds = historyRows.filter((row): boolean => row.kind === "comment").map((row): string => row.id);
+      const [events, comments] = await Promise.all([
+        eventIds.length === 0
+          ? Promise.resolve([] as AuditItem[])
+          : db.query.auditLogs.findMany({ where: and(eventWhere, inArray(auditLogs.id, eventIds)) }),
+        commentIds.length === 0
+          ? Promise.resolve([] as CommentItem[])
+          : db.query.runComments.findMany({ where: and(commentWhere, inArray(runComments.id, commentIds)) }),
+      ]);
+      const usernames = await usernamesById([
+        ...events.map((event: AuditItem): string | null => event.userId),
+        ...comments.map((comment: CommentItem): string | null => comment.userId),
+      ]);
+      const eventById = new Map(events.map((event): [string, AuditItem] => [event.id, event]));
+      const commentById = new Map(comments.map((comment): [string, CommentItem] => [comment.id, comment]));
+      const eventResources = historyRows
+        .flatMap((row): Record<string, unknown>[] => {
+          if (row.kind === "event") return eventHistoryResource(row.id, eventById, usernames);
+          if (row.kind !== "comment") return [];
+          return commentHistoryResource(row.id, commentById, usernames);
+        })
+        .map(
+          (resource): Record<string, unknown> =>
+            Object.fromEntries(Object.entries(resource).filter(([key]): boolean => key !== "createdAt")),
+        );
+      return {
+        data: eventResources,
+        ...pagination(request, page.number, page.size, totalCount),
+      };
+    },
+  )
+  .get(
+    "/api/v2/runs/:run_id/input-state-version",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "state-read");
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const inputStateId = authorized.run.statusTimestamps?.["input-state-version-id"];
+      if (typeof inputStateId !== "string" || inputStateId === "") return { data: null };
+      const currentSV = await db.query.stateVersions.findFirst({
+        where: and(eq(stateVersions.id, inputStateId), eq(stateVersions.workspaceId, authorized.run.workspaceId)),
+      });
+      if (currentSV === undefined) return { data: null };
+      const { stateVersionResource } = await import("../lib/response");
+      return {
+        data: stateVersionResource(
+          currentSV,
+          request,
+          false,
+          undefined,
+          authorizedStateAccess(authorized.workspace.id, "state-read"),
+        ),
+      };
+    },
+  )
+  .post(
+    "/api/v2/runs/:run_id/actions/revoke-log-links",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "admin");
+      if (authorized === undefined || authorized.run.softDeletedAt !== null) {
+        set.status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await db.update(runs).set({ logToken: crypto.randomUUID() }).where(eq(runs.id, runId));
+      await auditLog("revoke-log-links", "runs", runId, user?.id ?? null, authorized.workspace.orgId);
+      set.status = 204;
+      return null;
+    },
+  )
+  .get(
+    "/api/v2/runs/:run_id/logs",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const page = pageRequest(request);
+      const { logs: runLogs, totalCount, truncated } = await readRunLogsPage(runId, page);
+      const paging = pagination(request, page.number, page.size, totalCount);
+      return {
+        data: runLogs.map(
+          (l: LogItem): Record<string, unknown> => ({
+            id: l.id,
+            type: "logs",
+            attributes: { phase: l.phase, "output-text": l.outputText, "created-at": l.createdAt },
+          }),
+        ),
+        links: paging.links,
+        meta: { ...paging.meta, truncated },
+      };
+    },
+  )
   .get("/api/v2/runs/:run_id/plan/log/:log_token", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const logToken = params["log_token"] ?? "";
-    if ((await findLogCapability(runId, logToken, "plan")) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
+    if ((await findLogCapability(runId, logToken, "plan")) === undefined) {
+      (set as { status: number }).status = 404;
+      return "Not Found";
+    }
     return rawRunLogResponse(runId, "plan", request, set);
   })
   .get("/api/v2/runs/:run_id/apply/log/:log_token", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const logToken = params["log_token"] ?? "";
-    if ((await findLogCapability(runId, logToken, "apply")) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
+    if ((await findLogCapability(runId, logToken, "apply")) === undefined) {
+      (set as { status: number }).status = 404;
+      return "Not Found";
+    }
     return rawRunLogResponse(runId, "apply", request, set);
   })
-  .get("/api/v2/runs/:run_id/plan/log", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return rawRunLogResponse(runId, "plan", request, set);
-  })
-  .get("/api/v2/runs/:run_id/apply/log", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return rawRunLogResponse(runId, "apply", request, set);
-  })
-  .get("/api/v2/runs/:run_id/apply", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: `apply-${runId}`, type: "applies", attributes: { "log-read-url": issueRunLogCapability(authorizedRunCapability(authorized.run, "run-read"), "apply", request) } } };
-  })
-  .post("/api/v2/runs/:run_id/actions/apply", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const access = await authorizeRunAction(runId, user, orgId, teamId, set);
-    if ("failure" in access) return access.failure;
-    const { authorized } = access;
-    if (authorized.workspace.locked === true) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(authorized.workspace.lockedReason) }] };
-    }
-    const before = await db.query.runs.findFirst({ where: and(eq(runs.id, runId), inArray(runs.status, ["planned", "planned_and_saved"])) });
-    if (before === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }] }; }
-    const gateBlockReason = await applyGateBlockReason(new Date());
-    if (gateBlockReason !== null) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: gateBlockReason }] };
-    }
-    const pool = await resolveApplyAgentPool(authorized.workspace, set);
-    if ("failure" in pool) return pool.failure;
-    const { agentPoolId } = pool;
-    if (agentPoolId !== null) {
-      const confirmedTimestamps = {
-        ...(before.statusTimestamps ?? {}),
-        "confirmed-at": new Date().toISOString(),
+  .get(
+    "/api/v2/runs/:run_id/plan/log",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return rawRunLogResponse(runId, "plan", request, set);
+    },
+  )
+  .get(
+    "/api/v2/runs/:run_id/apply/log",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return rawRunLogResponse(runId, "apply", request, set);
+    },
+  )
+  .get(
+    "/api/v2/runs/:run_id/apply",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return {
+        data: {
+          id: `apply-${runId}`,
+          type: "applies",
+          attributes: {
+            "log-read-url": issueRunLogCapability(
+              authorizedRunCapability(authorized.run, "run-read"),
+              "apply",
+              request,
+            ),
+          },
+        },
       };
-      const job = await db.transaction(async (transaction) => {
-        const tx = transaction as unknown as typeof db;
-        const confirmed = await tx.update(runs).set({
-          status: "confirmed",
-          scheduledAt: null,
-          statusTimestamps: confirmedTimestamps,
-        }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
-        if (confirmed.length === 0) return undefined;
-        return insertAgentApplyJobTx(tx, runId, agentPoolId, confirmedTimestamps);
+    },
+  )
+  .post(
+    "/api/v2/runs/:run_id/actions/apply",
+    async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const access = await authorizeRunAction(runId, user, orgId, teamId, set);
+      if ("failure" in access) return access.failure;
+      const { authorized } = access;
+      if (authorized.workspace.locked === true) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: lockedWorkspaceDetail(authorized.workspace.lockedReason),
+            },
+          ],
+        };
+      }
+      const before = await db.query.runs.findFirst({
+        where: and(eq(runs.id, runId), inArray(runs.status, ["planned", "planned_and_saved"])),
       });
-      if (job === undefined) {
+      if (before === undefined) {
+        (set as { status: number }).status = 409;
+        return {
+          errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }],
+        };
+      }
+      const gateBlockReason = await applyGateBlockReason(new Date());
+      if (gateBlockReason !== null) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: gateBlockReason }] };
+      }
+      const pool = await resolveApplyAgentPool(authorized.workspace, set);
+      if ("failure" in pool) return pool.failure;
+      const { agentPoolId } = pool;
+      if (agentPoolId !== null) {
+        const confirmedTimestamps = {
+          ...(before.statusTimestamps ?? {}),
+          "confirmed-at": new Date().toISOString(),
+        };
+        const job = await db.transaction(async (transaction) => {
+          const tx = transaction as unknown as typeof db;
+          const confirmed = await tx
+            .update(runs)
+            .set({
+              status: "confirmed",
+              scheduledAt: null,
+              statusTimestamps: confirmedTimestamps,
+            })
+            .where(and(eq(runs.id, runId), eq(runs.status, before.status)))
+            .returning({ id: runs.id });
+          if (confirmed.length === 0) return undefined;
+          return insertAgentApplyJobTx(tx, runId, agentPoolId, confirmedTimestamps);
+        });
+        if (job === undefined) {
+          (set as { status: number }).status = 409;
+          return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] };
+        }
+        await logApplyConfirmation(
+          runId,
+          user?.id ?? null,
+          authorized.workspace.orgId,
+          authorized.workspace.id,
+          teamId,
+          before.status,
+          "apply_queued",
+          body,
+          authorized.workspace,
+        );
+        (set as { status: number }).status = 202;
+        return new Response(null, { status: 202 });
+      }
+      return await confirmDirectApply(runId, before, user?.id ?? null, teamId, body, authorized, set);
+    },
+  )
+  .post(
+    "/api/v2/runs/:run_id/actions/schedule-apply",
+    async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      // Schedule a confirmed apply for a future time.
+      // The worker applies the run when scheduled-at arrives; the manual apply
+      // action clears the schedule and applies immediately.
+      const runId = params["run_id"] ?? "";
+      const access = await authorizeRunAction(runId, user, orgId, teamId, set);
+      if ("failure" in access) return access.failure;
+      const { authorized } = access;
+      if (authorized.workspace.locked === true) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: lockedWorkspaceDetail(authorized.workspace.lockedReason),
+            },
+          ],
+        };
+      }
+      const before = await db.query.runs.findFirst({
+        where: and(
+          eq(runs.id, runId),
+          inArray(runs.status, ["planned", "planned_and_saved"]),
+          // A saved plan is specifically intended to be scheduled later. Only
+          // speculative/plan-only runs are excluded from apply scheduling.
+          eq(runs.planOnly, false),
+        ),
+      });
+      if (before === undefined) {
+        (set as { status: number }).status = 409;
+        return {
+          errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }],
+        };
+      }
+      const parsedApplyAt = parseScheduleApplyAt(body, set);
+      if ("failure" in parsedApplyAt) return parsedApplyAt.failure;
+      const { applyAtMs } = parsedApplyAt;
+      const confirmed = await db
+        .update(runs)
+        .set({
+          status: "confirmed",
+          scheduledAt: applyAtMs,
+          statusTimestamps: {
+            ...(before.statusTimestamps ?? {}),
+            "confirmed-at": new Date().toISOString(),
+            "scheduled-at": new Date(applyAtMs).toISOString(),
+          },
+        })
+        .where(and(eq(runs.id, runId), eq(runs.status, before.status)))
+        .returning({ id: runs.id });
+      if (confirmed.length === 0) {
         (set as { status: number }).status = 409;
         return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] };
       }
-      await logApplyConfirmation(runId, user?.id ?? null, authorized.workspace.orgId, authorized.workspace.id, teamId, before.status, "apply_queued", body, authorized.workspace);
+      return await publishScheduleConfirmation(
+        runId,
+        user?.id ?? null,
+        teamId,
+        before.status,
+        body,
+        authorized.workspace,
+        applyAtMs,
+      );
+    },
+  )
+  .post(
+    "/api/v2/runs/:run_id/actions/discard",
+    async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const access = await authorizeRunAction(runId, user, orgId, teamId, set, "discard");
+      if ("failure" in access) return access.failure;
+      const { authorized } = access;
+      const updated = await db
+        .update(runs)
+        .set({ status: "discarded" })
+        .where(
+          and(
+            eq(runs.id, runId),
+            eq(runs.status, authorized.run.status),
+            inArray(runs.status, DISCARDABLE_RUN_STATUSES),
+          ),
+        )
+        .returning();
+      if (updated.length === 0) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Run is not discardable" }] };
+      }
+      await revokeRunTokens(runId);
+      const { cleanupRunWorkDir, cleanupSavedPlan } = await import("../worker");
+      await cleanupSavedPlan(runId);
+      await cleanupRunWorkDir(runId);
+      const commentStr = actionComment(body);
+      if (commentStr !== "")
+        await createRunComment({
+          runId,
+          userId: user?.id ?? null,
+          body: commentStr,
+          workspaceId: authorized.workspace.id,
+          orgId: authorized.workspace.orgId,
+        });
+      await auditLog("discard", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+        workspaceId: authorized.workspace.id,
+        fromStatus: authorized.run.status,
+        toStatus: "discarded",
+        ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+      });
+      queueRunNotification(runId, "run:errored", "discarded");
       (set as { status: number }).status = 202;
       return new Response(null, { status: 202 });
-    }
-    return await confirmDirectApply(runId, before, user?.id ?? null, teamId, body, authorized, set);
-  })
-  .post("/api/v2/runs/:run_id/actions/schedule-apply", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    // Schedule a confirmed apply for a future time.
-    // The worker applies the run when scheduled-at arrives; the manual apply
-    // action clears the schedule and applies immediately.
-    const runId = params["run_id"] ?? "";
-    const access = await authorizeRunAction(runId, user, orgId, teamId, set);
-    if ("failure" in access) return access.failure;
-    const { authorized } = access;
-    if (authorized.workspace.locked === true) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(authorized.workspace.lockedReason) }] };
-    }
-    const before = await db.query.runs.findFirst({
-      where: and(
-        eq(runs.id, runId),
-        inArray(runs.status, ["planned", "planned_and_saved"]),
-        // A saved plan is specifically intended to be scheduled later. Only
-        // speculative/plan-only runs are excluded from apply scheduling.
-        eq(runs.planOnly, false),
-      ),
-    });
-    if (before === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }] }; }
-    const parsedApplyAt = parseScheduleApplyAt(body, set);
-    if ("failure" in parsedApplyAt) return parsedApplyAt.failure;
-    const { applyAtMs } = parsedApplyAt;
-    const confirmed = await db.update(runs).set({
-      status: "confirmed",
-      scheduledAt: applyAtMs,
-      statusTimestamps: {
-        ...(before.statusTimestamps ?? {}),
-        "confirmed-at": new Date().toISOString(),
-        "scheduled-at": new Date(applyAtMs).toISOString(),
-      },
-    }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
-    if (confirmed.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] }; }
-    return await publishScheduleConfirmation(runId, user?.id ?? null, teamId, before.status, body, authorized.workspace, applyAtMs);
-  })
-  .post("/api/v2/runs/:run_id/actions/discard", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const access = await authorizeRunAction(runId, user, orgId, teamId, set, "discard");
-    if ("failure" in access) return access.failure;
-    const { authorized } = access;
-    const updated = await db.update(runs).set({ status: "discarded" }).where(and(
-      eq(runs.id, runId),
-      eq(runs.status, authorized.run.status),
-      inArray(runs.status, DISCARDABLE_RUN_STATUSES),
-    )).returning();
-    if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not discardable" }] }; }
-    await revokeRunTokens(runId);
-    const { cleanupRunWorkDir, cleanupSavedPlan } = await import("../worker");
-    await cleanupSavedPlan(runId);
-    await cleanupRunWorkDir(runId);
-    const commentStr = actionComment(body);
-    if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
-    await auditLog("discard", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
-      workspaceId: authorized.workspace.id,
-      fromStatus: authorized.run.status,
-      toStatus: "discarded",
-      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
-    });
-    queueRunNotification(runId, "run:errored", "discarded");
-    (set as { status: number }).status = 202;
-    return new Response(null, { status: 202 });
-  })
-  .post("/api/v2/runs/:run_id/actions/cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const access = await authorizeRunAction(runId, user, orgId, teamId, set, "cancel");
-    if ("failure" in access) return access.failure;
-    const { authorized } = access;
-    const canceledAt = new Date().toISOString();
-    const updated = await db.update(runs).set({
-      status: "canceled",
-      statusTimestamps: {
-        ...(authorized.run.statusTimestamps ?? {}),
-        "cancel-requested-at": canceledAt,
-        "canceled-at": canceledAt,
-      },
-    }).where(and(
-      eq(runs.id, runId),
-      eq(runs.status, authorized.run.status),
-      inArray(runs.status, [
-        "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
-        "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated",
-        "policy_checking", "policy_override", "policy_checked", "post_plan_running",
-        "post_plan_completed", "confirmed", "apply_queued", "applying",
-      ]),
-    )).returning();
-    if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not cancelable" }] }; }
-    await revokeRunTokens(runId);
-    const { cancelRunExecution, cleanupSavedPlan, scheduleRunWorkDirCleanup } = await import("../worker");
-    cancelRunExecution(runId);
-    scheduleRunWorkDirCleanup(runId);
-    await cleanupSavedPlan(runId);
-    await cancelAgentJobsForRun(runId);
-    await auditLog("cancel", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
-      workspaceId: authorized.workspace.id,
-      fromStatus: authorized.run.status,
-      toStatus: "canceled",
-      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
-    });
-    queueRunNotification(runId, "run:errored", "canceled");
-    (set as { status: number }).status = 202;
-    return new Response(null, { status: 202 });
-  })
-  .post("/api/v2/runs/:run_id/actions/force-cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    if (requiresCancelBeforeForceCancel(authorized.run.statusTimestamps, authorized.run.status)) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Cancel the run before force-canceling it" }] };
-    }
-    const canceled = await forceCancelActiveRun(authorized, runId, user, teamId, set);
-    if ("failure" in canceled) return canceled.failure;
-    return new Response(null, { status: 202 });
-  })
-  .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authz = await authorizePolicyOverride(params, body, user, orgId, teamId, set);
-    if ("failure" in authz) return authz.failure;
-    const { authorized, justification } = authz;
-    const runId = params["run_id"] ?? "";
-    const workspace = authorized.workspace;
-    const commentId = newResourceId("rc");
-    const updated = await commitPolicyOverride({ runId, justification, commentId, actorId: user?.id ?? null, workspace, teamId, now: Date.now() });
-    if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is no longer awaiting policy override" }] }; }
-    publish("comment.created", {
-      "run-id": runId,
-      "workspace-id": workspace.id,
-      "org-id": workspace.orgId,
-      "comment-id": commentId,
-    });
-    queueRunNotification(runId, "run:needs_attention", "planned");
-    const updatedRun = updated[0];
-    if (updatedRun === undefined) {
-      (set as { status: number }).status = 500;
-      return { errors: [{ status: "500", title: "Internal Server Error" }] };
-    }
-    return { data: await actionRunResource(updatedRun, authorized.workspace, user?.id, orgId ?? null, teamId ?? null) };
-  })
-  .post("/api/v2/runs/:run_id/actions/force-execute", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    if (authorized.run.status !== "pending") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be pending to force-execute" }] }; }
-    // Issue #583: derive the stoppable list from the workspace blocking set
-    // minus the resting states a user can discard themselves (planned,
-    // policy_soft_failed). The old four-status list reported nothing blocking
-    // while fetching/confirmed/policy runs held the queue.
-    const { blocking, resting } = forceExecuteStatusLists();
-    const stopped = await stopForceExecuteBlockers(authorized.workspace.id, runId, resting, blocking, set);
-    if ("failure" in stopped) return stopped.failure;
-    const done = await transitionForceExecutedRun(authorized, runId, user, teamId, set);
-    if ("failure" in done) return done.failure;
-    return new Response(null, { status: 202 });
-  })
-  .post("/api/v2/runs/:run_id/actions/queue", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    await cancelQueuedRunExecution(runId, authorized.run.status);
-    const queued = await queuePendingRun(authorized, runId, user, orgId, teamId, set);
-    if ("failure" in queued) return queued.failure;
-    return queued;
-  })
-  // --- Comments ---
-  .get("/api/v2/runs/:run_id/comments", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const page = pageRequest(request);
-    const commentWhere = eq(runComments.runId, runId);
-    const [countRow] = await db.select({ total: count() }).from(runComments).where(commentWhere);
-    const totalCount = countRow?.total ?? 0;
-    const offset = runHistoryPageOffset(page, totalCount);
-    const commentsList = offset === null
-      ? []
-      : await db.query.runComments.findMany({
-        where: commentWhere,
-        orderBy: [asc(runComments.createdAt), asc(runComments.id)],
-        limit: page.size,
-        offset,
+    },
+  )
+  .post(
+    "/api/v2/runs/:run_id/actions/cancel",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const access = await authorizeRunAction(runId, user, orgId, teamId, set, "cancel");
+      if ("failure" in access) return access.failure;
+      const { authorized } = access;
+      const canceledAt = new Date().toISOString();
+      const updated = await db
+        .update(runs)
+        .set({
+          status: "canceled",
+          statusTimestamps: {
+            ...(authorized.run.statusTimestamps ?? {}),
+            "cancel-requested-at": canceledAt,
+            "canceled-at": canceledAt,
+          },
+        })
+        .where(
+          and(
+            eq(runs.id, runId),
+            eq(runs.status, authorized.run.status),
+            inArray(runs.status, [
+              "pending",
+              "fetching",
+              "fetching_completed",
+              "pre_plan_running",
+              "pre_plan_completed",
+              "queuing",
+              "plan_queued",
+              "planning",
+              "cost_estimating",
+              "cost_estimated",
+              "policy_checking",
+              "policy_override",
+              "policy_checked",
+              "post_plan_running",
+              "post_plan_completed",
+              "confirmed",
+              "apply_queued",
+              "applying",
+            ]),
+          ),
+        )
+        .returning();
+      if (updated.length === 0) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Run is not cancelable" }] };
+      }
+      await revokeRunTokens(runId);
+      const { cancelRunExecution, cleanupSavedPlan, scheduleRunWorkDirCleanup } = await import("../worker");
+      cancelRunExecution(runId);
+      scheduleRunWorkDirCleanup(runId);
+      await cleanupSavedPlan(runId);
+      await cancelAgentJobsForRun(runId);
+      await auditLog("cancel", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+        workspaceId: authorized.workspace.id,
+        fromStatus: authorized.run.status,
+        toStatus: "canceled",
+        ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
       });
-    const enriched = await enrichCommentsWithActors(commentsList);
-    return {
-      data: enriched.map((comment): Record<string, unknown> => commentResource(comment)),
-      ...pagination(request, page.number, page.size, totalCount),
-    };
-  })
-  .post("/api/v2/runs/:run_id/comments", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "plan");
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const parsed = parseCommentCreateBody(body, set);
-    if ("failure" in parsed) return parsed.failure;
-    const { id, createdAt } = await createRunComment({ runId, userId: user?.id ?? null, body: parsed.text, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
-    (set as { status: number }).status = 201;
-    return { data: commentResource({ id, runId, body: parsed.text, userId: user?.id ?? null, createdAt, ...commentActor(user) }) };
-  })
+      queueRunNotification(runId, "run:errored", "canceled");
+      (set as { status: number }).status = 202;
+      return new Response(null, { status: 202 });
+    },
+  )
+  .post(
+    "/api/v2/runs/:run_id/actions/force-cancel",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) {
+        (set as { status: number }).status = 403;
+        return { errors: [{ status: "403", title: "Forbidden" }] };
+      }
+      if (requiresCancelBeforeForceCancel(authorized.run.statusTimestamps, authorized.run.status)) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Cancel the run before force-canceling it" }] };
+      }
+      const canceled = await forceCancelActiveRun(authorized, runId, user, teamId, set);
+      if ("failure" in canceled) return canceled.failure;
+      return new Response(null, { status: 202 });
+    },
+  )
+  .post(
+    "/api/v2/runs/:run_id/actions/override-policy",
+    async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const authz = await authorizePolicyOverride(params, body, user, orgId, teamId, set);
+      if ("failure" in authz) return authz.failure;
+      const { authorized, justification } = authz;
+      const runId = params["run_id"] ?? "";
+      const workspace = authorized.workspace;
+      const commentId = newResourceId("rc");
+      const updated = await commitPolicyOverride({
+        runId,
+        justification,
+        commentId,
+        actorId: user?.id ?? null,
+        workspace,
+        teamId,
+        now: Date.now(),
+      });
+      if (updated.length === 0) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Run is no longer awaiting policy override" }] };
+      }
+      publish("comment.created", {
+        "run-id": runId,
+        "workspace-id": workspace.id,
+        "org-id": workspace.orgId,
+        "comment-id": commentId,
+      });
+      queueRunNotification(runId, "run:needs_attention", "planned");
+      const updatedRun = updated[0];
+      if (updatedRun === undefined) {
+        (set as { status: number }).status = 500;
+        return { errors: [{ status: "500", title: "Internal Server Error" }] };
+      }
+      return {
+        data: await actionRunResource(updatedRun, authorized.workspace, user?.id, orgId ?? null, teamId ?? null),
+      };
+    },
+  )
+  .post(
+    "/api/v2/runs/:run_id/actions/force-execute",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) {
+        (set as { status: number }).status = 403;
+        return { errors: [{ status: "403", title: "Forbidden" }] };
+      }
+      if (authorized.run.status !== "pending") {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Run must be pending to force-execute" }] };
+      }
+      // Issue #583: derive the stoppable list from the workspace blocking set
+      // minus the resting states a user can discard themselves (planned,
+      // policy_soft_failed). The old four-status list reported nothing blocking
+      // while fetching/confirmed/policy runs held the queue.
+      const { blocking, resting } = forceExecuteStatusLists();
+      const stopped = await stopForceExecuteBlockers(authorized.workspace.id, runId, resting, blocking, set);
+      if ("failure" in stopped) return stopped.failure;
+      const done = await transitionForceExecutedRun(authorized, runId, user, teamId, set);
+      if ("failure" in done) return done.failure;
+      return new Response(null, { status: 202 });
+    },
+  )
+  .post(
+    "/api/v2/runs/:run_id/actions/queue",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) {
+        (set as { status: number }).status = 403;
+        return { errors: [{ status: "403", title: "Forbidden" }] };
+      }
+      await cancelQueuedRunExecution(runId, authorized.run.status);
+      const queued = await queuePendingRun(authorized, runId, user, orgId, teamId, set);
+      if ("failure" in queued) return queued.failure;
+      return queued;
+    },
+  )
+  // --- Comments ---
+  .get(
+    "/api/v2/runs/:run_id/comments",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const page = pageRequest(request);
+      const commentWhere = eq(runComments.runId, runId);
+      const [countRow] = await db.select({ total: count() }).from(runComments).where(commentWhere);
+      const totalCount = countRow?.total ?? 0;
+      const offset = runHistoryPageOffset(page, totalCount);
+      const commentsList =
+        offset === null
+          ? []
+          : await db.query.runComments.findMany({
+              where: commentWhere,
+              orderBy: [asc(runComments.createdAt), asc(runComments.id)],
+              limit: page.size,
+              offset,
+            });
+      const enriched = await enrichCommentsWithActors(commentsList);
+      return {
+        data: enriched.map((comment): Record<string, unknown> => commentResource(comment)),
+        ...pagination(request, page.number, page.size, totalCount),
+      };
+    },
+  )
+  .post(
+    "/api/v2/runs/:run_id/comments",
+    async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "plan");
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const parsed = parseCommentCreateBody(body, set);
+      if ("failure" in parsed) return parsed.failure;
+      const { id, createdAt } = await createRunComment({
+        runId,
+        userId: user?.id ?? null,
+        body: parsed.text,
+        workspaceId: authorized.workspace.id,
+        orgId: authorized.workspace.orgId,
+      });
+      (set as { status: number }).status = 201;
+      return {
+        data: commentResource({
+          id,
+          runId,
+          body: parsed.text,
+          userId: user?.id ?? null,
+          createdAt,
+          ...commentActor(user),
+        }),
+      };
+    },
+  )
   .delete("/api/v2/comments/:comment_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const commentId = params["comment_id"] ?? "";
     const c = await db.query.runComments.findFirst({ where: eq(runComments.id, commentId) });
-    if (c === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (c === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const authorized = await findAuthorizedRun(c.runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) {
-      await auditLog("delete", "run-comments", commentId, user?.id ?? null, null, { runId: c.runId, reason: "not-authorized" }, { result: "denied", immutable: true });
+      await auditLog(
+        "delete",
+        "run-comments",
+        commentId,
+        user?.id ?? null,
+        null,
+        { runId: c.runId, reason: "not-authorized" },
+        { result: "denied", immutable: true },
+      );
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const auth = await authorizeCommentDelete(c, authorized, user, orgId, teamId, set);
     if ("failure" in auth) return auth.failure;
     const deleted = await deleteCommentWithAudit(c, authorized, user?.id ?? null, auth.isAuthor);
-    if (!deleted) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (!deleted) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     (set as { status: number }).status = 204;
     return new Response(null, { status: 204 });
   })
   .get("/api/v2/comments/:comment_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const commentId = params["comment_id"] ?? "";
     const comment = await db.query.runComments.findFirst({ where: eq(runComments.id, commentId) });
-    if (comment === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (comment === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const authorized = await findAuthorizedRun(comment.runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (authorized === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const [enrichedSingle] = await enrichCommentsWithActors([comment]);
     return { data: commentResource(enrichedSingle ?? comment) };
   })
   // --- Plan JSON Output ---
-  .get("/api/v2/plans/:plan_id/json-output", async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
-    const planId = params["plan_id"] ?? "";
-    const runId = planId.replace(/^plan-/, "");
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-    if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await authorizedRawPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null);
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const planJson = await readPlanJsonArtifact(runId);
-    if (planJson === undefined) {
-      if (isPlanIncompleteRunStatus(run.status)) {
-        // the reference format contract: 204 means "plan JSON supported, but the plan has not
-        // completed yet". The artifact will arrive when planning finishes.
-        (set as { status: number }).status = 204;
-        return null;
+  .get(
+    "/api/v2/plans/:plan_id/json-output",
+    async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
+      const planId = params["plan_id"] ?? "";
+      const runId = planId.replace(/^plan-/, "");
+      const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+      if (run === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found", detail: "Plan JSON output is unavailable" }] };
-    }
-    return planJson;
-  })
-  .get("/api/v2/runs/:run_id/plan/json-output", async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-    if (run === undefined || await authorizedRawPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null) === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const planJson = await readPlanJsonArtifact(runId);
-    if (planJson === undefined) {
-      if (isPlanIncompleteRunStatus(run.status)) { (set as { status: number }).status = 204; return null; }
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found", detail: "Plan JSON output is unavailable" }] };
-    }
-    return planJson;
-  })
-  .get("/api/v2/plans/:plan_id/json-output-redacted", async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
-    const planId = params["plan_id"] ?? "";
-    const runId = planId.replace(/^plan-/, "");
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-    if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (await authorizedPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null) === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    return sanitizedPlanArtifactResponse(runId, run, set);
-  })
-  .get("/api/v2/plans/:plan_id/sanitized-plan", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const planId = params["plan_id"] ?? "";
-    const runId = planId.replace(/^plan-/, "");
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-    if (run === undefined || await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId ?? null, teamId ?? null) === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    return sanitizedPlanArtifactResponse(runId, run, set);
-  })
-  .get("/api/v2/runs/:run_id/plan/sanitized-plan", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-    if (run === undefined || await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId ?? null, teamId ?? null) === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    return sanitizedPlanArtifactResponse(runId, run, set);
-  });
+      const ws = await authorizedRawPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null);
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const planJson = await readPlanJsonArtifact(runId);
+      if (planJson === undefined) {
+        if (isPlanIncompleteRunStatus(run.status)) {
+          // the reference format contract: 204 means "plan JSON supported, but the plan has not
+          // completed yet". The artifact will arrive when planning finishes.
+          (set as { status: number }).status = 204;
+          return null;
+        }
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found", detail: "Plan JSON output is unavailable" }] };
+      }
+      return planJson;
+    },
+  )
+  .get(
+    "/api/v2/runs/:run_id/plan/json-output",
+    async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+      if (
+        run === undefined ||
+        (await authorizedRawPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null)) ===
+          undefined
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const planJson = await readPlanJsonArtifact(runId);
+      if (planJson === undefined) {
+        if (isPlanIncompleteRunStatus(run.status)) {
+          (set as { status: number }).status = 204;
+          return null;
+        }
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found", detail: "Plan JSON output is unavailable" }] };
+      }
+      return planJson;
+    },
+  )
+  .get(
+    "/api/v2/plans/:plan_id/json-output-redacted",
+    async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
+      const planId = params["plan_id"] ?? "";
+      const runId = planId.replace(/^plan-/, "");
+      const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+      if (run === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (
+        (await authorizedPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null)) === undefined
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return sanitizedPlanArtifactResponse(runId, run, set);
+    },
+  )
+  .get(
+    "/api/v2/plans/:plan_id/sanitized-plan",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const planId = params["plan_id"] ?? "";
+      const runId = planId.replace(/^plan-/, "");
+      const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+      if (
+        run === undefined ||
+        (await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId ?? null, teamId ?? null)) === undefined
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return sanitizedPlanArtifactResponse(runId, run, set);
+    },
+  )
+  .get(
+    "/api/v2/runs/:run_id/plan/sanitized-plan",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+      if (
+        run === undefined ||
+        (await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId ?? null, teamId ?? null)) === undefined
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return sanitizedPlanArtifactResponse(runId, run, set);
+    },
+  );

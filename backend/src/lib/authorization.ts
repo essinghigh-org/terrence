@@ -14,6 +14,4 @@ export {
   checkRunStateAccess,
 } from "./utils";
 
-export type {
-  WorkspacePermission,
-} from "./utils";
+export type { WorkspacePermission } from "./utils";

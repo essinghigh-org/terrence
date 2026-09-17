@@ -1,11 +1,22 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, openSync, closeSync, readdirSync, statSync, readlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  openSync,
+  closeSync,
+  readdirSync,
+  statSync,
+  readlinkSync,
+} from "node:fs";
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { makeRegistryModuleArchive } from "../registry-module-helpers";
 import cliMatrix from "./cli_matrix.json";
 import { safeJsonStringify } from "../../src/lib/log";
+import { CLI_CREDENTIALS_HELPER_CONFIG, installCliCredentialsHelper } from "./cli-credentials-helper";
 import providerSurface from "./provider_surface.json";
 import lifecycleContract from "../../src/data/provider_lifecycle_contract.json" with { type: "json" };
 import {
@@ -34,6 +45,7 @@ const BACKEND_DIR = join(REPO_ROOT, "backend");
 // from OOM-killing the host gateway during e2e runs.
 const SHARED_BINARY_CACHE = join(BACKEND_DIR, "storage", "binaries");
 const SHARED_PLUGIN_CACHE = join(BACKEND_DIR, "storage", "e2e-plugin-cache");
+const REGISTRY_INSPECTOR_AVAILABLE = existsSync(join(BACKEND_DIR, "bin", "terraform-config-inspect"));
 
 const sleep = (ms: number): Promise<void> => new Promise((resolveFn) => setTimeout(resolveFn, ms));
 
@@ -41,7 +53,8 @@ let terraformBin = "";
 let tofuBin = "";
 const binaryDigests = new Map<string, string>();
 const matrixTier = process.env["TERRENCE_E2E_TIER"] ?? "current";
-if (!["floor", "current", "canary"].includes(matrixTier)) throw new Error("TERRENCE_E2E_TIER must be floor, current or canary");
+if (!["floor", "current", "canary"].includes(matrixTier))
+  throw new Error("TERRENCE_E2E_TIER must be floor, current or canary");
 const providerVersion = /v(\d+\.\d+\.\d+)/.exec(providerSurface.provider)?.[1];
 if (providerVersion === undefined) throw new Error("The provider catalog must name an exact version");
 const providerLifecycleContract = lifecycleContract as LifecycleContract;
@@ -134,17 +147,30 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_scim_token.scim_tok",
 ];
 
-type Backend = { port: number; proc: Bun.Subprocess; dbDir: string; logPath: string; storageDir: string; databaseKind: "sqlite" | "postgres"; securityProfile: "disabled" | "required"; dropDatabase: () => Promise<void> };
+type Backend = {
+  port: number;
+  proc: Bun.Subprocess;
+  dbDir: string;
+  logPath: string;
+  storageDir: string;
+  databaseKind: "sqlite" | "postgres";
+  securityProfile: "disabled" | "required";
+  dropDatabase: () => Promise<void>;
+};
 
 async function startBackend(workDir: string, engine: "terraform" | "tofu"): Promise<Backend> {
   const incomingUrl = process.env["DATABASE_URL"] ?? "file:";
-  if (!/^(file:|postgres(?:ql)?:\/\/)/.test(incomingUrl)) throw new Error("Provider E2E supports only SQLite file: or PostgreSQL URLs");
+  if (!/^(file:|postgres(?:ql)?:\/\/)/.test(incomingUrl))
+    throw new Error("Provider E2E supports only SQLite file: or PostgreSQL URLs");
   const databaseKind = incomingUrl.startsWith("postgres") ? "postgres" : "sqlite";
   const securityProfile = process.env["TERRENCE_E2E_SECURITY_PROFILE"] ?? "disabled";
-  if (securityProfile !== "disabled" && securityProfile !== "required") throw new Error("TERRENCE_E2E_SECURITY_PROFILE must be disabled or required");
+  if (securityProfile !== "disabled" && securityProfile !== "required")
+    throw new Error("TERRENCE_E2E_SECURITY_PROFILE must be disabled or required");
   const dbDir = createOperationalTestDirectory("terrence-provider-e2e-", process.env["TERRENCE_E2E_ROOT"]);
   let databaseUrl = `file:${join(dbDir, "test.db")}`;
-  let dropDatabase = async (): Promise<void> => { /* SQLite is removed with dbDir. */ };
+  let dropDatabase = async (): Promise<void> => {
+    /* SQLite is removed with dbDir. */
+  };
   const port = await freeOperationalTestPort();
   const logPath = join(workDir, "server.log");
   let proc: Bun.Subprocess | undefined;
@@ -152,29 +178,49 @@ async function startBackend(workDir: string, engine: "terraform" | "tofu"): Prom
     if (databaseKind === "postgres") {
       const name = `terrence_provider_${crypto.randomUUID().replaceAll("-", "")}`;
       const admin = new Bun.SQL(incomingUrl);
-      try { await admin.unsafe(`CREATE DATABASE "${name}"`); } finally { await admin.close(); }
+      try {
+        await admin.unsafe(`CREATE DATABASE "${name}"`);
+      } finally {
+        await admin.close();
+      }
       dropDatabase = async (): Promise<void> => {
         const admin = new Bun.SQL(incomingUrl);
-        try { await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`); } finally { await admin.close(); }
+        try {
+          await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+        } finally {
+          await admin.close();
+        }
       };
       const target = new URL(incomingUrl);
       target.pathname = `/${name}`;
       databaseUrl = target.toString();
     }
-    await writeFile(join(workDir, "profile.json"), JSON.stringify({
-      profile: process.env["TERRENCE_E2E_PROFILE"] ?? "direct-e2e",
-      seed: fixtureSeed,
-      mode: "real-cli",
-      engine,
-      databaseKind,
-      securityProfile,
-    }, null, 2), { mode: 0o600 });
+    await writeFile(
+      join(workDir, "profile.json"),
+      JSON.stringify(
+        {
+          profile: process.env["TERRENCE_E2E_PROFILE"] ?? "direct-e2e",
+          seed: fixtureSeed,
+          mode: "real-cli",
+          engine,
+          databaseKind,
+          securityProfile,
+        },
+        null,
+        2,
+      ),
+      { mode: 0o600 },
+    );
     console.log(`[e2e] database=${databaseKind} sandbox=${securityProfile}`);
     const logFd = openSync(logPath, "w", 0o600);
     try {
       // TERRENCE_E2E_* controls the harness and is not backend runtime
       // configuration. Do not pass it through startup validation.
-      const backendEnv = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && !entry[0].startsWith("TERRENCE_E2E_")));
+      const backendEnv = Object.fromEntries(
+        Object.entries(process.env).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined && !entry[0].startsWith("TERRENCE_E2E_"),
+        ),
+      );
       proc = Bun.spawn(managedCommand(["bun", "run", "index.ts"]), {
         cwd: BACKEND_DIR,
         env: {
@@ -194,11 +240,14 @@ async function startBackend(workDir: string, engine: "terraform" | "tofu"): Prom
         stdout: logFd,
         stderr: logFd,
       });
-    } finally { closeSync(logFd); }
+    } finally {
+      closeSync(logFd);
+    }
     for (let i = 0; i < 300; i++) {
       try {
         const res = await fetch(`http://127.0.0.1:${port}/healthz`);
-        if (res.ok) return { port, proc, dbDir, logPath, storageDir: dbDir, databaseKind, securityProfile, dropDatabase };
+        if (res.ok)
+          return { port, proc, dbDir, logPath, storageDir: dbDir, databaseKind, securityProfile, dropDatabase };
       } catch {}
       if (proc.exitCode !== null) break;
       await sleep(200);
@@ -215,11 +264,31 @@ async function startBackend(workDir: string, engine: "terraform" | "tofu"): Prom
 
 async function startTlsProxy(backendPort: number, workDir: string): Promise<Awaited<ReturnType<typeof Bun.serve>>> {
   const port = await freeOperationalTestPort();
-  const proc = Bun.spawn(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", join(workDir, "key.pem"), "-out", join(workDir, "cert.pem")], {
-    stdout: "ignore",
-    stderr: "ignore",
-  });
-  if (await proc.exited !== 0) throw new Error("Could not create TLS fixture certificate");
+  const proc = Bun.spawn(
+    [
+      "openssl",
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-days",
+      "1",
+      "-subj",
+      "/CN=127.0.0.1",
+      "-addext",
+      "subjectAltName=IP:127.0.0.1",
+      "-keyout",
+      join(workDir, "key.pem"),
+      "-out",
+      join(workDir, "cert.pem"),
+    ],
+    {
+      stdout: "ignore",
+      stderr: "ignore",
+    },
+  );
+  if ((await proc.exited) !== 0) throw new Error("Could not create TLS fixture certificate");
   const cert = await Bun.file(join(workDir, "cert.pem")).arrayBuffer();
   const key = await Bun.file(join(workDir, "key.pem")).arrayBuffer();
   return Bun.serve({
@@ -236,15 +305,17 @@ async function startTlsProxy(backendPort: number, workDir: string): Promise<Awai
       const headers = new Headers(req.headers);
       headers.set("X-Forwarded-Host", new URL(req.url).host);
       headers.set("X-Forwarded-Proto", "https");
-      return fetch(new Request(new Request(url, req), { headers })).then((res) => {
-        if (process.env["TERRENCE_E2E_PROXY_LOG"] === "1") {
-          console.log(`[proxy] -> ${res.status} ${req.method} ${req.url}`);
-        }
-        return res;
-      }).catch((err: unknown) => {
-        console.error(`[proxy] ERROR ${req.method} ${req.url}: ${String(err)}`);
-        return new Response("proxy error", { status: 502 });
-      });
+      return fetch(new Request(new Request(url, req), { headers }))
+        .then((res) => {
+          if (process.env["TERRENCE_E2E_PROXY_LOG"] === "1") {
+            console.log(`[proxy] -> ${res.status} ${req.method} ${req.url}`);
+          }
+          return res;
+        })
+        .catch((err: unknown) => {
+          console.error(`[proxy] ERROR ${req.method} ${req.url}: ${String(err)}`);
+          return new Response("proxy error", { status: 502 });
+        });
     },
   });
 }
@@ -287,15 +358,21 @@ async function signupAndToken(port: number): Promise<{ token: string; userId: st
   expect(login.status).toBe(200);
   const tempToken = login.json["data"].attributes.token as string;
 
-  const pwRes = await api(port, "PATCH", "/api/v2/account/password", {
-    data: {
-      attributes: {
-        "current-password": password,
-        password: newPassword,
-        "password-confirmation": newPassword,
+  const pwRes = await api(
+    port,
+    "PATCH",
+    "/api/v2/account/password",
+    {
+      data: {
+        attributes: {
+          "current-password": password,
+          password: newPassword,
+          "password-confirmation": newPassword,
+        },
       },
     },
-  }, tempToken);
+    tempToken,
+  );
   expect(pwRes.status).toBe(200);
 
   const finalLogin = await api(port, "POST", "/api/v2/users/login", {
@@ -313,10 +390,17 @@ async function signupAndToken(port: number): Promise<{ token: string; userId: st
   return { token, userId, username };
 }
 
-async function cli(bin: string, args: string[], cwd: string, env: Record<string, string>, input?: string): Promise<CliResult> {
+async function cli(
+  bin: string,
+  args: string[],
+  cwd: string,
+  env: Record<string, string>,
+  input?: string,
+): Promise<CliResult> {
   const sandboxed = process.env["TERRENCE_E2E_SECURITY_PROFILE"] === "required";
   const cliEnv = { ...env };
-  if (sandboxed && input !== undefined) throw new Error("Interactive CLI input is not supported by the sandbox harness");
+  if (sandboxed && input !== undefined)
+    throw new Error("Interactive CLI input is not supported by the sandbox harness");
   if (sandboxed) {
     // Provider installs must stay inside the sandbox workdir, not the shared writable cache.
     delete cliEnv["TF_PLUGIN_CACHE_DIR"];
@@ -324,8 +408,19 @@ async function cli(bin: string, args: string[], cwd: string, env: Record<string,
   }
   const proc = sandboxed
     ? new (await import("../../src/lib/sandbox")).RunSandbox().spawnGeneric([bin, ...args], { cwd, env: cliEnv })
-    : Bun.spawn([bin, ...args], { cwd, env: cliEnv, stdin: input === undefined ? "ignore" : new Blob([input]), stdout: "pipe", stderr: "pipe", timeout: 180_000 });
-  const [code, out, err] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    : Bun.spawn([bin, ...args], {
+        cwd,
+        env: cliEnv,
+        stdin: input === undefined ? "ignore" : new Blob([input]),
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 180_000,
+      });
+  const [code, out, err] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
   return { code, out, err };
 }
 
@@ -338,7 +433,9 @@ async function cli(bin: string, args: string[], cwd: string, env: Record<string,
 const PLUGIN_SOCKET_SPARE = 32; // "/tmp/plugin" plus up to a 20-char suffix.
 function assertCliDirFitsSocket(dir: string): void {
   if (dir.length + PLUGIN_SOCKET_SPARE > 107) {
-    throw new Error(`CLI dir too deep for terraform provider sockets (${dir.length} chars + ${PLUGIN_SOCKET_SPARE} spare > 107): ${dir}`);
+    throw new Error(
+      `CLI dir too deep for terraform provider sockets (${dir.length} chars + ${PLUGIN_SOCKET_SPARE} spare > 107): ${dir}`,
+    );
   }
 }
 
@@ -348,49 +445,83 @@ function cliOk(result: CliResult, what: string): void {
     const directory = process.env["TERRENCE_E2E_RESULTS_DIR"];
     if (directory !== undefined) {
       mkdirSync(directory, { recursive: true });
-      writeFileSync(join(directory, `failure-${Date.now()}-${crypto.randomUUID()}.json`), JSON.stringify({
-        profile: process.env["TERRENCE_E2E_PROFILE"] ?? "direct-e2e",
-        fixture_seed: fixtureSeed,
-        execution_mode: "real-cli",
-        command: what,
-        code: safe.code,
-        out: boundedCliDiagnostic(safe.out),
-        err: boundedCliDiagnostic(safe.err),
-      }, null, 2), { mode: 0o600 });
+      writeFileSync(
+        join(directory, `failure-${Date.now()}-${crypto.randomUUID()}.json`),
+        JSON.stringify(
+          {
+            profile: process.env["TERRENCE_E2E_PROFILE"] ?? "direct-e2e",
+            fixture_seed: fixtureSeed,
+            execution_mode: "real-cli",
+            command: what,
+            code: safe.code,
+            out: boundedCliDiagnostic(safe.out),
+            err: boundedCliDiagnostic(safe.err),
+          },
+          null,
+          2,
+        ),
+        { mode: 0o600 },
+      );
     }
     throw new Error(`${what} failed (exit ${safe.code}):\n--- stdout ---\n${safe.out}\n--- stderr ---\n${safe.err}`);
   }
 }
 
-type LifecycleFailure = Readonly<{
+type LifecycleFailureContext = Readonly<{
   engine: string;
   profile: string;
   fixture_seed: string;
-  execution_mode: "real-cli";
-  stage: string;
   contract_version: number;
-  completedAt: string;
-  error: { name: string; message: string };
 }>;
 
 function lifecycleError(error: unknown): { name: string; message: string } {
   if (error instanceof Error) {
     const command = error.message.split("\n--- stdout ---", 1)[0] ?? error.message;
     const stderr = error.message.includes("\n--- stderr ---")
-      ? error.message.split("\n--- stderr ---", 2)[1]?.split("\n", 2).find((line): boolean => line.trim() !== "")
+      ? error.message
+          .split("\n--- stderr ---", 2)[1]
+          ?.split("\n", 2)
+          .find((line): boolean => line.trim() !== "")
       : undefined;
-    return { name: error.name, message: [command, stderr].filter((part): part is string => part !== undefined && part !== "").join(": ").slice(0, 2_000) };
+    return {
+      name: error.name,
+      message: [command, stderr]
+        .filter((part): part is string => part !== undefined && part !== "")
+        .join(": ")
+        .slice(0, 2_000),
+    };
   }
   return { name: "UnknownError", message: safeJsonStringify(error) };
 }
 
-function writeLifecycleFailureEvidence(directory: string, failure: LifecycleFailure): void {
+function writeLifecycleFailureEvidence(directory: string, failure: LifecycleFailureContext): void {
   mkdirSync(directory, { recursive: true });
   const safeEngine = failure.engine.replace(/[^a-z0-9_-]/gi, "-");
-  writeFileSync(join(directory, `failure-${safeEngine}-${Date.now()}-${crypto.randomUUID()}.json`), JSON.stringify(failure, null, 2), { mode: 0o600 });
+  writeFileSync(
+    join(directory, `failure-${safeEngine}-${Date.now()}-${crypto.randomUUID()}.json`),
+    JSON.stringify(
+      {
+        engine: safeEngine,
+        profile: failure.profile,
+        fixture_seed: failure.fixture_seed,
+        execution_mode: "real-cli",
+        stage: "provider lifecycle failed; see test stderr for diagnostics",
+        contract_version: failure.contract_version,
+        completedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+    { mode: 0o600 },
+  );
 }
 
-async function normalizedCliState(bin: string, cwd: string, env: Record<string, string>, label: string): Promise<unknown> {
+async function normalizedCliState(
+  bin: string,
+  cwd: string,
+  env: Record<string, string>,
+  label: string,
+): Promise<unknown> {
   const shown = await cli(bin, ["show", "-json", "-no-color"], cwd, env);
   cliOk(shown, `${label} state snapshot`);
   try {
@@ -416,21 +547,62 @@ function firstResourceId(rows: readonly Record<string, any>[], name: string, lab
 }
 
 /** Probe the family list contracts with a bounded page and an invalid token. */
-async function runFamilyProbes(port: number, token: string, orgName: string, workspaceName: string, projectName: string): Promise<Set<string>> {
-  const workspaceList = await api(port, "GET", `/api/v2/organizations/${orgName}/workspaces?search[name]=${encodeURIComponent(workspaceName)}&page[number]=1&page[size]=1`, undefined, token);
+async function runFamilyProbes(
+  port: number,
+  token: string,
+  orgName: string,
+  workspaceName: string,
+  projectName: string,
+): Promise<Set<string>> {
+  const workspaceList = await api(
+    port,
+    "GET",
+    `/api/v2/organizations/${orgName}/workspaces?search[name]=${encodeURIComponent(workspaceName)}&page[number]=1&page[size]=1`,
+    undefined,
+    token,
+  );
   expect(workspaceList.status, "workspace family list probe").toBe(200);
-  firstResourceId(listData(workspaceList.json, "workspace family list probe"), workspaceName, "workspace family list probe");
-  const projectList = await api(port, "GET", `/api/v2/organizations/${orgName}/projects?filter[names]=${encodeURIComponent(projectName)}&page[number]=1&page[size]=1`, undefined, token);
+  firstResourceId(
+    listData(workspaceList.json, "workspace family list probe"),
+    workspaceName,
+    "workspace family list probe",
+  );
+  const projectList = await api(
+    port,
+    "GET",
+    `/api/v2/organizations/${orgName}/projects?filter[names]=${encodeURIComponent(projectName)}&page[number]=1&page[size]=1`,
+    undefined,
+    token,
+  );
   expect(projectList.status, "project family list probe").toBe(200);
-  const projectId = firstResourceId(listData(projectList.json, "project family list probe"), projectName, "project family list probe");
+  const projectId = firstResourceId(
+    listData(projectList.json, "project family list probe"),
+    projectName,
+    "project family list probe",
+  );
   const probes: FamilyProbe[] = [
     { fixture: "workspace-lifecycle", path: `/api/v2/organizations/${orgName}/workspaces?page[number]=1&page[size]=1` },
-    { fixture: "variables-and-sets-lifecycle", path: `/api/v2/organizations/${orgName}/varsets?page[number]=1&page[size]=1` },
-    { fixture: "teams-and-projects-lifecycle", path: `/api/v2/organizations/${orgName}/teams?page[number]=1&page[size]=1` },
-    { fixture: "teams-and-projects-lifecycle", path: `/api/v2/organizations/${orgName}/projects?page[number]=1&page[size]=1` },
+    {
+      fixture: "variables-and-sets-lifecycle",
+      path: `/api/v2/organizations/${orgName}/varsets?page[number]=1&page[size]=1`,
+    },
+    {
+      fixture: "teams-and-projects-lifecycle",
+      path: `/api/v2/organizations/${orgName}/teams?page[number]=1&page[size]=1`,
+    },
+    {
+      fixture: "teams-and-projects-lifecycle",
+      path: `/api/v2/organizations/${orgName}/projects?page[number]=1&page[size]=1`,
+    },
     { fixture: "policies-lifecycle", path: `/api/v2/organizations/${orgName}/policy-sets?page[number]=1&page[size]=1` },
-    { fixture: "notifications-lifecycle", path: `/api/v2/projects/${projectId}/notification-configurations?page[number]=1&page[size]=1` },
-    { fixture: "registry-lifecycle", path: `/api/v2/organizations/${orgName}/registry-modules?page[number]=1&page[size]=1` },
+    {
+      fixture: "notifications-lifecycle",
+      path: `/api/v2/projects/${projectId}/notification-configurations?page[number]=1&page[size]=1`,
+    },
+    {
+      fixture: "registry-lifecycle",
+      path: `/api/v2/organizations/${orgName}/registry-modules?page[number]=1&page[size]=1`,
+    },
   ];
   const passed = new Set<string>();
   for (const probe of probes) {
@@ -448,16 +620,21 @@ async function runFamilyProbes(port: number, token: string, orgName: string, wor
   return passed;
 }
 
-function providerTf(proxyPort: number, token: string): string {
+function providerTf(proxyPort: number): string {
   return `terraform {
   required_providers {
     tfe = { source = "hashicorp/tfe", version = "${providerVersion}" }
   }
 }
 
+variable "tfe_token" {
+  type      = string
+  sensitive = true
+}
+
 provider "tfe" {
   hostname        = "127.0.0.1:${proxyPort}"
-  token           = "${token}"
+  token           = var.tfe_token
   ssl_skip_verify = true
 }
 `;
@@ -1158,22 +1335,36 @@ ${scimMapping}
 `;
 }
 
-async function planAndApply(port: number, token: string, orgName: string, wsName: string, workDir: string): Promise<void> {
+async function planAndApply(
+  port: number,
+  token: string,
+  orgName: string,
+  wsName: string,
+  workDir: string,
+): Promise<void> {
   const list = await api(port, "GET", `/api/v2/organizations/${orgName}/workspaces`, undefined, token);
   expect(list.status).toBe(200);
   const ws = list.json["data"].find((w: any): boolean => w.attributes.name === wsName);
   expect(ws).toBeDefined();
   const wsId = ws.id as string;
 
-  const cv = await api(port, "POST", `/api/v2/workspaces/${wsId}/configuration-versions`, {
-    data: { type: "configuration-versions", attributes: { "auto-queue-runs": true } },
-  }, token);
+  const cv = await api(
+    port,
+    "POST",
+    `/api/v2/workspaces/${wsId}/configuration-versions`,
+    {
+      data: { type: "configuration-versions", attributes: { "auto-queue-runs": true } },
+    },
+    token,
+  );
   expect(cv.status).toBe(201);
   const cvId = cv.json["data"].id as string;
 
   const cfgDir = join(workDir, "run-config");
   await mkdir(cfgDir, { recursive: true });
-  await writeFile(join(cfgDir, "main.tf"), `terraform {
+  await writeFile(
+    join(cfgDir, "main.tf"),
+    `terraform {
   required_providers {
     null = { source = "hashicorp/null", version = "~> 3.2" }
   }
@@ -1188,30 +1379,40 @@ resource "null_resource" "probe" {
 output "probe_output" {
   value = "probe-value-pe2e"
 }
-`);
+`,
+  );
   const tarProc = Bun.spawn(["tar", "-czf", join(workDir, "config.tar.gz"), "-C", cfgDir, "."]);
   if ((await tarProc.exited) !== 0) throw new Error("tar failed");
 
-  const upload = await fetchWithRateLimitRetry(`http://127.0.0.1:${port}/api/v2/configuration-versions/${cvId}/upload`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/octet-stream",
-      Authorization: `Bearer ${token}`,
+  const upload = await fetchWithRateLimitRetry(
+    `http://127.0.0.1:${port}/api/v2/configuration-versions/${cvId}/upload`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        Authorization: `Bearer ${token}`,
+      },
+      body: await Bun.file(join(workDir, "config.tar.gz")).arrayBuffer(),
     },
-    body: await Bun.file(join(workDir, "config.tar.gz")).arrayBuffer(),
-  });
+  );
   expect(upload.status).toBe(200);
 
-  const run = await api(port, "POST", "/api/v2/runs", {
-    data: {
-      type: "runs",
-      attributes: { "auto-apply": true, message: "provider e2e apply" },
-      relationships: {
-        workspace: { data: { type: "workspaces", id: wsId } },
-        "configuration-version": { data: { type: "configuration-versions", id: cvId } },
+  const run = await api(
+    port,
+    "POST",
+    "/api/v2/runs",
+    {
+      data: {
+        type: "runs",
+        attributes: { "auto-apply": true, message: "provider e2e apply" },
+        relationships: {
+          workspace: { data: { type: "workspaces", id: wsId } },
+          "configuration-version": { data: { type: "configuration-versions", id: cvId } },
+        },
       },
     },
-  }, token);
+    token,
+  );
   expect(run.status).toBe(201);
   const runId = run.json["data"].id as string;
 
@@ -1224,7 +1425,9 @@ output "probe_output" {
     if (["errored", "canceled", "discarded", "force_canceled"].includes(status)) {
       const planLog = await api(port, "GET", `/api/v2/runs/${runId}/plan/log`, undefined, token);
       const applyLog = await api(port, "GET", `/api/v2/runs/${runId}/apply/log`, undefined, token);
-      throw new Error(`run ${runId} ended with status "${status}":\n--- plan ---\n${planLog.text.slice(-1500)}\n--- apply ---\n${applyLog.text.slice(-1500)}`);
+      throw new Error(
+        `run ${runId} ended with status "${status}":\n--- plan ---\n${planLog.text.slice(-1500)}\n--- apply ---\n${applyLog.text.slice(-1500)}`,
+      );
     }
   }
   expect(status, `run ${runId} did not reach applied`).toBe("applied");
@@ -1236,7 +1439,10 @@ output "probe_output" {
     await sleep(500);
     sv = await api(port, "GET", `/api/v2/workspaces/${wsId}/current-state-version`, undefined, token);
   }
-  expect(sv.status, `current-state-version for workspace ${wsId} did not become available (last status ${sv.status}): ${sv.text.slice(0, 300)}`).toBe(200);
+  expect(
+    sv.status,
+    `current-state-version for workspace ${wsId} did not become available (last status ${sv.status}): ${sv.text.slice(0, 300)}`,
+  ).toBe(200);
   const resources = sv.json["data"].attributes.resources as { name: string; type: string }[];
   expect(resources.some((r): boolean => r.name === "probe" && r.type === "null_resource")).toBe(true);
 
@@ -1293,7 +1499,16 @@ describe("tfe provider e2e", () => {
       // Sweep stale roots from prior runs (old and current prefixes: the
       // prefixes were shortened to leave AF_UNIX socket headroom, but dirs
       // from earlier runs still need cleanup).
-      if (!(name.startsWith("terrence-test-") || name.startsWith("terrence-provider-e2e-") || name.startsWith("terrence-profile-") || name.startsWith("tpe2e-") || name.startsWith("te2e-"))) continue;
+      if (
+        !(
+          name.startsWith("terrence-test-") ||
+          name.startsWith("terrence-provider-e2e-") ||
+          name.startsWith("terrence-profile-") ||
+          name.startsWith("tpe2e-") ||
+          name.startsWith("te2e-")
+        )
+      )
+        continue;
       try {
         const st = statSync(join(tmpdir(), name));
         if (st.mtimeMs < now - 10 * 60 * 1000 && !dirIsOpen(name)) {
@@ -1304,7 +1519,8 @@ describe("tfe provider e2e", () => {
       }
     }
     const { ensureBinary, readBinaryIntegrity, verifyBinaryIntegrity } = await import("../../src/binaryManager");
-    if (["1", "true"].includes(process.env["ALLOW_UNVERIFIED_CHECKSUMS"]?.toLowerCase() ?? "")) throw new Error("Compatibility tests require verified CLI checksums");
+    if (["1", "true"].includes(process.env["ALLOW_UNVERIFIED_CHECKSUMS"]?.toLowerCase() ?? ""))
+      throw new Error("Compatibility tests require verified CLI checksums");
     // Upstream registry lookups are occasionally transient (CI runners share
     // egress); retry each download before giving the whole file up.
     const ensureWithRetry = async (tool: "terraform" | "tofu"): Promise<{ binaryPath: string } | null> => {
@@ -1312,8 +1528,15 @@ describe("tfe provider e2e", () => {
       for (let attempt = 0; attempt < 3; attempt++) {
         if (attempt > 0) await sleep(5_000 * attempt);
         try {
-          const version = process.env[`TERRENCE_E2E_${tool.toUpperCase()}_VERSION`] ?? (matrixTier === "canary" ? "latest" : matrixTier === "floor" ? cliMatrix[tool].floor : cliMatrix[tool].current);
-          if (!/^(?:latest|\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?)$/.test(version)) throw new Error("Compatibility tests require an exact CLI version or latest canary");
+          const version =
+            process.env[`TERRENCE_E2E_${tool.toUpperCase()}_VERSION`] ??
+            (matrixTier === "canary"
+              ? "latest"
+              : matrixTier === "floor"
+                ? cliMatrix[tool].floor
+                : cliMatrix[tool].current);
+          if (!/^(?:latest|\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?)$/.test(version))
+            throw new Error("Compatibility tests require an exact CLI version or latest canary");
           last = await ensureBinary(tool, version);
         } catch {
           last = null;
@@ -1327,7 +1550,8 @@ describe("tfe provider e2e", () => {
       const binary = await ensureWithRetry(tool);
       if (binary === null) throw new Error(`Could not obtain ${tool} binary`);
       const integrity = await readBinaryIntegrity(dirname(binary.binaryPath));
-      if (integrity.status !== "ok" || !(await verifyBinaryIntegrity(binary.binaryPath, integrity.integrity))) throw new Error(`Compatibility tests require a verified managed ${tool} binary`);
+      if (integrity.status !== "ok" || !(await verifyBinaryIntegrity(binary.binaryPath, integrity.integrity)))
+        throw new Error(`Compatibility tests require a verified managed ${tool} binary`);
       binaryDigests.set(binary.binaryPath, integrity.integrity.binarySha256);
       if (tool === "terraform") terraformBin = binary.binaryPath;
       else tofuBin = binary.binaryPath;
@@ -1336,17 +1560,28 @@ describe("tfe provider e2e", () => {
 
   test("an unavailable PostgreSQL target fails instead of falling back to SQLite", async () => {
     const previous = process.env["DATABASE_URL"];
-    const directory = createOperationalTestDirectory("terrence-provider-unavailable-", process.env["TERRENCE_E2E_ROOT"]);
+    const directory = createOperationalTestDirectory(
+      "terrence-provider-unavailable-",
+      process.env["TERRENCE_E2E_ROOT"],
+    );
     let backend: Backend | undefined;
     try {
       process.env["DATABASE_URL"] = `postgres://unused:unused@127.0.0.1:${await freeOperationalTestPort()}/unavailable`;
       let failure: unknown;
-      try { backend = await startBackend(directory, "terraform"); } catch (error) { failure = error; }
+      try {
+        backend = await startBackend(directory, "terraform");
+      } catch (error) {
+        failure = error;
+      }
       expect(failure).toBeInstanceOf(Error);
     } finally {
       if (previous === undefined) delete process.env["DATABASE_URL"];
       else process.env["DATABASE_URL"] = previous;
-      if (backend) { await terminateManagedProcess(backend.proc); await backend.dropDatabase(); await rm(backend.dbDir, { recursive: true, force: true }); }
+      if (backend) {
+        await terminateManagedProcess(backend.proc);
+        await backend.dropDatabase();
+        await rm(backend.dbDir, { recursive: true, force: true });
+      }
       await rm(directory, { recursive: true, force: true });
     }
   }, 30_000);
@@ -1364,7 +1599,9 @@ describe("tfe provider e2e", () => {
       const workDir = createOperationalTestDirectory(`tpe2e-${cliName}-`, process.env["TERRENCE_E2E_ROOT"]);
       await mkdir(workDir, { recursive: true });
       const cliEnv: Record<string, string> = {
-        ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+        ...Object.fromEntries(
+          Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+        ),
         TF_IN_AUTOMATION: "1",
         TF_PLUGIN_CACHE_DIR: SHARED_PLUGIN_CACHE,
       };
@@ -1376,19 +1613,23 @@ describe("tfe provider e2e", () => {
         const proxy = await startTlsProxy(backend.port, workDir);
         try {
           const auth = await signupAndToken(backend.port);
+          cliEnv["TF_VAR_tfe_token"] = auth.token;
           const dbStatus = await api(backend.port, "GET", "/api/v2/admin/db-migration/status", undefined, auth.token);
           expect(dbStatus.status).toBe(200);
           expect(dbStatus.json["data"]["source-database"] === null).toBe(backend.databaseKind === "postgres");
           const meta = await api(backend.port, "GET", "/api/v2/meta", undefined, auth.token);
           expect(meta.status).toBe(200);
           expect(meta.json["data"].attributes["run-sandbox"].enabled).toBe(backend.securityProfile === "required");
-          if (backend.securityProfile === "required") expect(meta.json["data"].attributes["run-sandbox"].available).toBe(true);
-          console.log(`[e2e] engine=${cliName} database=${backend.databaseKind} sandbox=${backend.securityProfile} verified`);
+          if (backend.securityProfile === "required")
+            expect(meta.json["data"].attributes["run-sandbox"].available).toBe(true);
+          console.log(
+            `[e2e] engine=${cliName} database=${backend.databaseKind} sandbox=${backend.securityProfile} verified`,
+          );
 
           // mkdtemp: unique per run, no check-then-create race (CodeQL).
           const cfgDir = mkdtempSync(join(workDir, "config-"));
           assertCliDirFitsSocket(cfgDir);
-          await writeFile(join(cfgDir, "providers.tf"), providerTf(proxy.port!, auth.token));
+          await writeFile(join(cfgDir, "providers.tf"), providerTf(proxy.port!));
           await writeFile(join(cfgDir, "main.tf"), mainTf(suffix, auth.username));
           await writeFile(join(cfgDir, "outputs.tf"), outputsTf());
 
@@ -1401,7 +1642,10 @@ describe("tfe provider e2e", () => {
 
           // A successful create is not convergence: refresh and plan twice.
           for (let refresh = 0; refresh < 2; refresh++) {
-            cliOk(await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], cfgDir, cliEnv), `unchanged plan ${refresh + 1}`);
+            cliOk(
+              await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], cfgDir, cliEnv),
+              `unchanged plan ${refresh + 1}`,
+            );
           }
           const repeatedApply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(repeatedApply, "unchanged apply");
@@ -1412,31 +1656,66 @@ describe("tfe provider e2e", () => {
           // state would report false lifecycle drift.
           const baselineState = await normalizedCliState(bin, cfgDir, cliEnv, "baseline");
           lifecycleStage = "family pagination and permission probes";
-          const familyProbeFixtures = await runFamilyProbes(backend.port, auth.token, `pe2e-org-${suffix}`, `pe2e-ws-${suffix}`, `pe2e-proj-${suffix}`);
+          const familyProbeFixtures = await runFamilyProbes(
+            backend.port,
+            auth.token,
+            `pe2e-org-${suffix}`,
+            `pe2e-ws-${suffix}`,
+            `pe2e-proj-${suffix}`,
+          );
 
           lifecycleStage = "optional-value transitions";
           for (const description of ["updated description", "", "provider e2e variable set"]) {
-            await writeFile(join(cfgDir, "main.tf"), mainTf(suffix, auth.username).replace('description  = "provider e2e variable set"', `description  = "${description}"`));
-            cliOk(await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv), "variable set description update");
-            cliOk(await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], cfgDir, cliEnv), "variable set description convergence");
+            await writeFile(
+              join(cfgDir, "main.tf"),
+              mainTf(suffix, auth.username).replace(
+                'description  = "provider e2e variable set"',
+                `description  = "${description}"`,
+              ),
+            );
+            cliOk(
+              await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv),
+              "variable set description update",
+            );
+            cliOk(
+              await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], cfgDir, cliEnv),
+              "variable set description convergence",
+            );
           }
           const restoredState = await normalizedCliState(bin, cfgDir, cliEnv, "restored");
-          expect(normalizedStatesEqual(baselineState, restoredState), "normalized provider state drifted after optional value clear/restore").toBe(true);
+          expect(
+            normalizedStatesEqual(baselineState, restoredState),
+            "normalized provider state drifted after optional value clear/restore",
+          ).toBe(true);
 
           // Import into a minimal, separate state: no generated IDs or timestamps
           // in configuration, and never destroy the imported shared object here.
           lifecycleStage = "minimal team import";
           const importDir = mkdtempSync(join(workDir, "import-"));
           assertCliDirFitsSocket(importDir);
-          await writeFile(join(importDir, "providers.tf"), providerTf(proxy.port!, auth.token));
-          await writeFile(join(importDir, "main.tf"), `resource "tfe_team" "imported" {
+          await writeFile(join(importDir, "providers.tf"), providerTf(proxy.port!));
+          await writeFile(
+            join(importDir, "main.tf"),
+            `resource "tfe_team" "imported" {
   organization = "pe2e-org-${suffix}"
   name = "pe2e-team-${suffix}"
 }
-`);
+`,
+          );
           cliOk(await cli(bin, ["init", "-input=false", "-no-color"], importDir, cliEnv), "import init");
-          cliOk(await cli(bin, ["import", "-input=false", "-no-color", "tfe_team.imported", `pe2e-org-${suffix}/pe2e-team-${suffix}`], importDir, cliEnv), "team import");
-          cliOk(await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], importDir, cliEnv), "import convergence");
+          cliOk(
+            await cli(
+              bin,
+              ["import", "-input=false", "-no-color", "tfe_team.imported", `pe2e-org-${suffix}/pe2e-team-${suffix}`],
+              importDir,
+              cliEnv,
+            ),
+            "team import",
+          );
+          cliOk(
+            await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], importDir, cliEnv),
+            "import convergence",
+          );
 
           const stateList = await cli(bin, ["state", "list"], cfgDir, cliEnv);
           cliOk(stateList, "state list");
@@ -1453,32 +1732,38 @@ describe("tfe provider e2e", () => {
             return o[key]!.value;
           };
           // HYOK key-version data sources — the config auto-generates a key
-          // version on create; fetch its id so the second apply can read it.
-          // Fail loudly if the fixture cannot be resolved: silently skipping
-          // the data sources would drop provider coverage without failing.
-          let hyokDsTf = "";
+          // version on create. Keep the generated HCL static and pass the API-returned
+          // id via a sensitive Terraform variable so network data is never persisted.
           const hyid = o["hyid"]?.value;
           expect(typeof hyid, "hyid output must resolve").toBe("string");
-          if (typeof hyid === "string") {
-            const hyokRes = await api(backend.port, "GET", `/api/v2/hyok-configurations/${hyid}`, undefined, auth.token);
-            const kvRel = hyokRes.json["data"]?.relationships?.["hyok-customer-key-versions"]?.data as { id: string }[] | undefined;
-            const kid = kvRel?.[0]?.id;
-            expect(typeof kid, "hyok key version must exist").toBe("string");
-            if (typeof kid === "string") {
-              hyokDsTf = `data "tfe_hyok_customer_key_version" "d_hyok" {
-  id = "${kid}"
+          if (typeof hyid !== "string") throw new Error("hyid output must resolve");
+          const hyokRes = await api(backend.port, "GET", `/api/v2/hyok-configurations/${hyid}`, undefined, auth.token);
+          expect(hyokRes.status).toBe(200);
+          const kvRel = hyokRes.json["data"]?.relationships?.["hyok-customer-key-versions"]?.data as
+            | { id: string }[]
+            | undefined;
+          const kid = kvRel?.[0]?.id;
+          expect(typeof kid, "hyok key version must exist").toBe("string");
+          if (typeof kid !== "string") throw new Error("hyok key version must exist");
+          cliEnv["TF_VAR_hyok_key_version_id"] = kid;
+          const hyokDsTf = `variable "hyok_key_version_id" {
+  type      = string
+  sensitive = true
+}
+data "tfe_hyok_customer_key_version" "d_hyok" {
+  id = var.hyok_key_version_id
 }
 data "tfe_hyok_encrypted_data_key" "d_hyok_dek" {
-  id = "${kid}"
+  id = var.hyok_key_version_id
 }
 `;
-            }
-          }
           expect(val("ds_org_name")).toBe(`pe2e-org-${suffix}`);
           expect(val("ds_orgs_names")).toEqual(expect.arrayContaining([`pe2e-org-${suffix}`]));
           expect(val("ds_ws_name")).toBe(`pe2e-ws-${suffix}`);
           expect(val("ds_ws2_name")).toBe(`pe2e-ws2-${suffix}`);
-          expect(Object.values(val("ds_wsids_full") as Record<string, string>)).toEqual(expect.arrayContaining([`pe2e-org-${suffix}/pe2e-ws-${suffix}`]));
+          expect(Object.values(val("ds_wsids_full") as Record<string, string>)).toEqual(
+            expect.arrayContaining([`pe2e-org-${suffix}/pe2e-ws-${suffix}`]),
+          );
           expect(val("ds_proj_name")).toBe(`pe2e-proj-${suffix}`);
           expect(val("ds_projs_names")).toEqual(expect.arrayContaining([`pe2e-proj-${suffix}`]));
           expect(val("ds_team_name")).toBe(`pe2e-team-${suffix}`);
@@ -1516,19 +1801,45 @@ data "tfe_hyok_encrypted_data_key" "d_hyok_dek" {
             cliOk(versions, "remote CLI version");
             const engineVersion = (JSON.parse(versions.out) as { terraform_version: string }).terraform_version;
             const remoteName = `pe2e-remote-${suffix}`;
-            const created = await api(backend.port, "POST", `/api/v2/organizations/pe2e-org-${suffix}/workspaces`, { data: { attributes: { name: remoteName, "execution-mode": "remote", "terraform-version": engineVersion, "iac-binary": cliName, "auto-apply": false } } }, auth.token);
+            const created = await api(
+              backend.port,
+              "POST",
+              `/api/v2/organizations/pe2e-org-${suffix}/workspaces`,
+              {
+                data: {
+                  attributes: {
+                    name: remoteName,
+                    "execution-mode": "remote",
+                    "terraform-version": engineVersion,
+                    "iac-binary": cliName,
+                    "auto-apply": false,
+                  },
+                },
+              },
+              auth.token,
+            );
             expect(created.status).toBe(201);
-            const uploadProbe = await fetch(`https://127.0.0.1:${proxy.port}/api/v2/workspaces/${created.json["data"].id}/configuration-versions`, {
-              method: "POST", headers: { Authorization: `Bearer ${auth.token}`, "Content-Type": "application/vnd.api+json" },
-              body: JSON.stringify({ data: { type: "configuration-versions", attributes: { "auto-queue-runs": false, speculative: true } } }),
-              tls: { ca: await readFile(join(workDir, "cert.pem"), "utf8") },
-            });
+            const uploadProbe = await fetch(
+              `https://127.0.0.1:${proxy.port}/api/v2/workspaces/${created.json["data"].id}/configuration-versions`,
+              {
+                method: "POST",
+                headers: { Authorization: `Bearer ${auth.token}`, "Content-Type": "application/vnd.api+json" },
+                body: JSON.stringify({
+                  data: { type: "configuration-versions", attributes: { "auto-queue-runs": false, speculative: true } },
+                }),
+                tls: { ca: await readFile(join(workDir, "cert.pem"), "utf8") },
+              },
+            );
             expect(uploadProbe.status).toBe(201);
-            const uploadUrl = ((await uploadProbe.json()) as { data: { attributes: { "upload-url": string } } }).data.attributes["upload-url"];
+            const uploadUrl = ((await uploadProbe.json()) as { data: { attributes: { "upload-url": string } } }).data
+              .attributes["upload-url"];
             expect(new URL(uploadUrl).origin).toBe(`https://127.0.0.1:${proxy.port}`);
 
-            await writeFile(join(workDir, "remote.tfrc"), `credentials "127.0.0.1:${proxy.port}" { token = "${auth.token}" }`, { mode: 0o600 });
-            await writeFile(join(remoteDir, "main.tf"), `terraform {
+            await installCliCredentialsHelper(remoteDir);
+            await writeFile(join(workDir, "remote.tfrc"), CLI_CREDENTIALS_HELPER_CONFIG, { mode: 0o600 });
+            await writeFile(
+              join(remoteDir, "main.tf"),
+              `terraform {
   backend "remote" {
     hostname = "127.0.0.1:${proxy.port}"
     organization = "pe2e-org-${suffix}"
@@ -1537,8 +1848,15 @@ data "tfe_hyok_encrypted_data_key" "d_hyok_dek" {
 }
 resource "terraform_data" "probe" { input = "remote-cli-value" }
 output "probe" { value = terraform_data.probe.output }
-`);
-            const remoteEnv = { ...cliEnv, SSL_CERT_FILE: join(workDir, "cert.pem"), TF_CLI_CONFIG_FILE: join(workDir, "remote.tfrc"), HOME: remoteDir };
+`,
+            );
+            const remoteEnv = {
+              ...cliEnv,
+              SSL_CERT_FILE: join(workDir, "cert.pem"),
+              TF_CLI_CONFIG_FILE: join(workDir, "remote.tfrc"),
+              HOME: remoteDir,
+              TERRENCE_E2E_CLI_TOKEN: auth.token,
+            };
             cliOk(await cli(bin, ["init", "-input=false", "-no-color"], remoteDir, remoteEnv), "remote init");
             cliOk(await cli(bin, ["plan", "-input=false", "-no-color"], remoteDir, remoteEnv), "remote plan");
             const approved = await cli(bin, ["apply", "-no-color"], remoteDir, remoteEnv, "yes\n");
@@ -1549,20 +1867,41 @@ output "probe" { value = terraform_data.probe.output }
             const pulledState = JSON.parse(pulled.out) as { version: number; outputs: { probe: { value: string } } };
             expect(pulledState.version).toBe(4);
             expect(pulledState.outputs.probe.value).toBe("remote-cli-value");
-            cliOk(await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], remoteDir, remoteEnv), "remote unchanged plan");
+            cliOk(
+              await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], remoteDir, remoteEnv),
+              "remote unchanged plan",
+            );
           }
 
           await planAndApply(backend.port, auth.token, `pe2e-org-${suffix}`, `pe2e-ws-${suffix}`, workDir);
 
           // Second org for the admin module-sharing consumers surface.
-          await api(backend.port, "POST", "/api/v2/organizations", {
-            data: { type: "organizations", attributes: { name: `pe2e-org2-${suffix}`, email: `org2-${suffix}@example.com` } },
-          }, auth.token);
+          await api(
+            backend.port,
+            "POST",
+            "/api/v2/organizations",
+            {
+              data: {
+                type: "organizations",
+                attributes: { name: `pe2e-org2-${suffix}`, email: `org2-${suffix}@example.com` },
+              },
+            },
+            auth.token,
+          );
           // Github app installation fixture for the tfe_github_app_installation
           // data source (global list).
-          await api(backend.port, "POST", `/api/v2/organizations/pe2e-org-${suffix}/github-app/installations`, {
-            data: { type: "github-app-installations", attributes: { name: `pe2e-ghapp-${suffix}`, "installation-id": 123456 } },
-          }, auth.token);
+          await api(
+            backend.port,
+            "POST",
+            `/api/v2/organizations/pe2e-org-${suffix}/github-app/installations`,
+            {
+              data: {
+                type: "github-app-installations",
+                attributes: { name: `pe2e-ghapp-${suffix}`, "installation-id": 123456 },
+              },
+            },
+            auth.token,
+          );
           const ghAppDsTf = `data "tfe_github_app_installation" "d_gh" {
   name = "pe2e-ghapp-${suffix}"
 }
@@ -1617,68 +1956,66 @@ resource "tfe_admin_organization_settings" "aos" {
 `;
 
           // tfe_scim_group_mapping needs a provisioned SCIM group (created via
-          // the SCIM API with a SCIM bearer token). The group can't be created
-          // by Terraform itself, so provision it here between applies using an
-          // admin-issued SCIM token, then reference it in the second apply.
-          let scimMapping = "";
-          let scimMappingTf = "";
-          let scimDsTf = "";
-          {
-            const scimTokRes = await api(backend.port, "POST", "/api/v2/admin/scim-tokens", {
+          // the SCIM API with a SCIM bearer token). Treat setup failures as test
+          // failures; keep all generated HCL independent of network-returned data.
+          const scimTokRes = await api(
+            backend.port,
+            "POST",
+            "/api/v2/admin/scim-tokens",
+            {
               data: { type: "authentication-tokens", attributes: { description: `e2e-scim-${suffix}` } },
-            }, auth.token);
-            if (scimTokRes.status === 201) {
-              const scimRaw = scimTokRes.json["data"].attributes.token as string;
-              const scimTokenId = scimTokRes.json["data"].id as string;
-              const groupRes = await fetch(`http://127.0.0.1:${backend.port}/scim/v2/Groups`, {
-                method: "POST",
-                headers: { "Content-Type": "application/scim+json", Authorization: `Bearer ${scimRaw}` },
-                body: JSON.stringify({ schemas: ["urn:ietf:params:scim:schemas:core:2.0:Group"], displayName: `pe2e-scim-group-${suffix}` }),
-              });
-              if (groupRes.status === 201) {
-                const scimGroupId = (await groupRes.json() as { id: string }).id;
-                const teamsRes = await api(backend.port, "GET", `/api/v2/organizations/pe2e-org-${suffix}/teams`, undefined, auth.token);
-                const team = (teamsRes.json["data"] as { id: string; attributes: { name: string } }[]).find((t): boolean => t.attributes.name === `pe2e-team-${suffix}`);
-                if (team !== undefined) {
-                  scimMapping = scimGroupId;
-                  scimMappingTf = `resource "tfe_scim_group_mapping" "sgm" {
-  team_id       = "${team.id}"
-  scim_group_id = "${scimGroupId}"
+            },
+            auth.token,
+          );
+          expect(scimTokRes.status).toBe(201);
+          const scimRaw = scimTokRes.json["data"].attributes.token as string;
+          const scimTokenId = scimTokRes.json["data"].id as string;
+          const groupRes = await fetch(`http://127.0.0.1:${backend.port}/scim/v2/Groups`, {
+            method: "POST",
+            headers: { "Content-Type": "application/scim+json", Authorization: `Bearer ${scimRaw}` },
+            body: JSON.stringify({
+              schemas: ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+              displayName: `pe2e-scim-group-${suffix}`,
+            }),
+          });
+          expect(groupRes.status).toBe(201);
+          await groupRes.body?.cancel();
+          const teamsRes = await api(
+            backend.port,
+            "GET",
+            `/api/v2/organizations/pe2e-org-${suffix}/teams`,
+            undefined,
+            auth.token,
+          );
+          expect(teamsRes.status).toBe(200);
+          const team = (teamsRes.json["data"] as { id: string; attributes: { name: string } }[]).find(
+            (candidate): boolean => candidate.attributes.name === `pe2e-team-${suffix}`,
+          );
+          expect(team).toBeDefined();
+          cliEnv["TF_VAR_scim_token_id"] = scimTokenId;
+          const scimMappingTf = `resource "tfe_scim_group_mapping" "sgm" {
+  team_id       = tfe_team.team.id
+  scim_group_id = data.tfe_scim_group.d_sgroup.id
 }
 `;
-                }
-                scimDsTf = `data "tfe_scim_group" "d_sgroup" {
+          const scimDsTf = `variable "scim_token_id" {
+  type      = string
+  sensitive = true
+}
+data "tfe_scim_group" "d_sgroup" {
   name = "pe2e-scim-group-${suffix}"
 }
 data "tfe_scim_token" "d_stok" {
-  id = "${scimTokenId}"
+  id = var.scim_token_id
 }
 `;
-              }
-            }
-          }
 
           // tfe_no_code_module needs a PUBLISHED registry module version
-          // (status "ok"). Create + upload one between applies, then reference
-          // it with a version_pin in the second apply.
-          let noCodeTf = "";
-          {
-            const modRes = await api(backend.port, "GET", `/api/v2/organizations/pe2e-org-${suffix}/registry-modules/private/pe2e-org-${suffix}/pe2e-mod-${suffix}/aws`, undefined, auth.token);
-            const moduleId = modRes.json["data"]?.id as string | undefined;
-            if (typeof moduleId === "string") {
-              const verRes = await api(backend.port, "POST", `/api/v2/registry-modules/${moduleId}/versions`, {
-                data: { type: "registry-module-versions", attributes: { version: "1.0.0" } },
-              }, auth.token);
-              const versionId = verRes.json["data"]?.id as string | undefined;
-              if (typeof versionId === "string") {
-                await makeRegistryModuleArchive(join(workDir, "modver.tar.gz"));
-                const upload = await fetch(`http://127.0.0.1:${backend.port}/api/v2/registry-module-versions/${versionId}/upload`, {
-                  method: "PUT",
-                  headers: { "Content-Type": "application/octet-stream", Authorization: `Bearer ${auth.token}` },
-                  body: await Bun.file(join(workDir, "modver.tar.gz")).arrayBuffer(),
-                });
-                if (upload.status === 200) {
-                  noCodeTf = `resource "tfe_no_code_module" "ncm" {
+          // (status "ok"). Provider-matrix CI intentionally does not build the
+          // registry inspector, so gate this fixture on the local capability —
+          // never on network-returned data — to keep generated HCL untainted.
+          const noCodeTf = REGISTRY_INSPECTOR_AVAILABLE
+            ? `resource "tfe_no_code_module" "ncm" {
   organization    = "pe2e-org-${suffix}"
   registry_module = tfe_registry_module.regmod.id
   version_pin     = "1.0.0"
@@ -1686,10 +2023,44 @@ data "tfe_scim_token" "d_stok" {
 data "tfe_no_code_module" "d_ncm" {
   id = tfe_no_code_module.ncm.id
 }
-`;
-                }
-              }
-            }
+`
+            : "";
+          if (REGISTRY_INSPECTOR_AVAILABLE) {
+            const modRes = await api(
+              backend.port,
+              "GET",
+              `/api/v2/organizations/pe2e-org-${suffix}/registry-modules/private/pe2e-org-${suffix}/pe2e-mod-${suffix}/aws`,
+              undefined,
+              auth.token,
+            );
+            expect(modRes.status).toBe(200);
+            const moduleId = modRes.json["data"]?.id as string | undefined;
+            expect(typeof moduleId).toBe("string");
+            if (typeof moduleId !== "string") throw new Error("registry module fixture id missing");
+            const verRes = await api(
+              backend.port,
+              "POST",
+              `/api/v2/registry-modules/${moduleId}/versions`,
+              {
+                data: { type: "registry-module-versions", attributes: { version: "1.0.0" } },
+              },
+              auth.token,
+            );
+            expect(verRes.status).toBe(201);
+            const versionId = verRes.json["data"]?.id as string | undefined;
+            expect(typeof versionId).toBe("string");
+            if (typeof versionId !== "string") throw new Error("registry module version fixture id missing");
+            await makeRegistryModuleArchive(join(workDir, "modver.tar.gz"));
+            const upload = await fetch(
+              `http://127.0.0.1:${backend.port}/api/v2/registry-module-versions/${versionId}/upload`,
+              {
+                method: "PUT",
+                headers: { "Content-Type": "application/octet-stream", Authorization: `Bearer ${auth.token}` },
+                body: await Bun.file(join(workDir, "modver.tar.gz")).arrayBuffer(),
+              },
+            );
+            expect(upload.status).toBe(200);
+            await upload.body?.cancel();
           }
 
           // tfe_workspace_run triggers a real run on pe2e-ws, whose config was
@@ -1709,11 +2080,29 @@ data "tfe_no_code_module" "d_ncm" {
   source_path = "${cfgDir}"
 }
 `;
-          const slugAssert = (state2: string): void => { expect(state2).toContain("data.tfe_slug.d_slug"); };
+          const slugAssert = (state2: string): void => {
+            expect(state2).toContain("data.tfe_slug.d_slug");
+          };
 
           // tfe_outputs reads the real run's state outputs (available only
           // after planAndApply committed a state version).
-          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + scimDsTf + noCodeTf + wsRunTf + slugTf + adminBundleTf + ghAppDsTf + stackTf + hyokDsTf + audit2Tf + rgs2Tf));
+          await writeFile(
+            join(cfgDir, "build-outputs.tf"),
+            stateOutputsTf(
+              suffix,
+              scimMappingTf +
+                scimDsTf +
+                noCodeTf +
+                wsRunTf +
+                slugTf +
+                adminBundleTf +
+                ghAppDsTf +
+                stackTf +
+                hyokDsTf +
+                audit2Tf +
+                rgs2Tf,
+            ),
+          );
           const outApply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(outApply, "build outputs apply");
           const outJson = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
@@ -1721,18 +2110,16 @@ data "tfe_no_code_module" "d_ncm" {
           expect(o2["run_output_value"]!.value).toBe("probe-value-pe2e");
           expect(o2["ds_audit2"]?.value).toBe(true);
           expect(o2["ds_rgs2"]?.value).toBe(true);
-          if (scimMapping !== "" || noCodeTf !== "" || scimDsTf !== "") {
+          {
             // The SCIM group mapping / no-code module were created in the second apply.
             const stateList2 = await cli(bin, ["state", "list"], cfgDir, cliEnv);
             cliOk(stateList2, "state list #2");
-            if (scimMapping !== "") expect(stateList2.out).toContain("tfe_scim_group_mapping.sgm");
+            expect(stateList2.out).toContain("tfe_scim_group_mapping.sgm");
+            expect(stateList2.out).toContain("data.tfe_scim_group.d_sgroup");
+            expect(stateList2.out).toContain("data.tfe_scim_token.d_stok");
             if (noCodeTf !== "") {
               expect(stateList2.out).toContain("tfe_no_code_module.ncm");
               expect(stateList2.out).toContain("data.tfe_no_code_module.d_ncm");
-            }
-            if (scimDsTf !== "") {
-              expect(stateList2.out).toContain("data.tfe_scim_group.d_sgroup");
-              expect(stateList2.out).toContain("data.tfe_scim_token.d_stok");
             }
           }
           // tfe_workspace_run should be present after the second apply.
@@ -1746,10 +2133,8 @@ data "tfe_no_code_module" "d_ncm" {
             expect(stateList3.out).toContain("data.tfe_github_app_installation.d_gh");
             expect(stateList3.out).toContain("tfe_stack.stack");
             expect(stateList3.out).toContain("tfe_stack_variable_set.stack_vs");
-            if (hyokDsTf !== "") {
-              expect(stateList3.out).toContain("data.tfe_hyok_customer_key_version.d_hyok");
-              expect(stateList3.out).toContain("data.tfe_hyok_encrypted_data_key.d_hyok_dek");
-            }
+            expect(stateList3.out).toContain("data.tfe_hyok_customer_key_version.d_hyok");
+            expect(stateList3.out).toContain("data.tfe_hyok_encrypted_data_key.d_hyok_dek");
           }
           await rm(join(cfgDir, "build-outputs.tf"), { force: true });
 
@@ -1764,17 +2149,43 @@ data "tfe_no_code_module" "d_ncm" {
           cliOk(version, "version evidence");
           const versionInfo = JSON.parse(version.out) as { terraform_version: string };
           expect(versionInfo.terraform_version).toMatch(/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$/);
-          const tier = matrixTier === "canary" ? "experimental" : versionInfo.terraform_version === cliMatrix[cliName].floor ? "floor" : versionInfo.terraform_version === cliMatrix[cliName].current ? "current" : "experimental";
+          const tier =
+            matrixTier === "canary"
+              ? "experimental"
+              : versionInfo.terraform_version === cliMatrix[cliName].floor
+                ? "floor"
+                : versionInfo.terraform_version === cliMatrix[cliName].current
+                  ? "current"
+                  : "experimental";
           const resultsDir = process.env["TERRENCE_E2E_RESULTS_DIR"] ?? workDir;
           await mkdir(resultsDir, { recursive: true });
-          const stateResources = stateList.out.trim().split("\n").filter((address) => address !== "" && !address.startsWith("data."));
-          const resourcesFor = (type: string): string[] => stateResources.filter((address): boolean => address.startsWith(`${type}.`));
-          const baseBehaviors = ["create", "read", "refresh-twice", "no-op-plan", "second-apply-noop", "destroy", "normalized-state-convergence"];
+          const stateResources = stateList.out
+            .trim()
+            .split("\n")
+            .filter((address) => address !== "" && !address.startsWith("data."));
+          const resourcesFor = (type: string): string[] =>
+            stateResources.filter((address): boolean => address.startsWith(`${type}.`));
+          const baseBehaviors = [
+            "create",
+            "read",
+            "refresh-twice",
+            "no-op-plan",
+            "second-apply-noop",
+            "destroy",
+            "normalized-state-convergence",
+          ];
           const familyEvidence = (id: string, extra: readonly string[] = []): LifecycleFixtureEvidence => ({
             id,
             status: "passed",
-            resources: providerLifecycleContract.fixtures.find((fixture): boolean => fixture.id === id)?.resources.flatMap(resourcesFor) ?? [],
-            behaviors: [...baseBehaviors, ...(familyProbeFixtures.has(id) ? ["pagination", "permission-denied"] : []), ...extra],
+            resources:
+              providerLifecycleContract.fixtures
+                .find((fixture): boolean => fixture.id === id)
+                ?.resources.flatMap(resourcesFor) ?? [],
+            behaviors: [
+              ...baseBehaviors,
+              ...(familyProbeFixtures.has(id) ? ["pagination", "permission-denied"] : []),
+              ...extra,
+            ],
             normalized_state: {
               baseline_sha256: normalizedStateDigest(baselineState),
               restored_sha256: normalizedStateDigest(restoredState),
@@ -1795,40 +2206,84 @@ data "tfe_no_code_module" "d_ncm" {
             ],
           };
           assertLifecycleEvidence(providerLifecycleContract, lifecycleEvidence);
-          await writeFile(join(resultsDir, `${cliName}-${versionInfo.terraform_version}-${backend.databaseKind}-${backend.securityProfile}-lifecycle.json`), JSON.stringify({
-            fixture: "backend/tests/e2e/provider_e2e.test.ts",
-            profile: process.env["TERRENCE_E2E_PROFILE"] ?? "direct-e2e",
-            fixture_seed: fixtureSeed,
-            execution_mode: "real-cli",
-            completedAt: new Date().toISOString(),
-            engine: cliName,
-            versions: versionInfo,
-            tier,
-            binarySha256: binaryDigests.get(bin),
-            database: backend.databaseKind,
-            sandbox: backend.securityProfile,
-            lifecycle_contract: lifecycleEvidence,
-            claims: [
-              { resources: stateResources, behaviors: ["create", "read", "two-unchanged-plans", "unchanged-apply", "destroy", "normalized-state-convergence"] },
-              { resources: ["tfe_variable_set.vs"], behaviors: ["set-description", "clear-description", "restore-description", "unchanged-plan-after-each-update"] },
-              { resources: ["tfe_team.team"], behaviors: ["import-minimal-config", "unchanged-plan-after-import"] },
-              ...lifecycleEvidence.fixtures.map((fixture): { resources: readonly string[]; behaviors: readonly string[] } => ({ resources: fixture.resources, behaviors: fixture.behaviors })),
-              ...(backend.securityProfile === "disabled" ? [{ resources: ["terraform_data.probe"], behaviors: ["remote-init", "remote-plan", "interactive-apply-approval", "remote-state-pull", "remote-unchanged-plan"] }] : []),
-            ],
-          }, null, 2), { mode: 0o600 });
+          await writeFile(
+            join(
+              resultsDir,
+              `${cliName}-${versionInfo.terraform_version}-${backend.databaseKind}-${backend.securityProfile}-lifecycle.json`,
+            ),
+            JSON.stringify(
+              {
+                fixture: "backend/tests/e2e/provider_e2e.test.ts",
+                profile: process.env["TERRENCE_E2E_PROFILE"] ?? "direct-e2e",
+                fixture_seed: fixtureSeed,
+                execution_mode: "real-cli",
+                completedAt: new Date().toISOString(),
+                engine: cliName,
+                versions: versionInfo,
+                tier,
+                binarySha256: binaryDigests.get(bin),
+                database: backend.databaseKind,
+                sandbox: backend.securityProfile,
+                lifecycle_contract: lifecycleEvidence,
+                claims: [
+                  {
+                    resources: stateResources,
+                    behaviors: [
+                      "create",
+                      "read",
+                      "two-unchanged-plans",
+                      "unchanged-apply",
+                      "destroy",
+                      "normalized-state-convergence",
+                    ],
+                  },
+                  {
+                    resources: ["tfe_variable_set.vs"],
+                    behaviors: [
+                      "set-description",
+                      "clear-description",
+                      "restore-description",
+                      "unchanged-plan-after-each-update",
+                    ],
+                  },
+                  { resources: ["tfe_team.team"], behaviors: ["import-minimal-config", "unchanged-plan-after-import"] },
+                  ...lifecycleEvidence.fixtures.map(
+                    (fixture): { resources: readonly string[]; behaviors: readonly string[] } => ({
+                      resources: fixture.resources,
+                      behaviors: fixture.behaviors,
+                    }),
+                  ),
+                  ...(backend.securityProfile === "disabled"
+                    ? [
+                        {
+                          resources: ["terraform_data.probe"],
+                          behaviors: [
+                            "remote-init",
+                            "remote-plan",
+                            "interactive-apply-approval",
+                            "remote-state-pull",
+                            "remote-unchanged-plan",
+                          ],
+                        },
+                      ]
+                    : []),
+                ],
+              },
+              null,
+              2,
+            ),
+            { mode: 0o600 },
+          );
         } catch (error) {
           lifecycleFailed = true;
+          console.error(`[e2e] provider lifecycle failed at ${lifecycleStage}: ${lifecycleError(error).message}`);
           const evidenceDir = process.env["TERRENCE_E2E_RESULTS_DIR"] ?? workDir;
           try {
             writeLifecycleFailureEvidence(evidenceDir, {
               engine: cliName,
               profile: process.env["TERRENCE_E2E_PROFILE"] ?? "direct-e2e",
               fixture_seed: fixtureSeed,
-              execution_mode: "real-cli",
-              stage: lifecycleStage,
               contract_version: providerLifecycleContract.version,
-              completedAt: new Date().toISOString(),
-              error: lifecycleError(error),
             });
           } catch (evidenceError) {
             console.error(`[e2e] could not write lifecycle failure evidence: ${lifecycleError(evidenceError).message}`);

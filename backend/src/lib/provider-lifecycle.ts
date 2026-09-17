@@ -36,7 +36,8 @@ export type LifecycleEvidence = Readonly<{
 }>;
 /* eslint-enable @typescript-eslint/naming-convention */
 
-const VOLATILE_KEY = /^(?:id|lineage|serial|created(?:[-_]at|At)?|updated(?:[-_]at|At)?|(?:created|updated)[-_]?timestamp|timestamp)$/i;
+const VOLATILE_KEY =
+  /^(?:id|lineage|serial|created(?:[-_]at|At)?|updated(?:[-_]at|At)?|(?:created|updated)[-_]?timestamp|timestamp)$/i;
 const ID_KEY = /(?:^|[-_])id$/i;
 const SECRET_KEY = /(?:token|secret|password|private[-_]?key|oauth[-_]?token|api[-_]?key)/i;
 
@@ -51,9 +52,7 @@ export function normalizeProviderState(value: unknown, key?: string): unknown {
   if (key !== undefined && (VOLATILE_KEY.test(key) || ID_KEY.test(key))) return undefined;
   if (key !== undefined && SECRET_KEY.test(key)) return "[redacted]";
   if (Array.isArray(value)) {
-    return value
-      .map((entry): unknown => normalizeProviderState(entry))
-      .filter((entry): boolean => entry !== undefined);
+    return value.map((entry): unknown => normalizeProviderState(entry)).filter((entry): boolean => entry !== undefined);
   }
   if (value !== null && typeof value === "object") {
     const normalized: Record<string, unknown> = {};
@@ -61,7 +60,7 @@ export function normalizeProviderState(value: unknown, key?: string): unknown {
       const child = normalizeProviderState(childValue, childKey);
       if (child !== undefined) normalized[childKey] = child;
     }
-    return Object.fromEntries(Object.entries(normalized).sort(([a], [b]): number => a < b ? -1 : a > b ? 1 : 0));
+    return Object.fromEntries(Object.entries(normalized).sort(([a], [b]): number => (a < b ? -1 : a > b ? 1 : 0)));
   }
   return value;
 }
@@ -71,7 +70,9 @@ export function stableJson(value: unknown): string {
 }
 
 export function normalizedStateDigest(value: unknown): string {
-  return createHash("sha256").update(stableJson(normalizeProviderState(value))).digest("hex");
+  return createHash("sha256")
+    .update(stableJson(normalizeProviderState(value)))
+    .digest("hex");
 }
 
 export function normalizedStatesEqual(left: unknown, right: unknown): boolean {
@@ -93,7 +94,9 @@ export function lifecycleEvidenceGaps(contract: LifecycleContract, evidence: Lif
     }
     const resources = new Set(actual.resources);
     for (const resource of fixture.resources) {
-      if (![...resources].some((candidate): boolean => candidate === resource || candidate.startsWith(`${resource}.`))) {
+      if (
+        ![...resources].some((candidate): boolean => candidate === resource || candidate.startsWith(`${resource}.`))
+      ) {
         gaps.push(`${fixture.id}: missing resource ${resource}`);
       }
     }
@@ -101,11 +104,13 @@ export function lifecycleEvidenceGaps(contract: LifecycleContract, evidence: Lif
     for (const behavior of fixture.required_behaviors) {
       if (!behaviors.has(behavior)) gaps.push(`${fixture.id}: missing behavior ${behavior}`);
     }
-    if (fixture.required_behaviors.includes("normalized-state-convergence")
-      && (actual.normalized_state?.equivalent !== true
-        || actual.normalized_state.baseline_sha256 === undefined
-        || actual.normalized_state.restored_sha256 === undefined
-        || actual.normalized_state.baseline_sha256 !== actual.normalized_state.restored_sha256)) {
+    if (
+      fixture.required_behaviors.includes("normalized-state-convergence") &&
+      (actual.normalized_state?.equivalent !== true ||
+        actual.normalized_state.baseline_sha256 === undefined ||
+        actual.normalized_state.restored_sha256 === undefined ||
+        actual.normalized_state.baseline_sha256 !== actual.normalized_state.restored_sha256)
+    ) {
       gaps.push(`${fixture.id}: normalized state did not converge`);
     }
   }
@@ -114,8 +119,11 @@ export function lifecycleEvidenceGaps(contract: LifecycleContract, evidence: Lif
 
 export function assertLifecycleEvidence(contract: LifecycleContract, evidence: LifecycleEvidence): void {
   if (evidence.contract_version !== contract.version) {
-    throw new Error(`Lifecycle evidence contract version ${evidence.contract_version} does not match ${contract.version}`);
+    throw new Error(
+      `Lifecycle evidence contract version ${evidence.contract_version} does not match ${contract.version}`,
+    );
   }
   const gaps = lifecycleEvidenceGaps(contract, evidence);
-  if (gaps.length > 0) throw new Error(`Incomplete provider lifecycle evidence:\n${gaps.map((gap): string => `- ${gap}`).join("\n")}`);
+  if (gaps.length > 0)
+    throw new Error(`Incomplete provider lifecycle evidence:\n${gaps.map((gap): string => `- ${gap}`).join("\n")}`);
 }

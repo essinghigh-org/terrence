@@ -34,18 +34,24 @@ function token() {
 }
 
 test("deletes an API token and removes it from the list on success", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/account/details") {
-      return json({ data: { id: "user-1", type: "users", attributes: { username: "alice", email: "alice@example.com", "must-change-password": false } } });
+      return json({
+        data: {
+          id: "user-1",
+          type: "users",
+          attributes: { username: "alice", email: "alice@example.com", "must-change-password": false },
+        },
+      });
     }
     if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [token()] });
     if (url === "/api/v2/authentication-tokens/tkn-1" && init?.method === "DELETE") {
       return new Response(null, { status: 204 });
     }
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter>
@@ -53,7 +59,7 @@ test("deletes an API token and removes it from the list on success", async () =>
     </MemoryRouter>,
   );
 
-const deleteButton = await view.findByRole("button", { name: "Delete token tkn-1" });
+  const deleteButton = await view.findByRole("button", { name: "Delete token tkn-1" });
   fireEvent.click(deleteButton);
 
   await waitFor((): void => {
@@ -64,18 +70,24 @@ const deleteButton = await view.findByRole("button", { name: "Delete token tkn-1
 });
 
 test("keeps the token when deleting it fails", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/account/details") {
-      return json({ data: { id: "user-1", type: "users", attributes: { username: "alice", email: "alice@example.com", "must-change-password": false } } });
+      return json({
+        data: {
+          id: "user-1",
+          type: "users",
+          attributes: { username: "alice", email: "alice@example.com", "must-change-password": false },
+        },
+      });
     }
     if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [token()] });
     if (url === "/api/v2/authentication-tokens/tkn-1" && init?.method === "DELETE") {
       return json({ errors: [{ title: "Token cannot be deleted" }] }, 400);
     }
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter>

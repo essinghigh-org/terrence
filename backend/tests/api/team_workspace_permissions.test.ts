@@ -26,14 +26,16 @@ describe("team workspace permission validation", () => {
   let createdRelationshipId: string | undefined;
 
   const request = (path: string, method: string, body?: unknown): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   const relationshipBody = (attributes: Record<string, unknown>): Record<string, unknown> => ({
     data: {
@@ -92,11 +94,7 @@ describe("team workspace permission validation", () => {
   });
 
   it("validates relationship grants and blocks policy overrides from workspace admins", async () => {
-    const invalidAccess = await request(
-      "/api/v2/team-workspaces",
-      "POST",
-      relationshipBody({ access: "superuser" }),
-    );
+    const invalidAccess = await request("/api/v2/team-workspaces", "POST", relationshipBody({ access: "superuser" }));
     expect(invalidAccess.status).toBe(422);
 
     const invalidPermissions = await request(
@@ -126,38 +124,37 @@ describe("team workspace permission validation", () => {
       }),
     );
     expect(allowedCreate.status).toBe(201);
-    const allowedDocument = await allowedCreate.json() as { data: { id: string } };
+    const allowedDocument = (await allowedCreate.json()) as { data: { id: string } };
     createdRelationshipId = allowedDocument.data.id;
 
-    const deniedPatch = await request(
-      `/api/v2/team-workspaces/${createdRelationshipId}`,
-      "PATCH",
-      {
-        data: {
-          type: "team-workspaces",
-          attributes: { permissions: { runs: "read", "policy-overrides": true } },
-        },
+    const deniedPatch = await request(`/api/v2/team-workspaces/${createdRelationshipId}`, "PATCH", {
+      data: {
+        type: "team-workspaces",
+        attributes: { permissions: { runs: "read", "policy-overrides": true } },
       },
-    );
+    });
     expect(deniedPatch.status).toBe(403);
-    expect((await db.query.teamWorkspaces.findFirst({ where: eq(teamWorkspaces.id, createdRelationshipId) }))?.permissions).toEqual({
+    expect(
+      (await db.query.teamWorkspaces.findFirst({ where: eq(teamWorkspaces.id, createdRelationshipId) }))?.permissions,
+    ).toEqual({
       runs: "plan",
       variables: "read",
     });
 
-    await db.update(teams).set({ organizationAccess: { "manage-policy-overrides": true } }).where(eq(teams.id, adminTeamId));
-    const allowedPatch = await request(
-      `/api/v2/team-workspaces/${createdRelationshipId}`,
-      "PATCH",
-      {
-        data: {
-          type: "team-workspaces",
-          attributes: { permissions: { runs: "read", "policy-overrides": true } },
-        },
+    await db
+      .update(teams)
+      .set({ organizationAccess: { "manage-policy-overrides": true } })
+      .where(eq(teams.id, adminTeamId));
+    const allowedPatch = await request(`/api/v2/team-workspaces/${createdRelationshipId}`, "PATCH", {
+      data: {
+        type: "team-workspaces",
+        attributes: { permissions: { runs: "read", "policy-overrides": true } },
       },
-    );
+    });
     expect(allowedPatch.status).toBe(200);
-    expect((await db.query.teamWorkspaces.findFirst({ where: eq(teamWorkspaces.id, createdRelationshipId) }))?.permissions).toEqual({
+    expect(
+      (await db.query.teamWorkspaces.findFirst({ where: eq(teamWorkspaces.id, createdRelationshipId) }))?.permissions,
+    ).toEqual({
       runs: "read",
       "policy-overrides": true,
     });

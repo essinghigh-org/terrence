@@ -13,25 +13,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { PageHeader, PageShell } from "@/components/PageHeader";
@@ -39,7 +26,7 @@ import { PageHeader, PageShell } from "@/components/PageHeader";
 type ResourceIdentifier = {
   id: string;
   type: string;
-}
+};
 
 type VariableSet = {
   id: string;
@@ -56,12 +43,12 @@ type VariableSet = {
   relationships: {
     workspaces?: { data?: ResourceIdentifier[] };
   };
-}
+};
 
 type Workspace = {
   id: string;
   attributes: { name: string };
-}
+};
 
 type VariableCategory = "terraform" | "env";
 
@@ -75,7 +62,7 @@ type VariableSetVariable = {
     hcl: boolean;
     description: string | null;
   };
-}
+};
 
 function messageFrom(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
@@ -125,8 +112,12 @@ function VariableFormFields({
             autoComplete="off"
             spellCheck={false}
             value={variableKey}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onKeyChange(event.target.value); }}
-            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onKeyChange(event.currentTarget.value); }}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+              onKeyChange(event.target.value);
+            }}
+            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+              onKeyChange(event.currentTarget.value);
+            }}
             autoFocus
             aria-invalid={Boolean(error)}
           />
@@ -140,20 +131,26 @@ function VariableFormFields({
             spellCheck={false}
             type={sensitive ? "password" : "text"}
             value={value}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onValueChange(event.target.value); }}
-            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onValueChange(event.currentTarget.value); }}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+              onValueChange(event.target.value);
+            }}
+            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+              onValueChange(event.currentTarget.value);
+            }}
           />
-          {editingSensitive && (
-            <FieldDescription>Leave blank to keep the current sensitive value.</FieldDescription>
-          )}
+          {editingSensitive && <FieldDescription>Leave blank to keep the current sensitive value.</FieldDescription>}
         </Field>
         <Field>
           <FieldLabel htmlFor="variable-category">Category</FieldLabel>
           {/* SAFETY: the select options are generated from the same union; the change event carries one of them. */}
-          <Select name="variable-category" value={category} onValueChange={(val: string): void => {
-// SAFETY: the change event carries one of the union values the UI renders from the same options.
-onCategoryChange(val as VariableCategory);
-}}>
+          <Select
+            name="variable-category"
+            value={category}
+            onValueChange={(val: string): void => {
+              // SAFETY: the change event carries one of the union values the UI renders from the same options.
+              onCategoryChange(val as VariableCategory);
+            }}
+          >
             <SelectTrigger id="variable-category" className="w-full">
               <SelectValue placeholder="Select category" />
             </SelectTrigger>
@@ -171,16 +168,16 @@ onCategoryChange(val as VariableCategory);
             autoComplete="off"
             spellCheck={false}
             value={description}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onDescriptionChange(event.target.value); }}
-            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onDescriptionChange(event.currentTarget.value); }}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+              onDescriptionChange(event.target.value);
+            }}
+            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+              onDescriptionChange(event.currentTarget.value);
+            }}
           />
         </Field>
         <Field orientation="horizontal">
-          <Checkbox
-            id="variable-sensitive"
-            checked={sensitive}
-            onCheckedChange={onSensitiveChange}
-          />
+          <Checkbox id="variable-sensitive" checked={sensitive} onCheckedChange={onSensitiveChange} />
           <div className="flex flex-col gap-0.5">
             <FieldLabel htmlFor="variable-sensitive">Sensitive</FieldLabel>
             <FieldDescription>Hide this value in API responses and the UI.</FieldDescription>
@@ -220,9 +217,11 @@ function VariablesTable({
 }>): React.JSX.Element {
   return (
     <div className="flex flex-col gap-4">
-      {canManage && <div className="flex justify-end">
-        <Button onClick={onAdd}>Add variable</Button>
-      </div>}
+      {canManage && (
+        <div className="flex justify-end">
+          <Button onClick={onAdd}>Add variable</Button>
+        </div>
+      )}
       {error !== "" && (
         <p role="alert" className="text-sm text-destructive">
           {error}
@@ -248,42 +247,44 @@ function VariablesTable({
               </TableRow>
             )}
             {!loading &&
-              variables.map((variable): React.JSX.Element => (
-                <TableRow key={variable.id}>
-                  <TableCell className="font-mono font-medium">
-                    {variable.attributes.key}
-                  </TableCell>
-                  <TableCell className="max-w-48 truncate font-mono text-xs">
-                    {variable.attributes.sensitive
-                      ? "••••••••"
-                      : variable.attributes.value ?? "—"}
-                  </TableCell>
-                  <TableCell>
-                    {variable.attributes.category === "env" ? "Environment" : "Terraform"}
-                  </TableCell>
-                  <TableCell className="max-w-48 truncate text-muted-foreground">
-                    {variable.attributes.description ?? "—"}
-                  </TableCell>
-                  {canManage && <TableCell>
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={(): void => { onEdit(variable); }}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={(): void => { onDeleteRequest(variable); }}
-                      >
-                        Delete
-                      </Button>
-                    </div>
-                  </TableCell>}
-                </TableRow>
-              ))}
+              variables.map(
+                (variable): React.JSX.Element => (
+                  <TableRow key={variable.id}>
+                    <TableCell className="font-mono font-medium">{variable.attributes.key}</TableCell>
+                    <TableCell className="max-w-48 truncate font-mono text-xs">
+                      {variable.attributes.sensitive ? "••••••••" : (variable.attributes.value ?? "—")}
+                    </TableCell>
+                    <TableCell>{variable.attributes.category === "env" ? "Environment" : "Terraform"}</TableCell>
+                    <TableCell className="max-w-48 truncate text-muted-foreground">
+                      {variable.attributes.description ?? "—"}
+                    </TableCell>
+                    {canManage && (
+                      <TableCell>
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={(): void => {
+                              onEdit(variable);
+                            }}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={(): void => {
+                              onDeleteRequest(variable);
+                            }}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                ),
+              )}
             {!loading && variables.length === 0 && (
               <TableRow>
                 <TableCell colSpan={canManage ? 5 : 4} className="h-20 text-center text-muted-foreground">
@@ -352,7 +353,7 @@ function VariablesDialog({
     if (!canManage) return;
     setEditing(variable ?? null);
     setKey(variable?.attributes.key ?? "");
-    setValue(variable?.attributes.sensitive === true ? "" : variable?.attributes.value ?? "");
+    setValue(variable?.attributes.sensitive === true ? "" : (variable?.attributes.value ?? ""));
     setCategory(variable?.attributes.category ?? "terraform");
     setSensitive(variable?.attributes.sensitive ?? false);
     setDescription(variable?.attributes.description ?? "");
@@ -379,19 +380,22 @@ function VariablesDialog({
     setSaving(true);
     setError("");
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(
         `/varsets/${variableSetId}/relationships/vars${editing != null ? `/${editing.id}` : ""}`,
         {
           method: editing != null ? "PATCH" : "POST",
           body: JSON.stringify({ data: { type: "vars", attributes } }),
         },
-      ) as { data: VariableSetVariable };
+      )) as { data: VariableSetVariable };
       const saved = response.data;
       setVariables((current: VariableSetVariable[]): VariableSetVariable[] => {
-        const next = editing != null
-          ? current.map((variable: VariableSetVariable): VariableSetVariable => (variable.id === saved.id ? saved : variable))
-          : [...current, saved];
+        const next =
+          editing != null
+            ? current.map(
+                (variable: VariableSetVariable): VariableSetVariable => (variable.id === saved.id ? saved : variable),
+              )
+            : [...current, saved];
         return next.sort((left: VariableSetVariable, right: VariableSetVariable): number =>
           left.attributes.key.localeCompare(right.attributes.key),
         );
@@ -414,7 +418,9 @@ function VariablesDialog({
       await fetchApi(`/varsets/${variableSetId}/relationships/vars/${variable.id}`, {
         method: "DELETE",
       });
-      setVariables((current: VariableSetVariable[]): VariableSetVariable[] => current.filter((item: VariableSetVariable): boolean => item.id !== variable.id));
+      setVariables((current: VariableSetVariable[]): VariableSetVariable[] =>
+        current.filter((item: VariableSetVariable): boolean => item.id !== variable.id),
+      );
       onCountChange(variableSetId, -1);
     } catch (caught: unknown) {
       setError(messageFrom(caught, "Failed to delete variable"));
@@ -425,74 +431,80 @@ function VariablesDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>
-            {formOpen
-              ? editing != null
-                ? "Edit variable"
-                : "Add variable"
-              : `Variables in ${variableSet?.attributes.name ?? "variable set"}`}
-          </DialogTitle>
-          <DialogDescription>
-            {formOpen
-              ? "Configure a Terraform input or environment variable."
-              : "Variables in this set are available to its assigned workspaces."}
-          </DialogDescription>
-        </DialogHeader>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>
+              {formOpen
+                ? editing != null
+                  ? "Edit variable"
+                  : "Add variable"
+                : `Variables in ${variableSet?.attributes.name ?? "variable set"}`}
+            </DialogTitle>
+            <DialogDescription>
+              {formOpen
+                ? "Configure a Terraform input or environment variable."
+                : "Variables in this set are available to its assigned workspaces."}
+            </DialogDescription>
+          </DialogHeader>
 
-        {formOpen ? (
-          <VariableFormFields
-            variableKey={key}
-            onKeyChange={setKey}
-            value={value}
-            onValueChange={setValue}
-            category={category}
-            onCategoryChange={setCategory}
-            sensitive={sensitive}
-            onSensitiveChange={setSensitive}
-            description={description}
-            onDescriptionChange={setDescription}
-            editingSensitive={editing?.attributes.sensitive === true}
-            error={error}
-            saving={saving}
-            onBack={(): void => { setFormOpen(false); }}
-            onSubmit={saveVariable}
-          />
-        ) : (
-          <VariablesTable
-            loading={loading}
-            variables={variables}
-            canManage={canManage}
-            error={error}
-            onAdd={(): void => { openForm(); }}
-            onEdit={openForm}
-            onDeleteRequest={(variable: VariableSetVariable): void => {
-              const isTestEnv = window.navigator.userAgent.includes("jsdom");
-              if (isTestEnv) {
-                void deleteVariable(variable);
-              } else {
-                setVarToDelete(variable);
-              }
-            }}
-          />
-        )}
-      </DialogContent>
-    </Dialog>
+          {formOpen ? (
+            <VariableFormFields
+              variableKey={key}
+              onKeyChange={setKey}
+              value={value}
+              onValueChange={setValue}
+              category={category}
+              onCategoryChange={setCategory}
+              sensitive={sensitive}
+              onSensitiveChange={setSensitive}
+              description={description}
+              onDescriptionChange={setDescription}
+              editingSensitive={editing?.attributes.sensitive === true}
+              error={error}
+              saving={saving}
+              onBack={(): void => {
+                setFormOpen(false);
+              }}
+              onSubmit={saveVariable}
+            />
+          ) : (
+            <VariablesTable
+              loading={loading}
+              variables={variables}
+              canManage={canManage}
+              error={error}
+              onAdd={(): void => {
+                openForm();
+              }}
+              onEdit={openForm}
+              onDeleteRequest={(variable: VariableSetVariable): void => {
+                const isTestEnv = window.navigator.userAgent.includes("jsdom");
+                if (isTestEnv) {
+                  void deleteVariable(variable);
+                } else {
+                  setVarToDelete(variable);
+                }
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
-    <ConfirmDialog
-      open={varToDelete !== null}
-      onOpenChange={(open): void => { if (!open) setVarToDelete(null); }}
-      title="Delete Variable"
-      description={`Are you sure you want to delete variable "${varToDelete?.attributes.key ?? ""}"?`}
-      confirmText="Delete Variable"
-      confirmVariant="destructive"
-      onConfirm={async (): Promise<void> => {
-        if (varToDelete !== null) {
-          await deleteVariable(varToDelete);
-        }
-      }}
-    />
+      <ConfirmDialog
+        open={varToDelete !== null}
+        onOpenChange={(open): void => {
+          if (!open) setVarToDelete(null);
+        }}
+        title="Delete Variable"
+        description={`Are you sure you want to delete variable "${varToDelete?.attributes.key ?? ""}"?`}
+        confirmText="Delete Variable"
+        confirmVariant="destructive"
+        onConfirm={async (): Promise<void> => {
+          if (varToDelete !== null) {
+            await deleteVariable(varToDelete);
+          }
+        }}
+      />
     </>
   );
 }
@@ -519,99 +531,122 @@ function VariableSetsTable({
   return (
     <Card>
       <CardContent className="p-0">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Name</TableHead>
-            <TableHead>Description</TableHead>
-            <TableHead>Scope</TableHead>
-            <TableHead>Variables</TableHead>
-            <TableHead>Workspaces</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {loading && (
+        <Table>
+          <TableHeader>
             <TableRow>
-              <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                Loading variable sets…
-              </TableCell>
+              <TableHead>Name</TableHead>
+              <TableHead>Description</TableHead>
+              <TableHead>Scope</TableHead>
+              <TableHead>Variables</TableHead>
+              <TableHead>Workspaces</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
-          )}
-          {!loading &&
-            variableSets.map((variableSet): React.JSX.Element => (
-              <TableRow key={variableSet.id}>
-                <TableCell className="font-medium">{variableSet.attributes.name}</TableCell>
-                <TableCell className="max-w-72 truncate text-muted-foreground">
-                  {variableSet.attributes.description ?? "—"}
-                </TableCell>
-                <TableCell>
-                  <Badge
-                    variant={
-                      variableSet.attributes["parent-project-id"] !== undefined && variableSet.attributes["parent-project-id"] !== null
-                        ? "outline"
-                        : variableSet.attributes.global
-                          ? "default"
-                          : "secondary"
-                    }
-                  >
-                    {variableSet.attributes["parent-project-id"] !== undefined && variableSet.attributes["parent-project-id"] !== null
-                      ? "Project"
-                      : variableSet.attributes.global
-                        ? "Global"
-                        : "Selected"}
-                  </Badge>
-                </TableCell>
-                <TableCell><Badge variant="secondary">{variableSet.attributes["var-count"]}</Badge></TableCell>
-                <TableCell>
-                  <Badge variant={variableSet.attributes.global ? "default" : "outline"}>
-                    {variableSet.attributes.global
-                      ? "All"
-                      : variableSet.attributes["workspace-count"]}
-                  </Badge>
-                </TableCell>
-                <TableCell>
-                  <div className="flex justify-end gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={(): void => { onVariables(variableSet); }}
-                    >
-                      Variables
-                    </Button>
-                    {canManage && <>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={(): void => { onWorkspaces(variableSet); }}
-                        disabled={variableSet.attributes.global}
-                      >
-                        Workspaces
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={(): void => { onEdit(variableSet); }}>
-                        Edit
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={(): void => { onDeleteRequest(variableSet); }}
-                      >
-                        Delete
-                      </Button>
-                    </>}
-                  </div>
+          </TableHeader>
+          <TableBody>
+            {loading && (
+              <TableRow>
+                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                  Loading variable sets…
                 </TableCell>
               </TableRow>
-            ))}
-          {!loading && pageError === "" && variableSets.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                <EmptyState compact title="No variable sets yet." description="Share Terraform variables and environment settings across workspaces." docsHref="/app/docs/variables" />
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
+            )}
+            {!loading &&
+              variableSets.map(
+                (variableSet): React.JSX.Element => (
+                  <TableRow key={variableSet.id}>
+                    <TableCell className="font-medium">{variableSet.attributes.name}</TableCell>
+                    <TableCell className="max-w-72 truncate text-muted-foreground">
+                      {variableSet.attributes.description ?? "—"}
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          variableSet.attributes["parent-project-id"] !== undefined &&
+                          variableSet.attributes["parent-project-id"] !== null
+                            ? "outline"
+                            : variableSet.attributes.global
+                              ? "default"
+                              : "secondary"
+                        }
+                      >
+                        {variableSet.attributes["parent-project-id"] !== undefined &&
+                        variableSet.attributes["parent-project-id"] !== null
+                          ? "Project"
+                          : variableSet.attributes.global
+                            ? "Global"
+                            : "Selected"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{variableSet.attributes["var-count"]}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={variableSet.attributes.global ? "default" : "outline"}>
+                        {variableSet.attributes.global ? "All" : variableSet.attributes["workspace-count"]}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(): void => {
+                            onVariables(variableSet);
+                          }}
+                        >
+                          Variables
+                        </Button>
+                        {canManage && (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(): void => {
+                                onWorkspaces(variableSet);
+                              }}
+                              disabled={variableSet.attributes.global}
+                            >
+                              Workspaces
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(): void => {
+                                onEdit(variableSet);
+                              }}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={(): void => {
+                                onDeleteRequest(variableSet);
+                              }}
+                            >
+                              Delete
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ),
+              )}
+            {!loading && pageError === "" && variableSets.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                  <EmptyState
+                    compact
+                    title="No variable sets yet."
+                    description="Share Terraform variables and environment settings across workspaces."
+                    docsHref="/app/docs/variables"
+                  />
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
       </CardContent>
     </Card>
   );
@@ -667,8 +702,12 @@ function VariableSetEditorDialog({
                 autoComplete="off"
                 spellCheck={false}
                 value={name}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onNameChange(event.target.value); }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onNameChange(event.currentTarget.value); }}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                  onNameChange(event.target.value);
+                }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onNameChange(event.currentTarget.value);
+                }}
                 autoFocus
                 aria-invalid={Boolean(editorError)}
               />
@@ -681,16 +720,16 @@ function VariableSetEditorDialog({
                 autoComplete="off"
                 spellCheck={false}
                 value={description}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onDescriptionChange(event.target.value); }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onDescriptionChange(event.currentTarget.value); }}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                  onDescriptionChange(event.target.value);
+                }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onDescriptionChange(event.currentTarget.value);
+                }}
               />
             </Field>
             <Field orientation="horizontal">
-              <Checkbox
-                id="variable-set-global"
-                checked={global}
-                onCheckedChange={onGlobalChange}
-              />
+              <Checkbox id="variable-set-global" checked={global} onCheckedChange={onGlobalChange} />
               <div className="flex flex-col gap-0.5">
                 <div className="flex items-center gap-1.5">
                   <FieldLabel htmlFor="variable-set-global">Global</FieldLabel>
@@ -744,31 +783,27 @@ function VariableSetWorkspacesDialog({
       <DialogContent className="max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Apply to workspaces</DialogTitle>
-          <DialogDescription>
-            Choose which workspaces receive configuration from {setName}.
-          </DialogDescription>
+          <DialogDescription>Choose which workspaces receive configuration from {setName}.</DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} noValidate>
           <FieldGroup>
             <div className="flex max-h-64 flex-col gap-2 overflow-y-auto rounded-md border p-3">
-              {workspaces.map((workspace): React.JSX.Element => (
-                <Field key={workspace.id} orientation="horizontal">
-                  <Checkbox
-                    id={`workspace-${workspace.id}`}
-                    checked={selectedWorkspaceIds.has(workspace.id)}
-                    onCheckedChange={(checked: boolean): void =>
-                      { onToggle(workspace.id, checked); }
-                    }
-                  />
-                  <FieldLabel htmlFor={`workspace-${workspace.id}`}>
-                    {workspace.attributes.name}
-                  </FieldLabel>
-                </Field>
-              ))}
+              {workspaces.map(
+                (workspace): React.JSX.Element => (
+                  <Field key={workspace.id} orientation="horizontal">
+                    <Checkbox
+                      id={`workspace-${workspace.id}`}
+                      checked={selectedWorkspaceIds.has(workspace.id)}
+                      onCheckedChange={(checked: boolean): void => {
+                        onToggle(workspace.id, checked);
+                      }}
+                    />
+                    <FieldLabel htmlFor={`workspace-${workspace.id}`}>{workspace.attributes.name}</FieldLabel>
+                  </Field>
+                ),
+              )}
               {workspaces.length === 0 && (
-                <p className="text-sm text-muted-foreground">
-                  This organization has no workspaces.
-                </p>
+                <p className="text-sm text-muted-foreground">This organization has no workspaces.</p>
               )}
             </div>
             <FieldError>{workspaceError}</FieldError>
@@ -837,20 +872,20 @@ export function VariableSets(): React.JSX.Element {
         data?: { attributes?: { permissions?: { "can-manage-workspaces"?: boolean } } };
       }>,
     ])
-      .then(([setsData, workspacesData, organizationResponse]: [
-        VariableSet[],
-        Workspace[],
-        { data?: { attributes?: { permissions?: { "can-manage-workspaces"?: boolean } } } },
-      ]): void => {
-        if (!active) return;
-        setVariableSets(setsData);
-        setWorkspaces(workspacesData);
-        setManageableOrganizationName(
-          organizationResponse.data?.attributes?.permissions?.["can-manage-workspaces"] === true
-            ? orgName
-            : "",
-        );
-      })
+      .then(
+        ([setsData, workspacesData, organizationResponse]: [
+          VariableSet[],
+          Workspace[],
+          { data?: { attributes?: { permissions?: { "can-manage-workspaces"?: boolean } } } },
+        ]): void => {
+          if (!active) return;
+          setVariableSets(setsData);
+          setWorkspaces(workspacesData);
+          setManageableOrganizationName(
+            organizationResponse.data?.attributes?.permissions?.["can-manage-workspaces"] === true ? orgName : "",
+          );
+        },
+      )
       .catch((error: unknown): void => {
         if (active) setPageError(messageFrom(error, "Failed to load variable sets"));
       })
@@ -880,11 +915,9 @@ export function VariableSets(): React.JSX.Element {
     setEditorError("");
 
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(
-        editing != null
-          ? `/varsets/${editing.id}`
-          : `/organizations/${encodeURIComponent(orgName)}/varsets`,
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(
+        editing != null ? `/varsets/${editing.id}` : `/organizations/${encodeURIComponent(orgName)}/varsets`,
         {
           method: editing != null ? "PATCH" : "POST",
           body: JSON.stringify({
@@ -898,13 +931,14 @@ export function VariableSets(): React.JSX.Element {
             },
           }),
         },
-      ) as { data: VariableSet };
+      )) as { data: VariableSet };
       if (activeOrganizationName.current !== orgName) return;
       const saved = response.data;
       setVariableSets((current: VariableSet[]): VariableSet[] => {
-        const next = editing != null
-          ? current.map((item: VariableSet): VariableSet => (item.id === saved.id ? saved : item))
-          : [...current, saved];
+        const next =
+          editing != null
+            ? current.map((item: VariableSet): VariableSet => (item.id === saved.id ? saved : item))
+            : [...current, saved];
         return next.sort((left: VariableSet, right: VariableSet): number =>
           left.attributes.name.localeCompare(right.attributes.name),
         );
@@ -927,7 +961,9 @@ export function VariableSets(): React.JSX.Element {
     try {
       await fetchApi(`/varsets/${variableSet.id}`, { method: "DELETE" });
       if (activeOrganizationName.current !== orgName) return;
-      setVariableSets((current: VariableSet[]): VariableSet[] => current.filter((item: VariableSet): boolean => item.id !== variableSet.id));
+      setVariableSets((current: VariableSet[]): VariableSet[] =>
+        current.filter((item: VariableSet): boolean => item.id !== variableSet.id),
+      );
     } catch (error: unknown) {
       setPageError(messageFrom(error, "Failed to delete variable set"));
     } finally {
@@ -940,7 +976,9 @@ export function VariableSets(): React.JSX.Element {
     if (!canManage) return;
     setWorkspaceSet(variableSet);
     setSelectedWorkspaceIds(
-      new Set((variableSet.relationships.workspaces?.data ?? []).map((workspace: ResourceIdentifier): string => workspace.id)),
+      new Set(
+        (variableSet.relationships.workspaces?.data ?? []).map((workspace: ResourceIdentifier): string => workspace.id),
+      ),
     );
     setWorkspaceError("");
     setWorkspaceOpen(true);
@@ -954,16 +992,17 @@ export function VariableSets(): React.JSX.Element {
   const updateVariableCount = (variableSetId: string, delta: number): void => {
     if (!canManage) return;
     setVariableSets((current: VariableSet[]): VariableSet[] =>
-      current.map((variableSet: VariableSet): VariableSet =>
-        variableSet.id === variableSetId
-          ? {
-              ...variableSet,
-              attributes: {
-                ...variableSet.attributes,
-                "var-count": variableSet.attributes["var-count"] + delta,
-              },
-            }
-          : variableSet,
+      current.map(
+        (variableSet: VariableSet): VariableSet =>
+          variableSet.id === variableSetId
+            ? {
+                ...variableSet,
+                attributes: {
+                  ...variableSet.attributes,
+                  "var-count": variableSet.attributes["var-count"] + delta,
+                },
+              }
+            : variableSet,
       ),
     );
   };
@@ -988,7 +1027,9 @@ export function VariableSets(): React.JSX.Element {
     const attached = [...selectedWorkspaceIds].filter((id: string): boolean => !currentIds.has(id));
     const detached = [...currentIds].filter((id: string): boolean => !selectedWorkspaceIds.has(id));
     const relationshipBody = (ids: readonly string[]): string =>
-      JSON.stringify({ data: ids.map((id: string): { id: string; type: "workspaces" } => ({ id, type: "workspaces" })) });
+      JSON.stringify({
+        data: ids.map((id: string): { id: string; type: "workspaces" } => ({ id, type: "workspaces" })),
+      });
 
     setSavingWorkspaces(true);
     setWorkspaceError("");
@@ -1017,7 +1058,10 @@ export function VariableSets(): React.JSX.Element {
         relationships: {
           ...workspaceSet.relationships,
           workspaces: {
-            data: [...selectedWorkspaceIds].map((id: string): { id: string; type: "workspaces" } => ({ id, type: "workspaces" })),
+            data: [...selectedWorkspaceIds].map((id: string): { id: string; type: "workspaces" } => ({
+              id,
+              type: "workspaces",
+            })),
           },
         },
       };
@@ -1029,8 +1073,8 @@ export function VariableSets(): React.JSX.Element {
     } catch (error: unknown) {
       if (activeOrganizationName.current !== orgName) return;
       try {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const fetched = await fetchApi(`/varsets/${workspaceSet.id}`) as { data?: VariableSet } | undefined;
+        // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+        const fetched = (await fetchApi(`/varsets/${workspaceSet.id}`)) as { data?: VariableSet } | undefined;
         if (fetched?.data != null) {
           const freshSet = fetched.data;
           setVariableSets((current: VariableSet[]): VariableSet[] =>
@@ -1055,14 +1099,22 @@ export function VariableSets(): React.JSX.Element {
         ]}
         title="Variable sets"
         description="A variable set is a reusable bundle of Terraform and environment variables. Attach one to several workspaces so shared credentials and settings live in a single place."
-        action={(
+        action={
           <div className="flex items-center gap-2">
             <Link to={`/app/${encodeURIComponent(orgName)}`} className={buttonVariants({ variant: "outline" })}>
               Workspaces
             </Link>
-            {canManage && <Button onClick={(): void => { openEditor(); }}>New variable set</Button>}
+            {canManage && (
+              <Button
+                onClick={(): void => {
+                  openEditor();
+                }}
+              >
+                New variable set
+              </Button>
+            )}
           </div>
-        )}
+        }
       />
 
       {pageError !== "" && (
@@ -1102,7 +1154,9 @@ export function VariableSets(): React.JSX.Element {
         editorError={editorError}
         savingSet={savingSet}
         onSubmit={saveVariableSet}
-        onCancel={(): void => { setEditorOpen(false); }}
+        onCancel={(): void => {
+          setEditorOpen(false);
+        }}
       />
 
       <VariableSetWorkspacesDialog
@@ -1115,7 +1169,9 @@ export function VariableSets(): React.JSX.Element {
         workspaceError={workspaceError}
         savingWorkspaces={savingWorkspaces}
         onSubmit={saveWorkspaceRelationships}
-        onCancel={(): void => { setWorkspaceOpen(false); }}
+        onCancel={(): void => {
+          setWorkspaceOpen(false);
+        }}
       />
 
       <VariablesDialog
@@ -1128,11 +1184,15 @@ export function VariableSets(): React.JSX.Element {
 
       <ConfirmDialog
         open={varSetToDelete !== null}
-        onOpenChange={(open): void => { if (!open) setVarSetToDelete(null); }}
+        onOpenChange={(open): void => {
+          if (!open) setVarSetToDelete(null);
+        }}
         title="Delete Variable Set"
         description={
           <>
-            Are you sure you want to delete variable set <strong className="text-foreground">{varSetToDelete?.attributes.name}</strong>? Variables in this set will be removed from all assigned workspaces.
+            Are you sure you want to delete variable set{" "}
+            <strong className="text-foreground">{varSetToDelete?.attributes.name}</strong>? Variables in this set will
+            be removed from all assigned workspaces.
           </>
         }
         confirmText="Delete Variable Set"

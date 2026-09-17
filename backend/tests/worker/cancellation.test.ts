@@ -44,8 +44,10 @@ async function runCancellationScript(script: string, env: Record<string, string>
   }
 }
 
-test("cancel terminates the IaC subprocess and the run cannot publish success", async () => {
-  const result = await runCancellationScript(`
+test(
+  "cancel terminates the IaC subprocess and the run cannot publish success",
+  async () => {
+    const result = await runCancellationScript(`
     const { chmod, mkdir, writeFile, rm, exists, readFile } = await import("fs/promises");
     const { join } = await import("path");
     const _pidAlive = (p) => { try { process.kill(p, 0); return true; } catch { return false; } };
@@ -135,13 +137,17 @@ test("cancel terminates the IaC subprocess and the run cannot publish success", 
     process.stdout.write(JSON.stringify({ status: final?.status, applied, subprocessDead }) + "\\n");
   `);
 
-  expect(result.subprocessDead).toBe(true);
-  expect(result.status).toBe("canceled");
-  expect(result.applied).toBe(false);
-}, { timeout: 30000 });
+    expect(result.subprocessDead).toBe(true);
+    expect(result.status).toBe("canceled");
+    expect(result.applied).toBe(false);
+  },
+  { timeout: 30000 },
+);
 
-test("cancel captures partial apply state before deleting the work directory", async () => {
-  const result = await runCancellationScript(`
+test(
+  "cancel captures partial apply state before deleting the work directory",
+  async () => {
+    const result = await runCancellationScript(`
     const { chmod, exists, mkdir, readFile, rm, writeFile } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
@@ -212,13 +218,17 @@ test("cancel captures partial apply state before deleting the work directory", a
     await rm(join(process.env.STORAGE_DIR, "recovery", runId), { recursive: true, force: true });
   `);
 
-  expect(result.status).toBe("canceled");
-  expect(result.encrypted).toBe(true);
-  expect(result.marker).toBe(true);
-}, { timeout: 30000 });
+    expect(result.status).toBe("canceled");
+    expect(result.encrypted).toBe(true);
+    expect(result.marker).toBe(true);
+  },
+  { timeout: 30000 },
+);
 
-test("deleting the run record mid-execution stops the subprocess without publishing success (issue #693)", async () => {
-  const result = await runCancellationScript(`
+test(
+  "deleting the run record mid-execution stops the subprocess without publishing success (issue #693)",
+  async () => {
+    const result = await runCancellationScript(`
     const { chmod, exists, mkdir, readFile, writeFile } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
@@ -301,28 +311,33 @@ test("deleting the run record mid-execution stops the subprocess without publish
     process.stdout.write(JSON.stringify({ subprocessDead, applied, rowGone, errorMessage }) + "\\n");
   `);
 
-  expect(result.subprocessDead).toBe(true);
-  expect(result.applied).toBe(false);
-  expect(result.rowGone).toBe(true);
-  expect(result.errorMessage).toBeNull();
-}, { timeout: 30000 });
+    expect(result.subprocessDead).toBe(true);
+    expect(result.applied).toBe(false);
+    expect(result.rowGone).toBe(true);
+    expect(result.errorMessage).toBeNull();
+  },
+  { timeout: 30000 },
+);
 
-test("failed recovery capture preserves the work directory (issue #579)", async () => {
-  // The fake apply writes partial state and then blocks, like the capture
-  // test above. A blocker file where the recovery run directory goes forces
-  // capture to throw, which must preserve the work directory for manual
-  // recovery instead of deleting the only source.
-  const fakeTofu = [
-    "#!/bin/sh",
-    "case \"$1\" in",
-    "  init) : ;;",
-    "  plan) echo \"Plan: 1 to add, 0 to change, 0 to destroy.\"; : > tfplan ;;",
-    "  show) echo \"{}\" ;;",
-    "  apply) printf \"%s\" partial-state > terraform.tfstate; while :; do sleep 30; done ;;",
-    "  *) exit 2 ;;",
-    "esac",
-  ].join("\n");
-  const result = await runCancellationScript(`
+test(
+  "failed recovery capture preserves the work directory (issue #579)",
+  async () => {
+    // The fake apply writes partial state and then blocks, like the capture
+    // test above. A blocker file where the recovery run directory goes forces
+    // capture to throw, which must preserve the work directory for manual
+    // recovery instead of deleting the only source.
+    const fakeTofu = [
+      "#!/bin/sh",
+      'case "$1" in',
+      "  init) : ;;",
+      '  plan) echo "Plan: 1 to add, 0 to change, 0 to destroy."; : > tfplan ;;',
+      '  show) echo "{}" ;;',
+      '  apply) printf "%s" partial-state > terraform.tfstate; while :; do sleep 30; done ;;',
+      "  *) exit 2 ;;",
+      "esac",
+    ].join("\n");
+    const result = await runCancellationScript(
+      `
     const { chmod, exists, mkdir, readFile, rm, writeFile } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
@@ -379,14 +394,20 @@ test("failed recovery capture preserves the work directory (issue #579)", async 
     const workDirExists = await exists(workRoot);
     process.stdout.write(JSON.stringify({ status: final?.status, workDirExists }) + "\\n");
     await rm(workRoot, { recursive: true, force: true });
-  `, { FAKE_TOFU: fakeTofu });
+  `,
+      { FAKE_TOFU: fakeTofu },
+    );
 
-  expect(result.status).toBe("canceled");
-  expect(result.workDirExists).toBe(true);
-}, { timeout: 30000 });
+    expect(result.status).toBe("canceled");
+    expect(result.workDirExists).toBe(true);
+  },
+  { timeout: 30000 },
+);
 
-test("a canceled plan failure writes Run canceled, not a state-machine error (issue #615)", async () => {
-  const result = await runCancellationScript(`
+test(
+  "a canceled plan failure writes Run canceled, not a state-machine error (issue #615)",
+  async () => {
+    const result = await runCancellationScript(`
     const { chmod, exists, mkdir, writeFile } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
@@ -461,7 +482,9 @@ test("a canceled plan failure writes Run canceled, not a state-machine error (is
     }) + "\\n");
   `);
 
-  expect(result.canceledLine).toBe(true);
-  expect(result.stateMachineLeak).toBe(false);
-  expect(result.errorLeak).toBe(false);
-}, { timeout: 45000 });
+    expect(result.canceledLine).toBe(true);
+    expect(result.stateMachineLeak).toBe(false);
+    expect(result.errorLeak).toBe(false);
+  },
+  { timeout: 45000 },
+);

@@ -2,7 +2,19 @@ import { describe, expect, it, beforeEach } from "bun:test";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { users, organizations, organizationMemberships, projects, projectTags, workspaces, workspaceTags, remoteStateConsumers, dataRetentionPolicies, configurationVersions, apiTokens } from "../../src/db/schema";
+import {
+  users,
+  organizations,
+  organizationMemberships,
+  projects,
+  projectTags,
+  workspaces,
+  workspaceTags,
+  remoteStateConsumers,
+  dataRetentionPolicies,
+  configurationVersions,
+  apiTokens,
+} from "../../src/db/schema";
 describe("Epic 4 & 5 Projects, Workspaces, Remote State Consumers & Retention Policies", () => {
   let userToken: string;
   let userId: string;
@@ -93,7 +105,7 @@ describe("Epic 4 & 5 Projects, Workspaces, Remote State Consumers & Retention Po
             { attributes: { key: "cost-center", value: "finance" } },
           ],
         }),
-      })
+      }),
     );
     expect(postProjTag.status).toBe(201);
 
@@ -109,7 +121,7 @@ describe("Epic 4 & 5 Projects, Workspaces, Remote State Consumers & Retention Po
     const effRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/effective-tag-bindings`, {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(effRes.status).toBe(200);
     const effBody = await effRes.json();
@@ -140,14 +152,14 @@ describe("Epic 4 & 5 Projects, Workspaces, Remote State Consumers & Retention Po
         body: JSON.stringify({
           data: [{ id: consumerWsId, type: "workspaces" }],
         }),
-      })
+      }),
     );
     expect(addRes.status).toBe(204);
 
     const getRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/relationships/remote-state-consumers`, {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(getRes.status).toBe(200);
     const getBody = await getRes.json();
@@ -171,7 +183,7 @@ describe("Epic 4 & 5 Projects, Workspaces, Remote State Consumers & Retention Po
             },
           },
         }),
-      })
+      }),
     );
     expect(postRes.status).toBe(201);
     const postBody = await postRes.json();
@@ -180,7 +192,7 @@ describe("Epic 4 & 5 Projects, Workspaces, Remote State Consumers & Retention Po
     const getRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/relationships/data-retention-policy`, {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(getRes.status).toBe(200);
     const getBody = await getRes.json();
@@ -190,7 +202,7 @@ describe("Epic 4 & 5 Projects, Workspaces, Remote State Consumers & Retention Po
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/relationships/data-retention-policy`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(delRes.status).toBe(204);
   });
@@ -213,7 +225,7 @@ describe("Epic 4 & 5 Projects, Workspaces, Remote State Consumers & Retention Po
     const res = await app.handle(
       new Request(`http://localhost/api/v2/configuration-versions/${cvId}/ingress-attributes`, {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(res.status).toBe(200);
     const body = await res.json();

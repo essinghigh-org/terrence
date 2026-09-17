@@ -3,14 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens,
-  organizationMemberships,
-  organizations,
-  runs,
-  users,
-  workspaces,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, runs, users, workspaces } from "../../src/db/schema";
 
 describe("Workspace Run Triggers & Cost Estimates API contract", () => {
   const suffix = crypto.randomUUID();
@@ -22,21 +15,21 @@ describe("Workspace Run Triggers & Cost Estimates API contract", () => {
   const sourceWsId = `ws-source-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
-    await db.insert(organizationMemberships).values([
-      { id: crypto.randomUUID(), userId, orgId, role: "owner" },
-    ]);
+    await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId, role: "owner" }]);
     await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: hashAuthenticationToken(token), userId }]);
     await db.insert(workspaces).values([
       { id: targetWsId, name: `target-${suffix}`, orgId },
@@ -76,7 +69,9 @@ describe("Workspace Run Triggers & Cost Estimates API contract", () => {
     const listAfterBody = await listAfterRes.json();
     expect(listAfterBody.data.length).toBe(0);
 
-    const invalidFilterRes = await request(`/api/v2/workspaces/${targetWsId}/run-triggers?filter[run-trigger][type]=invalid`);
+    const invalidFilterRes = await request(
+      `/api/v2/workspaces/${targetWsId}/run-triggers?filter[run-trigger][type]=invalid`,
+    );
     expect(invalidFilterRes.status).toBe(422);
   });
 

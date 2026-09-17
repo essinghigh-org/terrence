@@ -79,68 +79,86 @@ describe("openapi contract", () => {
   });
 
   it("matches the checked-in artifact exactly", () => {
-    const artifact = JSON.parse(readFileSync(join(import.meta.dir, "../../openapi.json"), "utf8")) as Record<string, unknown>;
+    const artifact = JSON.parse(readFileSync(join(import.meta.dir, "../../openapi.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
     expect(spec).toEqual(artifact);
   });
 
   it("documents create-style bulk actions with their 201 response", () => {
-    const operation = paths["/api/v2/organizations/{org_name}/explorer/bulk-actions"]?.["post"] as {
-      responses?: Record<string, unknown>;
-    } | undefined;
+    const operation = paths["/api/v2/organizations/{org_name}/explorer/bulk-actions"]?.["post"] as
+      | {
+          responses?: Record<string, unknown>;
+        }
+      | undefined;
     expect(operation?.responses?.["201"]).toBeDefined();
     expect(operation?.responses?.["200"]).toBeUndefined();
   });
 
   it("derives route-specific success and error responses", () => {
-    const createOperation = paths["/api/v2/organizations"]?.["post"] as { responses?: Record<string, unknown> } | undefined;
+    const createOperation = paths["/api/v2/organizations"]?.["post"] as
+      | { responses?: Record<string, unknown> }
+      | undefined;
     expect(createOperation?.responses?.["201"]).toBeDefined();
     expect(createOperation?.responses?.["200"]).toBeUndefined();
     expect(createOperation?.responses?.["409"]).toBeDefined();
 
-    const deleteOperation = paths["/api/v2/comments/{comment_id}"]?.["delete"] as { responses?: Record<string, unknown> } | undefined;
+    const deleteOperation = paths["/api/v2/comments/{comment_id}"]?.["delete"] as
+      | { responses?: Record<string, unknown> }
+      | undefined;
     expect(deleteOperation?.responses?.["204"]).toBeDefined();
     expect(deleteOperation?.responses?.["200"]).toBeUndefined();
 
-    const planOperation = paths["/api/v2/runs/{run_id}/plan/json-output"]?.["get"] as { responses?: Record<string, unknown> } | undefined;
+    const planOperation = paths["/api/v2/runs/{run_id}/plan/json-output"]?.["get"] as
+      | { responses?: Record<string, unknown> }
+      | undefined;
     expect(planOperation?.responses?.["200"]).toBeDefined();
     expect(planOperation?.responses?.["204"]).toBeDefined();
     expect(planOperation?.responses?.["200"]).toMatchObject({
       content: { "application/json": { schema: { type: "object" } } },
     });
 
-    const uploadOperation = paths["/api/v2/workspaces/{workspace_id}/state-versions/upload"]?.["post"] as { responses?: Record<string, unknown> } | undefined;
+    const uploadOperation = paths["/api/v2/workspaces/{workspace_id}/state-versions/upload"]?.["post"] as
+      | { responses?: Record<string, unknown> }
+      | undefined;
     expect(uploadOperation?.responses?.["201"]).toBeDefined();
     expect(uploadOperation?.responses?.["413"]).toBeDefined();
   });
 
   it("includes system-listener operations and their delegated responses", () => {
     const diagnosticsPath = "/api/v1/diagnostics";
-    const diagnostics = paths[diagnosticsPath]?.["get"] as {
-      responses?: Record<string, unknown>;
-      servers?: { url?: string }[];
-    } | undefined;
+    const diagnostics = paths[diagnosticsPath]?.["get"] as
+      | {
+          responses?: Record<string, unknown>;
+          servers?: { url?: string }[];
+        }
+      | undefined;
     expect(diagnostics?.responses?.["401"]).toBeDefined();
     expect(diagnostics?.responses?.["503"]).toBeDefined();
     const systemServerUrl = diagnostics?.servers?.[0]?.url;
     expect(systemServerUrl).toBeDefined();
-    const resolvedDiagnostics = new URL(
-      diagnosticsPath,
-      new URL(systemServerUrl ?? "/", "https://terrence.test"),
-    );
+    const resolvedDiagnostics = new URL(diagnosticsPath, new URL(systemServerUrl ?? "/", "https://terrence.test"));
     expect(resolvedDiagnostics.pathname).toBe(diagnosticsPath);
 
-    const createBundle = paths["/api/v1/support/bundle-requests"]?.["post"] as { responses?: Record<string, unknown> } | undefined;
+    const createBundle = paths["/api/v1/support/bundle-requests"]?.["post"] as
+      | { responses?: Record<string, unknown> }
+      | undefined;
     expect(createBundle?.responses?.["202"]).toBeDefined();
 
-    const deleteBundle = paths["/api/v1/support/bundle-requests/{id}"]?.["delete"] as { responses?: Record<string, unknown> } | undefined;
+    const deleteBundle = paths["/api/v1/support/bundle-requests/{id}"]?.["delete"] as
+      | { responses?: Record<string, unknown> }
+      | undefined;
     expect(deleteBundle?.responses?.["204"]).toBeDefined();
     expect(deleteBundle?.responses?.["409"]).toBeDefined();
   });
 
   it("documents provider artwork as an image response", () => {
-    const operation = paths["/api/v2/provider-icons/{hostname}/{namespace}/{name}"]?.["get"] as {
-      responses?: Record<string, { content?: Record<string, unknown> }>;
-    } | undefined;
+    const operation = paths["/api/v2/provider-icons/{hostname}/{namespace}/{name}"]?.["get"] as
+      | {
+          responses?: Record<string, { content?: Record<string, unknown> }>;
+        }
+      | undefined;
     expect(operation?.responses?.["200"]?.content?.["image/svg+xml"]).toEqual({
       schema: { type: "string", format: "binary" },
     });
@@ -148,10 +166,12 @@ describe("openapi contract", () => {
   });
 
   it("documents the GitHub App manifest handoff as an HTML response with required state", () => {
-    const operation = paths["/api/v2/admin/github-app/manifest/redirect"]?.["get"] as {
-      parameters?: { name?: string; in?: string; required?: boolean; schema?: Record<string, unknown> }[];
-      responses?: Record<string, { content?: Record<string, unknown> }>;
-    } | undefined;
+    const operation = paths["/api/v2/admin/github-app/manifest/redirect"]?.["get"] as
+      | {
+          parameters?: { name?: string; in?: string; required?: boolean; schema?: Record<string, unknown> }[];
+          responses?: Record<string, { content?: Record<string, unknown> }>;
+        }
+      | undefined;
     expect(operation?.parameters).toContainEqual({
       name: "state",
       in: "query",

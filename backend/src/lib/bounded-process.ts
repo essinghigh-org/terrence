@@ -25,7 +25,9 @@ export async function runBoundedProcess(
     signal.throwIfAborted();
     const child = Bun.spawn([...command], {
       env: { ...process.env, ...(options.env ?? {}), LC_ALL: "C", TAR_OPTIONS: undefined },
-      stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
     });
     const stdoutReader = child.stdout.getReader();
     const stderrReader = child.stderr.getReader();
@@ -35,11 +37,21 @@ export async function runBoundedProcess(
       failure ??= error instanceof Error ? error : new Error(String(error));
       if (stopped) return;
       stopped = true;
-      try { child.kill("SIGKILL"); } catch { /* The process may have exited between the check and kill. */ }
-      void stdoutReader.cancel().catch(() => { /* Cancellation may race with pipe closure. */ });
-      void stderrReader.cancel().catch(() => { /* Cancellation may race with pipe closure. */ });
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* The process may have exited between the check and kill. */
+      }
+      void stdoutReader.cancel().catch(() => {
+        /* Cancellation may race with pipe closure. */
+      });
+      void stderrReader.cancel().catch(() => {
+        /* Cancellation may race with pipe closure. */
+      });
     };
-    const abort = (): void => { stop(signal.reason); };
+    const abort = (): void => {
+      stop(signal.reason);
+    };
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) abort();
     // The stream reader advances its cursor; it cannot be deeply readonly.
@@ -73,7 +85,12 @@ export async function runBoundedProcess(
     try {
       const [exitCode, stdout, stderr] = await Promise.all([
         child.exited,
-        drain(stdoutReader, options.maxStdoutBytes ?? 4 * 1024 * 1024, options.discardStdout ?? false, options.stdoutLimitMessage),
+        drain(
+          stdoutReader,
+          options.maxStdoutBytes ?? 4 * 1024 * 1024,
+          options.discardStdout ?? false,
+          options.stdoutLimitMessage,
+        ),
         drain(stderrReader, options.maxStderrBytes ?? 64 * 1024, false),
       ]);
       if (failure !== undefined) throw failure;

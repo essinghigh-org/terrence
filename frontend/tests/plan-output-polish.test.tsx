@@ -38,7 +38,7 @@ function createFakeStream(): {
 }
 
 function changeInput(element: HTMLElement, value: string): void {
-// SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
+  // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
   // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
   const tracker = (element as { _valueTracker?: { setValue: (next: string) => void } })._valueTracker;
   tracker?.setValue(value === "" ? "x" : "");
@@ -57,25 +57,30 @@ test("loads a running plan when plan.output.ready arrives over SSE", async () =>
   const fetchMock = mock(async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     request++;
     if (request === 1) {
-      return json({
-        errors: [{ status: "404", detail: "Plan JSON output is unavailable." }],
-      }, 404);
+      return json(
+        {
+          errors: [{ status: "404", detail: "Plan JSON output is unavailable." }],
+        },
+        404,
+      );
     }
     return json({
       terraform_version: "1.11.0",
       format_version: "1.2",
-      resource_changes: [{
-        address: "aws_instance.ready",
-        type: "aws_instance",
-        change: {
-          actions: ["create"],
-          before: null,
-          after: { instance_type: "t3.small" },
+      resource_changes: [
+        {
+          address: "aws_instance.ready",
+          type: "aws_instance",
+          change: {
+            actions: ["create"],
+            before: null,
+            after: { instance_type: "t3.small" },
+          },
         },
-      }],
+      ],
     });
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
   const stream = createFakeStream();
 
   const view = render(
@@ -100,59 +105,62 @@ test("loads a running plan when plan.output.ready arrives over SSE", async () =>
   });
 
   expect(fetchMock).toHaveBeenCalledTimes(2);
-// SAFETY: the fixture field is a string per the API contract.
-  expect((fetchMock.mock.calls[0]?.[0] as string)).toBe("/api/v2/plans/plan-run-ready/json-output");
+  // SAFETY: the fixture field is a string per the API contract.
+  expect(fetchMock.mock.calls[0]?.[0] as string).toBe("/api/v2/plans/plan-run-ready/json-output");
   // The event-triggered fetch targets the same endpoint (no extra polling).
-  expect((fetchMock.mock.calls[1]?.[0] as string)).toBe("/api/v2/plans/plan-run-ready/json-output");
+  expect(fetchMock.mock.calls[1]?.[0] as string).toBe("/api/v2/plans/plan-run-ready/json-output");
 });
 
 test("renders replacement and nested safe diffs and filters resources", async () => {
-  const fetchMock = mock(async (): Promise<Response> => json({
-    terraform_version: "1.11.0",
-    format_version: "1.2",
-    resource_changes: [
-      {
-        address: "module.app.secret_resource.replaced",
-        deposed: "deadbeef",
-        module_address: "module.app",
-        provider_name: "registry.terraform.io/example/secret",
-        action_reason: "replace_because_cannot_update",
-        type: "secret_resource",
-        change: {
-          actions: ["delete", "create"],
-          before: {
-            token: "old-super-secret",
-            settings: { endpoints: [{ url: "https://old.example" }] },
-            id: "old-id",
-            name: "stable-resource",
-            region: "eu-west-2",
+  const fetchMock = mock(
+    async (): Promise<Response> =>
+      json({
+        terraform_version: "1.11.0",
+        format_version: "1.2",
+        resource_changes: [
+          {
+            address: "module.app.secret_resource.replaced",
+            deposed: "deadbeef",
+            module_address: "module.app",
+            provider_name: "registry.terraform.io/example/secret",
+            action_reason: "replace_because_cannot_update",
+            type: "secret_resource",
+            change: {
+              actions: ["delete", "create"],
+              before: {
+                token: "old-super-secret",
+                settings: { endpoints: [{ url: "https://old.example" }] },
+                id: "old-id",
+                name: "stable-resource",
+                region: "eu-west-2",
+              },
+              after: {
+                token: "new-super-secret",
+                settings: { endpoints: [{ url: "https://new.example" }] },
+                id: null,
+                name: "stable-resource",
+                region: "eu-west-2",
+              },
+              before_sensitive: { token: true },
+              after_sensitive: { token: true },
+              after_unknown: { id: true },
+              replace_paths: [["settings", "endpoints"]],
+            },
           },
-          after: {
-            token: "new-super-secret",
-            settings: { endpoints: [{ url: "https://new.example" }] },
-            id: null,
-            name: "stable-resource",
-            region: "eu-west-2",
+          {
+            address: "aws_instance.changed",
+            provider_name: "registry.terraform.io/hashicorp/aws",
+            type: "aws_instance",
+            change: {
+              actions: ["update"],
+              before: { instance_type: "t3.micro" },
+              after: { instance_type: "t3.small" },
+            },
           },
-          before_sensitive: { token: true },
-          after_sensitive: { token: true },
-          after_unknown: { id: true },
-          replace_paths: [["settings", "endpoints"]],
-        },
-      },
-      {
-        address: "aws_instance.changed",
-        provider_name: "registry.terraform.io/hashicorp/aws",
-        type: "aws_instance",
-        change: {
-          actions: ["update"],
-          before: { instance_type: "t3.micro" },
-          after: { instance_type: "t3.small" },
-        },
-      },
-    ],
-  }));
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+        ],
+      }),
+  );
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-detail" status="planned" />);
   await waitFor((): void => {
@@ -180,7 +188,9 @@ test("renders replacement and nested safe diffs and filters resources", async ()
     expect(view.getAllByText(/replace because cannot update/).length).toBeGreaterThan(0);
     expect(view.getByText(/1 unchanged attribute hidden/)).toBeTruthy();
   });
-  expect((view.container as HTMLElement).querySelector("img[alt=\"\"]")?.getAttribute("src") ?? view.container.textContent).toBeTruthy();
+  expect(
+    (view.container as HTMLElement).querySelector('img[alt=""]')?.getAttribute("src") ?? view.container.textContent,
+  ).toBeTruthy();
 
   changeInput(view.getByLabelText("Filter resources by address or type"), "aws_instance");
   await waitFor((): void => {
@@ -200,29 +210,32 @@ test("renders replacement and nested safe diffs and filters resources", async ()
 });
 
 test("summary filters retain replacements and flat resource rows expand independently", async () => {
-  globalThis.fetch = mock(async (): Promise<Response> => json({
-    resource_changes: [
-      {
-        address: "aws_instance.replaced",
-        module_address: "module.app",
-        type: "aws_instance",
-        change: {
-          actions: ["delete", "create"],
-          before: { id: "old" },
-          after: { id: "new" },
-        },
-      },
-      {
-        address: "aws_instance.updated",
-        type: "aws_instance",
-        change: {
-          actions: ["update"],
-          before: { size: "small" },
-          after: { size: "large" },
-        },
-      },
-    ],
-  })) as unknown as typeof fetch;
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        resource_changes: [
+          {
+            address: "aws_instance.replaced",
+            module_address: "module.app",
+            type: "aws_instance",
+            change: {
+              actions: ["delete", "create"],
+              before: { id: "old" },
+              after: { id: "new" },
+            },
+          },
+          {
+            address: "aws_instance.updated",
+            type: "aws_instance",
+            change: {
+              actions: ["update"],
+              before: { size: "small" },
+              after: { size: "large" },
+            },
+          },
+        ],
+      }),
+  ) as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-navigation" status="planned" />);
   await waitFor((): void => {
@@ -260,58 +273,63 @@ test("summary filters retain replacements and flat resource rows expand independ
 
 test("keeps moves, imports, drift, and output values visible", async () => {
   const onSummaryChange = mock((): void => undefined);
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (): Promise<Response> => json({
-    action_invocations: [{
-      address: "action.aws_lambda_invoke.deploy",
-      type: "aws_lambda_invoke",
-      name: "deploy",
-      provider_name: "registry.terraform.io/hashicorp/aws",
-      lifecycle_action_trigger: {
-        triggering_resource_address: "aws_instance.renamed",
-        action_trigger_event: "after_update",
-      },
-    }],
-    resource_changes: [
-      {
-        address: "aws_instance.renamed",
-        previous_address: "aws_instance.old_name",
-        type: "aws_instance",
-        change: { actions: ["no-op"], before: { id: "i-1" }, after: { id: "i-1" } },
-      },
-      {
-        address: "aws_instance.imported",
-        type: "aws_instance",
-        change: {
-          actions: ["no-op"],
-          before: null,
-          after: { id: "i-2" },
-          importing: { id: "i-2" },
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        action_invocations: [
+          {
+            address: "action.aws_lambda_invoke.deploy",
+            type: "aws_lambda_invoke",
+            name: "deploy",
+            provider_name: "registry.terraform.io/hashicorp/aws",
+            lifecycle_action_trigger: {
+              triggering_resource_address: "aws_instance.renamed",
+              action_trigger_event: "after_update",
+            },
+          },
+        ],
+        resource_changes: [
+          {
+            address: "aws_instance.renamed",
+            previous_address: "aws_instance.old_name",
+            type: "aws_instance",
+            change: { actions: ["no-op"], before: { id: "i-1" }, after: { id: "i-1" } },
+          },
+          {
+            address: "aws_instance.imported",
+            type: "aws_instance",
+            change: {
+              actions: ["no-op"],
+              before: null,
+              after: { id: "i-2" },
+              importing: { id: "i-2" },
+            },
+          },
+        ],
+        resource_drift: [
+          {
+            address: "aws_instance.drifted",
+            type: "aws_instance",
+            change: {
+              actions: ["update"],
+              before: { size: "small" },
+              after: { size: "large" },
+            },
+          },
+        ],
+        output_changes: {
+          unchanged: { actions: ["no-op"], before: "same", after: "same" },
+          endpoint: {
+            actions: ["update"],
+            before: "old.example",
+            after: "new.example",
+          },
         },
-      },
-    ],
-    resource_drift: [{
-      address: "aws_instance.drifted",
-      type: "aws_instance",
-      change: {
-        actions: ["update"],
-        before: { size: "small" },
-        after: { size: "large" },
-      },
-    }],
-    output_changes: {
-      unchanged: { actions: ["no-op"], before: "same", after: "same" },
-      endpoint: {
-        actions: ["update"],
-        before: "old.example",
-        after: "new.example",
-      },
-    },
-  }))) as unknown as typeof fetch;
+      }),
+  ) as unknown as typeof fetch;
 
-  const view = render(
-    <PlanOutput runId="run-complete" status="planned" onSummaryChange={onSummaryChange} />,
-  );
+  const view = render(<PlanOutput runId="run-complete" status="planned" onSummaryChange={onSummaryChange} />);
   await waitFor((): void => {
     expect(view.getAllByText("aws_instance.renamed").length).toBeGreaterThan(0);
   });
@@ -342,23 +360,26 @@ test("keeps moves, imports, drift, and output values visible", async () => {
 
 test("counts an imported resource's planned update as both import and change", async () => {
   const onSummaryChange = mock((): void => undefined);
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (): Promise<Response> => json({
-    resource_changes: [{
-      address: "aws_instance.imported_and_changed",
-      type: "aws_instance",
-      change: {
-        actions: ["update"],
-        before: { size: "small" },
-        after: { size: "large" },
-        importing: { id: "i-123" },
-      },
-    }],
-  }))) as unknown as typeof fetch;
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        resource_changes: [
+          {
+            address: "aws_instance.imported_and_changed",
+            type: "aws_instance",
+            change: {
+              actions: ["update"],
+              before: { size: "small" },
+              after: { size: "large" },
+              importing: { id: "i-123" },
+            },
+          },
+        ],
+      }),
+  ) as unknown as typeof fetch;
 
-  const view = render(
-    <PlanOutput runId="run-import-update" status="planned" onSummaryChange={onSummaryChange} />,
-  );
+  const view = render(<PlanOutput runId="run-import-update" status="planned" onSummaryChange={onSummaryChange} />);
   await waitFor((): void => {
     expect(view.getByText("aws_instance.imported_and_changed")).toBeTruthy();
   });
@@ -378,19 +399,24 @@ test("counts an imported resource's planned update as both import and change", a
 });
 
 test("counts a moved resource's planned update as both move and change", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (): Promise<Response> => json({
-    resource_changes: [{
-      address: "aws_instance.new_name",
-      previous_address: "aws_instance.old_name",
-      type: "aws_instance",
-      change: {
-        actions: ["update"],
-        before: { size: "small" },
-        after: { size: "large" },
-      },
-    }],
-  }))) as unknown as typeof fetch;
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        resource_changes: [
+          {
+            address: "aws_instance.new_name",
+            previous_address: "aws_instance.old_name",
+            type: "aws_instance",
+            change: {
+              actions: ["update"],
+              before: { size: "small" },
+              after: { size: "large" },
+            },
+          },
+        ],
+      }),
+  ) as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-move-update" status="planned" />);
   await waitFor((): void => {
@@ -417,16 +443,18 @@ test("keeps a ready artifact across status changes and hides it immediately for 
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url.includes("plan-run-first")) {
       return json({
-        resource_changes: [{
-          address: "aws_instance.first",
-          type: "aws_instance",
-          change: { actions: ["create"], before: null, after: { name: "first" } },
-        }],
+        resource_changes: [
+          {
+            address: "aws_instance.first",
+            type: "aws_instance",
+            change: { actions: ["create"], before: null, after: { name: "first" } },
+          },
+        ],
       });
     }
     return await nextResponse;
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-first" status="planned" />);
   await waitFor((): void => {
@@ -444,23 +472,30 @@ test("keeps a ready artifact across status changes and hides it immediately for 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  resolveNext?.(json({
-    resource_changes: [{
-      address: "aws_instance.second",
-      type: "aws_instance",
-      change: { actions: ["create"], before: null, after: { name: "second" } },
-    }],
-  }));
+  resolveNext?.(
+    json({
+      resource_changes: [
+        {
+          address: "aws_instance.second",
+          type: "aws_instance",
+          change: { actions: ["create"], before: null, after: { name: "second" } },
+        },
+      ],
+    }),
+  );
   await waitFor((): void => {
     expect(view.getByText("aws_instance.second")).toBeTruthy();
   });
 });
 
 test("rejects malformed structured plan resources", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (): Promise<Response> => json({
-    resource_changes: [{ address: 123, change: { actions: "create" } }],
-  }))) as unknown as typeof fetch;
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        resource_changes: [{ address: 123, change: { actions: "create" } }],
+      }),
+  ) as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-invalid" status="planned" />);
   await waitFor((): void => {
@@ -469,11 +504,14 @@ test("rejects malformed structured plan resources", async () => {
 });
 
 test("rejects malformed structured plan action metadata", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (): Promise<Response> => json({
-    action_invocations: [{ address: 123 }],
-    resource_changes: [],
-  }))) as unknown as typeof fetch;
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        action_invocations: [{ address: 123 }],
+        resource_changes: [],
+      }),
+  ) as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-invalid-action" status="planned" />);
   await waitFor((): void => {
@@ -483,11 +521,9 @@ test("rejects malformed structured plan action metadata", async () => {
 
 test("shows a neutral state when a terminal run never produced a plan artifact", async () => {
   const fetchMock = mock(async (): Promise<Response> => json({}, 404));
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-  const view = render(
-    <PlanOutput runId="run-pre-plan-canceled" status="canceled" planStatus="pending" />,
-  );
+  const view = render(<PlanOutput runId="run-pre-plan-canceled" status="canceled" planStatus="pending" />);
 
   await waitFor((): void => {
     expect(view.getByText("Plan output was not produced for this run.")).toBeTruthy();
@@ -498,31 +534,36 @@ test("shows a neutral state when a terminal run never produced a plan artifact",
 });
 
 test("renders structured terraform-style diff lines for changed list elements", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (): Promise<Response> => json({
-    terraform_version: "1.11.0",
-    format_version: "1.2",
-    resource_changes: [{
-      address: "github_repository.this",
-      type: "github_repository",
-      name: "this",
-      change: {
-        actions: ["update"],
-        before: {
-          id: "twitter-nsfw-api",
-          name: "twitter-nsfw-api",
-          topics: ["tfe-managed", "unchanged-topic"],
-          visibility: "private",
-        },
-        after: {
-          id: "twitter-nsfw-api",
-          name: "twitter-nsfw-api",
-          topics: ["terrence-managed", "unchanged-topic"],
-          visibility: "private",
-        },
-      },
-    }],
-  }))) as unknown as typeof fetch;
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        terraform_version: "1.11.0",
+        format_version: "1.2",
+        resource_changes: [
+          {
+            address: "github_repository.this",
+            type: "github_repository",
+            name: "this",
+            change: {
+              actions: ["update"],
+              before: {
+                id: "twitter-nsfw-api",
+                name: "twitter-nsfw-api",
+                topics: ["tfe-managed", "unchanged-topic"],
+                visibility: "private",
+              },
+              after: {
+                id: "twitter-nsfw-api",
+                name: "twitter-nsfw-api",
+                topics: ["terrence-managed", "unchanged-topic"],
+                visibility: "private",
+              },
+            },
+          },
+        ],
+      }),
+  ) as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-topics" status="planned" />);
   await waitFor((): void => {
@@ -552,17 +593,34 @@ test("the healthy illustration requires a completed plan without changes or drif
   // SAFETY: this fetch mock returns the plan JSON endpoint contract.
   globalThis.fetch = fetchMock as unknown as typeof fetch;
   const view = render(<PlanOutput runId="run-quiet" status="planning" planStatus="running" />);
-  await waitFor((): void => { expect(view.getByText("This plan has no resource changes.")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("This plan has no resource changes.")).toBeTruthy();
+  });
   expect(view.container.querySelector('[data-pose="healthy"]')).toBeNull();
   view.rerender(<PlanOutput runId="run-quiet" status="planned_and_finished" planStatus="finished" />);
-  await waitFor((): void => { expect(view.container.querySelector('[data-pose="healthy"]')).not.toBeNull(); });
+  await waitFor((): void => {
+    expect(view.container.querySelector('[data-pose="healthy"]')).not.toBeNull();
+  });
   cleanup();
-  fetchMock.mockImplementation(async (): Promise<Response> => json({ resource_changes: [], resource_drift: [{ address: "example.drift", type: "example", change: { actions: ["update"], before: { value: 1 }, after: { value: 2 } } }] }));
+  fetchMock.mockImplementation(
+    async (): Promise<Response> =>
+      json({
+        resource_changes: [],
+        resource_drift: [
+          {
+            address: "example.drift",
+            type: "example",
+            change: { actions: ["update"], before: { value: 1 }, after: { value: 2 } },
+          },
+        ],
+      }),
+  );
   const drifted = render(<PlanOutput runId="run-drift" status="planned_and_finished" planStatus="finished" />);
-  await waitFor((): void => { expect(drifted.getByText("This plan has no resource changes.")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(drifted.getByText("This plan has no resource changes.")).toBeTruthy();
+  });
   expect(drifted.container.querySelector('[data-pose="healthy"]')).toBeNull();
 });
-
 
 test("keeps state removal and unsupported operations visible, and counts real deletion", async () => {
   expect(operationFor(["forget"])).toBe("remove");
@@ -571,15 +629,30 @@ test("keeps state removal and unsupported operations visible, and counts real de
   expect(operationFor(["create", "forget"])).toBe("unsupported");
   expect(operationFor([])).toBe("unsupported");
   expect(operationFor(["future-action"])).toBe("unsupported");
-  expect(operationForResource({ address: "test.deleted", type: "test", action_reason: "delete_because_no_resource_config", change: { actions: ["delete"], before: {}, after: null } })).toBe("delete");
-  globalThis.fetch = mock(async (): Promise<Response> => json({
-    public_plan_version: 1,
-    resource_changes: [
-      { address: "test.forgotten", type: "test", change: { actions: ["forget"], before: {}, after: null } },
-      { address: "test.future", type: "test", change: { actions: ["unsupported"], before: {}, after: {} } },
-      { address: "test.deleted", type: "test", action_reason: "delete_because_no_resource_config", change: { actions: ["delete"], before: {}, after: null } },
-    ],
-  })) as unknown as typeof fetch;
+  expect(
+    operationForResource({
+      address: "test.deleted",
+      type: "test",
+      action_reason: "delete_because_no_resource_config",
+      change: { actions: ["delete"], before: {}, after: null },
+    }),
+  ).toBe("delete");
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        public_plan_version: 1,
+        resource_changes: [
+          { address: "test.forgotten", type: "test", change: { actions: ["forget"], before: {}, after: null } },
+          { address: "test.future", type: "test", change: { actions: ["unsupported"], before: {}, after: {} } },
+          {
+            address: "test.deleted",
+            type: "test",
+            action_reason: "delete_because_no_resource_config",
+            change: { actions: ["delete"], before: {}, after: null },
+          },
+        ],
+      }),
+  ) as unknown as typeof fetch;
   const view = render(<PlanOutput runId="run-operation-contract" status="planned" />);
   await waitFor((): void => {
     expect(view.getByLabelText("1 to remove from state")).toBeTruthy();

@@ -24,8 +24,8 @@ afterEach((): void => {
 });
 
 function installFetch(): void {
-// SAFETY: the mock's handling mirrors the backend contract for these tests.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for these tests.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice", "is-site-admin": true } } });
@@ -36,7 +36,7 @@ function installFetch(): void {
     }
     if (url === "/api/v2/docs") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 }
 
 let capturedPathname = "";
@@ -64,15 +64,16 @@ function renderLayout(initialEntry = "/app/acme"): ReturnType<typeof render> {
 
 test("[ collapses and expands the sidebar", async () => {
   const view = renderLayout();
-  await waitFor((): void => { expect(view.getByText("Organization content")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Organization content")).toBeTruthy();
+  });
 
   const toggle = view.getByRole("button", { name: "Collapse sidebar" });
   expect(toggle.getAttribute("aria-expanded")).toBe("true");
 
   fireEvent.keyDown(document.body, { key: "[" });
 
-  const expandedToggle = await waitFor((): HTMLElement =>
-    view.getByRole("button", { name: "Expand sidebar" }));
+  const expandedToggle = await waitFor((): HTMLElement => view.getByRole("button", { name: "Expand sidebar" }));
   expect(expandedToggle.getAttribute("aria-expanded")).toBe("false");
 
   fireEvent.keyDown(document.body, { key: "[" });
@@ -83,7 +84,9 @@ test("[ collapses and expands the sidebar", async () => {
 
 test("/ opens the command palette and Escape closes it again", async () => {
   const view = renderLayout();
-  await waitFor((): void => { expect(view.getByText("Organization content")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Organization content")).toBeTruthy();
+  });
   expect(view.queryByPlaceholderText(/Type a command/)).toBeNull();
 
   fireEvent.keyDown(document.body, { key: "/" });
@@ -100,7 +103,9 @@ test("/ opens the command palette and Escape closes it again", async () => {
 
 test("? opens the shortcuts help", async () => {
   const view = renderLayout();
-  await waitFor((): void => { expect(view.getByText("Organization content")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Organization content")).toBeTruthy();
+  });
 
   fireEvent.keyDown(document.body, { key: "?" });
 
@@ -111,42 +116,56 @@ test("? opens the shortcuts help", async () => {
 
 test("g then w jumps to the organization's workspaces", async () => {
   const view = renderLayout();
-  await waitFor((): void => { expect(view.getByText("Organization content")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Organization content")).toBeTruthy();
+  });
 
   fireEvent.keyDown(document.body, { key: "g" });
   fireEvent.keyDown(document.body, { key: "w" });
 
-  await waitFor((): void => { expect(capturedPathname).toBe("/app/acme/workspaces"); });
+  await waitFor((): void => {
+    expect(capturedPathname).toBe("/app/acme/workspaces");
+  });
   expect(view.getByText("WORKSPACES PAGE")).toBeTruthy();
 });
 
 test("g then h jumps to account settings", async () => {
   const view = renderLayout();
-  await waitFor((): void => { expect(view.getByText("Organization content")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Organization content")).toBeTruthy();
+  });
 
   fireEvent.keyDown(document.body, { key: "g" });
   fireEvent.keyDown(document.body, { key: "h" });
 
-  await waitFor((): void => { expect(capturedPathname).toBe("/app/account"); });
+  await waitFor((): void => {
+    expect(capturedPathname).toBe("/app/account");
+  });
   expect(view.getByText("ACCOUNT PAGE")).toBeTruthy();
 });
 
 test("a lone g without a follow-up key navigates nowhere", async () => {
   const view = renderLayout();
-  await waitFor((): void => { expect(view.getByText("Organization content")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Organization content")).toBeTruthy();
+  });
 
   fireEvent.keyDown(document.body, { key: "g" });
   fireEvent.keyDown(document.body, { key: "x" });
   fireEvent.keyDown(document.body, { key: "w" });
 
   // Give the router a tick; the plain "w" must not be treated as a sequence.
-  await new Promise((resolve): void => { setTimeout(resolve, 50); });
+  await new Promise((resolve): void => {
+    setTimeout(resolve, 50);
+  });
   expect(capturedPathname).toBe("/app/acme");
 });
 
 test("typing / inside a form field does not open the palette", async () => {
   const view = renderLayout();
-  await waitFor((): void => { expect(view.getByText("Organization content")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Organization content")).toBeTruthy();
+  });
 
   const input = document.createElement("input");
   input.setAttribute("data-testid", "plain-input");
@@ -156,7 +175,9 @@ test("typing / inside a form field does not open the palette", async () => {
   try {
     fireEvent.keyDown(input, { key: "/" });
     fireEvent.keyDown(input, { key: "g" });
-    await new Promise((resolve): void => { setTimeout(resolve, 50); });
+    await new Promise((resolve): void => {
+      setTimeout(resolve, 50);
+    });
     expect(view.queryByPlaceholderText(/Type a command/)).toBeNull();
     expect(capturedPathname).toBe("/app/acme");
   } finally {

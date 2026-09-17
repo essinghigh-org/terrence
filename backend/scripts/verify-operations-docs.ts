@@ -28,7 +28,9 @@ function runProcess(command: string, args: readonly string[], env: Readonly<Reco
   });
   if (result.error !== undefined) throw result.error;
   if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(" ")} failed (${String(result.status)}): ${(result.stderr ?? result.stdout).trim()}`);
+    throw new Error(
+      `${command} ${args.join(" ")} failed (${String(result.status)}): ${(result.stderr ?? result.stdout).trim()}`,
+    );
   }
   return result.stdout;
 }
@@ -59,11 +61,42 @@ async function main(): Promise<void> {
   const quickstart = await readFile(join(root, "backend/docs/quickstart.md"), "utf8");
   const security = await readFile(join(root, "backend/docs/security.md"), "utf8");
   const configuration = await readFile(join(root, "backend/docs/configuration.md"), "utf8");
-  assertRunbookText(operations, ["tar --create", "sha256sum --check", "doctor.ts --json", "verify-operations-docs.ts", "terrence-backup-manifest.json", "restore-rehearsals", "last-verified-restore-at", "GET /healthz", "GET /readyz", "GET /api/v1/metadata", "## Diagnostics", "## Storage layout", "## Backups"], "operations.md");
+  assertRunbookText(
+    operations,
+    [
+      "tar --create",
+      "sha256sum --check",
+      "doctor.ts --json",
+      "verify-operations-docs.ts",
+      "terrence-backup-manifest.json",
+      "restore-rehearsals",
+      "last-verified-restore-at",
+      "GET /healthz",
+      "GET /readyz",
+      "GET /api/v1/metadata",
+      "## Diagnostics",
+      "## Storage layout",
+      "## Backups",
+    ],
+    "operations.md",
+  );
   assertRunbookText(upgrading, ["vX.Y.Z@sha256", "upgrade-invariants.test.ts", "forward-only"], "upgrading.md");
   assertRunbookText(quickstart, ["terraform login", "terraform init", "terraform plan"], "quickstart.md");
-  assertRunbookText(security, ["TERRENCE_RUN_SANDBOX=false", "artifact-specific", "operations#storage-layout"], "security.md");
-  assertRunbookText(configuration, ["configuration contract", "Values must be at least 100 ms", "It must be at least 1 ms", "Unknown values fail startup"], "configuration.md");
+  assertRunbookText(
+    security,
+    ["TERRENCE_RUN_SANDBOX=false", "artifact-specific", "operations#storage-layout"],
+    "security.md",
+  );
+  assertRunbookText(
+    configuration,
+    [
+      "configuration contract",
+      "Values must be at least 100 ms",
+      "It must be at least 1 ms",
+      "Unknown values fail startup",
+    ],
+    "configuration.md",
+  );
   if (operations.includes("There is no backup manifest, hashing, encryption, restore test")) {
     throw new Error("operations.md still contains the retired backup-manifest guarantee");
   }
@@ -80,7 +113,11 @@ async function main(): Promise<void> {
     const dbPath = join(source, "terrence.db");
     const sourceDatabase = new Database(dbPath, { create: true });
     migrate(drizzle(sourceDatabase), { migrationsFolder: join(root, "backend/drizzle") });
-    const fixture = JSON.parse(runBun(["-e", `
+    const fixture = JSON.parse(
+      runBun(
+        [
+          "-e",
+          `
       const { encryptSecret } = await import(${JSON.stringify(join(root, "backend/src/lib/secrets.ts"))});
       const { encryptStatePayload } = await import(${JSON.stringify(join(root, "backend/src/lib/validation.ts"))});
       const { runVariablesForWrite } = await import(${JSON.stringify(join(root, "backend/src/lib/run-variables.ts"))});
@@ -94,26 +131,39 @@ async function main(): Promise<void> {
         databaseUrl: await encryptSecret("postgres://example.invalid/terrence"),
         variables,
       }));
-    `], {
-      STORAGE_DIR: source,
-      DATABASE_URL: `file:${dbPath}`,
-      ENCRYPTION_PASSWORD: "operations-docs-password",
-      TERRENCE_RUN_SANDBOX: "false",
-    })) as Readonly<{ statePayload: string; databaseUrl: string; variables: readonly Record<string, unknown>[] }>;
+    `,
+        ],
+        {
+          STORAGE_DIR: source,
+          DATABASE_URL: `file:${dbPath}`,
+          ENCRYPTION_PASSWORD: "operations-docs-password",
+          TERRENCE_RUN_SANDBOX: "false",
+        },
+      ),
+    ) as Readonly<{ statePayload: string; databaseUrl: string; variables: readonly Record<string, unknown>[] }>;
     const now = Date.now();
     sourceDatabase.run("INSERT INTO organizations (id, name) VALUES (?, ?)", ["doc-org", "Documentation Org"]);
-    sourceDatabase.run("INSERT INTO workspaces (id, name, org_id, created_at) VALUES (?, ?, ?, ?)", ["doc-workspace", "Restore Fixture", "doc-org", now]);
-    sourceDatabase.run("INSERT INTO runs (id, workspace_id, status, operation, variables, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
-      "doc-run", "doc-workspace", "planned", "plan_and_apply", JSON.stringify(fixture.variables), now,
+    sourceDatabase.run("INSERT INTO workspaces (id, name, org_id, created_at) VALUES (?, ?, ?, ?)", [
+      "doc-workspace",
+      "Restore Fixture",
+      "doc-org",
+      now,
     ]);
-    sourceDatabase.run("INSERT INTO state_versions (id, workspace_id, serial, state_payload, json_state, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [
-      "doc-state", "doc-workspace", 1, fixture.statePayload, fixture.statePayload, "doc-run", now,
-    ]);
+    sourceDatabase.run(
+      "INSERT INTO runs (id, workspace_id, status, operation, variables, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["doc-run", "doc-workspace", "planned", "plan_and_apply", JSON.stringify(fixture.variables), now],
+    );
+    sourceDatabase.run(
+      "INSERT INTO state_versions (id, workspace_id, serial, state_payload, json_state, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ["doc-state", "doc-workspace", 1, fixture.statePayload, fixture.statePayload, "doc-run", now],
+    );
     sourceDatabase.close();
     await mkdir(join(source, "secrets"), { recursive: true });
     await writeFile(join(source, "secrets", "database-url"), fixture.databaseUrl, { mode: 0o600 });
     await mkdir(join(source, "plan-json"), { recursive: true });
-    await writeFile(join(source, "plan-json", "doc-run.json"), JSON.stringify({ resource_changes: [] }), { mode: 0o600 });
+    await writeFile(join(source, "plan-json", "doc-run.json"), JSON.stringify({ resource_changes: [] }), {
+      mode: 0o600,
+    });
 
     const archive = join(backup, "storage.tar");
     runProcess("tar", ["--create", "--file", archive, "--directory", source, "."]);
@@ -129,7 +179,10 @@ async function main(): Promise<void> {
       if (!(await Bun.file(join(restored, path)).exists())) throw new Error(`restored backup is missing ${path}`);
     }
 
-    const restoredState = runBun(["-e", `
+    const restoredState = runBun(
+      [
+        "-e",
+        `
       const { decryptSecret } = await import(${JSON.stringify(join(root, "backend/src/lib/secrets.ts"))});
       const { decryptStatePayload, parseTerraformStatePayload } = await import(${JSON.stringify(join(root, "backend/src/lib/validation.ts"))});
       const { normalizeRunVariables } = await import(${JSON.stringify(join(root, "backend/src/lib/run-variables.ts"))});
@@ -142,12 +195,15 @@ async function main(): Promise<void> {
       if (variables.find((entry) => entry.key === "region")?.value !== "eu-west-2") throw new Error("restored run variable did not survive");
       if (databaseUrl !== "postgres://example.invalid/terrence") throw new Error("restored database URL secret did not decrypt");
       console.log(JSON.stringify({ state: true, execution: true }));
-    `], {
-      STORAGE_DIR: restored,
-      DATABASE_URL: `file:${join(restored, "terrence.db")}`,
-      ENCRYPTION_PASSWORD: "operations-docs-password",
-      TERRENCE_RUN_SANDBOX: "false",
-    });
+    `,
+      ],
+      {
+        STORAGE_DIR: restored,
+        DATABASE_URL: `file:${join(restored, "terrence.db")}`,
+        ENCRYPTION_PASSWORD: "operations-docs-password",
+        TERRENCE_RUN_SANDBOX: "false",
+      },
+    );
     const restoredReport = JSON.parse(restoredState) as unknown;
     if (!isRecord(restoredReport) || restoredReport["state"] !== true || restoredReport["execution"] !== true) {
       throw new Error("restored state/execution fixture did not verify");
@@ -162,7 +218,12 @@ async function main(): Promise<void> {
     });
     const report = JSON.parse(output) as unknown;
     const checks = isRecord(report) && Array.isArray(report["checks"]) ? report["checks"].filter(isRecord) : [];
-    if (!isRecord(report) || !Array.isArray(report["checks"]) || checks.length !== report["checks"].length || checks.some((check) => typeof check["name"] !== "string")) {
+    if (
+      !isRecord(report) ||
+      !Array.isArray(report["checks"]) ||
+      checks.length !== report["checks"].length ||
+      checks.some((check) => typeof check["name"] !== "string")
+    ) {
       throw new Error("doctor --json did not return a checks array");
     }
     const database = checks.find((check) => check["name"] === "database");
@@ -171,7 +232,20 @@ async function main(): Promise<void> {
   } finally {
     await rm(work, { recursive: true, force: true });
   }
-  console.log(JSON.stringify({ ok: true, checks: ["configuration-contract", "migrated-database", "backup-checksum", "restore-files", "state-decryption", "execution-variables", "doctor"] }));
+  console.log(
+    JSON.stringify({
+      ok: true,
+      checks: [
+        "configuration-contract",
+        "migrated-database",
+        "backup-checksum",
+        "restore-files",
+        "state-decryption",
+        "execution-variables",
+        "doctor",
+      ],
+    }),
+  );
 }
 
 if (import.meta.main) await main();

@@ -31,7 +31,9 @@ function CurrentLocation(): React.JSX.Element {
   const location = useLocation();
   return (
     <output aria-label="Current location">
-      {location.pathname}{location.search}{location.hash}
+      {location.pathname}
+      {location.search}
+      {location.hash}
     </output>
   );
 }
@@ -44,42 +46,33 @@ afterEach((): void => {
 
 test("uses a persisted, route-aware workspace settings sidebar", async () => {
   const view = render(
-    <MemoryRouter
-      initialEntries={["/app/acme/workspaces/production/settings/general"]}
-    >
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/general"]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName"
-          element={<Layout />}
-        >
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<Layout />}>
           <Route index element={<div>Overview content</div>} />
           <Route path="runs" element={<div>Runs content</div>} />
-          <Route
-            path="settings/general"
-            element={<div>General settings content</div>}
-          />
+          <Route path="settings/general" element={<div>General settings content</div>} />
         </Route>
       </Routes>
     </MemoryRouter>,
   );
 
-  expect(view.getByRole("link", { name: "Skip to main content" }).getAttribute("href"))
-    .toBe("#main-content");
-  expect(view.getByRole("link", { name: "General" }).getAttribute("aria-current"))
-    .toBe("page");
-  expect(view.getByRole("link", { name: "production" }).getAttribute("href"))
-    .toBe("/app/acme/workspaces/production");
-  expect(view.getByRole("link", { name: "Run tasks" }).getAttribute("href"))
-    .toBe("/app/acme/workspaces/production/settings/tasks");
-  expect(view.getByRole("link", { name: "Destruction and deletion" }).getAttribute("href"))
-    .toBe("/app/acme/workspaces/production/settings/delete");
+  expect(view.getByRole("link", { name: "Skip to main content" }).getAttribute("href")).toBe("#main-content");
+  expect(view.getByRole("link", { name: "General" }).getAttribute("aria-current")).toBe("page");
+  expect(view.getByRole("link", { name: "production" }).getAttribute("href")).toBe("/app/acme/workspaces/production");
+  expect(view.getByRole("link", { name: "Run tasks" }).getAttribute("href")).toBe(
+    "/app/acme/workspaces/production/settings/tasks",
+  );
+  expect(view.getByRole("link", { name: "Destruction and deletion" }).getAttribute("href")).toBe(
+    "/app/acme/workspaces/production/settings/delete",
+  );
   fireEvent.click(view.getByRole("button", { name: "Help and support" }));
   await waitFor((): void => {
     expect(view.getByRole("menuitem", { name: "Documentation" })).toBeTruthy();
-    expect(view.getByRole("menuitem", { name: "Support" }).getAttribute("href"))
-      .toBe("https://github.com/essinghigh-org/terrence/issues");
-    expect(view.getByRole("menuitem", { name: "Support" }).getAttribute("target"))
-      .toBe("_blank");
+    expect(view.getByRole("menuitem", { name: "Support" }).getAttribute("href")).toBe(
+      "https://github.com/essinghigh-org/terrence/issues",
+    );
+    expect(view.getByRole("menuitem", { name: "Support" }).getAttribute("target")).toBe("_blank");
     expect(view.queryByRole("menuitem", { name: "Tutorials" })).toBeNull();
     expect(view.queryByRole("menuitem", { name: "Status" })).toBeNull();
   });
@@ -88,30 +81,21 @@ test("uses a persisted, route-aware workspace settings sidebar", async () => {
   expect(collapse.getAttribute("aria-expanded")).toBe("true");
   fireEvent.click(collapse);
   expect(localStorage.getItem("terrence-sidebar-collapsed")).toBe("true");
-  expect(view.getByRole("button", { name: "Expand sidebar" }).getAttribute("aria-expanded"))
-    .toBe("false");
+  expect(view.getByRole("button", { name: "Expand sidebar" }).getAttribute("aria-expanded")).toBe("false");
 
   fireEvent.click(view.getByRole("link", { name: "production" }));
   await waitFor((): void => {
     expect(view.getByText("Overview content")).toBeTruthy();
   });
-  expect(view.getByRole("link", { name: "Overview" }).getAttribute("aria-current"))
-    .toBe("page");
+  expect(view.getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBe("page");
 });
 
 test("ignores an aborted workspace response after the route changes", async () => {
   const production = deferred<Response>();
   const staging = deferred<Response>();
   let productionSignal: AbortSignal | null = null;
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const url = isString(input)
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       productionSignal = init?.signal ?? null;
       return production.promise;
@@ -120,26 +104,29 @@ test("ignores an aborted workspace response after the route changes", async () =
     if (url === "/api/v2/workspaces/ws-staging/runs?page[size]=1") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
       <Link to="/app/acme/workspaces/staging">Open staging</Link>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName"
-          element={<WorkspaceDetail section="overview" />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail section="overview" />} />
       </Routes>
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(productionSignal).not.toBeNull(); });
+  await waitFor((): void => {
+    expect(productionSignal).not.toBeNull();
+  });
   fireEvent.click(view.getByRole("link", { name: "Open staging" }));
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input]): boolean =>
-      (isString(input) ? input : input instanceof URL ? input.toString() : input.url)
-        === "/api/v2/organizations/acme/workspaces/staging")).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]): boolean =>
+          (isString(input) ? input : input instanceof URL ? input.toString() : input.url) ===
+          "/api/v2/organizations/acme/workspaces/staging",
+      ),
+    ).toBe(true);
   });
   await act(async (): Promise<void> => {
     staging.resolve(json({ data: { id: "ws-staging", attributes: { name: "staging" } } }));
@@ -151,7 +138,9 @@ test("ignores an aborted workspace response after the route changes", async () =
 
   await act(async (): Promise<void> => {
     production.resolve(json({ data: { id: "ws-production", attributes: { name: "production" } } }));
-    await new Promise<void>((resolve): void => { window.setTimeout(resolve, 0); });
+    await new Promise<void>((resolve): void => {
+      window.setTimeout(resolve, 0);
+    });
   });
   expect(view.getByRole("heading", { name: "staging" })).toBeTruthy();
   expect(view.queryByRole("heading", { name: "production" })).toBeNull();
@@ -162,15 +151,8 @@ test("renders before the latest run finishes and ignores an aborted run response
   const productionRun = deferred<Response>();
   const stagingRun = deferred<Response>();
   let productionRunSignal: AbortSignal | null = null;
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const url = isString(input)
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({ data: { id: "ws-production", attributes: { name: "production" } } });
     }
@@ -184,16 +166,13 @@ test("renders before the latest run finishes and ignores an aborted run response
     if (url === "/api/v2/workspaces/ws-staging/runs?page[size]=1") return stagingRun.promise;
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
       <Link to="/app/acme/workspaces/staging">Open staging</Link>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName"
-          element={<WorkspaceDetail section="overview" />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail section="overview" />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -203,8 +182,9 @@ test("renders before the latest run finishes and ignores an aborted run response
     expect(productionRunSignal).not.toBeNull();
   });
   expect(view.getByText("Loading run history…")).toBeTruthy();
-  expect(view.getByRole("link", { name: "View runs" }).getAttribute("href"))
-    .toBe("/app/acme/workspaces/production/runs");
+  expect(view.getByRole("link", { name: "View runs" }).getAttribute("href")).toBe(
+    "/app/acme/workspaces/production/runs",
+  );
 
   fireEvent.click(view.getByRole("link", { name: "Open staging" }));
   await waitFor((): void => {
@@ -213,12 +193,16 @@ test("renders before the latest run finishes and ignores an aborted run response
   expect(productionRunSignal!.aborted).toBe(true);
 
   await act(async (): Promise<void> => {
-    stagingRun.resolve(json({
-      data: [{
-        id: "run-staging",
-        attributes: { status: "planned_and_finished", "created-at": createdAt },
-      }],
-    }));
+    stagingRun.resolve(
+      json({
+        data: [
+          {
+            id: "run-staging",
+            attributes: { status: "planned_and_finished", "created-at": createdAt },
+          },
+        ],
+      }),
+    );
   });
   await waitFor((): void => {
     expect(view.getByRole("link", { name: "run-staging" })).toBeTruthy();
@@ -228,10 +212,14 @@ test("renders before the latest run finishes and ignores an aborted run response
   expect(latestRunTime.getAttribute("title")).toBe(formatDateTime(createdAt));
 
   await act(async (): Promise<void> => {
-    productionRun.resolve(json({
-      data: [{ id: "run-production", attributes: { status: "applied" } }],
-    }));
-    await new Promise<void>((resolve): void => { window.setTimeout(resolve, 0); });
+    productionRun.resolve(
+      json({
+        data: [{ id: "run-production", attributes: { status: "applied" } }],
+      }),
+    );
+    await new Promise<void>((resolve): void => {
+      window.setTimeout(resolve, 0);
+    });
   });
   expect(view.getByRole("link", { name: "run-staging" })).toBeTruthy();
   expect(view.queryByRole("link", { name: "run-production" })).toBeNull();
@@ -239,13 +227,9 @@ test("renders before the latest run finishes and ignores an aborted run response
 
 test("blocks update-only settings when can-update is false", async () => {
   const requestedUrls: string[] = [];
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = isString(input)
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     requestedUrls.push(url);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({
@@ -259,7 +243,7 @@ test("blocks update-only settings when can-update is false", async () => {
       });
     }
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const settings = [
     { section: "notifications", control: "Add notification" },
@@ -285,19 +269,13 @@ test("blocks update-only settings when can-update is false", async () => {
     view.unmount();
   }
 
-  expect(requestedUrls).toEqual(
-    settings.map((): string => "/api/v2/organizations/acme/workspaces/production"),
-  );
+  expect(requestedUrls).toEqual(settings.map((): string => "/api/v2/organizations/acme/workspaces/production"));
 });
 
 test("fails closed when update permission is missing from readable settings", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = isString(input)
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({
         data: {
@@ -307,7 +285,7 @@ test("fails closed when update permission is missing from readable settings", as
       });
     }
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   for (const setting of [
     { section: "health", control: "Save health settings" },
@@ -324,8 +302,7 @@ test("fails closed when update permission is missing from readable settings", as
       </MemoryRouter>,
     );
     await waitFor((): void => {
-      expect((view.getByRole("button", { name: setting.control }) as HTMLButtonElement).disabled)
-        .toBe(true);
+      expect((view.getByRole("button", { name: setting.control }) as HTMLButtonElement).disabled).toBe(true);
     });
     view.unmount();
   }
@@ -333,11 +310,7 @@ test("fails closed when update permission is missing from readable settings", as
 
 test("keeps workspace variables readable without mutation permission", async () => {
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = isString(input)
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({
         data: {
@@ -354,22 +327,24 @@ test("keeps workspace variables readable without mutation permission", async () 
     }
     if (url === "/api/v2/workspaces/ws-1/vars?page[size]=100") {
       return json({
-        data: [{
-          id: "var-1",
-          attributes: {
-            key: "region",
-            value: "eu-west-2",
-            category: "env",
-            sensitive: false,
-            hcl: false,
-            description: "Deployment region",
+        data: [
+          {
+            id: "var-1",
+            attributes: {
+              key: "region",
+              value: "eu-west-2",
+              category: "env",
+              sensitive: false,
+              hcl: false,
+              description: "Deployment region",
+            },
           },
-        }],
+        ],
       });
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/variables"]}>
@@ -382,7 +357,9 @@ test("keeps workspace variables readable without mutation permission", async () 
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("region")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("region")).toBeTruthy();
+  });
   expect(view.getByText("You can view variables, but you do not have permission to change them.")).toBeTruthy();
   expect(view.queryByRole("button", { name: "Add variable" })).toBeNull();
   expect(view.queryByRole("button", { name: "Edit" })).toBeNull();
@@ -391,15 +368,8 @@ test("keeps workspace variables readable without mutation permission", async () 
 });
 
 test("keeps the current settings route in sync after renaming a workspace", async () => {
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const url = isString(input)
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     const workspace = {
       id: "ws-1",
       attributes: {
@@ -408,13 +378,13 @@ test("keeps the current settings route in sync after renaming a workspace", asyn
       },
     };
     if (
-      url === "/api/v2/organizations/acme/workspaces/production"
-      || url === "/api/v2/organizations/acme/workspaces/renamed"
+      url === "/api/v2/organizations/acme/workspaces/production" ||
+      url === "/api/v2/organizations/acme/workspaces/renamed"
     ) {
       return json({ data: workspace });
     }
     if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const body = JSON.parse(init.body as string) as {
         data: { attributes: JsonObject };
       };
@@ -427,7 +397,7 @@ test("keeps the current settings route in sync after renaming a workspace", asyn
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/general?from=test#advanced"]}>
@@ -441,7 +411,9 @@ test("keeps the current settings route in sync after renaming a workspace", asyn
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("General settings")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("General settings")).toBeTruthy();
+  });
   fireEvent.input(view.getByLabelText("Name"), { target: { value: "renamed" } });
   await act(async (): Promise<void> => {
     const form = view.getByRole("button", { name: "Save settings" }).closest("form");
@@ -449,24 +421,24 @@ test("keeps the current settings route in sync after renaming a workspace", asyn
   });
 
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input]): boolean =>
-      (isString(input) ? input : input instanceof URL ? input.toString() : input.url)
-        === "/api/v2/organizations/acme/workspaces/renamed")).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]): boolean =>
+          (isString(input) ? input : input instanceof URL ? input.toString() : input.url) ===
+          "/api/v2/organizations/acme/workspaces/renamed",
+      ),
+    ).toBe(true);
   });
-  expect(view.getByRole("link", { name: "renamed" }).getAttribute("href"))
-    .toBe("/app/acme/workspaces/renamed");
-  expect(view.getByLabelText("Current location").textContent)
-    .toBe("/app/acme/workspaces/renamed/settings/general?from=test#advanced");
+  expect(view.getByRole("link", { name: "renamed" }).getAttribute("href")).toBe("/app/acme/workspaces/renamed");
+  expect(view.getByLabelText("Current location").textContent).toBe(
+    "/app/acme/workspaces/renamed/settings/general?from=test#advanced",
+  );
 });
 
 test("renders controlled workspace sections with current resources and project context", async () => {
   const project = deferred<Response>();
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = isString(input)
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({
         data: {
@@ -494,12 +466,14 @@ test("renders controlled workspace sections with current resources and project c
     }
     if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") {
       return json({
-        data: [{
-          id: "run-1",
-          attributes: {
-            status: "planned_and_finished",
+        data: [
+          {
+            id: "run-1",
+            attributes: {
+              status: "planned_and_finished",
+            },
           },
-        }],
+        ],
       });
     }
     if (url === "/api/v2/projects/prj-1") {
@@ -507,14 +481,16 @@ test("renders controlled workspace sections with current resources and project c
     }
     if (url.startsWith("/api/v2/workspaces/ws-1/resources?")) {
       return json({
-        data: [{
-          id: "resource-1",
-          attributes: {
-            address: "aws_instance.web",
-            provider: "aws",
-            "provider-type": "aws_instance",
+        data: [
+          {
+            id: "resource-1",
+            attributes: {
+              address: "aws_instance.web",
+              provider: "aws",
+              "provider-type": "aws_instance",
+            },
           },
-        }],
+        ],
       });
     }
     if (url === "/api/v2/workspaces/ws-1/current-state-version-outputs") {
@@ -522,15 +498,12 @@ test("renders controlled workspace sections with current resources and project c
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName"
-          element={<WorkspaceDetail section="overview" />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail section="overview" />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -539,12 +512,13 @@ test("renders controlled workspace sections with current resources and project c
     expect(view.getByText("Workspace details")).toBeTruthy();
   });
   expect(view.queryByRole("navigation", { name: "Workspace sections" })).toBeNull();
-  expect(view.getByRole("link", { name: "Workspaces" }).getAttribute("href"))
-    .toBe("/app/acme/workspaces");
-  expect(view.getByRole("link", { name: "New run" }).getAttribute("href"))
-    .toBe("/app/acme/workspaces/production/runs?new-run=true");
-  expect(view.getByRole("link", { name: "Open GitHub repository acme/infrastructure" }).getAttribute("href"))
-    .toBe("https://github.com/acme/infrastructure");
+  expect(view.getByRole("link", { name: "Workspaces" }).getAttribute("href")).toBe("/app/acme/workspaces");
+  expect(view.getByRole("link", { name: "New run" }).getAttribute("href")).toBe(
+    "/app/acme/workspaces/production/runs?new-run=true",
+  );
+  expect(view.getByRole("link", { name: "Open GitHub repository acme/infrastructure" }).getAttribute("href")).toBe(
+    "https://github.com/acme/infrastructure",
+  );
   expect(view.getByText("modules/network")).toBeTruthy();
   expect(view.getByText("OpenTofu")).toBeTruthy();
   expect(view.getByText("Loading project…")).toBeTruthy();
@@ -553,18 +527,15 @@ test("renders controlled workspace sections with current resources and project c
   });
   await waitFor((): void => {
     expect(view.getByText("aws_instance.web")).toBeTruthy();
-    expect(view.getByRole("link", { name: "Platform foundation" }).getAttribute("href"))
-      .toBe("/app/acme/projects/prj-1");
+    expect(view.getByRole("link", { name: "Platform foundation" }).getAttribute("href")).toBe(
+      "/app/acme/projects/prj-1",
+    );
   });
 });
 
 test("passes workspace run-task permission into the routed settings section", async () => {
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = isString(input)
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({
         data: {
@@ -581,7 +552,7 @@ test("passes workspace run-task permission into the routed settings section", as
     if (url === "/api/v2/workspaces/ws-1/run-tasks") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/tasks"]}>
@@ -598,22 +569,19 @@ test("passes workspace run-task permission into the routed settings section", as
     expect(view.getByRole("button", { name: "Attach run task" })).toBeTruthy();
   });
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input]): boolean =>
-      (isString(input) ? input : input instanceof URL ? input.toString() : input.url)
-        === "/api/v2/organizations/acme/run-tasks")).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]): boolean =>
+          (isString(input) ? input : input instanceof URL ? input.toString() : input.url) ===
+          "/api/v2/organizations/acme/run-tasks",
+      ),
+    ).toBe(true);
   });
 });
 
 test("returns to the organization workspace list after deleting a workspace", async () => {
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const url = isString(input)
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({
         data: {
@@ -631,7 +599,7 @@ test("returns to the organization workspace list after deleting a workspace", as
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/delete"]}>
@@ -657,19 +625,18 @@ test("returns to the organization workspace list after deleting a workspace", as
   await waitFor((): void => {
     expect(view.getByText("Organization workspaces")).toBeTruthy();
   });
-  expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-    (isString(input) ? input : input instanceof URL ? input.toString() : input.url)
-      === "/api/v2/workspaces/ws-1"
-    && init?.method === "DELETE")).toBe(true);
+  expect(
+    fetchMock.mock.calls.some(
+      ([input, init]): boolean =>
+        (isString(input) ? input : input instanceof URL ? input.toString() : input.url) === "/api/v2/workspaces/ws-1" &&
+        init?.method === "DELETE",
+    ),
+  ).toBe(true);
 });
 
 test("project settings sidebar marks exactly one section active", async () => {
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = isString(input)
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice" } } });
     }
@@ -678,7 +645,7 @@ test("project settings sidebar marks exactly one section active", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/projects/prj-1/settings"]}>
@@ -701,11 +668,7 @@ test("project settings sidebar marks exactly one section active", async () => {
 
 test("project settings variable sets section marks only variable sets active", async () => {
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = isString(input)
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice" } } });
     }
@@ -714,7 +677,7 @@ test("project settings variable sets section marks only variable sets active", a
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/projects/prj-1/settings/variable-sets"]}>
@@ -756,7 +719,7 @@ test("confirms workspace locking and unlocking before sending mutations", async 
     if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") return json({ data: [] });
     if (url === "/api/v2/workspaces/ws-1/actions/lock" && init?.method === "POST") {
       locked = true;
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       reason = JSON.parse(init.body as string).reason as string;
       return json({ data: { id: "ws-1", attributes: { name: "production", locked: true } } });
     }
@@ -767,44 +730,59 @@ test("confirms workspace locking and unlocking before sending mutations", async 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName"
-          element={<WorkspaceDetail />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
       </Routes>
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Workspace details")).toBeTruthy();
+  });
   fireEvent.click(view.getByRole("button", { name: "Lock" }));
-  expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-    getUrl(input) === "/api/v2/workspaces/ws-1/actions/lock" && init?.method === "POST")).toBe(false);
+  expect(
+    fetchMock.mock.calls.some(
+      ([input, init]): boolean => getUrl(input) === "/api/v2/workspaces/ws-1/actions/lock" && init?.method === "POST",
+    ),
+  ).toBe(false);
   fireEvent.input(view.getByLabelText("Reason (Optional)"), { target: { value: "Maintenance" } });
   fireEvent.click(view.getByRole("button", { name: "Lock workspace" }));
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-      getUrl(input) === "/api/v2/workspaces/ws-1/actions/lock" && init?.method === "POST")).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]): boolean => getUrl(input) === "/api/v2/workspaces/ws-1/actions/lock" && init?.method === "POST",
+      ),
+    ).toBe(true);
   });
-  const lockCall = fetchMock.mock.calls.find(([input, init]): boolean =>
-    getUrl(input) === "/api/v2/workspaces/ws-1/actions/lock" && init?.method === "POST");
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+  const lockCall = fetchMock.mock.calls.find(
+    ([input, init]): boolean => getUrl(input) === "/api/v2/workspaces/ws-1/actions/lock" && init?.method === "POST",
+  );
+  // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(lockCall?.[1]?.body as string).reason).toBe("Maintenance");
 
-  await waitFor((): void => { expect(view.getByText("Locked")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Locked")).toBeTruthy();
+  });
   fireEvent.click(view.getByRole("button", { name: "Unlock" }));
   expect(view.getByRole("heading", { name: "Unlock workspace production" })).toBeTruthy();
   expect(view.getByText(/cannot be undone/)).toBeTruthy();
-  expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-    getUrl(input) === "/api/v2/workspaces/ws-1/actions/unlock" && init?.method === "POST")).toBe(false);
+  expect(
+    fetchMock.mock.calls.some(
+      ([input, init]): boolean => getUrl(input) === "/api/v2/workspaces/ws-1/actions/unlock" && init?.method === "POST",
+    ),
+  ).toBe(false);
   fireEvent.click(view.getByRole("button", { name: "Yes, unlock workspace" }));
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-      getUrl(input) === "/api/v2/workspaces/ws-1/actions/unlock" && init?.method === "POST")).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]): boolean =>
+          getUrl(input) === "/api/v2/workspaces/ws-1/actions/unlock" && init?.method === "POST",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -814,9 +792,7 @@ test("drops a sidebar recent when the workspace detail fetch 404s", async () => 
   recordWorkspaceVisit("acme", "production");
   expect(getRecentWorkspaces().map((visit) => visit.workspaceName)).toEqual(["production", "ghost"]);
 
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-  ): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = getUrl(input);
     if (url === "/api/v2/organizations/acme/workspaces/ghost") {
       return new Response(JSON.stringify({ errors: [{ status: "404", title: "Not Found" }] }), {
@@ -826,15 +802,12 @@ test("drops a sidebar recent when the workspace detail fetch 404s", async () => 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/ghost"]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName"
-          element={<WorkspaceDetail section="overview" />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail section="overview" />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -847,9 +820,7 @@ test("drops a sidebar recent when the workspace detail fetch 404s", async () => 
 
 test("keeps a sidebar recent when the workspace detail fetch fails without a 404", async () => {
   recordWorkspaceVisit("acme", "ghost");
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-  ): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = getUrl(input);
     if (url === "/api/v2/organizations/acme/workspaces/ghost") {
       return new Response(JSON.stringify({ errors: [{ status: "403", title: "Forbidden" }] }), {
@@ -859,15 +830,12 @@ test("keeps a sidebar recent when the workspace detail fetch fails without a 404
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/ghost"]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName"
-          element={<WorkspaceDetail section="overview" />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail section="overview" />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -876,7 +844,9 @@ test("keeps a sidebar recent when the workspace detail fetch fails without a 404
     expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
   });
   await act(async (): Promise<void> => {
-    await new Promise<void>((resolve): void => { window.setTimeout(resolve, 0); });
+    await new Promise<void>((resolve): void => {
+      window.setTimeout(resolve, 0);
+    });
   });
   expect(getRecentWorkspaces().map((visit) => visit.workspaceName)).toEqual(["ghost"]);
   view.unmount();

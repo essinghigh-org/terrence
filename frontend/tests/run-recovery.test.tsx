@@ -60,11 +60,29 @@ function recoveryReviewFixture(): JsonValue {
       type: "recovery-reviews",
       attributes: {
         capture: { status: "candidate", "marker-present": true, "manifest-present": true },
-        "candidate-state": { serial: 7, lineage: "lineage", digest: "a".repeat(64), size: 128, terraformVersion: "1.9.3", representation: "terraform-v4" },
-        "last-committed-state": { serial: 6, lineage: "lineage", digest: "b".repeat(64), size: 120, terraformVersion: "1.9.3", representation: "terraform-v4" },
+        "candidate-state": {
+          serial: 7,
+          lineage: "lineage",
+          digest: "a".repeat(64),
+          size: 128,
+          terraformVersion: "1.9.3",
+          representation: "terraform-v4",
+        },
+        "last-committed-state": {
+          serial: 6,
+          lineage: "lineage",
+          digest: "b".repeat(64),
+          size: 120,
+          terraformVersion: "1.9.3",
+          representation: "terraform-v4",
+        },
         checks: [
           { id: "capture-complete", status: "pass", detail: "The durable capture marker is present." },
-          { id: "candidate-parse", status: "pass", detail: "The captured state is a supported Terraform state document." },
+          {
+            id: "candidate-parse",
+            status: "pass",
+            detail: "The captured state is a supported Terraform state document.",
+          },
           { id: "digest", status: "pass", detail: "The captured bytes match their recorded SHA-256 digest." },
           { id: "lineage", status: "pass", detail: "The candidate lineage matches the latest committed state." },
           { id: "serial", status: "pass", detail: "The candidate serial is compatible with the current history." },
@@ -101,17 +119,14 @@ function installFetch(
     if (url.endsWith("/cost-estimate")) return json({ data: null });
     return json({ data: [] });
   };
-  globalThis.fetch = (mock(handler)) as unknown as typeof fetch;
+  globalThis.fetch = mock(handler) as unknown as typeof fetch;
 }
 
 function renderDetail(runId: string): ReturnType<typeof render> {
   return render(
     <MemoryRouter initialEntries={[`/app/acme/workspaces/production/runs/${runId}`]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
-          element={<RunDetail />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<RunDetail />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -141,22 +156,31 @@ test("shows the recovery section only when a verified copy exists", async () => 
   const seenBare: string[] = [];
   installFetch("run-plain", runFixture("run-plain"), () => null, seenBare);
   const plain = renderDetail("run-plain");
-  await waitFor((): void => { expect(plain.queryByText("Recovery state available")).toBeNull(); });
+  await waitFor((): void => {
+    expect(plain.queryByText("Recovery state available")).toBeNull();
+  });
   expect(plain.queryByRole("button", { name: "Download recovery state" })).toBeNull();
 });
 
 test("recover posts the recover-state action and refreshes", async () => {
   const seen: string[] = [];
-  installFetch("run-rec", runFixture("run-rec", { "has-recovery-state": true }), (url) => {
-    if (url === "/api/v2/runs/run-rec/actions/recover-state") {
-      return json({ data: { id: "sv-1", type: "state-versions" } }, 201);
-    }
-    return null;
-  }, seen);
+  installFetch(
+    "run-rec",
+    runFixture("run-rec", { "has-recovery-state": true }),
+    (url) => {
+      if (url === "/api/v2/runs/run-rec/actions/recover-state") {
+        return json({ data: { id: "sv-1", type: "state-versions" } }, 201);
+      }
+      return null;
+    },
+    seen,
+  );
   const view = renderDetail("run-rec");
   await view.findByText("Recovery state available");
   const recover = view.getByRole("button", { name: "Recover into new state version" });
-  await waitFor((): void => { expect((recover as HTMLButtonElement).disabled).toBe(false); });
+  await waitFor((): void => {
+    expect((recover as HTMLButtonElement).disabled).toBe(false);
+  });
   fireEvent.click(recover);
   await waitFor((): void => {
     expect(seen).toContain("POST /api/v2/runs/run-rec/actions/recover-state");
@@ -165,11 +189,16 @@ test("recover posts the recover-state action and refreshes", async () => {
 
 test("client-encrypted recovery remains downloadable but cannot be promoted", async () => {
   const seen: string[] = [];
-  installFetch("run-encrypted", runFixture("run-encrypted", {
-    "has-recovery-state": true,
-    "recovery-state-format-supported": false,
-    "recovery-state-unavailable-reason": "Client-encrypted state requires its original keys and cannot be promoted.",
-  }), () => null, seen);
+  installFetch(
+    "run-encrypted",
+    runFixture("run-encrypted", {
+      "has-recovery-state": true,
+      "recovery-state-format-supported": false,
+      "recovery-state-unavailable-reason": "Client-encrypted state requires its original keys and cannot be promoted.",
+    }),
+    () => null,
+    seen,
+  );
   const view = renderDetail("run-encrypted");
   await view.findByText("Recovery state available");
   const recover = view.getByRole("button", { name: "Recover into new state version" }) as HTMLButtonElement;
@@ -182,44 +211,63 @@ test("client-encrypted recovery remains downloadable but cannot be promoted", as
 
 test("recover explains the workspace lock requirement on conflict", async () => {
   const seen: string[] = [];
-  installFetch("run-rec", runFixture("run-rec", { "has-recovery-state": true }), (url) => {
-    if (url === "/api/v2/runs/run-rec/actions/recover-state") {
-      return json({ errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked" }] }, 409);
-    }
-    return null;
-  }, seen);
+  installFetch(
+    "run-rec",
+    runFixture("run-rec", { "has-recovery-state": true }),
+    (url) => {
+      if (url === "/api/v2/runs/run-rec/actions/recover-state") {
+        return json({ errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked" }] }, 409);
+      }
+      return null;
+    },
+    seen,
+  );
   const view = renderDetail("run-rec");
   await view.findByText("Recovery state available");
   const recover = view.getByRole("button", { name: "Recover into new state version" });
-  await waitFor((): void => { expect((recover as HTMLButtonElement).disabled).toBe(false); });
+  await waitFor((): void => {
+    expect((recover as HTMLButtonElement).disabled).toBe(false);
+  });
   fireEvent.click(recover);
-  await view.findByText("The workspace must be locked by you before recovering state. Lock it on the workspace page, then try again.");
+  await view.findByText(
+    "The workspace must be locked by you before recovering state. Lock it on the workspace page, then try again.",
+  );
 });
 
 test("download fetches the recovery copy", async () => {
   const seen: string[] = [];
   let downloaded: Blob | undefined;
   const rawState = '{ "version": 4, "serial": 7, "large": 123456789012345678901234567890 }\n';
-  URL.createObjectURL = mock((blob: Blob): string => { downloaded = blob; return "blob:recovery"; }) as unknown as typeof URL.createObjectURL;
+  URL.createObjectURL = mock((blob: Blob): string => {
+    downloaded = blob;
+    return "blob:recovery";
+  }) as unknown as typeof URL.createObjectURL;
   URL.revokeObjectURL = mock((): boolean => true) as unknown as typeof URL.revokeObjectURL;
   // jsdom cannot navigate: swallow the programmatic download click.
   HTMLAnchorElement.prototype.click = mock((): boolean => true) as unknown as typeof HTMLAnchorElement.prototype.click;
-  installFetch("run-rec", runFixture("run-rec", { "has-recovery-state": true }), (url) => {
-    if (url === "/api/v2/runs/run-rec/recovery-state") {
-      return new Response(rawState, {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    return null;
-  }, seen);
+  installFetch(
+    "run-rec",
+    runFixture("run-rec", { "has-recovery-state": true }),
+    (url) => {
+      if (url === "/api/v2/runs/run-rec/recovery-state") {
+        return new Response(rawState, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return null;
+    },
+    seen,
+  );
   const view = renderDetail("run-rec");
   await view.findByText("Recovery state available");
   fireEvent.click(view.getByRole("button", { name: "Download recovery state" }));
   await waitFor((): void => {
     expect(seen).toContain("GET /api/v2/runs/run-rec/recovery-state");
   });
-  await waitFor((): void => { expect(downloaded).toBeDefined(); });
+  await waitFor((): void => {
+    expect(downloaded).toBeDefined();
+  });
   expect(await downloaded!.text()).toBe(rawState);
   expect(view.queryByRole("alert")).toBeNull();
 });

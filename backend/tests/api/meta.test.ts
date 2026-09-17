@@ -38,9 +38,11 @@ afterAll(async () => {
 });
 
 test("GET /api/v2/meta reports the run sandbox status for an authenticated caller", async () => {
-  const response = await app.handle(new Request("http://localhost/api/v2/meta", {
-    headers: { Authorization: `Bearer ${token}` },
-  }));
+  const response = await app.handle(
+    new Request("http://localhost/api/v2/meta", {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+  );
   expect(response.status).toBe(200);
   const payload = (await response.json()) as SandboxMeta;
   expect(payload.data?.id).toBe("meta");
@@ -58,11 +60,13 @@ test("GET /api/v2/meta reports the run sandbox status for an authenticated calle
 });
 
 test("GET /api/v2/capabilities returns a typed JSON:API resource", async () => {
-  const response = await app.handle(new Request("http://localhost/api/v2/capabilities", {
-    headers: { Authorization: `Bearer ${token}` },
-  }));
+  const response = await app.handle(
+    new Request("http://localhost/api/v2/capabilities", {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+  );
   expect(response.status).toBe(200);
-  const payload = await response.json() as {
+  const payload = (await response.json()) as {
     data?: {
       id?: string;
       type?: string;

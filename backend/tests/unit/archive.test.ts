@@ -4,7 +4,14 @@ import { link, mkdir, mkdtemp, open, readFile, readdir, rm, symlink, writeFile }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount, assertSafeTarArchive, extractSafeTarArchive, tarMemberPathUnsafe } from "../../src/lib/archive";
+import {
+  assertArchiveExpandedSize,
+  assertArchiveLogicalSize,
+  assertArchiveMemberCount,
+  assertSafeTarArchive,
+  extractSafeTarArchive,
+  tarMemberPathUnsafe,
+} from "../../src/lib/archive";
 
 import { ingestModuleArchive } from "../../src/lib/registry-module-archive";
 import { validTarGzip } from "../api/test-archives";
@@ -77,7 +84,6 @@ describe("archive expansion limit", () => {
   });
 });
 
-
 describe("shared archive extraction", () => {
   async function fixture(): Promise<{ source: string; packed: string; destination: string }> {
     const root = await mkdtemp(join(directory, "extraction-"));
@@ -123,14 +129,16 @@ describe("shared archive extraction", () => {
     const { packed, destination } = await fixture();
     await rejects(assertSafeTarArchive(packed, { maxCompressedBytes: 1 }), /compressed byte/);
     await rejects(assertSafeTarArchive(packed, { maxFileBytes: 1 }), /file larger/);
-    await rejects(extractSafeTarArchive(packed, destination, { signal: AbortSignal.abort(new Error("cancelled")) }), /cancelled/);
+    await rejects(
+      extractSafeTarArchive(packed, destination, { signal: AbortSignal.abort(new Error("cancelled")) }),
+      /cancelled/,
+    );
     expect(await Bun.file(join(destination, "main.tf")).exists()).toBe(false);
     await writeFile(packed, "invalid gzip");
     await rejects(extractSafeTarArchive(packed, destination));
     expect(await Bun.file(join(destination, "main.tf")).exists()).toBe(false);
   });
 });
-
 
 it("rejects hard links and traversal members through the shared validator", async () => {
   const source = await mkdtemp(join(directory, "links-"));
@@ -158,24 +166,29 @@ it("bounds real member counts and rejects enormous declared metadata", async () 
     value.write(checksum.toString(8).padStart(6, "0") + "\0 ", 148, "ascii");
     return value;
   };
-  await writeFile(packed, gzipSync(Buffer.concat([
-    ...Array.from({ length: 10_001 }, (_, index) => header(`file-${index}`, 0)), Buffer.alloc(1024),
-  ])));
+  await writeFile(
+    packed,
+    gzipSync(
+      Buffer.concat([...Array.from({ length: 10_001 }, (_, index) => header(`file-${index}`, 0)), Buffer.alloc(1024)]),
+    ),
+  );
   await rejects(assertSafeTarArchive(packed), /too many members/);
   await writeFile(packed, gzipSync(Buffer.concat([header("huge", 8_000_000_000), Buffer.alloc(1024)])));
   await rejects(assertSafeTarArchive(packed));
 });
-
 
 it("removes registry staging files when inspection fails", async () => {
   const packed = join(directory, "cleanup.tar.gz");
   const output = join(directory, "cleanup-output.tar.gz");
   await writeFile(packed, validTarGzip("terraform {}"));
   let staging = "";
-  await rejects(ingestModuleArchive(packed, output, "", (root) => {
-    staging = root;
-    return Promise.reject(new Error("inspection failed"));
-  }), /inspection failed/);
+  await rejects(
+    ingestModuleArchive(packed, output, "", (root) => {
+      staging = root;
+      return Promise.reject(new Error("inspection failed"));
+    }),
+    /inspection failed/,
+  );
   expect(staging).not.toBe("");
   await rejects(readdir(staging), /ENOENT/);
   expect(await Bun.file(output).exists()).toBe(false);

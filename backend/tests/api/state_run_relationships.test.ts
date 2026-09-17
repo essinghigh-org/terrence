@@ -20,7 +20,7 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
         body: JSON.stringify({
           data: { attributes: { username, password: "Password123!" } },
         }),
-      })
+      }),
     );
 
     const loginRes = await app.handle(
@@ -30,7 +30,7 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
         body: JSON.stringify({
           data: { attributes: { username, password: "Password123!" } },
         }),
-      })
+      }),
     );
     const loginData = await loginRes.json();
     userToken = loginData.data.attributes.token;
@@ -46,7 +46,7 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
         body: JSON.stringify({
           data: { type: "organizations", attributes: { name: orgName } },
         }),
-      })
+      }),
     );
 
     // Create workspace
@@ -60,7 +60,7 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
         body: JSON.stringify({
           data: { type: "workspaces", attributes: { name: "state-test-ws" } },
         }),
-      })
+      }),
     );
     const wsBody = await wsRes.json();
     workspaceId = wsBody.data.id;
@@ -89,14 +89,16 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
             },
           },
         }),
-      })
+      }),
     );
     const runBody = await runRes.json();
     runId = runBody.data.id;
-    const lockRes = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${userToken}` },
-    }));
+    const lockRes = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
     if (lockRes.status !== 200) throw new Error(`workspace lock failed: ${lockRes.status}`);
   });
 
@@ -124,7 +126,7 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
             },
           },
         }),
-      })
+      }),
     );
 
     expect(res.status).toBe(201);
@@ -138,7 +140,7 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
       new Request(`http://localhost/api/v2/runs/${runId}/input-state-version`, {
         method: "GET",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(200);
@@ -167,14 +169,14 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
             },
           },
         }),
-      })
+      }),
     );
 
     const res = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
         method: "GET",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -182,19 +184,17 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
     expect(body.data.length).toBeGreaterThanOrEqual(1);
 
     // The state version should have run relationship data
-    const svWithRun = (body.data as Record<string, unknown>[]).find(
-      (sv: Record<string, unknown>): boolean => {
-        const rels = sv["relationships"] as Record<string, unknown> | null | undefined;
-        const runRel = rels?.["run"] as Record<string, unknown> | null | undefined;
-        return runRel?.["data"] != null;
-      }
-    );
+    const svWithRun = (body.data as Record<string, unknown>[]).find((sv: Record<string, unknown>): boolean => {
+      const rels = sv["relationships"] as Record<string, unknown> | null | undefined;
+      const runRel = rels?.["run"] as Record<string, unknown> | null | undefined;
+      return runRel?.["data"] != null;
+    });
     expect(svWithRun).toBeDefined();
-    const rels = (svWithRun!)["relationships"] as Record<string, unknown>;
+    const rels = svWithRun!["relationships"] as Record<string, unknown>;
     const runRel = rels["run"] as Record<string, unknown>;
     const runData = runRel["data"] as Record<string, unknown>;
     expect(runData["id"]).toBe(runId);
-    const attrs = (svWithRun!)["attributes"] as Record<string, unknown>;
+    const attrs = svWithRun!["attributes"] as Record<string, unknown>;
 
     // Run attributes should be included
     expect(attrs["run-status"]).toBeDefined();
@@ -209,7 +209,7 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
         method: "POST",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
 
     const rawState = JSON.stringify({ version: 4, serial: 3, lineage: "abc-123", resources: [] });
@@ -232,7 +232,7 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
             type: "state-versions",
           },
         }),
-      })
+      }),
     );
 
     // the reference format semantics: state uploads are allowed on locked workspaces (the
@@ -244,7 +244,7 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/unlock`, {
         method: "POST",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
   });
 });

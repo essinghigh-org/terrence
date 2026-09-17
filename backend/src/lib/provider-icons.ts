@@ -145,7 +145,9 @@ export function providerIconResponsePath(providerName: string | null | undefined
 }
 
 /** Build a safe, stable placeholder for an icon that is still discovering. */
-export function providerIconFallbackSvg(providerName: string | null | undefined): Readonly<{ body: string; etag: string }> | null {
+export function providerIconFallbackSvg(
+  providerName: string | null | undefined,
+): Readonly<{ body: string; etag: string }> | null {
   const source = parseProviderSource(providerName);
   if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
   const digest = createHash("sha256").update(providerCacheKey(source)).digest("hex");
@@ -178,10 +180,12 @@ function matchesOptionalProviderAttribute(value: unknown, expected: string): boo
 }
 
 function hasExactProviderParts(namespace: unknown, name: unknown, source: ProviderSource): boolean {
-  return typeof namespace === "string"
-    && typeof name === "string"
-    && namespace.toLowerCase() === source.namespace
-    && name.toLowerCase() === source.name;
+  return (
+    typeof namespace === "string" &&
+    typeof name === "string" &&
+    namespace.toLowerCase() === source.namespace &&
+    name.toLowerCase() === source.name
+  );
 }
 
 function hasExactProviderFullName(value: unknown, source: ProviderSource): boolean {
@@ -226,9 +230,11 @@ function isLegacyGithubSlugAvatar(logoUrl: string): boolean {
   } catch {
     return false;
   }
-  return parsed.protocol === "https:"
-    && /^avatars\d*\.githubusercontent\.com$/i.test(parsed.hostname)
-    && /^\/[A-Za-z0-9-]+\/?$/.test(parsed.pathname);
+  return (
+    parsed.protocol === "https:" &&
+    /^avatars\d*\.githubusercontent\.com$/i.test(parsed.hostname) &&
+    /^\/[A-Za-z0-9-]+\/?$/.test(parsed.pathname)
+  );
 }
 
 async function fetchGithubOwnerAvatarUrl(login: string, signal: Readonly<AbortSignal>): Promise<string | null> {
@@ -242,7 +248,10 @@ async function fetchGithubOwnerAvatarUrl(login: string, signal: Readonly<AbortSi
   } catch {
     return null;
   }
-  if (!res.ok) { await res.body?.cancel().catch((): void => undefined); return null; }
+  if (!res.ok) {
+    await res.body?.cancel().catch((): void => undefined);
+    return null;
+  }
   let body: unknown;
   try {
     body = JSON.parse(await readTextWithLimit(res, 1024 * 1024));
@@ -253,7 +262,11 @@ async function fetchGithubOwnerAvatarUrl(login: string, signal: Readonly<AbortSi
   return typeof avatarUrl === "string" ? absoluteLogoUrl(avatarUrl) : null;
 }
 
-async function resolveRegistryLogoUrl(attributes: Readonly<Record<string, unknown>>, source: ProviderSource, signal: Readonly<AbortSignal>): Promise<string | null> {
+async function resolveRegistryLogoUrl(
+  attributes: Readonly<Record<string, unknown>>,
+  source: ProviderSource,
+  signal: Readonly<AbortSignal>,
+): Promise<string | null> {
   const logoUrl = attributes["logo-url"];
   if (typeof logoUrl !== "string") return null;
   // The v2 record can retain the Registry's legacy GitHub slug URL. GitHub
@@ -277,7 +290,10 @@ async function fetchLogoUrl(source: ProviderSource, signal: Readonly<AbortSignal
   } catch {
     return null;
   }
-  if (!res.ok) { await res.body?.cancel().catch((): void => undefined); return null; }
+  if (!res.ok) {
+    await res.body?.cancel().catch((): void => undefined);
+    return null;
+  }
   let body: unknown;
   try {
     body = JSON.parse(await readTextWithLimit(res, 1024 * 1024));
@@ -298,11 +314,17 @@ export async function resolveProviderIconUrl(providerName: string | null | undef
   if (hit !== undefined && now < hit.expiresAt) {
     return hit.url;
   }
-  if (hit !== undefined && now >= hit.expiresAt) { cache.delete(key); negativeCache.delete(key); }
+  if (hit !== undefined && now >= hit.expiresAt) {
+    cache.delete(key);
+    negativeCache.delete(key);
+  }
   const existing = inflightByKey.get(key);
   if (existing !== undefined) return existing;
   const discovery = discover(source.hostname, async (signal): Promise<string | null> => fetchLogoUrl(source, signal));
-  if (discovery === null) { setCache(key, null, 5_000); return null; }
+  if (discovery === null) {
+    setCache(key, null, 5_000);
+    return null;
+  }
   const run = (async (): Promise<string | null> => {
     const logoUrl = await discovery;
     const avatarUrl = logoUrl === null ? null : AvatarService.resolveUrl("provider-icon", logoUrl);
@@ -324,15 +346,25 @@ export async function resolveProviderIconUrl(providerName: string | null | undef
   }
 }
 
-export async function batchResolveProviderIconUrls(providerNames: readonly string[]): Promise<Readonly<Record<string, string | null>>> {
-  const unique = [...new Set(providerNames.map((p): string | null => normalizeProvider(p)).filter((p): p is string => p !== null))];
-  const entries = await Promise.all(unique.map(async (k): Promise<[string, string | null]> => [k, await resolveProviderIconUrl(k)]));
+export async function batchResolveProviderIconUrls(
+  providerNames: readonly string[],
+): Promise<Readonly<Record<string, string | null>>> {
+  const unique = [
+    ...new Set(providerNames.map((p): string | null => normalizeProvider(p)).filter((p): p is string => p !== null)),
+  ];
+  const entries = await Promise.all(
+    unique.map(async (k): Promise<[string, string | null]> => [k, await resolveProviderIconUrl(k)]),
+  );
   return Object.fromEntries(entries);
 }
 
 /** Return stable provider paths and schedule misses without awaiting them. */
-export function batchResolveProviderIconPaths(providerNames: readonly string[]): Readonly<Record<string, string | null>> {
-  const unique = [...new Set(providerNames.map((p): string | null => normalizeProvider(p)).filter((p): p is string => p !== null))];
+export function batchResolveProviderIconPaths(
+  providerNames: readonly string[],
+): Readonly<Record<string, string | null>> {
+  const unique = [
+    ...new Set(providerNames.map((p): string | null => normalizeProvider(p)).filter((p): p is string => p !== null)),
+  ];
   return Object.fromEntries(unique.map((key): [string, string | null] => [key, providerIconResponsePath(key)]));
 }
 

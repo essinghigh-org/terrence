@@ -8,9 +8,10 @@ import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 
-const json = (data: JsonValue): Response => new Response(JSON.stringify(data), {
-  headers: { "Content-Type": "application/vnd.api+json" },
-});
+const json = (data: JsonValue): Response =>
+  new Response(JSON.stringify(data), {
+    headers: { "Content-Type": "application/vnd.api+json" },
+  });
 
 const urlOf = (input: string | URL | Request): string =>
   isString(input) ? input : input instanceof URL ? input.toString() : input.url;
@@ -28,16 +29,23 @@ test("explains pool capacity, scope, and worker health from server records", asy
     }
     if (url === "/api/v2/organizations/acme/agent-pools") {
       return json({
-        data: [{
-          id: "pool-1",
-          type: "agent-pools",
-          attributes: { name: "private-workers", organization: "acme", "organization-scoped": false, "agent-count": 3 },
-          relationships: {
-            "allowed-workspaces": { data: [{ id: "ws-1" }] },
-            "allowed-projects": { data: [{ id: "project-1" }] },
-            "excluded-workspaces": { data: [{ id: "ws-excluded" }] },
+        data: [
+          {
+            id: "pool-1",
+            type: "agent-pools",
+            attributes: {
+              name: "private-workers",
+              organization: "acme",
+              "organization-scoped": false,
+              "agent-count": 3,
+            },
+            relationships: {
+              "allowed-workspaces": { data: [{ id: "ws-1" }] },
+              "allowed-projects": { data: [{ id: "project-1" }] },
+              "excluded-workspaces": { data: [{ id: "ws-excluded" }] },
+            },
           },
-        }],
+        ],
       });
     }
     if (url === "/api/v2/agent-pools/pool-1/agents") {

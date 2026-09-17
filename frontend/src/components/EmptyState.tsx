@@ -15,7 +15,10 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "
  * registry pages) and views using this wrapper render the same thing — before,
  * the app had two unrelated empty-state treatments.
  */
-function EmptyStateHeading({ level, title }: Readonly<{
+function EmptyStateHeading({
+  level,
+  title,
+}: Readonly<{
   level: "h2" | "h3" | "h4";
   title: string;
 }>): React.JSX.Element {
@@ -24,7 +27,11 @@ function EmptyStateHeading({ level, title }: Readonly<{
   return <h2>{title}</h2>;
 }
 
-function EmptyStateAction({ actionLabel, onAction, actionHref }: Readonly<{
+function EmptyStateAction({
+  actionLabel,
+  onAction,
+  actionHref,
+}: Readonly<{
   actionLabel: string;
   onAction: (() => void) | undefined;
   actionHref: string | undefined;
@@ -37,16 +44,15 @@ function EmptyStateAction({ actionLabel, onAction, actionHref }: Readonly<{
   );
 }
 
-function DocsLink({ docsHref }: Readonly<{
+function DocsLink({
+  docsHref,
+}: Readonly<{
   docsHref: string | undefined;
 }>): React.JSX.Element | null {
   if (docsHref === undefined) return null;
   if (docsHref.startsWith("/app/")) {
     return (
-      <Link
-        to={docsHref}
-        className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-      >
+      <Link to={docsHref} className="text-sm font-medium text-primary underline-offset-4 hover:underline">
         Read the docs
       </Link>
     );
@@ -63,33 +69,51 @@ function DocsLink({ docsHref }: Readonly<{
   );
 }
 
-export function EmptyState(props: Readonly<{
-  illustration?: TerrencePose | undefined;
-  title: string;
-  description?: string;
-  actionLabel?: string;
-  onAction?: () => void;
-  /**
-   * Where the primary action goes, when the next step is a different page
-   * rather than a callback on this one.
-   *
-   * Several empty states used to *describe* the way out in prose — "Create a
-   * workspace in this project to get started", "Add one in organization VCS
-   * settings" — without offering a control, leaving the user to go and find
-   * the page named. Pass this with `actionLabel` and the description can stop
-   * doing the navigation's job.
-   */
-  actionHref?: string;
-  docsHref?: string;
-  compact?: boolean;
-  headingLevel?: "h2" | "h3" | "h4";
-}>): React.JSX.Element {
-  const { illustration, title, description, actionLabel, onAction, actionHref, docsHref, compact, headingLevel = "h2" } = props;
+export function EmptyState(
+  props: Readonly<{
+    illustration?: TerrencePose | undefined;
+    title: string;
+    description?: string;
+    actionLabel?: string;
+    onAction?: () => void;
+    /**
+     * Where the primary action goes, when the next step is a different page
+     * rather than a callback on this one.
+     *
+     * Several empty states used to *describe* the way out in prose — "Create a
+     * workspace in this project to get started", "Add one in organization VCS
+     * settings" — without offering a control, leaving the user to go and find
+     * the page named. Pass this with `actionLabel` and the description can stop
+     * doing the navigation's job.
+     */
+    actionHref?: string;
+    docsHref?: string;
+    compact?: boolean;
+    headingLevel?: "h2" | "h3" | "h4";
+  }>,
+): React.JSX.Element {
+  const {
+    illustration,
+    title,
+    description,
+    actionLabel,
+    onAction,
+    actionHref,
+    docsHref,
+    compact,
+    headingLevel = "h2",
+  } = props;
   const hasAction = actionLabel !== undefined && (onAction !== undefined || actionHref !== undefined);
   const footerVisible = hasAction || docsHref !== undefined;
   return (
     <Empty className={compact === true ? "p-6" : "px-6 py-12"}>
-      {illustration !== undefined && <Terrence pose={illustration} detail={compact === true ? "small" : "full"} className={compact === true ? "w-32" : "w-44"} />}
+      {illustration !== undefined && (
+        <Terrence
+          pose={illustration}
+          detail={compact === true ? "small" : "full"}
+          className={compact === true ? "w-32" : "w-44"}
+        />
+      )}
       <EmptyHeader>
         {/* EmptyTitle is a div; render a real heading inside it so empty
             states still land in the document outline. */}
@@ -100,9 +124,7 @@ export function EmptyState(props: Readonly<{
       </EmptyHeader>
       {footerVisible && (
         <EmptyContent className="max-w-none flex-row flex-wrap items-center justify-center gap-3">
-          {hasAction && (
-            <EmptyStateAction actionLabel={actionLabel} onAction={onAction} actionHref={actionHref} />
-          )}
+          {hasAction && <EmptyStateAction actionLabel={actionLabel} onAction={onAction} actionHref={actionHref} />}
           <DocsLink docsHref={docsHref} />
         </EmptyContent>
       )}

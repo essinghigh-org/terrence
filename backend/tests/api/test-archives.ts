@@ -17,7 +17,11 @@ export function validTarGzip(content = ""): Uint8Array<ArrayBuffer> {
   const checksum = header.reduce((total, byte) => total + byte, 0);
   header.write(checksum.toString(8).padStart(6, "0") + "\0 ", 148, "ascii");
   const paddedLength = Math.ceil(bytes.length / 512) * 512;
-  const body = Buffer.concat([header, Buffer.concat([bytes, Buffer.alloc(paddedLength - bytes.length)]), Buffer.alloc(1024)]);
+  const body = Buffer.concat([
+    header,
+    Buffer.concat([bytes, Buffer.alloc(paddedLength - bytes.length)]),
+    Buffer.alloc(1024),
+  ]);
   const compressed = gzipSync(body);
   const output = new Uint8Array(new ArrayBuffer(compressed.byteLength));
   output.set(compressed);

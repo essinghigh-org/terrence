@@ -1,21 +1,8 @@
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { fetchApi } from "@/lib/api";
 
 type PolicySet = {
@@ -30,9 +17,7 @@ type PolicySet = {
   };
 };
 
-export function WorkspacePolicySets({
-  workspaceId,
-}: Readonly<{ workspaceId: string }>): React.JSX.Element {
+export function WorkspacePolicySets({ workspaceId }: Readonly<{ workspaceId: string }>): React.JSX.Element {
   const [policySets, setPolicySets] = useState<PolicySet[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -89,30 +74,33 @@ export function WorkspacePolicySets({
                   </TableCell>
                 </TableRow>
               )}
-              {!loading && policySets.map((policySet: PolicySet): React.JSX.Element => (
-                <TableRow key={policySet.id}>
-                  <TableCell>
-                    <div className="flex flex-col gap-1">
-                      <span className="font-medium">{policySet.attributes.name}</span>
-                      {policySet.attributes.description != null && policySet.attributes.description !== "" && (
-                        <span className="max-w-md text-sm text-muted-foreground">
-                          {policySet.attributes.description}
-                        </span>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={policySet.attributes.scope === "global" ? "default" : "secondary"}>
-                      {policySet.attributes.scope}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline">{policySet.attributes.kind.toUpperCase()}</Badge>
-                  </TableCell>
-                  <TableCell>{policySet.attributes["policy-count"] ?? 0}</TableCell>
-                  <TableCell>{policySet.attributes.overridable === true ? "Allowed" : "Blocked"}</TableCell>
-                </TableRow>
-              ))}
+              {!loading &&
+                policySets.map(
+                  (policySet: PolicySet): React.JSX.Element => (
+                    <TableRow key={policySet.id}>
+                      <TableCell>
+                        <div className="flex flex-col gap-1">
+                          <span className="font-medium">{policySet.attributes.name}</span>
+                          {policySet.attributes.description != null && policySet.attributes.description !== "" && (
+                            <span className="max-w-md text-sm text-muted-foreground">
+                              {policySet.attributes.description}
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={policySet.attributes.scope === "global" ? "default" : "secondary"}>
+                          {policySet.attributes.scope}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{policySet.attributes.kind.toUpperCase()}</Badge>
+                      </TableCell>
+                      <TableCell>{policySet.attributes["policy-count"] ?? 0}</TableCell>
+                      <TableCell>{policySet.attributes.overridable === true ? "Allowed" : "Blocked"}</TableCell>
+                    </TableRow>
+                  ),
+                )}
               {!loading && error === "" && policySets.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={5} className="h-20 text-center text-muted-foreground">

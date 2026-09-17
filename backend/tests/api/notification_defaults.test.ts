@@ -4,8 +4,12 @@ import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
-  apiTokens, notificationConfigurations, organizationMemberships,
-  organizations, users, workspaces,
+  apiTokens,
+  notificationConfigurations,
+  organizationMemberships,
+  organizations,
+  users,
+  workspaces,
 } from "../../src/db/schema";
 
 /**
@@ -25,14 +29,16 @@ describe("Notification configuration defaults (NOT-003 / NOT-004)", () => {
   const workspaceId = `ws-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "x" });

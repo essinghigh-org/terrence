@@ -24,7 +24,10 @@ type Job = DeepReadonly<typeof durableJobs.$inferSelect>;
 const MEMBERSHIP_BATCH_SIZE = 100;
 const EXPLORER_INVENTORY_BATCH_SIZE = 200;
 
-async function insertMemberships(tx: DeepReadonly<Parameters<Parameters<typeof db.transaction>[0]>[0]>, memberships: readonly DeepReadonly<typeof explorerCatalogMemberships.$inferInsert>[]): Promise<void> {
+async function insertMemberships(
+  tx: DeepReadonly<Parameters<Parameters<typeof db.transaction>[0]>[0]>,
+  memberships: readonly DeepReadonly<typeof explorerCatalogMemberships.$inferInsert>[],
+): Promise<void> {
   for (let index = 0; index < memberships.length; index += MEMBERSHIP_BATCH_SIZE) {
     const batch = memberships.slice(index, index + MEMBERSHIP_BATCH_SIZE);
     if (batch.length > 0) await tx.insert(explorerCatalogMemberships).values(batch);
@@ -33,7 +36,8 @@ async function insertMemberships(tx: DeepReadonly<Parameters<Parameters<typeof d
 
 function parseStateResources(jsonState: string | null): unknown[] | undefined {
   try {
-    const parsed = jsonState === null ? undefined : JSON.parse(decodeStatePayload(jsonState)) as Record<string, unknown>;
+    const parsed =
+      jsonState === null ? undefined : (JSON.parse(decodeStatePayload(jsonState)) as Record<string, unknown>);
     const rawResources = parsed?.["resources"];
     return Array.isArray(rawResources) ? rawResources : undefined;
   } catch {
@@ -41,7 +45,13 @@ function parseStateResources(jsonState: string | null): unknown[] | undefined {
   }
 }
 
-function stateItems(jsonState: string | null): Readonly<{ resources: number; providers: string[]; modules: string[]; providerItems: ExplorerCatalogItem[]; moduleItems: ExplorerCatalogItem[] }> {
+function stateItems(jsonState: string | null): Readonly<{
+  resources: number;
+  providers: string[];
+  modules: string[];
+  providerItems: ExplorerCatalogItem[];
+  moduleItems: ExplorerCatalogItem[];
+}> {
   const providers = new Map<string, ExplorerCatalogItem>();
   const modules = new Map<string, ExplorerCatalogItem>();
   let resources = 0;
@@ -51,24 +61,41 @@ function stateItems(jsonState: string | null): Readonly<{ resources: number; pro
     if (raw === null || typeof raw !== "object") continue;
     const resource = raw as Record<string, unknown>;
     resources += Array.isArray(resource["instances"]) ? resource["instances"].length : 0;
-    const provider = typeof resource["provider"] === "string" ? resource["provider"].replace(/^provider\[\"|\"\]$/g, "") : "";
+    const provider =
+      typeof resource["provider"] === "string" ? resource["provider"].replace(/^provider\[\"|\"\]$/g, "") : "";
     if (provider !== "") {
       const name = provider.split("/").at(-1) ?? provider;
       const version = typeof resource["provider_version"] === "string" ? resource["provider_version"] : "";
       providers.set(`${name}|${provider}|${version}`, { name, source: provider, version });
     }
     const module = typeof resource["module"] === "string" ? resource["module"] : "";
-    if (module !== "" && module !== "root") modules.set(`${module}|${module}`, { name: module, source: module, version: "" });
+    if (module !== "" && module !== "root")
+      modules.set(`${module}|${module}`, { name: module, source: module, version: "" });
   }
   const providerItems = [...providers.values()].sort((a, b) => a.source.localeCompare(b.source));
   const moduleItems = [...modules.values()].sort((a, b) => a.source.localeCompare(b.source));
-  return { resources, providers: providerItems.map((item) => item.source), modules: moduleItems.map((item) => item.source), providerItems, moduleItems };
+  return {
+    resources,
+    providers: providerItems.map((item) => item.source),
+    modules: moduleItems.map((item) => item.source),
+    providerItems,
+    moduleItems,
+  };
 }
 
 function jsonItems(value: string): ExplorerCatalogItem[] {
   try {
     const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter((item): item is ExplorerCatalogItem => item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["name"] === "string" && typeof (item as Record<string, unknown>)["source"] === "string" && typeof (item as Record<string, unknown>)["version"] === "string") : [];
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (item): item is ExplorerCatalogItem =>
+            item !== null &&
+            typeof item === "object" &&
+            typeof (item as Record<string, unknown>)["name"] === "string" &&
+            typeof (item as Record<string, unknown>)["source"] === "string" &&
+            typeof (item as Record<string, unknown>)["version"] === "string",
+        )
+      : [];
   } catch {
     return [];
   }
@@ -83,12 +110,19 @@ type ExplorerInventoryCatalogRow = Readonly<{
   moduleItems?: string | undefined;
 }>;
 
-function membershipRows(row: ExplorerInventoryCatalogRow): typeof explorerCatalogMemberships.$inferInsert[] {
+function membershipRows(row: ExplorerInventoryCatalogRow): (typeof explorerCatalogMemberships.$inferInsert)[] {
   const now = Date.now();
   const items: Readonly<{ kind: string; item: ExplorerCatalogItem }>[] = [
-    { kind: "tf_versions", item: { name: row.terraformVersion ?? "latest", source: "", version: row.terraformVersion ?? "latest" } },
-    ...jsonItems(row.providerItems ?? "[]").map((item): Readonly<{ kind: string; item: ExplorerCatalogItem }> => ({ kind: "providers", item })),
-    ...jsonItems(row.moduleItems ?? "[]").map((item): Readonly<{ kind: string; item: ExplorerCatalogItem }> => ({ kind: "modules", item })),
+    {
+      kind: "tf_versions",
+      item: { name: row.terraformVersion ?? "latest", source: "", version: row.terraformVersion ?? "latest" },
+    },
+    ...jsonItems(row.providerItems ?? "[]").map(
+      (item): Readonly<{ kind: string; item: ExplorerCatalogItem }> => ({ kind: "providers", item }),
+    ),
+    ...jsonItems(row.moduleItems ?? "[]").map(
+      (item): Readonly<{ kind: string; item: ExplorerCatalogItem }> => ({ kind: "modules", item }),
+    ),
   ];
   return items.map(({ kind, item }): typeof explorerCatalogMemberships.$inferInsert => ({
     id: newResourceId("ecm"),
@@ -103,12 +137,31 @@ function membershipRows(row: ExplorerInventoryCatalogRow): typeof explorerCatalo
   }));
 }
 
-type ExplorerWorkspace = Pick<typeof workspaces.$inferSelect, "id" | "orgId" | "name" | "projectId" | "terraformVersion" | "executionMode" | "vcsRepo" | "createdAt" | "updatedAt">;
+type ExplorerWorkspace = Pick<
+  typeof workspaces.$inferSelect,
+  "id" | "orgId" | "name" | "projectId" | "terraformVersion" | "executionMode" | "vcsRepo" | "createdAt" | "updatedAt"
+>;
 type ExplorerOrganization = Pick<typeof organizations.$inferSelect, "id">;
 type ExplorerProject = Pick<typeof projects.$inferSelect, "id" | "name">;
-type ExplorerState = Pick<typeof stateVersions.$inferSelect, "id" | "workspaceId" | "serial" | "terraformVersion" | "jsonState">;
+type ExplorerState = Pick<
+  typeof stateVersions.$inferSelect,
+  "id" | "workspaceId" | "serial" | "terraformVersion" | "jsonState"
+>;
 type ExplorerRun = Pick<typeof runs.$inferSelect, "id" | "workspaceId" | "status" | "appliedAt" | "createdAt">;
-type ExplorerAssessment = Pick<typeof assessmentResults.$inferSelect, "id" | "workspaceId" | "drifted" | "resourcesDrifted" | "resourcesUndrifted" | "allChecksSucceeded" | "checksPassed" | "checksFailed" | "checksErrored" | "checksUnknown" | "createdAt">;
+type ExplorerAssessment = Pick<
+  typeof assessmentResults.$inferSelect,
+  | "id"
+  | "workspaceId"
+  | "drifted"
+  | "resourcesDrifted"
+  | "resourcesUndrifted"
+  | "allChecksSucceeded"
+  | "checksPassed"
+  | "checksFailed"
+  | "checksErrored"
+  | "checksUnknown"
+  | "createdAt"
+>;
 type ExplorerNoCode = Pick<typeof noCodeWorkspaceConfigurations.$inferSelect, "workspaceId" | "noCodeModuleId">;
 
 type ExplorerWorkspaceData = DeepReadonly<{
@@ -127,12 +180,29 @@ async function loadExplorerWorkspaceData(workspaceId: string): Promise<ExplorerW
   if (workspace === undefined) return undefined;
   const [organization, project, state, run, assessment, tags, noCode] = await Promise.all([
     db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) }),
-    workspace.projectId === null ? Promise.resolve(undefined) : db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) }),
-    db.query.stateVersions.findFirst({ where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)), orderBy: [desc(stateVersions.serial), desc(stateVersions.id)] }),
-    db.query.runs.findFirst({ where: eq(runs.workspaceId, workspace.id), orderBy: [desc(runs.createdAt), desc(runs.id)] }),
-    db.query.assessmentResults.findFirst({ where: eq(assessmentResults.workspaceId, workspace.id), orderBy: [desc(assessmentResults.createdAt), desc(assessmentResults.id)] }),
+    workspace.projectId === null
+      ? Promise.resolve(undefined)
+      : db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) }),
+    db.query.stateVersions.findFirst({
+      where: and(
+        eq(stateVersions.workspaceId, workspace.id),
+        eq(stateVersions.status, "finalized"),
+        eq(stateVersions.intermediate, false),
+      ),
+      orderBy: [desc(stateVersions.serial), desc(stateVersions.id)],
+    }),
+    db.query.runs.findFirst({
+      where: eq(runs.workspaceId, workspace.id),
+      orderBy: [desc(runs.createdAt), desc(runs.id)],
+    }),
+    db.query.assessmentResults.findFirst({
+      where: eq(assessmentResults.workspaceId, workspace.id),
+      orderBy: [desc(assessmentResults.createdAt), desc(assessmentResults.id)],
+    }),
     db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspace.id), columns: { key: true } }),
-    db.query.noCodeWorkspaceConfigurations.findFirst({ where: eq(noCodeWorkspaceConfigurations.workspaceId, workspace.id) }),
+    db.query.noCodeWorkspaceConfigurations.findFirst({
+      where: eq(noCodeWorkspaceConfigurations.workspaceId, workspace.id),
+    }),
   ]);
   return { workspace, organization, project, state, run, assessment, tags, noCode };
 }
@@ -164,12 +234,23 @@ async function loadExplorerWorkspaceDataBatch(workspaceIds: readonly string[]): 
   });
   if (workspaceRows.length === 0) return [];
   const organizationIds = [...new Set(workspaceRows.map((workspace): string => workspace.orgId))];
-  const projectIds = workspaceRows.flatMap((workspace): string[] => workspace.projectId === null ? [] : [workspace.projectId]);
+  const projectIds = workspaceRows.flatMap((workspace): string[] =>
+    workspace.projectId === null ? [] : [workspace.projectId],
+  );
   const [organizationRows, projectRows, stateRows, runRows, assessmentRows, tagRows, noCodeRows] = await Promise.all([
     db.query.organizations.findMany({ where: inArray(organizations.id, organizationIds), columns: { id: true } }),
-    projectIds.length === 0 ? Promise.resolve([]) : db.query.projects.findMany({ where: inArray(projects.id, [...new Set(projectIds)]), columns: { id: true, name: true } }),
+    projectIds.length === 0
+      ? Promise.resolve([])
+      : db.query.projects.findMany({
+          where: inArray(projects.id, [...new Set(projectIds)]),
+          columns: { id: true, name: true },
+        }),
     db.query.stateVersions.findMany({
-      where: and(inArray(stateVersions.workspaceId, ids), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
+      where: and(
+        inArray(stateVersions.workspaceId, ids),
+        eq(stateVersions.status, "finalized"),
+        eq(stateVersions.intermediate, false),
+      ),
       columns: { id: true, workspaceId: true, serial: true, terraformVersion: true, jsonState: true },
       orderBy: [desc(stateVersions.serial), desc(stateVersions.id)],
     }),
@@ -206,7 +287,9 @@ async function loadExplorerWorkspaceDataBatch(workspaceIds: readonly string[]): 
       orderBy: [asc(noCodeWorkspaceConfigurations.workspaceId)],
     }),
   ]);
-  const organizationsById = new Map(organizationRows.map((organization): [string, ExplorerOrganization] => [organization.id, organization]));
+  const organizationsById = new Map(
+    organizationRows.map((organization): [string, ExplorerOrganization] => [organization.id, organization]),
+  );
   const projectsById = new Map(projectRows.map((project): [string, ExplorerProject] => [project.id, project]));
   const statesByWorkspace = latestRowsByWorkspace(stateRows);
   const runsByWorkspace = latestRowsByWorkspace(runRows);
@@ -218,21 +301,29 @@ async function loadExplorerWorkspaceDataBatch(workspaceIds: readonly string[]): 
     tags.push({ key: tag.key });
     tagsByWorkspace.set(tag.workspaceId, tags);
   }
-  return workspaceRows.map((workspace): ExplorerWorkspaceData => ({
-    workspace,
-    organization: organizationsById.get(workspace.orgId),
-    project: workspace.projectId === null ? undefined : projectsById.get(workspace.projectId),
-    state: statesByWorkspace.get(workspace.id),
-    run: runsByWorkspace.get(workspace.id),
-    assessment: assessmentsByWorkspace.get(workspace.id),
-    tags: tagsByWorkspace.get(workspace.id) ?? [],
-    noCode: noCodeByWorkspace.get(workspace.id),
-  }));
+  return workspaceRows.map(
+    (workspace): ExplorerWorkspaceData => ({
+      workspace,
+      organization: organizationsById.get(workspace.orgId),
+      project: workspace.projectId === null ? undefined : projectsById.get(workspace.projectId),
+      state: statesByWorkspace.get(workspace.id),
+      run: runsByWorkspace.get(workspace.id),
+      assessment: assessmentsByWorkspace.get(workspace.id),
+      tags: tagsByWorkspace.get(workspace.id) ?? [],
+      noCode: noCodeByWorkspace.get(workspace.id),
+    }),
+  );
 }
 
-function explorerWorkspaceFields(data: DeepReadonly<ExplorerWorkspaceData>, now: number): Readonly<Record<string, unknown>> {
+function explorerWorkspaceFields(
+  data: DeepReadonly<ExplorerWorkspaceData>,
+  now: number,
+): Readonly<Record<string, unknown>> {
   const { workspace } = data;
-  const repo = typeof workspace.vcsRepo === "object" && workspace.vcsRepo !== null ? workspace.vcsRepo as Record<string, unknown> : {};
+  const repo =
+    typeof workspace.vcsRepo === "object" && workspace.vcsRepo !== null
+      ? (workspace.vcsRepo as Record<string, unknown>)
+      : {};
   return {
     workspaceId: workspace.id,
     orgId: workspace.orgId,
@@ -277,7 +368,10 @@ function explorerAssessmentFields(data: DeepReadonly<ExplorerWorkspaceData>): Re
   return { ...explorerAssessmentDriftFields(data), ...explorerAssessmentCheckFields(data) };
 }
 
-function explorerStateFields(data: DeepReadonly<ExplorerWorkspaceData>, items: DeepReadonly<ReturnType<typeof stateItems>>): Readonly<Record<string, unknown>> {
+function explorerStateFields(
+  data: DeepReadonly<ExplorerWorkspaceData>,
+  items: DeepReadonly<ReturnType<typeof stateItems>>,
+): Readonly<Record<string, unknown>> {
   return {
     currentResourceCount: items.resources,
     stateVersionTerraformVersion: data.state?.terraformVersion ?? data.workspace.terraformVersion,
@@ -285,9 +379,15 @@ function explorerStateFields(data: DeepReadonly<ExplorerWorkspaceData>, items: D
   };
 }
 
-function explorerCatalogFields(data: DeepReadonly<ExplorerWorkspaceData>, items: DeepReadonly<ReturnType<typeof stateItems>>): Readonly<Record<string, unknown>> {
+function explorerCatalogFields(
+  data: DeepReadonly<ExplorerWorkspaceData>,
+  items: DeepReadonly<ReturnType<typeof stateItems>>,
+): Readonly<Record<string, unknown>> {
   return {
-    tags: data.tags.map((tag) => tag.key).sort().join(", "),
+    tags: data.tags
+      .map((tag) => tag.key)
+      .sort()
+      .join(", "),
     providers: items.providers.join(", "),
     modules: items.modules.join(", "),
     providerItems: JSON.stringify(items.providerItems),
@@ -349,7 +449,9 @@ async function refreshExplorerWorkspaces(workspaceIds: readonly string[], rebuil
   });
   await persistExplorerInventoryBatch(rows);
   if (rebuild) {
-    for (const orgId of new Set(data.flatMap((workspace): string[] => workspace.organization === undefined ? [] : [workspace.organization.id]))) {
+    for (const orgId of new Set(
+      data.flatMap((workspace): string[] => (workspace.organization === undefined ? [] : [workspace.organization.id])),
+    )) {
       scheduleExplorerCatalog(orgId);
     }
   }
@@ -371,9 +473,12 @@ export async function rebuildExplorerCatalog(orgId: string, context?: DurableJob
   // is the source for paged catalog queries.
   let cursor = "";
   for (;;) {
-    if (context !== undefined && await context.canceled()) return;
+    if (context !== undefined && (await context.canceled())) return;
     const rows = await db.query.explorerWorkspaceInventory.findMany({
-      where: and(eq(explorerWorkspaceInventory.orgId, orgId), cursor === "" ? undefined : gt(explorerWorkspaceInventory.workspaceId, cursor)),
+      where: and(
+        eq(explorerWorkspaceInventory.orgId, orgId),
+        cursor === "" ? undefined : gt(explorerWorkspaceInventory.workspaceId, cursor),
+      ),
       orderBy: [asc(explorerWorkspaceInventory.workspaceId)],
       limit: 200,
     });
@@ -402,12 +507,18 @@ async function backfillExplorerInventory(orgId: string, context: DurableJobConte
     });
     if (page.length === 0) break;
     const ids = page.map((workspace) => workspace.id);
-    const inventory = await db.query.explorerWorkspaceInventory.findMany({ where: inArray(explorerWorkspaceInventory.workspaceId, ids), columns: { workspaceId: true } });
+    const inventory = await db.query.explorerWorkspaceInventory.findMany({
+      where: inArray(explorerWorkspaceInventory.workspaceId, ids),
+      columns: { workspaceId: true },
+    });
     const existing = new Set(inventory.map((row) => row.workspaceId));
     const missing = page.filter((workspace) => !existing.has(workspace.id));
     for (let index = 0; index < missing.length; index += EXPLORER_INVENTORY_BATCH_SIZE) {
       if (await context.canceled()) return;
-      await refreshExplorerWorkspaces(missing.slice(index, index + EXPLORER_INVENTORY_BATCH_SIZE).map((workspace): string => workspace.id), false);
+      await refreshExplorerWorkspaces(
+        missing.slice(index, index + EXPLORER_INVENTORY_BATCH_SIZE).map((workspace): string => workspace.id),
+        false,
+      );
     }
     cursor = page[page.length - 1]?.id ?? cursor;
     await context.heartbeat();
@@ -417,12 +528,18 @@ async function backfillExplorerInventory(orgId: string, context: DurableJobConte
 }
 
 export async function enqueueExplorerInventory(workspaceId: string): Promise<void> {
-  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId), columns: { orgId: true } });
+  const workspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, workspaceId),
+    columns: { orgId: true },
+  });
   if (workspace === undefined) return;
   await enqueueDurableJob(
     "explorer-inventory",
     { workspaceId, organizationId: workspace.orgId, jobClass: "background", estimatedBytes: 4 * 1024 * 1024 },
-    { dedupeKey: workspaceId, budget: { organizationId: workspace.orgId, jobClass: "background", estimatedBytes: 4 * 1024 * 1024 } },
+    {
+      dedupeKey: workspaceId,
+      budget: { organizationId: workspace.orgId, jobClass: "background", estimatedBytes: 4 * 1024 * 1024 },
+    },
   );
 }
 
@@ -430,7 +547,10 @@ export async function enqueueExplorerCatalog(orgId: string): Promise<void> {
   await enqueueDurableJob(
     "explorer-catalog",
     { orgId, organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 },
-    { dedupeKey: `catalog:${orgId}`, budget: { organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 } },
+    {
+      dedupeKey: `catalog:${orgId}`,
+      budget: { organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 },
+    },
   );
 }
 
@@ -463,32 +583,52 @@ export async function runExplorerCatalogJob(job: Job, context: DurableJobContext
 
 async function rebuildOrQueueExplorerCatalog(orgId: string, workspaceTotal: number): Promise<void> {
   if (workspaceTotal <= 1000) await rebuildExplorerCatalog(orgId);
-  else await enqueueDurableJob(
-    "explorer-catalog",
-    { orgId, organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 },
-    { dedupeKey: `catalog:${orgId}`, budget: { organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 } },
-  );
+  else
+    await enqueueDurableJob(
+      "explorer-catalog",
+      { orgId, organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 },
+      {
+        dedupeKey: `catalog:${orgId}`,
+        budget: { organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 },
+      },
+    );
 }
 
 export async function ensureExplorerInventory(orgId: string): Promise<void> {
   const [workspaceCount, inventoryCount, membershipCount] = await Promise.all([
     db.select({ total: count() }).from(workspaces).where(eq(workspaces.orgId, orgId)),
     db.select({ total: count() }).from(explorerWorkspaceInventory).where(eq(explorerWorkspaceInventory.orgId, orgId)),
-    db.select({ total: countDistinct(explorerCatalogMemberships.workspaceId) }).from(explorerCatalogMemberships).where(eq(explorerCatalogMemberships.orgId, orgId)),
+    db
+      .select({ total: countDistinct(explorerCatalogMemberships.workspaceId) })
+      .from(explorerCatalogMemberships)
+      .where(eq(explorerCatalogMemberships.orgId, orgId)),
   ]);
   const workspaceTotal = workspaceCount[0]?.total ?? 0;
-  if (workspaceTotal === (inventoryCount[0]?.total ?? 0) && (workspaceTotal === 0 || (membershipCount[0]?.total ?? 0) > 0)) return;
+  if (
+    workspaceTotal === (inventoryCount[0]?.total ?? 0) &&
+    (workspaceTotal === 0 || (membershipCount[0]?.total ?? 0) > 0)
+  )
+    return;
   if (workspaceTotal === (inventoryCount[0]?.total ?? 0)) {
     await rebuildOrQueueExplorerCatalog(orgId, workspaceTotal);
     return;
   }
   if (workspaceTotal <= 1000) {
-    const workspacesInOrg = await db.query.workspaces.findMany({ where: eq(workspaces.orgId, orgId), columns: { id: true } });
-    const inventory = await db.query.explorerWorkspaceInventory.findMany({ where: eq(explorerWorkspaceInventory.orgId, orgId), columns: { workspaceId: true } });
+    const workspacesInOrg = await db.query.workspaces.findMany({
+      where: eq(workspaces.orgId, orgId),
+      columns: { id: true },
+    });
+    const inventory = await db.query.explorerWorkspaceInventory.findMany({
+      where: eq(explorerWorkspaceInventory.orgId, orgId),
+      columns: { workspaceId: true },
+    });
     const existing = new Set(inventory.map((row) => row.workspaceId));
     const missing = workspacesInOrg.filter((workspace) => !existing.has(workspace.id));
     for (let index = 0; index < missing.length; index += EXPLORER_INVENTORY_BATCH_SIZE) {
-      await refreshExplorerWorkspaces(missing.slice(index, index + EXPLORER_INVENTORY_BATCH_SIZE).map((workspace): string => workspace.id), false);
+      await refreshExplorerWorkspaces(
+        missing.slice(index, index + EXPLORER_INVENTORY_BATCH_SIZE).map((workspace): string => workspace.id),
+        false,
+      );
     }
     await rebuildExplorerCatalog(orgId);
     return;
@@ -498,6 +638,9 @@ export async function ensureExplorerInventory(orgId: string): Promise<void> {
   await enqueueDurableJob(
     "explorer-catalog",
     { orgId, organizationId: orgId, jobClass: "background", estimatedBytes: 16 * 1024 * 1024, backfill: true },
-    { dedupeKey: `catalog-backfill:${orgId}`, budget: { organizationId: orgId, jobClass: "background", estimatedBytes: 16 * 1024 * 1024 } },
+    {
+      dedupeKey: `catalog-backfill:${orgId}`,
+      budget: { organizationId: orgId, jobClass: "background", estimatedBytes: 16 * 1024 * 1024 },
+    },
   );
 }

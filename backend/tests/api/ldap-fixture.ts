@@ -22,10 +22,7 @@ type CommandResult = Readonly<{
 async function runDocker(args: readonly string[]): Promise<CommandResult> {
   try {
     const child = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe" });
-    const [stdout, stderr] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ]);
+    const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
     return { exitCode: await child.exited, stdout, stderr };
   } catch (error: unknown) {
     return { exitCode: 127, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
@@ -77,7 +74,9 @@ async function waitForHealthy(containerName: string): Promise<void> {
       setTimeout(resolve, 1_000);
     });
   }
-  throw new Error(`OpenLDAP container did not become healthy within ${STARTUP_TIMEOUT_MS / 1_000}s:\n${await containerLogs(containerName)}`);
+  throw new Error(
+    `OpenLDAP container did not become healthy within ${STARTUP_TIMEOUT_MS / 1_000}s:\n${await containerLogs(containerName)}`,
+  );
 }
 
 async function mappedPort(containerName: string): Promise<number> {
@@ -118,12 +117,14 @@ async function seedDirectory(port: number, usernames: readonly string[]): Promis
   try {
     await client.bind(SERVICE_DN, SERVICE_PASSWORD);
     const records = [
-      ...usernames.map((username): Readonly<{ dn: string; uid: string; cn: string; mail: string }> => ({
-        dn: `uid=${username},${LDAP_BASE_DN}`,
-        uid: username,
-        cn: username.charAt(0).toUpperCase() + username.slice(1),
-        mail: `${username}@example.com`,
-      })),
+      ...usernames.map(
+        (username): Readonly<{ dn: string; uid: string; cn: string; mail: string }> => ({
+          dn: `uid=${username},${LDAP_BASE_DN}`,
+          uid: username,
+          cn: username.charAt(0).toUpperCase() + username.slice(1),
+          mail: `${username}@example.com`,
+        }),
+      ),
       {
         dn: `uid=duplicate,${LDAP_BASE_DN}`,
         uid: "duplicate",

@@ -73,7 +73,7 @@ describe("landlock run sandbox", () => {
           "#!/bin/sh",
           "OUT=BLOCKED",
           `if cat ${secretPath} > /dev/null 2>&1; then OUT="SECRET_READABLE"; fi`,
-          "if touch " + secretPath + ".written 2>/dev/null; then OUT=\"${OUT}_SECRET_WRITABLE\"; fi",
+          "if touch " + secretPath + '.written 2>/dev/null; then OUT="${OUT}_SECRET_WRITABLE"; fi',
           "echo $OUT",
         ].join("\n"),
         { mode: 0o755 },
@@ -92,7 +92,10 @@ describe("landlock run sandbox", () => {
   });
 
   it("does not grant blanket /etc access while permitting DNS and CA paths", async (): Promise<void> => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
     const caProbePath = [
       "/etc/ssl/certs",
       "/etc/ssl/cert.pem",
@@ -116,7 +119,7 @@ describe("landlock run sandbox", () => {
           "#!/bin/sh",
           "OUT=ETC_BLOCKED",
           "if cat /etc/passwd > /dev/null 2>&1; then OUT=ETC_WIDE_READABLE; fi",
-          "if cat /etc/resolv.conf > /dev/null 2>&1; then OUT=\"${OUT}_DNS_READABLE\"; else OUT=\"${OUT}_DNS_BLOCKED\"; fi",
+          'if cat /etc/resolv.conf > /dev/null 2>&1; then OUT="${OUT}_DNS_READABLE"; else OUT="${OUT}_DNS_BLOCKED"; fi',
           `if ${caProbeCommand} "${caProbePath}" > /dev/null 2>&1; then OUT=\"\${OUT}_CA_READABLE\"; else OUT=\"\${OUT}_CA_BLOCKED\"; fi`,
           "echo $OUT",
         ].join("\n"),
@@ -136,7 +139,10 @@ describe("landlock run sandbox", () => {
   });
 
   it("denies access to .encryption-key in the storage directory", async (): Promise<void> => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
     const sandbox = new RunSandbox();
     const testBase = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     const workDir = join(testBase, "work");
@@ -147,7 +153,11 @@ describe("landlock run sandbox", () => {
     await writeFile(keyFile, "terrence-test-encryption-key\n", { mode: 0o600 });
     try {
       const script = join(workDir, "probe.sh");
-      await writeFile(script, `#!/bin/sh\nif cat "${keyFile}" > /dev/null 2>&1; then echo "KEY_READABLE"; else echo "KEY_DENIED"; fi\n`, { mode: 0o755 });
+      await writeFile(
+        script,
+        `#!/bin/sh\nif cat "${keyFile}" > /dev/null 2>&1; then echo "KEY_READABLE"; else echo "KEY_DENIED"; fi\n`,
+        { mode: 0o755 },
+      );
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
@@ -158,7 +168,10 @@ describe("landlock run sandbox", () => {
   });
 
   it("denies access to another run's work directory", async (): Promise<void> => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
     const sandbox = new RunSandbox();
     const testBase = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     const workDir = join(testBase, "victim");
@@ -169,7 +182,11 @@ describe("landlock run sandbox", () => {
     await writeFile(targetFile, '{"version":1}\n');
     try {
       const script = join(attackerDir, "probe.sh");
-      await writeFile(script, `#!/bin/sh\nif cat "${targetFile}" > /dev/null 2>&1; then echo "OTHER_RUN_READABLE"; else echo "OTHER_RUN_DENIED"; fi\n`, { mode: 0o755 });
+      await writeFile(
+        script,
+        `#!/bin/sh\nif cat "${targetFile}" > /dev/null 2>&1; then echo "OTHER_RUN_READABLE"; else echo "OTHER_RUN_DENIED"; fi\n`,
+        { mode: 0o755 },
+      );
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: attackerDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
@@ -180,7 +197,10 @@ describe("landlock run sandbox", () => {
   });
 
   it("denies access via symlink from workdir into storage", async (): Promise<void> => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
     const sandbox = new RunSandbox();
     const testBase = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     const workDir = join(testBase, "work");
@@ -193,7 +213,11 @@ describe("landlock run sandbox", () => {
     await symlink(storageDir, linkPath);
     try {
       const script = join(workDir, "probe.sh");
-      await writeFile(script, `#!/bin/sh\nif cat "${linkPath}/symlink-secret.txt" > /dev/null 2>&1; then echo "SYMLINK_READABLE"; else echo "SYMLINK_DENIED"; fi\n`, { mode: 0o755 });
+      await writeFile(
+        script,
+        `#!/bin/sh\nif cat "${linkPath}/symlink-secret.txt" > /dev/null 2>&1; then echo "SYMLINK_READABLE"; else echo "SYMLINK_DENIED"; fi\n`,
+        { mode: 0o755 },
+      );
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
@@ -204,7 +228,10 @@ describe("landlock run sandbox", () => {
   });
 
   it("denies reading /proc/<pid>/environ of another process", async (): Promise<void> => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
     const sandbox = new RunSandbox();
     const testBase = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     const workDir = join(testBase, "work");
@@ -212,7 +239,11 @@ describe("landlock run sandbox", () => {
     try {
       const ppid = process.pid;
       const script = join(workDir, "probe.sh");
-      await writeFile(script, `#!/bin/sh\nif cat /proc/${ppid}/environ > /dev/null 2>&1; then echo "PROC_READABLE"; else echo "PROC_DENIED"; fi\n`, { mode: 0o755 });
+      await writeFile(
+        script,
+        `#!/bin/sh\nif cat /proc/${ppid}/environ > /dev/null 2>&1; then echo "PROC_READABLE"; else echo "PROC_DENIED"; fi\n`,
+        { mode: 0o755 },
+      );
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
@@ -223,7 +254,10 @@ describe("landlock run sandbox", () => {
   });
 
   it("checks network connectivity under Landlock (documented: Landlock does not restrict network)", async (): Promise<void> => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
     const sandbox = new RunSandbox();
     const testBase = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     const workDir = join(testBase, "work");
@@ -231,7 +265,11 @@ describe("landlock run sandbox", () => {
     try {
       const script = join(workDir, "probe.sh");
       const denyNet = (process.env["TERRENCE_RUN_NET_POLICY"] ?? "allow").trim().toLowerCase() === "deny";
-      await writeFile(script, `#!/bin/sh\npython3 -c "import socket; s=socket.socket(); s.settimeout(1); rc=s.connect_ex(('127.0.0.1', 9)); print('NET_DENIED' if rc==13 else ('NET_REACHABLE' if rc==111 else f'NET_RC_{rc}'))"\n`, { mode: 0o755 });
+      await writeFile(
+        script,
+        `#!/bin/sh\npython3 -c "import socket; s=socket.socket(); s.settimeout(1); rc=s.connect_ex(('127.0.0.1', 9)); print('NET_DENIED' if rc==13 else ('NET_REACHABLE' if rc==111 else f'NET_RC_{rc}'))"\n`,
+        { mode: 0o755 },
+      );
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
@@ -244,7 +282,10 @@ describe("landlock run sandbox", () => {
   });
 
   it("denies signals to processes outside the sandbox on Landlock ABI 6+", async (): Promise<void> => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
     const sandbox = new RunSandbox();
     const testBase = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     const workDir = join(testBase, "work");
@@ -252,7 +293,11 @@ describe("landlock run sandbox", () => {
     try {
       const targetPid = process.pid;
       const script = join(workDir, "probe.sh");
-      await writeFile(script, `#!/bin/sh\nif kill -0 ${targetPid} 2>/dev/null; then echo "SIGNAL_OK"; else echo "SIGNAL_DENIED"; fi\n`, { mode: 0o755 });
+      await writeFile(
+        script,
+        `#!/bin/sh\nif kill -0 ${targetPid} 2>/dev/null; then echo "SIGNAL_OK"; else echo "SIGNAL_DENIED"; fi\n`,
+        { mode: 0o755 },
+      );
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
@@ -265,15 +310,20 @@ describe("landlock run sandbox", () => {
   });
 
   it("verifies the sandbox helper binary is present at the resolved path", (): void => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
     const runnerPath = process.env["TERRENCE_LANDLOCK_RUNNER"] ?? join(__dirname, "../../bin/landlock-runner");
     expect(existsSync(runnerPath)).toBe(true);
     expect(RunSandbox.isUsable()).toBe(true);
   });
 
-
   it("denies access to /var/run (Docker/containerd sockets, etc.)", async (): Promise<void> => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
     const sandbox = new RunSandbox();
     const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     await mkdir(join(workDir, "tmp"), { recursive: true });
@@ -283,7 +333,11 @@ describe("landlock run sandbox", () => {
     await writeFile(fixture, "fixture\n");
     try {
       const script = join(workDir, "probe.sh");
-      await writeFile(script, `#!/bin/sh\nif cat "${fixture}" > /dev/null 2>&1; then echo "VARRUN_READABLE"; else echo "VARRUN_DENIED"; fi\n`, { mode: 0o755 });
+      await writeFile(
+        script,
+        `#!/bin/sh\nif cat "${fixture}" > /dev/null 2>&1; then echo "VARRUN_READABLE"; else echo "VARRUN_DENIED"; fi\n`,
+        { mode: 0o755 },
+      );
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
@@ -295,7 +349,10 @@ describe("landlock run sandbox", () => {
   });
 
   it("denies access to control-plane Unix sockets and agent sockets", async (): Promise<void> => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
     const sandbox = new RunSandbox();
     const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     await mkdir(join(workDir, "tmp"), { recursive: true });
@@ -315,15 +372,21 @@ describe("landlock run sandbox", () => {
     }
   });
 
-
   it("denies access to /proc/self/environ details beyond what is allowed", async (): Promise<void> => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
     const sandbox = new RunSandbox();
     const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     await mkdir(join(workDir, "tmp"), { recursive: true });
     try {
       const script = join(workDir, "probe.sh");
-      await writeFile(script, `#!/bin/sh\nif cat /proc/self/environ > /dev/null 2>&1; then echo "ENV_READABLE"; else echo "ENV_DENIED"; fi\nif cat /proc/meminfo > /dev/null 2>&1; then echo "MEMINFO_READABLE"; else echo "MEMINFO_DENIED"; fi\n`, { mode: 0o755 });
+      await writeFile(
+        script,
+        `#!/bin/sh\nif cat /proc/self/environ > /dev/null 2>&1; then echo "ENV_READABLE"; else echo "ENV_DENIED"; fi\nif cat /proc/meminfo > /dev/null 2>&1; then echo "MEMINFO_READABLE"; else echo "MEMINFO_DENIED"; fi\n`,
+        { mode: 0o755 },
+      );
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
@@ -336,14 +399,24 @@ describe("landlock run sandbox", () => {
   });
 
   it("denies access to /sys where filesystem restrictions apply", async (): Promise<void> => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
-    if (!existsSync("/sys/kernel/hostname")) { console.warn("Skipping: /sys/kernel/hostname missing on this host"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
+    if (!existsSync("/sys/kernel/hostname")) {
+      console.warn("Skipping: /sys/kernel/hostname missing on this host");
+      return;
+    }
     const sandbox = new RunSandbox();
     const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     await mkdir(join(workDir, "tmp"), { recursive: true });
     try {
       const script = join(workDir, "probe.sh");
-      await writeFile(script, `#!/bin/sh\nif cat /sys/kernel/hostname > /dev/null 2>&1; then echo "SYS_READABLE"; else echo "SYS_DENIED"; fi\n`, { mode: 0o755 });
+      await writeFile(
+        script,
+        `#!/bin/sh\nif cat /sys/kernel/hostname > /dev/null 2>&1; then echo "SYS_READABLE"; else echo "SYS_DENIED"; fi\n`,
+        { mode: 0o755 },
+      );
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
@@ -354,13 +427,20 @@ describe("landlock run sandbox", () => {
   });
 
   it("denies /dev/shm shared-memory access", async (): Promise<void> => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
     const sandbox = new RunSandbox();
     const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     await mkdir(join(workDir, "tmp"), { recursive: true });
     try {
       const script = join(workDir, "probe.sh");
-      await writeFile(script, `#!/bin/sh\nif touch /dev/shm/sandbox-test 2>/dev/null; then echo "SHM_WRITABLE"; rm -f /dev/shm/sandbox-test; else echo "SHM_DENIED"; fi\n`, { mode: 0o755 });
+      await writeFile(
+        script,
+        `#!/bin/sh\nif touch /dev/shm/sandbox-test 2>/dev/null; then echo "SHM_WRITABLE"; rm -f /dev/shm/sandbox-test; else echo "SHM_DENIED"; fi\n`,
+        { mode: 0o755 },
+      );
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
@@ -370,9 +450,11 @@ describe("landlock run sandbox", () => {
     }
   });
 
-
   it("denies creating Unix domain sockets outside the workdir", async (): Promise<void> => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
     const sandbox = new RunSandbox();
     const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     await mkdir(join(workDir, "tmp"), { recursive: true });
@@ -402,12 +484,17 @@ except OSError as e:
       expect(stdout).toContain("SOCKET_DENIED");
     } finally {
       await rm(workDir, { recursive: true, force: true });
-      try { await rm("/tmp/sandbox-socket-test.sock", { force: true }); } catch {}
+      try {
+        await rm("/tmp/sandbox-socket-test.sock", { force: true });
+      } catch {}
     }
   });
 
   it("denies abstract Unix domain sockets (ABI-dependent, documents behavior)", async (): Promise<void> => {
-    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!usable) {
+      console.warn("Skipping: Landlock unavailable");
+      return;
+    }
     const sandbox = new RunSandbox();
     const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     await mkdir(join(workDir, "tmp"), { recursive: true });
@@ -512,7 +599,10 @@ PYTHON
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
-      const out = stdout.trim().split("\n").map((line): string => line.trim());
+      const out = stdout
+        .trim()
+        .split("\n")
+        .map((line): string => line.trim());
       expect(out).toContain("TCP_BIND_ERR_13");
       expect(out).toContain("UDP_BIND_OK");
       expect(out).toContain("META_RC_13");

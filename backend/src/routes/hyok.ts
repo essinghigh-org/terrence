@@ -26,9 +26,11 @@ async function hyokResource(
   orgName: string,
   keyVersionsByConfig?: ReadonlyMap<string, readonly (typeof hyokCustomerKeyVersions.$inferSelect)[]>,
 ): Promise<Record<string, unknown>> {
-  const keyVersions = keyVersionsByConfig?.get(row.id) ?? await db.query.hyokCustomerKeyVersions.findMany({
-    where: eq(hyokCustomerKeyVersions.hyokConfigId, row.id),
-  });
+  const keyVersions =
+    keyVersionsByConfig?.get(row.id) ??
+    (await db.query.hyokCustomerKeyVersions.findMany({
+      where: eq(hyokCustomerKeyVersions.hyokConfigId, row.id),
+    }));
   return {
     id: row.id,
     type: "hyok-configurations",
@@ -43,9 +45,13 @@ async function hyokResource(
     relationships: {
       organization: { data: { id: orgName, type: "organizations" } },
       "agent-pool": row.agentPoolId !== null ? { data: { id: row.agentPoolId, type: "agent-pools" } } : { data: null },
-      "oidc-configuration": { data: row.oidcConfigId !== "" ? { id: row.oidcConfigId, type: row.oidcConfigType } : null },
+      "oidc-configuration": {
+        data: row.oidcConfigId !== "" ? { id: row.oidcConfigId, type: row.oidcConfigType } : null,
+      },
       "hyok-customer-key-versions": {
-        data: keyVersions.map((keyVersion): Record<string, string> => ({ id: keyVersion.id, type: "hyok-customer-key-versions" })),
+        data: keyVersions.map(
+          (keyVersion): Record<string, string> => ({ id: keyVersion.id, type: "hyok-customer-key-versions" }),
+        ),
       },
     },
   };
@@ -68,14 +74,23 @@ function hyokKeyVersionResource(row: Readonly<typeof hyokCustomerKeyVersions.$in
   };
 }
 
-function bodyData(body: unknown): { attributes?: Record<string, unknown> | undefined; relationships?: Record<string, unknown> | undefined } {
+function bodyData(body: unknown): {
+  attributes?: Record<string, unknown> | undefined;
+  relationships?: Record<string, unknown> | undefined;
+} {
   if (body === null || typeof body !== "object") return {};
   const data = (body as Record<string, unknown>)["data"];
   if (data === null || typeof data !== "object") return {};
   const d = data as Record<string, unknown>;
   return {
-    attributes: d["attributes"] !== null && typeof d["attributes"] === "object" ? d["attributes"] as Record<string, unknown> : undefined,
-    relationships: d["relationships"] !== null && typeof d["relationships"] === "object" ? d["relationships"] as Record<string, unknown> : undefined,
+    attributes:
+      d["attributes"] !== null && typeof d["attributes"] === "object"
+        ? (d["attributes"] as Record<string, unknown>)
+        : undefined,
+    relationships:
+      d["relationships"] !== null && typeof d["relationships"] === "object"
+        ? (d["relationships"] as Record<string, unknown>)
+        : undefined,
   };
 }
 
@@ -97,7 +112,7 @@ type HyokCreate = {
 
 function parseKmsOptions(attributes: Record<string, unknown> | undefined): Record<string, string> | null {
   return attributes?.["kms-options"] !== null && typeof attributes?.["kms-options"] === "object"
-    ? attributes["kms-options"] as Record<string, string>
+    ? (attributes["kms-options"] as Record<string, string>)
     : null;
 }
 
@@ -109,24 +124,38 @@ function parseHyokCreate(body: unknown, set: ParamCtx["set"]): HyokCreate | { er
   const oidcRef = relId(relationships?.["oidc-configuration"] ?? null);
   if (name === "" || kekId === "" || oidcRef === null || oidcRef.id === "") {
     (set as { status: number }).status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "HYOK configuration requires name, kek-id and an oidc-configuration relationship" }] } };
+    return {
+      error: {
+        errors: [
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail: "HYOK configuration requires name, kek-id and an oidc-configuration relationship",
+          },
+        ],
+      },
+    };
   }
   return { name, kekId, kms: parseKmsOptions(attributes), agentPoolRef, oidcRef };
 }
 
-async function insertHyokConfig(
-  orgId: string,
-  orgName: string,
-  create: HyokCreate,
-): Promise<Record<string, unknown>> {
+async function insertHyokConfig(orgId: string, orgName: string, create: HyokCreate): Promise<Record<string, unknown>> {
   const id = newResourceId("hyok");
   const now = Date.now();
   const row: HyokRow = {
-    id, orgId, name: create.name, kekId: create.kekId, kmsOptions: create.kms,
+    id,
+    orgId,
+    name: create.name,
+    kekId: create.kekId,
+    kmsOptions: create.kms,
     agentPoolId: create.agentPoolRef?.id ?? null,
-    oidcConfigId: create.oidcRef.id, oidcConfigType: create.oidcRef.type,
-    isPrimary: false, status: "ok", error: null,
-    createdAt: now, updatedAt: now,
+    oidcConfigId: create.oidcRef.id,
+    oidcConfigType: create.oidcRef.type,
+    isPrimary: false,
+    status: "ok",
+    error: null,
+    createdAt: now,
+    updatedAt: now,
   };
   await db.insert(hyokConfigurations).values(row);
   // the reference format auto-generates a customer key version (and encrypted data key) when a
@@ -147,103 +176,176 @@ async function insertHyokConfig(
   return hyokResource(row, orgName);
 }
 
-function buildHyokUpdates(attributes: Record<string, unknown> | undefined): Partial<typeof hyokConfigurations.$inferInsert> {
+function buildHyokUpdates(
+  attributes: Record<string, unknown> | undefined,
+): Partial<typeof hyokConfigurations.$inferInsert> {
   const updates: Partial<typeof hyokConfigurations.$inferInsert> = {};
   if (typeof attributes?.["name"] === "string") updates.name = attributes["name"];
   if (typeof attributes?.["kek-id"] === "string") updates.kekId = attributes["kek-id"];
-  if (attributes?.["kms-options"] !== undefined) updates.kmsOptions = attributes["kms-options"] !== null && typeof attributes["kms-options"] === "object" ? attributes["kms-options"] as Record<string, string> : null;
+  if (attributes?.["kms-options"] !== undefined)
+    updates.kmsOptions =
+      attributes["kms-options"] !== null && typeof attributes["kms-options"] === "object"
+        ? (attributes["kms-options"] as Record<string, string>)
+        : null;
   return updates;
 }
 
 export const hyokRoutes = new Elysia({ name: "hyok" })
   .use(authPlugin)
-  .get("/api/v2/organizations/:org_name/hyok-configurations", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
-    const rows = await db.query.hyokConfigurations.findMany({ where: eq(hyokConfigurations.orgId, org.id) });
-    // One query for every config's key versions instead of one per row.
-    // An empty rows list must not run an unfiltered findMany (that would
-    // return every key version in the database).
-    const keyVersions = rows.length === 0
-      ? []
-      : await db.query.hyokCustomerKeyVersions.findMany({
-          where: inArray(hyokCustomerKeyVersions.hyokConfigId, rows.map((row) => row.id)),
-        });
-    const keyVersionsByConfig = new Map<string, readonly (typeof hyokCustomerKeyVersions.$inferSelect)[]>();
-    for (const kv of keyVersions) {
-      const bucket = keyVersionsByConfig.get(kv.hyokConfigId);
-      if (bucket === undefined) keyVersionsByConfig.set(kv.hyokConfigId, [kv]);
-      else (bucket as (typeof hyokCustomerKeyVersions.$inferSelect)[]).push(kv);
-    }
-    return { data: await Promise.all(rows.map(async (row) => hyokResource(row, org.name, keyVersionsByConfig))) };
-  })
-  .post("/api/v2/organizations/:org_name/hyok-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
-    const parsed = parseHyokCreate(body, set);
-    if ("error" in parsed) return parsed.error;
-    (set as { status: number }).status = 201;
-    return { data: await insertHyokConfig(org.id, org.name, parsed) };
-  })
-  .get("/api/v2/hyok-configurations/:id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const id = params["id"] ?? "";
-    const row = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
-    if (row === undefined) return notFound(set);
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, row.orgId) });
-    if (org === undefined || !(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
-    return { data: await hyokResource(row, org.name) };
-  })
-  .patch("/api/v2/hyok-configurations/:id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const id = params["id"] ?? "";
-    const row = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
-    if (row === undefined) return notFound(set);
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, row.orgId) });
-    if (org === undefined || !(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
-    const { attributes } = bodyData(body);
-    const updates = buildHyokUpdates(attributes);
-    if (Object.keys(updates).length > 0) await db.update(hyokConfigurations).set({ ...updates, updatedAt: Date.now() }).where(eq(hyokConfigurations.id, id));
-    const updated = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
-    if (updated === undefined) return notFound(set);
-    return { data: await hyokResource(updated, org.name) };
-  })
-  .delete("/api/v2/hyok-configurations/:id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const id = params["id"] ?? "";
-    const row = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
-    if (row === undefined) return notFound(set);
-    if (!(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
-    await db.delete(hyokConfigurations).where(eq(hyokConfigurations.id, id));
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .get("/api/v2/hyok-customer-key-versions/:key_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    // go-tfe HYOKCustomerKeyVersions.Read — the tfe_hyok_customer_key_version data source.
-    const keyVersion = await db.query.hyokCustomerKeyVersions.findFirst({ where: eq(hyokCustomerKeyVersions.id, params["key_id"] ?? "") });
-    if (keyVersion === undefined) return notFound(set);
-    const hyok = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, keyVersion.hyokConfigId) });
-    if (hyok === undefined || !(await checkOrganizationPermission(hyok.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
-    return { data: hyokKeyVersionResource(keyVersion) };
-  })
-  .get("/api/v2/hyok-encrypted-data-keys/:key_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    // go-tfe HYOKEncryptedDataKeys.Read — the tfe_hyok_encrypted_data_key data source.
-    const keyVersion = await db.query.hyokCustomerKeyVersions.findFirst({ where: eq(hyokCustomerKeyVersions.id, params["key_id"] ?? "") });
-    if (keyVersion === undefined) return notFound(set);
-    const hyok = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, keyVersion.hyokConfigId) });
-    if (hyok === undefined || !(await checkOrganizationPermission(hyok.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
-    return {
-      data: {
-        id: keyVersion.id,
-        type: "hyok-encrypted-data-keys",
-        attributes: {
-          "encrypted-dek": keyVersion.encryptedDek,
-          "customer-key-name": keyVersion.customerKeyName,
-          "created-at": new Date(keyVersion.createdAt).toISOString(),
+  .get(
+    "/api/v2/organizations/:org_name/hyok-configurations",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))
+      )
+        return notFound(set);
+      const rows = await db.query.hyokConfigurations.findMany({ where: eq(hyokConfigurations.orgId, org.id) });
+      // One query for every config's key versions instead of one per row.
+      // An empty rows list must not run an unfiltered findMany (that would
+      // return every key version in the database).
+      const keyVersions =
+        rows.length === 0
+          ? []
+          : await db.query.hyokCustomerKeyVersions.findMany({
+              where: inArray(
+                hyokCustomerKeyVersions.hyokConfigId,
+                rows.map((row) => row.id),
+              ),
+            });
+      const keyVersionsByConfig = new Map<string, readonly (typeof hyokCustomerKeyVersions.$inferSelect)[]>();
+      for (const kv of keyVersions) {
+        const bucket = keyVersionsByConfig.get(kv.hyokConfigId);
+        if (bucket === undefined) keyVersionsByConfig.set(kv.hyokConfigId, [kv]);
+        else (bucket as (typeof hyokCustomerKeyVersions.$inferSelect)[]).push(kv);
+      }
+      return { data: await Promise.all(rows.map(async (row) => hyokResource(row, org.name, keyVersionsByConfig))) };
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/hyok-configurations",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))
+      )
+        return notFound(set);
+      const parsed = parseHyokCreate(body, set);
+      if ("error" in parsed) return parsed.error;
+      (set as { status: number }).status = 201;
+      return { data: await insertHyokConfig(org.id, org.name, parsed) };
+    },
+  )
+  .get(
+    "/api/v2/hyok-configurations/:id",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const id = params["id"] ?? "";
+      const row = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
+      if (row === undefined) return notFound(set);
+      const org = await db.query.organizations.findFirst({ where: eq(organizations.id, row.orgId) });
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))
+      )
+        return notFound(set);
+      return { data: await hyokResource(row, org.name) };
+    },
+  )
+  .patch(
+    "/api/v2/hyok-configurations/:id",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const id = params["id"] ?? "";
+      const row = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
+      if (row === undefined) return notFound(set);
+      const org = await db.query.organizations.findFirst({ where: eq(organizations.id, row.orgId) });
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))
+      )
+        return notFound(set);
+      const { attributes } = bodyData(body);
+      const updates = buildHyokUpdates(attributes);
+      if (Object.keys(updates).length > 0)
+        await db
+          .update(hyokConfigurations)
+          .set({ ...updates, updatedAt: Date.now() })
+          .where(eq(hyokConfigurations.id, id));
+      const updated = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
+      if (updated === undefined) return notFound(set);
+      return { data: await hyokResource(updated, org.name) };
+    },
+  )
+  .delete(
+    "/api/v2/hyok-configurations/:id",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const id = params["id"] ?? "";
+      const row = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
+      if (row === undefined) return notFound(set);
+      if (!(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers")))
+        return notFound(set);
+      await db.delete(hyokConfigurations).where(eq(hyokConfigurations.id, id));
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .get(
+    "/api/v2/hyok-customer-key-versions/:key_id",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      // go-tfe HYOKCustomerKeyVersions.Read — the tfe_hyok_customer_key_version data source.
+      const keyVersion = await db.query.hyokCustomerKeyVersions.findFirst({
+        where: eq(hyokCustomerKeyVersions.id, params["key_id"] ?? ""),
+      });
+      if (keyVersion === undefined) return notFound(set);
+      const hyok = await db.query.hyokConfigurations.findFirst({
+        where: eq(hyokConfigurations.id, keyVersion.hyokConfigId),
+      });
+      if (
+        hyok === undefined ||
+        !(await checkOrganizationPermission(hyok.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))
+      )
+        return notFound(set);
+      return { data: hyokKeyVersionResource(keyVersion) };
+    },
+  )
+  .get(
+    "/api/v2/hyok-encrypted-data-keys/:key_id",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      // go-tfe HYOKEncryptedDataKeys.Read — the tfe_hyok_encrypted_data_key data source.
+      const keyVersion = await db.query.hyokCustomerKeyVersions.findFirst({
+        where: eq(hyokCustomerKeyVersions.id, params["key_id"] ?? ""),
+      });
+      if (keyVersion === undefined) return notFound(set);
+      const hyok = await db.query.hyokConfigurations.findFirst({
+        where: eq(hyokConfigurations.id, keyVersion.hyokConfigId),
+      });
+      if (
+        hyok === undefined ||
+        !(await checkOrganizationPermission(hyok.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))
+      )
+        return notFound(set);
+      return {
+        data: {
+          id: keyVersion.id,
+          type: "hyok-encrypted-data-keys",
+          attributes: {
+            "encrypted-dek": keyVersion.encryptedDek,
+            "customer-key-name": keyVersion.customerKeyName,
+            "created-at": new Date(keyVersion.createdAt).toISOString(),
+          },
+          relationships: {
+            "hyok-customer-key-versions": { data: { id: keyVersion.id, type: "hyok-customer-key-versions" } },
+          },
         },
-        relationships: {
-          "hyok-customer-key-versions": { data: { id: keyVersion.id, type: "hyok-customer-key-versions" } },
-        },
-      },
-    };
-  });
-;
+      };
+    },
+  );

@@ -1,10 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-  ENDPOINT_POLICIES,
-  isUploadPath,
-  rateLimitClassFor,
-  serverEndpointPath,
-} from "../../src/lib/endpoint-policy";
+import { ENDPOINT_POLICIES, isUploadPath, rateLimitClassFor, serverEndpointPath } from "../../src/lib/endpoint-policy";
 import type { RateLimitClass } from "../../src/lib/endpoint-policy";
 
 describe("endpoint-policy (465-469)", () => {
@@ -43,8 +38,17 @@ describe("endpoint-policy (465-469)", () => {
   // 467/468/469: audit + rate + permission surfaces are all declared.
   it("every registry entry has audit/rate", () => {
     for (const e of ENDPOINT_POLICIES) {
-      expect(["admin","auth","workspace","run","none"]).toContain(e.audit);
-      expect(["global","none","sensitive","sso-get","scim-settings","scim-mapping","workspace-run-history","metrics"]).toContain(e.rateLimit);
+      expect(["admin", "auth", "workspace", "run", "none"]).toContain(e.audit);
+      expect([
+        "global",
+        "none",
+        "sensitive",
+        "sso-get",
+        "scim-settings",
+        "scim-mapping",
+        "workspace-run-history",
+        "metrics",
+      ]).toContain(e.rateLimit);
     }
   });
 

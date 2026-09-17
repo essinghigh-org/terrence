@@ -19,16 +19,23 @@ import { putOAuthHandshakeState, takeOAuthHandshakeState } from "../../src/lib/o
 import { legacyHashAuthenticationToken } from "../../src/lib/token-service";
 
 function oauthPercentEncode(value: string): string {
-  return encodeURIComponent(value).replace(/[!'()*]/g, (character: string): string =>
-    `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  return encodeURIComponent(value).replace(
+    /[!'()*]/g,
+    (character: string): string => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
 }
 
 function oauthHeaderParameters(header: string | null): Record<string, string> {
   if (header?.startsWith("OAuth ") !== true) return {};
-  return Object.fromEntries(header.slice(6).split(",").map((part): [string, string] => {
-    const [key, quotedValue = ""] = part.trim().split("=", 2);
-    return [decodeURIComponent(key ?? ""), decodeURIComponent(quotedValue.replace(/^"|"$/g, ""))];
-  }));
+  return Object.fromEntries(
+    header
+      .slice(6)
+      .split(",")
+      .map((part): [string, string] => {
+        const [key, quotedValue = ""] = part.trim().split("=", 2);
+        return [decodeURIComponent(key ?? ""), decodeURIComponent(quotedValue.replace(/^"|"$/g, ""))];
+      }),
+  );
 }
 
 function validHmacOAuth1Request(
@@ -42,30 +49,36 @@ function validHmacOAuth1Request(
   const signature = parameters["oauth_signature"];
   delete parameters["oauth_signature"];
   if (
-    signature === undefined
-    || parameters["oauth_signature_method"] !== "HMAC-SHA1"
-    || Object.entries(expected).some(([key, value]): boolean => parameters[key] !== value)
-  ) return false;
+    signature === undefined ||
+    parameters["oauth_signature_method"] !== "HMAC-SHA1" ||
+    Object.entries(expected).some(([key, value]): boolean => parameters[key] !== value)
+  )
+    return false;
 
   const url = new URL(requestUrl);
   const normalized = [...url.searchParams.entries(), ...Object.entries(parameters)]
     .map(([key, value]): [string, string] => [oauthPercentEncode(key), oauthPercentEncode(value)])
     .sort(([leftKey, leftValue], [rightKey, rightValue]): number =>
       leftKey === rightKey
-        ? leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0
-        : leftKey < rightKey ? -1 : 1)
+        ? leftValue < rightValue
+          ? -1
+          : leftValue > rightValue
+            ? 1
+            : 0
+        : leftKey < rightKey
+          ? -1
+          : 1,
+    )
     .map(([key, value]): string => `${key}=${value}`)
     .join("&");
   const baseUrl = `${url.protocol}//${url.host}${url.pathname || "/"}`;
-  const signatureBase = [
-    method.toUpperCase(),
-    oauthPercentEncode(baseUrl),
-    oauthPercentEncode(normalized),
-  ].join("&");
+  const signatureBase = [method.toUpperCase(), oauthPercentEncode(baseUrl), oauthPercentEncode(normalized)].join("&");
   const expectedSignature = createHmac(
     "sha1",
     `${oauthPercentEncode("bitbucket-dc-secret")}&${oauthPercentEncode(tokenSecret)}`,
-  ).update(signatureBase).digest("base64");
+  )
+    .update(signatureBase)
+    .digest("base64");
   return signature === expectedSignature;
 }
 
@@ -88,7 +101,9 @@ describe("VCS OAuth handshakes", () => {
   const withPrivateVcsUrls = async <T>(operation: () => Promise<T>): Promise<T> => {
     let release!: () => void;
     const waiting = privateVcsUrlLock;
-    privateVcsUrlLock = new Promise<void>((resolve): void => { release = resolve; });
+    privateVcsUrlLock = new Promise<void>((resolve): void => {
+      release = resolve;
+    });
     await waiting;
     const previous = process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"];
     process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"] = "1";
@@ -101,16 +116,17 @@ describe("VCS OAuth handshakes", () => {
     }
   };
 
-  const request = (
-    path: string,
-    auth: string | null = apiToken,
-    accept?: string,
-  ): Promise<Response> => withPrivateVcsUrls(() => app.handle(new Request(`http://terrence.test${path}`, {
-      headers: {
-        ...(auth === null ? {} : { Authorization: `Bearer ${auth}` }),
-        ...(accept === undefined ? {} : { Accept: accept }),
-      },
-    })));
+  const request = (path: string, auth: string | null = apiToken, accept?: string): Promise<Response> =>
+    withPrivateVcsUrls(() =>
+      app.handle(
+        new Request(`http://terrence.test${path}`, {
+          headers: {
+            ...(auth === null ? {} : { Authorization: `Bearer ${auth}` }),
+            ...(accept === undefined ? {} : { Accept: accept }),
+          },
+        }),
+      ),
+    );
 
   beforeAll(async () => {
     provider = Bun.serve({
@@ -132,28 +148,49 @@ describe("VCS OAuth handshakes", () => {
         if (url.pathname === "/plugins/servlet/oauth/request-token") {
           const oauth = oauthHeaderParameters(request.headers.get("authorization"));
           if (
-            oauth["oauth_consumer_key"] !== "bitbucket-dc-key"
-            || typeof oauth["oauth_callback"] !== "string"
-            || !validHmacOAuth1Request(request.method, request.url, request.headers.get("authorization"), "", {
+            oauth["oauth_consumer_key"] !== "bitbucket-dc-key" ||
+            typeof oauth["oauth_callback"] !== "string" ||
+            !validHmacOAuth1Request(request.method, request.url, request.headers.get("authorization"), "", {
               oauth_callback: oauth["oauth_callback"],
               oauth_consumer_key: "bitbucket-dc-key",
             })
-          ) return new Response("invalid signature", { status: 401 });
-          return new Response("oauth_token=request-token&oauth_token_secret=request-secret&oauth_callback_confirmed=true");
+          )
+            return new Response("invalid signature", { status: 401 });
+          return new Response(
+            "oauth_token=request-token&oauth_token_secret=request-secret&oauth_callback_confirmed=true",
+          );
         }
         if (url.pathname === "/plugins/servlet/oauth/access-token") {
-          if (!validHmacOAuth1Request(request.method, request.url, request.headers.get("authorization"), "request-secret", {
-            oauth_consumer_key: "bitbucket-dc-key",
-            oauth_token: "request-token",
-            oauth_verifier: "provider-verifier",
-          })) return new Response("invalid signature", { status: 401 });
+          if (
+            !validHmacOAuth1Request(
+              request.method,
+              request.url,
+              request.headers.get("authorization"),
+              "request-secret",
+              {
+                oauth_consumer_key: "bitbucket-dc-key",
+                oauth_token: "request-token",
+                oauth_verifier: "provider-verifier",
+              },
+            )
+          )
+            return new Response("invalid signature", { status: 401 });
           return new Response("oauth_token=access-token&oauth_token_secret=access-secret");
         }
         if (url.pathname === "/plugins/servlet/applinks/whoami") {
-          if (!validHmacOAuth1Request(request.method, request.url, request.headers.get("authorization"), "access-secret", {
-            oauth_consumer_key: "bitbucket-dc-key",
-            oauth_token: "access-token",
-          })) return new Response("invalid signature", { status: 401 });
+          if (
+            !validHmacOAuth1Request(
+              request.method,
+              request.url,
+              request.headers.get("authorization"),
+              "access-secret",
+              {
+                oauth_consumer_key: "bitbucket-dc-key",
+                oauth_token: "access-token",
+              },
+            )
+          )
+            return new Response("invalid signature", { status: 401 });
           return new Response("bitbucket-service-user");
         }
         return new Response("not found", { status: 404 });
@@ -190,32 +227,33 @@ describe("VCS OAuth handshakes", () => {
     ]);
 
     const providerBase = `http://${provider.hostname}:${provider.port}`;
-    const createResponse = await withPrivateVcsUrls(() => app.handle(new Request(
-      `http://terrence.test/api/v2/organizations/${orgName}/oauth-clients`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiToken}`,
-          "Content-Type": "application/vnd.api+json",
-        },
-        body: JSON.stringify({
-          data: {
-            type: "oauth-clients",
-            attributes: {
-              name: "GitHub Enterprise",
-              "service-provider": "github_enterprise",
-              "http-url": providerBase,
-              "api-url": `${providerBase}/api/v3`,
-              key: "client-key",
-              secret: "client-secret",
-            },
-            relationships: {
-              projects: { data: [{ id: projectId, type: "projects" }] },
-            },
+    const createResponse = await withPrivateVcsUrls(() =>
+      app.handle(
+        new Request(`http://terrence.test/api/v2/organizations/${orgName}/oauth-clients`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiToken}`,
+            "Content-Type": "application/vnd.api+json",
           },
+          body: JSON.stringify({
+            data: {
+              type: "oauth-clients",
+              attributes: {
+                name: "GitHub Enterprise",
+                "service-provider": "github_enterprise",
+                "http-url": providerBase,
+                "api-url": `${providerBase}/api/v3`,
+                key: "client-key",
+                secret: "client-secret",
+              },
+              relationships: {
+                projects: { data: [{ id: projectId, type: "projects" }] },
+              },
+            },
+          }),
         }),
-      },
-    )));
+      ),
+    );
     expect(createResponse.status).toBe(201);
     const created = await createResponse.json();
     clientId = created.data.id;
@@ -323,11 +361,12 @@ describe("VCS OAuth handshakes", () => {
     expect(gitlab.pathname).toBe("/oauth/authorize");
     expect(gitlab.searchParams.get("scope")).toBe("api");
 
-    const bitbucket = new URL((await request(`/api/v2/oauth-clients/${clients[1]!.id}/connect`)).headers.get("location")!);
+    const bitbucket = new URL(
+      (await request(`/api/v2/oauth-clients/${clients[1]!.id}/connect`)).headers.get("location")!,
+    );
     expect(bitbucket.hostname).toBe("bitbucket.org");
     expect(bitbucket.pathname).toBe("/site/oauth2/authorize");
     expect(bitbucket.searchParams.has("scope")).toBeFalse();
-
   });
 
   test("completes a signed, project-scoped Bitbucket Data Center OAuth 1.0 handshake once", async () => {
@@ -355,8 +394,9 @@ describe("VCS OAuth handshakes", () => {
     expect(authorization.pathname).toBe("/plugins/servlet/oauth/authorize");
     expect(authorization.searchParams.get("oauth_token")).toBe("request-token");
 
-    const requestTokenCall = providerRequests.findLast((item): boolean =>
-      item.path === "/plugins/servlet/oauth/request-token");
+    const requestTokenCall = providerRequests.findLast(
+      (item): boolean => item.path === "/plugins/servlet/oauth/request-token",
+    );
     const requestTokenOAuth = oauthHeaderParameters(requestTokenCall?.authorization ?? null);
     expect(requestTokenOAuth["oauth_signature_method"]).toBe("HMAC-SHA1");
     expect(requestTokenOAuth["oauth_nonce"]).not.toBeEmpty();
@@ -395,13 +435,17 @@ describe("VCS OAuth handshakes", () => {
       oauth_token_secret: "access-secret",
     });
     expect((await request(`${providerCallback.pathname}${providerCallback.search}`, null)).status).toBe(400);
-    expect((await db.query.oauthTokens.findMany({
-      where: eq(oauthTokens.oauthClientId, dcClientId),
-    }))).toHaveLength(1);
+    expect(
+      await db.query.oauthTokens.findMany({
+        where: eq(oauthTokens.oauthClientId, dcClientId),
+      }),
+    ).toHaveLength(1);
   });
 
   test("exchanges the callback once and persists a non-exposed provider token", async () => {
-    expect((await request(`/api/v2/oauth-clients/${clientId}/callback?code=forged&state=forged`, null)).status).toBe(400);
+    expect((await request(`/api/v2/oauth-clients/${clientId}/callback?code=forged&state=forged`, null)).status).toBe(
+      400,
+    );
 
     const connect = await request(`/api/v2/oauth-clients/${clientId}/connect?project_id=${projectId}`);
     const authorization = new URL(connect.headers.get("location")!);
@@ -421,10 +465,12 @@ describe("VCS OAuth handshakes", () => {
     });
     expect(isEncryptedSecret(stored?.token ?? "")).toBeTrue();
     expect(await decryptSecret(stored?.token ?? "")).toBe(providerToken);
-    expect(providerRequests).toContainEqual(expect.objectContaining({
-      path: "/login/oauth/access_token",
-      body: expect.stringContaining("client_secret=client-secret"),
-    }));
+    expect(providerRequests).toContainEqual(
+      expect.objectContaining({
+        path: "/login/oauth/access_token",
+        body: expect.stringContaining("client_secret=client-secret"),
+      }),
+    );
     expect(providerRequests).toContainEqual({
       path: "/api/v3/user",
       authorization: `Bearer ${providerToken}`,
@@ -432,8 +478,10 @@ describe("VCS OAuth handshakes", () => {
     });
 
     expect((await request(callbackPath, null)).status).toBe(400);
-    expect((await db.query.oauthTokens.findMany({
-      where: eq(oauthTokens.oauthClientId, clientId),
-    }))).toHaveLength(1);
+    expect(
+      await db.query.oauthTokens.findMany({
+        where: eq(oauthTokens.oauthClientId, clientId),
+      }),
+    ).toHaveLength(1);
   });
 });

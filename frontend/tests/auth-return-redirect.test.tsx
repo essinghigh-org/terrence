@@ -48,7 +48,7 @@ function getUrlString(input: string | URL | Request): string {
 const asElement = (el: Element | null): HTMLElement => el as HTMLElement;
 
 const changeInput = (element: HTMLElement, value: string): void => {
-// SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
+  // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
   const tracker = (element as { _valueTracker?: { setValue: (v: string) => void } })._valueTracker;
   if (tracker !== undefined) {
     tracker.setValue(value === "" ? "x" : "");
@@ -72,7 +72,14 @@ test("unauthenticated deep links carry their destination to /login", () => {
     <MemoryRouter initialEntries={["/app/account?email-verified=1"]}>
       <Routes>
         <Route path="/login" element={<LocationCapture />} />
-        <Route path="/app/*" element={<ProtectedRoute><div>APP</div></ProtectedRoute>} />
+        <Route
+          path="/app/*"
+          element={
+            <ProtectedRoute>
+              <div>APP</div>
+            </ProtectedRoute>
+          }
+        />
       </Routes>
     </MemoryRouter>,
   );
@@ -87,8 +94,23 @@ test("verification flags ride along to the login URL and raise the login toast",
     <MemoryRouter initialEntries={["/app/account?email-verified=1"]}>
       <Toaster />
       <Routes>
-        <Route path="/login" element={<><LocationCapture /><Login /></>} />
-        <Route path="/app/*" element={<ProtectedRoute><div>APP</div></ProtectedRoute>} />
+        <Route
+          path="/login"
+          element={
+            <>
+              <LocationCapture />
+              <Login />
+            </>
+          }
+        />
+        <Route
+          path="/app/*"
+          element={
+            <ProtectedRoute>
+              <div>APP</div>
+            </ProtectedRoute>
+          }
+        />
       </Routes>
     </MemoryRouter>,
   );
@@ -100,7 +122,9 @@ test("verification flags ride along to the login URL and raise the login toast",
     expect(capturedSearch.startsWith("?")).toBe(true);
     expect(new URLSearchParams(capturedSearch).get("email-verified")).toBe("1");
   });
-  await waitFor((): void => { expect(view.getByText("Verification link processed")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Verification link processed")).toBeTruthy();
+  });
 });
 
 test("non-app paths do not get a returnTo parameter", () => {
@@ -108,7 +132,14 @@ test("non-app paths do not get a returnTo parameter", () => {
     <MemoryRouter initialEntries={["/somewhere-else"]}>
       <Routes>
         <Route path="/login" element={<LocationCapture />} />
-        <Route path="*" element={<ProtectedRoute><div>APP</div></ProtectedRoute>} />
+        <Route
+          path="*"
+          element={
+            <ProtectedRoute>
+              <div>APP</div>
+            </ProtectedRoute>
+          }
+        />
       </Routes>
     </MemoryRouter>,
   );
@@ -124,7 +155,7 @@ test("sign-in returns the user to the preserved destination", async () => {
     if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/login?returnTo=%2Fapp%2Faccount"]}>
@@ -144,7 +175,9 @@ test("sign-in returns the user to the preserved destination", async () => {
     if (form !== null) fireEvent.submit(form);
   });
 
-  await waitFor((): void => { expect(view.getByText("ACCOUNT")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("ACCOUNT")).toBeTruthy();
+  });
   expect(view.queryByText("HOME")).toBeNull();
 });
 
@@ -155,7 +188,7 @@ test("external returnTo values are ignored", async () => {
     if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/login?returnTo=https%3A%2F%2Fevil.example"]}>
@@ -173,7 +206,9 @@ test("external returnTo values are ignored", async () => {
     if (form !== null) fireEvent.submit(form);
   });
 
-  await waitFor((): void => { expect(view.getByText("HOME")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("HOME")).toBeTruthy();
+  });
 });
 
 test("arriving at login from the verification redirect shows a confirmation toast", async () => {
@@ -186,7 +221,9 @@ test("arriving at login from the verification redirect shows a confirmation toas
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("Verification link processed")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Verification link processed")).toBeTruthy();
+  });
 });
 
 test("the shared returnTo validator accepts /app paths and rejects the rest (issue #642)", () => {
@@ -210,7 +247,7 @@ test("registration restores the preserved destination through the shared validat
     if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/register?returnTo=%2Fapp%2Faccount"]}>
@@ -222,7 +259,9 @@ test("registration restores the preserved destination through the shared validat
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByLabelText("Username")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByLabelText("Username")).toBeTruthy();
+  });
   changeInput(asElement(view.getByLabelText("Username")), "alice");
   changeInput(asElement(view.getByLabelText("Email address")), "alice@example.com");
   changeInput(asElement(view.getByLabelText("Password")), "correct horse 123");
@@ -231,7 +270,9 @@ test("registration restores the preserved destination through the shared validat
     if (form !== null) fireEvent.submit(form);
   });
 
-  await waitFor((): void => { expect(view.getByText("ACCOUNT")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("ACCOUNT")).toBeTruthy();
+  });
   expect(view.queryByText("HOME")).toBeNull();
 });
 
@@ -242,9 +283,9 @@ test("the login-path helper preserves /app destinations and drops the rest (issu
   expect(loginPathWithReturnTo("/app", "", "#section")).toBe("/login?returnTo=%2Fapp%23section");
   expect(loginPathWithReturnTo("/login", "", "")).toBe("/login");
   expect(loginPathWithReturnTo("/register", "", "")).toBe("/login");
-  expect(
-    loginPathWithReturnTo("/app/account", "", "", { "email-verified": "1" }),
-  ).toBe("/login?returnTo=%2Fapp%2Faccount&email-verified=1");
+  expect(loginPathWithReturnTo("/app/account", "", "", { "email-verified": "1" })).toBe(
+    "/login?returnTo=%2Fapp%2Faccount&email-verified=1",
+  );
 });
 
 test("session expiry preserves the viewed run through the sign-in round-trip (issue #738)", async () => {
@@ -269,7 +310,15 @@ test("session expiry outside the app lands on the plain login (issue #738)", asy
   render(
     <MemoryRouter initialEntries={["/login"]}>
       <Routes>
-        <Route path="/login" element={<><AuthSessionManager /><LocationCapture /></>} />
+        <Route
+          path="/login"
+          element={
+            <>
+              <AuthSessionManager />
+              <LocationCapture />
+            </>
+          }
+        />
       </Routes>
     </MemoryRouter>,
   );

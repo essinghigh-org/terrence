@@ -26,7 +26,10 @@ for (const file of readdirSync(oldFolder)) {
 }
 const raw = new Database(dbPath);
 migrate(drizzle(raw), { migrationsFolder: oldFolder });
-console.log("journal rows after old-image migrate:", (raw.query("SELECT count(*) c FROM __drizzle_migrations").get() as { c: number }).c);
+console.log(
+  "journal rows after old-image migrate:",
+  (raw.query("SELECT count(*) c FROM __drizzle_migrations").get() as { c: number }).c,
+);
 
 // 2. Reproduce the Aug-19 boot-DDL side effects EXACTLY as prod has them
 //    (probed live on terrence-terrence-1's DB, 2026-08-23): seven out-of-journal
@@ -44,13 +47,22 @@ process.env.DATABASE_URL = `file:${dbPath}`;
 process.env.STORAGE_DIR = `${dir}/storage`;
 await import("../src/db/index.ts");
 console.log("boot OK (no throw)");
-console.log("journal rows after new-code boot:", (raw.query("SELECT count(*) c FROM __drizzle_migrations").get() as { c: number }).c);
+console.log(
+  "journal rows after new-code boot:",
+  (raw.query("SELECT count(*) c FROM __drizzle_migrations").get() as { c: number }).c,
+);
 const tables = raw
   .query(
     "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('identity_links','organization_invitations','notification_delivery_state','rate_limit_buckets','registry_components','action_invocations','state_output_index')",
   )
   .all() as { name: string }[];
-console.log("0027+ tables now present:", tables.map((t: { readonly name: string }): string => t.name).sort().join(","));
+console.log(
+  "0027+ tables now present:",
+  tables
+    .map((t: { readonly name: string }): string => t.name)
+    .sort()
+    .join(","),
+);
 const col = (table: string, column: string): boolean => {
   const row = raw.query(`SELECT 1 FROM pragma_table_info('${table}') WHERE name='${column}'`).get();
   return row !== null;

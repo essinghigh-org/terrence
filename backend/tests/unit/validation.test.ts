@@ -28,14 +28,16 @@ describe("state payload helpers", () => {
 
 describe("validVariableAttributes", () => {
   it("accepts a full valid variable", () => {
-    expect(validVariableAttributes({
-      key: "my_var",
-      value: "hello",
-      category: "terraform",
-      sensitive: false,
-      hcl: false,
-      description: "Test var",
-    })).toBeTrue();
+    expect(
+      validVariableAttributes({
+        key: "my_var",
+        value: "hello",
+        category: "terraform",
+        sensitive: false,
+        hcl: false,
+        description: "Test var",
+      }),
+    ).toBeTrue();
   });
 
   it("rejects null", () => {
@@ -69,9 +71,16 @@ describe("validVariableAttributes", () => {
   });
 
   it("accepts optional fields when valid", () => {
-    expect(validVariableAttributes({
-      key: "x", value: "y", category: "env", sensitive: true, hcl: true, description: null,
-    })).toBeTrue();
+    expect(
+      validVariableAttributes({
+        key: "x",
+        value: "y",
+        category: "env",
+        sensitive: true,
+        hcl: true,
+        description: null,
+      }),
+    ).toBeTrue();
   });
 
   it("rejects invalid category", () => {
@@ -93,14 +102,16 @@ describe("validVariableAttributes", () => {
 
 describe("validVariableSetVariableAttributes", () => {
   it("accepts a full valid variable set variable", () => {
-    expect(validVariableSetVariableAttributes({
-      key: "region",
-      value: "us-east-1",
-      category: "terraform",
-      sensitive: false,
-      hcl: false,
-      description: "Deployment region",
-    })).toBeTrue();
+    expect(
+      validVariableSetVariableAttributes({
+        key: "region",
+        value: "us-east-1",
+        category: "terraform",
+        sensitive: false,
+        hcl: false,
+        description: "Deployment region",
+      }),
+    ).toBeTrue();
   });
 
   it("accepts hcl=true for set variables", () => {
@@ -114,12 +125,14 @@ describe("validVariableSetVariableAttributes", () => {
 
 describe("validVariableSetAttributes", () => {
   it("accepts a full valid variable set", () => {
-    expect(validVariableSetAttributes({
-      name: "Production Variables",
-      description: "Shared config",
-      global: false,
-      priority: true,
-    })).toBeTrue();
+    expect(
+      validVariableSetAttributes({
+        name: "Production Variables",
+        description: "Shared config",
+        global: false,
+        priority: true,
+      }),
+    ).toBeTrue();
   });
 
   it("rejects empty fields", () => {
@@ -154,7 +167,9 @@ describe("validVariableSetAttributes", () => {
 
 describe("isUniqueConstraintError", () => {
   it("matches an error with the SQLITE_CONSTRAINT_UNIQUE code", () => {
-    expect(isUniqueConstraintError({ code: "SQLITE_CONSTRAINT_UNIQUE", message: "UNIQUE constraint failed: users.email" })).toBeTrue();
+    expect(
+      isUniqueConstraintError({ code: "SQLITE_CONSTRAINT_UNIQUE", message: "UNIQUE constraint failed: users.email" }),
+    ).toBeTrue();
   });
 
   it("matches a UNIQUE constraint message on the error itself", () => {
@@ -206,13 +221,15 @@ describe("parseTerraformStatePayload", () => {
     lineage: "abc-123",
     terraform_version: "1.9.0",
     outputs: {},
-    resources: [{
-      mode: "managed",
-      type: "aws_instance",
-      name: "web",
-      provider: "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      instances: [{ schema_version: 0, sensitive_attributes: [], dependencies: [], attributes: {} }],
-    }],
+    resources: [
+      {
+        mode: "managed",
+        type: "aws_instance",
+        name: "web",
+        provider: 'provider["registry.terraform.io/hashicorp/aws"]',
+        instances: [{ schema_version: 0, sensitive_attributes: [], dependencies: [], attributes: {} }],
+      },
+    ],
   };
 
   it("accepts a valid v4 state object", () => {
@@ -222,13 +239,15 @@ describe("parseTerraformStatePayload", () => {
   it("accepts optional instance fields", () => {
     const state = {
       ...validState,
-      resources: [{
-        mode: "data",
-        type: "aws_ami",
-        name: "ubuntu",
-        provider: "provider[\"registry.terraform.io/hashicorp/aws\"]",
-        instances: [{ attributes: {} }],
-      }],
+      resources: [
+        {
+          mode: "data",
+          type: "aws_ami",
+          name: "ubuntu",
+          provider: 'provider["registry.terraform.io/hashicorp/aws"]',
+          instances: [{ attributes: {} }],
+        },
+      ],
     };
     expect(parseTerraformStatePayload(JSON.stringify(state))).not.toBeNull();
   });
@@ -253,19 +272,29 @@ describe("parseTerraformStatePayload", () => {
   });
 
   it("rejects resources with invalid mode or missing fields", () => {
-    expect(parseTerraformStatePayload(JSON.stringify({ ...validState, resources: [{ ...validState.resources[0], mode: "import" }] }))).toBeNull();
+    expect(
+      parseTerraformStatePayload(
+        JSON.stringify({ ...validState, resources: [{ ...validState.resources[0], mode: "import" }] }),
+      ),
+    ).toBeNull();
     const { name: _name, ...resourceWithoutName } = validState.resources[0]!;
     expect(parseTerraformStatePayload(JSON.stringify({ ...validState, resources: [resourceWithoutName] }))).toBeNull();
   });
 
   it("rejects instances with a non-integer schema_version", () => {
-    expect(parseTerraformStatePayload(JSON.stringify({
-      ...validState,
-      resources: [{
-        ...validState.resources[0]!,
-        instances: [{ ...validState.resources[0]!.instances[0], schema_version: "nope" }],
-      }],
-    }))).toBeNull();
+    expect(
+      parseTerraformStatePayload(
+        JSON.stringify({
+          ...validState,
+          resources: [
+            {
+              ...validState.resources[0]!,
+              instances: [{ ...validState.resources[0]!.instances[0], schema_version: "nope" }],
+            },
+          ],
+        }),
+      ),
+    ).toBeNull();
   });
 
   it("rejects a non-string terraform_version and a non-object outputs", () => {

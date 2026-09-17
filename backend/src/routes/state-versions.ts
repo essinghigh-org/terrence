@@ -1,13 +1,37 @@
-import { discardStateReservation, fenceStateWorkspace, pruneStateReservations, stateReservationObsolete, stateUploadLock, STATE_UPLOAD_TTL_MS } from "../lib/state-reservations";
+import {
+  discardStateReservation,
+  fenceStateWorkspace,
+  pruneStateReservations,
+  stateReservationObsolete,
+  stateUploadLock,
+  STATE_UPLOAD_TTL_MS,
+} from "../lib/state-reservations";
 import { Elysia } from "elysia";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { db } from "../db";
-import { agentJobs, auditLogs, logs, stateOutputIndex, stateVersions, workspaces, runs, organizationMemberships, teams, type users } from "../db/schema";
+import {
+  agentJobs,
+  auditLogs,
+  logs,
+  stateOutputIndex,
+  stateVersions,
+  workspaces,
+  runs,
+  organizationMemberships,
+  teams,
+  type users,
+} from "../db/schema";
 import { eq, and, desc, count, inArray, ne, or, isNull, sql } from "drizzle-orm";
 import { stateVersionResource, stateOutputResources, stateVersionSummaryResource } from "../lib/response";
-import { encryptStatePayload, isClientEncryptedState, parseTerraformStatePayload, statePayloadError, statePayloadWithSerial } from "../lib/validation";
+import {
+  encryptStatePayload,
+  isClientEncryptedState,
+  parseTerraformStatePayload,
+  statePayloadError,
+  statePayloadWithSerial,
+} from "../lib/validation";
 import { checkWorkspacePermission, checkRunStateAccess, workspaceIdsForPermission } from "../lib/authorization";
 import { findAuthorizedWorkspace, findRemoteStateReadableWorkspace } from "../lib/authorized-resources";
 import { decodeStatePayload, parseStatePayload, auditLog, lockPrincipal, ownsWorkspaceLock } from "../lib/utils";
@@ -30,7 +54,14 @@ import {
   type RecoveryCopyInspection,
 } from "../lib/recovery-files";
 import { commitStateVersionAtSerialTx, nextStateSerialTx } from "../lib/state-commit";
-import { abandonIdempotency, beginIdempotency, completeIdempotency, idempotencyContext, idempotencyError, idempotencyPrincipal } from "../lib/idempotency";
+import {
+  abandonIdempotency,
+  beginIdempotency,
+  completeIdempotency,
+  idempotencyContext,
+  idempotencyError,
+  idempotencyPrincipal,
+} from "../lib/idempotency";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -101,10 +132,7 @@ class StateSerialConflictError extends Error {
 
 type BodyTextResult = Readonly<{ ok: true; text: string } | { ok: false; reason: "too-large" | "empty" }>;
 
-async function requestBodyText(
-  body: unknown,
-  request: Request,
-): Promise<BodyTextResult> {
+async function requestBodyText(body: unknown, request: Request): Promise<BodyTextResult> {
   const uploadDir = join(storageDir, "state-uploads");
   const path = join(uploadDir, `state-${crypto.randomUUID()}.json`);
   await mkdir(uploadDir, { recursive: true });
@@ -154,9 +182,7 @@ function stateLineageError(
   if (previous === null) {
     return "State lineage cannot be validated because the workspace history contains an invalid state payload";
   }
-  return incomingState["lineage"] === previous["lineage"]
-    ? null
-    : "State lineage does not match the workspace history";
+  return incomingState["lineage"] === previous["lineage"] ? null : "State lineage does not match the workspace history";
 }
 
 type RecoveryReviewCheck = Readonly<{
@@ -176,10 +202,24 @@ type RecoveryStateMetadata = Readonly<{
 }>;
 
 const RECOVERY_ACTIVE_RUN_STATUSES = new Set([
-  "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
-  "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated",
-  "policy_checking", "policy_override", "policy_checked", "post_plan_running",
-  "post_plan_completed", "confirmed", "apply_queued", "applying",
+  "pending",
+  "fetching",
+  "fetching_completed",
+  "pre_plan_running",
+  "pre_plan_completed",
+  "queuing",
+  "plan_queued",
+  "planning",
+  "cost_estimating",
+  "cost_estimated",
+  "policy_checking",
+  "policy_override",
+  "policy_checked",
+  "post_plan_running",
+  "post_plan_completed",
+  "confirmed",
+  "apply_queued",
+  "applying",
 ]);
 
 function parsedStateMetadata(
@@ -189,33 +229,62 @@ function parsedStateMetadata(
 ): RecoveryStateMetadata {
   return {
     id: state.id,
-    serial: parsed?.["serial"] !== undefined && Number.isSafeInteger(parsed["serial"]) ? parsed["serial"] as number : state.serial,
-    lineage: typeof parsed?.["lineage"] === "string" && parsed["lineage"] !== "" && parsed["lineage"].length <= 256 ? parsed["lineage"] : null,
+    serial:
+      parsed?.["serial"] !== undefined && Number.isSafeInteger(parsed["serial"])
+        ? (parsed["serial"] as number)
+        : state.serial,
+    lineage:
+      typeof parsed?.["lineage"] === "string" && parsed["lineage"] !== "" && parsed["lineage"].length <= 256
+        ? parsed["lineage"]
+        : null,
     digest: createHash("sha256").update(payload).digest("hex"),
     size: Buffer.byteLength(payload),
-    terraformVersion: typeof parsed?.["terraform_version"] === "string" && parsed["terraform_version"].length <= 256 ? parsed["terraform_version"] : state.terraformVersion,
-    representation: parsed === null
-      ? isClientEncryptedState(payload) ? "opentofu-encrypted" : "invalid"
-      : "terraform-v4",
+    terraformVersion:
+      typeof parsed?.["terraform_version"] === "string" && parsed["terraform_version"].length <= 256
+        ? parsed["terraform_version"]
+        : state.terraformVersion,
+    representation:
+      parsed === null ? (isClientEncryptedState(payload) ? "opentofu-encrypted" : "invalid") : "terraform-v4",
   };
 }
 
-function stateMetadata(state: Readonly<{ id: string; statePayload: string | null; serial: number; terraformVersion: string | null }>): RecoveryStateMetadata {
+function stateMetadata(
+  state: Readonly<{ id: string; statePayload: string | null; serial: number; terraformVersion: string | null }>,
+): RecoveryStateMetadata {
   if (typeof state.statePayload !== "string" || state.statePayload === "") {
-    return { id: state.id, serial: state.serial, lineage: null, digest: null, size: null, terraformVersion: state.terraformVersion, representation: "unavailable" };
+    return {
+      id: state.id,
+      serial: state.serial,
+      lineage: null,
+      digest: null,
+      size: null,
+      terraformVersion: state.terraformVersion,
+      representation: "unavailable",
+    };
   }
   try {
     const payload = decodeStatePayload(state.statePayload);
     const parsed = parseTerraformStatePayload(payload);
     return parsedStateMetadata(state, payload, parsed);
   } catch {
-    return { id: state.id, serial: state.serial, lineage: null, digest: null, size: null, terraformVersion: state.terraformVersion, representation: "invalid" };
+    return {
+      id: state.id,
+      serial: state.serial,
+      lineage: null,
+      digest: null,
+      size: null,
+      terraformVersion: state.terraformVersion,
+      representation: "invalid",
+    };
   }
 }
 
 function redactRecoveryLog(text: string): string {
   const bounded = text.length > 4096 ? text.slice(-4096) : text;
-  return bounded.replace(/(authorization|bearer|token|password|secret|private[_-]?key)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]");
+  return bounded.replace(
+    /(authorization|bearer|token|password|secret|private[_-]?key)\s*[:=]\s*[^\s,;]+/gi,
+    "$1=[REDACTED]",
+  );
 }
 
 function recoveryCandidateMetadata(capture: RecoveryCopyInspection): RecoveryStateMetadata | null {
@@ -227,15 +296,31 @@ function recoveryCandidateMetadata(capture: RecoveryCopyInspection): RecoverySta
     digest: capture.digest,
     size: capture.size,
     terraformVersion: capture.terraformVersion,
-    representation: capture.status === "opaque" ? "opentofu-encrypted" : capture.status === "candidate" || capture.status === "promoted" ? "terraform-v4" : "invalid",
+    representation:
+      capture.status === "opaque"
+        ? "opentofu-encrypted"
+        : capture.status === "candidate" || capture.status === "promoted"
+          ? "terraform-v4"
+          : "invalid",
   };
 }
 
-async function activeRecoveryOwner(runId: string, runStatus: string): Promise<Readonly<{
-  runActive: boolean;
-  localProcessActive: boolean;
-  agentJobs: readonly Readonly<{ id: string; phase: string; status: string; agentId: string | null; claimedAt: number | null }>[];
-}>> {
+async function activeRecoveryOwner(
+  runId: string,
+  runStatus: string,
+): Promise<
+  Readonly<{
+    runActive: boolean;
+    localProcessActive: boolean;
+    agentJobs: readonly Readonly<{
+      id: string;
+      phase: string;
+      status: string;
+      agentId: string | null;
+      claimedAt: number | null;
+    }>[];
+  }>
+> {
   const jobs = await db.query.agentJobs.findMany({
     where: and(eq(agentJobs.runId, runId), inArray(agentJobs.status, ["queued", "claimed"])),
     columns: { id: true, phase: true, status: true, agentId: true, claimedAt: true },
@@ -268,13 +353,16 @@ async function fetchRecoveryReviewData(
   orgId: string | null,
   teamId: string | null,
 ) {
-  const canWritePromise = orgId === null
-    ? checkWorkspacePermission(workspace, userId, orgId, teamId, "state-write")
-    : Promise.resolve(false);
+  const canWritePromise =
+    orgId === null ? checkWorkspacePermission(workspace, userId, orgId, teamId, "state-write") : Promise.resolve(false);
   const [capture, latest, owner, recentLogs, canWrite] = await Promise.all([
     inspectRecoveryCopy(storageDir, run.id),
     db.query.stateVersions.findFirst({
-      where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
+      where: and(
+        eq(stateVersions.workspaceId, workspace.id),
+        eq(stateVersions.status, "finalized"),
+        eq(stateVersions.intermediate, false),
+      ),
       orderBy: [desc(stateVersions.serial)],
       columns: { id: true, statePayload: true, serial: true, terraformVersion: true },
     }),
@@ -300,40 +388,95 @@ function isRecoveryCandidate(capture: RecoveryCapture): boolean {
 
 function captureCompleteCheck(capture: RecoveryCapture): RecoveryReviewCheck {
   const pass = capture.status !== "missing" && capture.status !== "incomplete" && capture.marker !== null;
-  return { id: "capture-complete", status: pass ? "pass" : "fail", detail: pass ? "The durable capture marker is present." : "The capture marker is missing or invalid; this copy is not a verified candidate." };
+  return {
+    id: "capture-complete",
+    status: pass ? "pass" : "fail",
+    detail: pass
+      ? "The durable capture marker is present."
+      : "The capture marker is missing or invalid; this copy is not a verified candidate.",
+  };
 }
 
 function candidateParseCheck(capture: RecoveryCapture): RecoveryReviewCheck {
   const pass = capture.status === "candidate" || capture.status === "promoted";
-  return { id: "candidate-parse", status: pass ? "pass" : capture.status === "opaque" ? "blocked" : "fail", detail: pass ? "The captured state is a supported Terraform state document." : capture.status === "opaque" ? "The captured state is client-encrypted and needs its original client keys." : "The captured state cannot be parsed as a supported Terraform state document." };
+  return {
+    id: "candidate-parse",
+    status: pass ? "pass" : capture.status === "opaque" ? "blocked" : "fail",
+    detail: pass
+      ? "The captured state is a supported Terraform state document."
+      : capture.status === "opaque"
+        ? "The captured state is client-encrypted and needs its original client keys."
+        : "The captured state cannot be parsed as a supported Terraform state document.",
+  };
 }
 
 function digestCheck(capture: RecoveryCapture, candidate: RecoveryCandidate): RecoveryReviewCheck {
-  const pass = candidate?.digest !== null && candidate?.digest !== undefined && (capture.evidence === null || (capture.evidence.digest === candidate.digest && capture.evidence.size === candidate.size));
-  return { id: "digest", status: pass ? "pass" : "fail", detail: pass ? "The captured bytes match their recorded SHA-256 digest." : "The captured bytes do not match the recorded SHA-256 digest." };
+  const pass =
+    candidate?.digest !== null &&
+    candidate?.digest !== undefined &&
+    (capture.evidence === null ||
+      (capture.evidence.digest === candidate.digest && capture.evidence.size === candidate.size));
+  return {
+    id: "digest",
+    status: pass ? "pass" : "fail",
+    detail: pass
+      ? "The captured bytes match their recorded SHA-256 digest."
+      : "The captured bytes do not match the recorded SHA-256 digest.",
+  };
 }
 
 function lineageCheck(candidate: RecoveryCandidate, committed: CommittedRecoveryState): RecoveryReviewCheck {
-  const pass = candidate?.lineage !== null && (committed === null || committed.lineage === null || candidate?.lineage === committed.lineage);
-  return { id: "lineage", status: candidate?.lineage === null ? "unknown" : pass ? "pass" : "fail", detail: candidate?.lineage === null ? "The candidate has no lineage value to compare." : pass ? "The candidate lineage matches the latest committed state." : "The candidate lineage differs from the latest committed state." };
+  const pass =
+    candidate?.lineage !== null &&
+    (committed === null || committed.lineage === null || candidate?.lineage === committed.lineage);
+  return {
+    id: "lineage",
+    status: candidate?.lineage === null ? "unknown" : pass ? "pass" : "fail",
+    detail:
+      candidate?.lineage === null
+        ? "The candidate has no lineage value to compare."
+        : pass
+          ? "The candidate lineage matches the latest committed state."
+          : "The candidate lineage differs from the latest committed state.",
+  };
 }
 
 function recoveryDigestsMatch(candidate: RecoveryCandidate, committed: CommittedRecoveryState): boolean {
   return candidate?.digest !== null && candidate?.digest !== undefined && candidate.digest === committed?.digest;
 }
 
-function recoveryCandidateStale(candidate: RecoveryCandidate, committed: CommittedRecoveryState, sameDigest: boolean): boolean {
+function recoveryCandidateStale(
+  candidate: RecoveryCandidate,
+  committed: CommittedRecoveryState,
+  sameDigest: boolean,
+): boolean {
   const candidateSerial = candidate?.serial;
   const committedSerial = committed?.serial;
-  return committedSerial !== null && committedSerial !== undefined && candidateSerial !== null && candidateSerial !== undefined
-    && candidateSerial < committedSerial && !sameDigest;
+  return (
+    committedSerial !== null &&
+    committedSerial !== undefined &&
+    candidateSerial !== null &&
+    candidateSerial !== undefined &&
+    candidateSerial < committedSerial &&
+    !sameDigest
+  );
 }
 
-function recoverySerialConflict(candidate: RecoveryCandidate, committed: CommittedRecoveryState, sameDigest: boolean): boolean {
+function recoverySerialConflict(
+  candidate: RecoveryCandidate,
+  committed: CommittedRecoveryState,
+  sameDigest: boolean,
+): boolean {
   const candidateSerial = candidate?.serial;
   const committedSerial = committed?.serial;
-  return committedSerial !== null && committedSerial !== undefined && candidateSerial !== null && candidateSerial !== undefined
-    && candidateSerial === committedSerial && !sameDigest;
+  return (
+    committedSerial !== null &&
+    committedSerial !== undefined &&
+    candidateSerial !== null &&
+    candidateSerial !== undefined &&
+    candidateSerial === committedSerial &&
+    !sameDigest
+  );
 }
 
 function serialCheck(candidate: RecoveryCandidate, committed: CommittedRecoveryState): RecoveryReviewCheck {
@@ -341,12 +484,26 @@ function serialCheck(candidate: RecoveryCandidate, committed: CommittedRecoveryS
   const stale = recoveryCandidateStale(candidate, committed, sameDigest);
   const conflict = recoverySerialConflict(candidate, committed, sameDigest);
   const known = candidate?.serial !== null && candidate?.serial !== undefined;
-  return { id: "serial", status: !known ? "unknown" : stale || conflict ? "fail" : "pass", detail: stale ? "The candidate serial is behind a different committed state and is stale." : conflict ? "The candidate shares a serial with a different committed digest." : "The candidate serial is compatible with the current history." };
+  return {
+    id: "serial",
+    status: !known ? "unknown" : stale || conflict ? "fail" : "pass",
+    detail: stale
+      ? "The candidate serial is behind a different committed state and is stale."
+      : conflict
+        ? "The candidate shares a serial with a different committed digest."
+        : "The candidate serial is compatible with the current history.",
+  };
 }
 
 function ownerTerminatedCheck(owner: RecoveryOwner): RecoveryReviewCheck {
   const clear = isRecoveryOwnerClear(owner);
-  return { id: "owner-terminated", status: clear ? "pass" : "blocked", detail: clear ? "The run and its local/agent execution owners are stopped." : "Execution is still owned by the run or an agent; stop it or reconcile ownership before promotion." };
+  return {
+    id: "owner-terminated",
+    status: clear ? "pass" : "blocked",
+    detail: clear
+      ? "The run and its local/agent execution owners are stopped."
+      : "Execution is still owned by the run or an agent; stop it or reconcile ownership before promotion.",
+  };
 }
 
 function workspaceLockCheck(
@@ -356,11 +513,23 @@ function workspaceLockCheck(
   teamId: string | null,
 ): RecoveryReviewCheck {
   const owned = ownsWorkspaceLock(workspace, lockPrincipal(userId, orgId, teamId));
-  return { id: "workspace-lock", status: owned ? "pass" : "blocked", detail: owned ? "The workspace lock is held by this caller." : "The workspace must be locked by this caller before promotion." };
+  return {
+    id: "workspace-lock",
+    status: owned ? "pass" : "blocked",
+    detail: owned
+      ? "The workspace lock is held by this caller."
+      : "The workspace must be locked by this caller before promotion.",
+  };
 }
 
 function stateWriteCheck(canWrite: boolean): RecoveryReviewCheck {
-  return { id: "state-write", status: canWrite ? "pass" : "blocked", detail: canWrite ? "The caller has state-write permission." : "The caller does not have state-write permission for this workspace." };
+  return {
+    id: "state-write",
+    status: canWrite ? "pass" : "blocked",
+    detail: canWrite
+      ? "The caller has state-write permission."
+      : "The caller does not have state-write permission for this workspace.",
+  };
 }
 
 function buildRecoveryReviewChecks(args: {
@@ -373,7 +542,13 @@ function buildRecoveryReviewChecks(args: {
   orgId: string | null;
   teamId: string | null;
   canWrite: boolean;
-}): { checks: RecoveryReviewCheck[]; ownerClear: boolean; alreadyPromoted: boolean; promotionAllowed: boolean; blockers: string[] } {
+}): {
+  checks: RecoveryReviewCheck[];
+  ownerClear: boolean;
+  alreadyPromoted: boolean;
+  promotionAllowed: boolean;
+  blockers: string[];
+} {
   const checks: RecoveryReviewCheck[] = [
     captureCompleteCheck(args.capture),
     candidateParseCheck(args.capture),
@@ -384,8 +559,11 @@ function buildRecoveryReviewChecks(args: {
     workspaceLockCheck(args.workspace, args.userId, args.orgId, args.teamId),
     stateWriteCheck(args.canWrite),
   ];
-  const blockers = checks.filter((check): boolean => check.status === "fail" || check.status === "blocked").map((check): string => check.detail);
-  const alreadyPromoted = args.capture.status === "promoted" && args.capture.evidence?.promotedStateVersionId !== undefined;
+  const blockers = checks
+    .filter((check): boolean => check.status === "fail" || check.status === "blocked")
+    .map((check): string => check.detail);
+  const alreadyPromoted =
+    args.capture.status === "promoted" && args.capture.evidence?.promotedStateVersionId !== undefined;
   return {
     checks,
     ownerClear: isRecoveryOwnerClear(args.owner),
@@ -410,7 +588,7 @@ function assembleRecoveryReview(args: {
 }): Record<string, unknown> {
   const timestamps = args.run.statusTimestamps ?? {};
   return {
-    "run": {
+    run: {
       id: args.run.id,
       status: args.run.status,
       operation: args.run.operation,
@@ -419,7 +597,7 @@ function assembleRecoveryReview(args: {
       "agent-id": args.run.agentId,
       "agent-pool-id": args.run.agentPoolId,
     },
-    "capture": {
+    capture: {
       status: args.capture.status,
       "marker-present": args.capture.marker !== null,
       "captured-at": args.capture.capturedAt,
@@ -428,27 +606,31 @@ function assembleRecoveryReview(args: {
     },
     "candidate-state": args.candidate,
     "last-committed-state": args.committed,
-    "checks": args.checks,
+    checks: args.checks,
     "execution-owner": {
       "run-active": args.owner.runActive,
       "local-process-active": args.owner.localProcessActive,
       "agent-jobs": args.owner.agentJobs,
-      "terminated": args.ownerClear,
+      terminated: args.ownerClear,
     },
-    "relevant-logs": [...args.recentLogs].reverse().map((entry): Record<string, unknown> => ({
-      id: entry.id,
-      phase: entry.phase,
-      "created-at": new Date(entry.createdAt).toISOString(),
-      excerpt: redactRecoveryLog(entry.outputText),
-      truncated: entry.outputText.length > 4096,
-    })),
+    "relevant-logs": [...args.recentLogs].reverse().map(
+      (entry): Record<string, unknown> => ({
+        id: entry.id,
+        phase: entry.phase,
+        "created-at": new Date(entry.createdAt).toISOString(),
+        excerpt: redactRecoveryLog(entry.outputText),
+        truncated: entry.outputText.length > 4096,
+      }),
+    ),
     promotion: {
       allowed: args.promotionAllowed,
       "already-promoted": args.alreadyPromoted,
       blockers: args.blockers,
-      "evidence-retention": "The captured bytes and promotion manifest are retained until the configured recovery retention sweep removes promoted evidence.",
+      "evidence-retention":
+        "The captured bytes and promotion manifest are retained until the configured recovery retention sweep removes promoted evidence.",
     },
-    "secret-warning": "State downloads and log excerpts may contain sensitive values. Back up them only in an approved secure location.",
+    "secret-warning":
+      "State downloads and log excerpts may contain sensitive values. Back up them only in an approved secure location.",
   };
 }
 
@@ -489,7 +671,10 @@ async function recoveryReviewFor(
 }
 
 class StateVersionRejected extends Error {
-  constructor(public status: number, public body: unknown) {
+  constructor(
+    public status: number,
+    public body: unknown,
+  ) {
     super("state version rejected");
   }
 }
@@ -521,7 +706,8 @@ function parseStateVersionPayload(body: unknown): ParsedStateVersionRequest {
   const runData = objectField(runRel["data"]);
   const inlineState = typeof attributes["state"] === "string" ? attributes["state"] : undefined;
   const inlineJsonState = typeof attributes["json-state"] === "string" ? attributes["json-state"] : undefined;
-  const inlineJsonStateOutputs = typeof attributes["json-state-outputs"] === "string" ? attributes["json-state-outputs"] : undefined;
+  const inlineJsonStateOutputs =
+    typeof attributes["json-state-outputs"] === "string" ? attributes["json-state-outputs"] : undefined;
   const serial = typeof attributes["serial"] === "number" ? attributes["serial"] : undefined;
   return {
     payload,
@@ -539,8 +725,11 @@ function parseStateVersionPayload(body: unknown): ParsedStateVersionRequest {
 }
 
 function stateChecksumShapeError(expectedMd5: unknown, expectedLineage: unknown): string | null {
-  if ((expectedMd5 !== undefined && (typeof expectedMd5 !== "string" || !/^(?:[a-fA-F0-9]{32}|[A-Za-z0-9+/]{22}==)$/.test(expectedMd5)))
-    || (expectedLineage !== undefined && (typeof expectedLineage !== "string" || expectedLineage === ""))) {
+  if (
+    (expectedMd5 !== undefined &&
+      (typeof expectedMd5 !== "string" || !/^(?:[a-fA-F0-9]{32}|[A-Za-z0-9+/]{22}==)$/.test(expectedMd5))) ||
+    (expectedLineage !== undefined && (typeof expectedLineage !== "string" || expectedLineage === ""))
+  ) {
     return "Invalid state checksum or lineage";
   }
   return null;
@@ -552,10 +741,12 @@ function decodeStateVersionBodies(
   inlineJsonStateOutputs: string | undefined,
 ): { statePayload: string | null; jsonState: string | null; jsonStateOutputs: string | null } {
   const statePayload = inlineState !== undefined && inlineState !== "" ? decodeStatePayload(inlineState) : null;
-  const jsonState = inlineJsonState !== undefined && inlineJsonState !== "" ? decodeStatePayload(inlineJsonState) : null;
-  const jsonStateOutputs = inlineJsonStateOutputs !== undefined && inlineJsonStateOutputs !== ""
-    ? decodeStatePayload(inlineJsonStateOutputs)
-    : null;
+  const jsonState =
+    inlineJsonState !== undefined && inlineJsonState !== "" ? decodeStatePayload(inlineJsonState) : null;
+  const jsonStateOutputs =
+    inlineJsonStateOutputs !== undefined && inlineJsonStateOutputs !== ""
+      ? decodeStatePayload(inlineJsonStateOutputs)
+      : null;
   return { statePayload, jsonState, jsonStateOutputs };
 }
 
@@ -566,9 +757,10 @@ async function resolveStateVersionWorkspace(
   orgId: string | null,
   teamId: string | null,
 ): Promise<typeof workspaces.$inferSelect> {
-  const ws = run !== null && run.workspaceId === workspaceId
-    ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
-    : await findAuthorizedWorkspace(workspaceId, userId, orgId, teamId, "state-write");
+  const ws =
+    run !== null && run.workspaceId === workspaceId
+      ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
+      : await findAuthorizedWorkspace(workspaceId, userId, orgId, teamId, "state-write");
   if (ws === undefined) {
     throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
   }
@@ -592,7 +784,9 @@ function resolveStateVersionIdempotency(
     set,
   );
   if (idempotency === "invalid") {
-    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] });
+    throw new StateVersionRejected(400, {
+      errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }],
+    });
   }
   return idempotency;
 }
@@ -603,35 +797,52 @@ function assertStateVersionCreatable(
   orgId: string | null,
 ): void {
   if (parsed.data?.["type"] !== "state-versions") {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be state-versions" }] });
+    throw new StateVersionRejected(422, {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be state-versions" }],
+    });
   }
   if (orgId !== null && orgId !== undefined) {
-    throw new StateVersionRejected(403, { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create state versions" }] });
+    throw new StateVersionRejected(403, {
+      errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create state versions" }],
+    });
   }
   const checksumError = stateChecksumShapeError(parsed.expectedMd5, parsed.expectedLineage);
   if (checksumError !== null) {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: checksumError }] });
+    throw new StateVersionRejected(422, {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: checksumError }],
+    });
   }
   if (run !== null && parsed.requestedRunId !== null && parsed.requestedRunId !== run.runId) {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "run must match the run-scoped credential" }] });
+    throw new StateVersionRejected(422, {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: "run must match the run-scoped credential" }],
+    });
   }
 }
 
 function assertStateVersionSerial(serial: number | undefined): number {
   if (serial === undefined) {
-    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: "param is missing or the value is empty: serial" }] });
+    throw new StateVersionRejected(400, {
+      errors: [{ status: "400", title: "Bad Request", detail: "param is missing or the value is empty: serial" }],
+    });
   }
   if (!Number.isSafeInteger(serial) || serial < 0) {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial must be a non-negative safe integer" }] });
+    throw new StateVersionRejected(422, {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial must be a non-negative safe integer" }],
+    });
   }
   return serial;
 }
 
 async function resolveStateVersionRun(runId: string | null, workspaceId: string): Promise<string | null> {
   if (runId === null) return null;
-  const relatedRun = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { workspaceId: true, createdBy: true } });
+  const relatedRun = await db.query.runs.findFirst({
+    where: eq(runs.id, runId),
+    columns: { workspaceId: true, createdBy: true },
+  });
   if (relatedRun?.workspaceId !== workspaceId) {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "run must belong to this workspace" }] });
+    throw new StateVersionRejected(422, {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: "run must belong to this workspace" }],
+    });
   }
   return relatedRun.createdBy;
 }
@@ -644,8 +855,12 @@ function assertStateVersionWritable(
   teamId: string | null,
   intermediate: boolean,
 ): void {
-  if (run === null && (!ownsWorkspaceLock(ws, lockPrincipal(userId, orgId, teamId)))) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before writing state" }] });
+  if (run === null && !ownsWorkspaceLock(ws, lockPrincipal(userId, orgId, teamId))) {
+    throw new StateVersionRejected(409, {
+      errors: [
+        { status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before writing state" },
+      ],
+    });
   }
   // No locked-workspace rejection here: the reference format allows state uploads on locked
   // workspaces. The CLI holds the workspace lock for the whole
@@ -654,18 +869,27 @@ function assertStateVersionWritable(
   // comes from the run-level lock and state serial numbers, not from
   // blocking the lock holder.
   if (intermediate && ws.locked !== true) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Intermediate state requires a locked workspace" }] });
+    throw new StateVersionRejected(409, {
+      errors: [{ status: "409", title: "Conflict", detail: "Intermediate state requires a locked workspace" }],
+    });
   }
 }
 
 function assertStatePayloadMd5(statePayload: string | null, md5Attribute: unknown): void {
   if (statePayload === null) return;
   if (typeof md5Attribute !== "string") {
-    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: "md5 is required when state is supplied" }] });
+    throw new StateVersionRejected(400, {
+      errors: [{ status: "400", title: "Bad Request", detail: "md5 is required when state is supplied" }],
+    });
   }
   const expected = createHash("md5").update(statePayload).digest("base64");
-  if (md5Attribute !== expected && md5Attribute.toLowerCase() !== createHash("md5").update(statePayload).digest("hex")) {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "md5 does not match the state payload" }] });
+  if (
+    md5Attribute !== expected &&
+    md5Attribute.toLowerCase() !== createHash("md5").update(statePayload).digest("hex")
+  ) {
+    throw new StateVersionRejected(422, {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: "md5 does not match the state payload" }],
+    });
   }
 }
 
@@ -677,13 +901,25 @@ function parseAndAssertStatePayload(
 ): Record<string, unknown> | null {
   const parsedTerraformState = statePayload === null ? null : parseTerraformStatePayload(statePayload);
   if (statePayload !== null && parsedTerraformState === null) {
-    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(statePayload) }] });
+    throw new StateVersionRejected(400, {
+      errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(statePayload) }],
+    });
   }
-  if (parsedTerraformState !== null && expectedLineage !== undefined && parsedTerraformState["lineage"] !== expectedLineage) {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "lineage does not match the state payload" }] });
+  if (
+    parsedTerraformState !== null &&
+    expectedLineage !== undefined &&
+    parsedTerraformState["lineage"] !== expectedLineage
+  ) {
+    throw new StateVersionRejected(422, {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: "lineage does not match the state payload" }],
+    });
   }
   if (parsedTerraformState !== null && parsedTerraformState["serial"] !== serial) {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial does not match the Terraform state payload" }] });
+    throw new StateVersionRejected(422, {
+      errors: [
+        { status: "422", title: "Unprocessable Entity", detail: "serial does not match the Terraform state payload" },
+      ],
+    });
   }
   assertStatePayloadMd5(statePayload, md5Attribute);
   return parsedTerraformState;
@@ -701,7 +937,9 @@ async function assertStateVersionAdvances(
     columns: { serial: true, statePayload: true },
   });
   if (latestState !== undefined && serial <= latestState.serial) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] });
+    throw new StateVersionRejected(409, {
+      errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }],
+    });
   }
   if (parsedTerraformState !== null) {
     const lineageError = stateLineageError(latestState, parsedTerraformState);
@@ -710,7 +948,9 @@ async function assertStateVersionAdvances(
     }
   }
   if (jsonState !== null && parseStatePayload(jsonState) === null) {
-    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] });
+    throw new StateVersionRejected(400, {
+      errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }],
+    });
   }
 }
 
@@ -731,60 +971,80 @@ type InsertStateVersionArgs = {
 };
 
 async function insertStateVersionRecord(args: InsertStateVersionArgs): Promise<void> {
-  const { id, workspaceId, serial, expectedMd5, expectedLineage, statePayload, runId, jsonState, jsonStateOutputs, relatedRunCreatedBy, createdBy, intermediate, ws } = args;
+  const {
+    id,
+    workspaceId,
+    serial,
+    expectedMd5,
+    expectedLineage,
+    statePayload,
+    runId,
+    jsonState,
+    jsonStateOutputs,
+    relatedRunCreatedBy,
+    createdBy,
+    intermediate,
+    ws,
+  } = args;
   try {
-    await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<void> => {
-      const t = tx as typeof db;
-      if (!(await fenceStateWorkspace(t, ws))) throw new StateSerialConflictError();
-      await pruneStateReservations(t, ws);
-      // Re-check inside the same transaction as the insert. This closes the
-      // race between two writers that both observed the same latest serial,
-      // and includes pending/intermediate rows hidden by the finalized-only
-      // validation query above.
-      const latestAny = await t.query.stateVersions.findFirst({
-        where: eq(stateVersions.workspaceId, workspaceId),
-        orderBy: [desc(stateVersions.serial)],
-        columns: { serial: true },
-      });
-      if (latestAny !== undefined && serial <= latestAny.serial) throw new StateSerialConflictError();
-      await t.insert(stateVersions).values({
-        id,
-        workspaceId,
-        serial,
-        expectedMd5,
-        expectedLineage,
-        uploadExpiresAt: statePayload === null ? Date.now() + STATE_UPLOAD_TTL_MS : null,
-        uploadLock: statePayload === null ? stateUploadLock(ws) : null,
-        uploadSha256: statePayload === null ? null : createHash("sha256").update(statePayload).digest("hex"),
-        runId,
-        statePayload: await encryptStatePayload(statePayload),
-        jsonState: await encryptStatePayload(jsonState ?? statePayload),
-        jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
-        createdBy: relatedRunCreatedBy ?? createdBy,
-        intermediate,
-        status: statePayload === null ? "pending" : "finalized",
-        createdAt: Date.now(),
-      });
-      await insertStateOutputIndex(t, id, workspaceId, jsonState, statePayload);
-      await t.insert(auditLogs).values(auditLogValues({
-        action: "create",
-        resourceType: "state-version",
-        resourceId: id,
-        orgId: ws.orgId,
-        userId: createdBy,
-        details: {
+    await withStateSerialRetry(async () =>
+      db.transaction(async (tx: unknown): Promise<void> => {
+        const t = tx as typeof db;
+        if (!(await fenceStateWorkspace(t, ws))) throw new StateSerialConflictError();
+        await pruneStateReservations(t, ws);
+        // Re-check inside the same transaction as the insert. This closes the
+        // race between two writers that both observed the same latest serial,
+        // and includes pending/intermediate rows hidden by the finalized-only
+        // validation query above.
+        const latestAny = await t.query.stateVersions.findFirst({
+          where: eq(stateVersions.workspaceId, workspaceId),
+          orderBy: [desc(stateVersions.serial)],
+          columns: { serial: true },
+        });
+        if (latestAny !== undefined && serial <= latestAny.serial) throw new StateSerialConflictError();
+        await t.insert(stateVersions).values({
+          id,
           workspaceId,
-          runId,
           serial,
-          status: statePayload === null ? "pending" : "finalized",
+          expectedMd5,
+          expectedLineage,
+          uploadExpiresAt: statePayload === null ? Date.now() + STATE_UPLOAD_TTL_MS : null,
+          uploadLock: statePayload === null ? stateUploadLock(ws) : null,
+          uploadSha256: statePayload === null ? null : createHash("sha256").update(statePayload).digest("hex"),
+          runId,
+          statePayload: await encryptStatePayload(statePayload),
+          jsonState: await encryptStatePayload(jsonState ?? statePayload),
+          jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
+          createdBy: relatedRunCreatedBy ?? createdBy,
           intermediate,
-          stateBytes: statePayload === null ? 0 : Buffer.byteLength(statePayload, "utf8"),
-        },
-      }) as typeof auditLogs.$inferInsert);
-    }));
+          status: statePayload === null ? "pending" : "finalized",
+          createdAt: Date.now(),
+        });
+        await insertStateOutputIndex(t, id, workspaceId, jsonState, statePayload);
+        await t.insert(auditLogs).values(
+          auditLogValues({
+            action: "create",
+            resourceType: "state-version",
+            resourceId: id,
+            orgId: ws.orgId,
+            userId: createdBy,
+            details: {
+              workspaceId,
+              runId,
+              serial,
+              status: statePayload === null ? "pending" : "finalized",
+              intermediate,
+              stateBytes: statePayload === null ? 0 : Buffer.byteLength(statePayload, "utf8"),
+            },
+          }) as typeof auditLogs.$inferInsert,
+        );
+      }),
+    );
   } catch (error: unknown) {
     if (error instanceof StateSerialConflictError || isUniqueConstraintError(error)) {
-      throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] });
+      throw new StateVersionRejected(409, {
+        errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }],
+      });
     }
     throw error;
   }
@@ -807,9 +1067,11 @@ async function completeStateVersionCreation(
     throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
   }
   (set as { status: number }).status = 201;
-   const responseBody = { data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, userId, orgId, teamId)) };
-   if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
-   return responseBody;
+  const responseBody = {
+    data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, userId, orgId, teamId)),
+  };
+  if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
+  return responseBody;
 }
 
 type RecoveryCaptureFull = Awaited<ReturnType<typeof inspectRecoveryCopy>>;
@@ -822,7 +1084,10 @@ async function requireRecoverStateContext(
   teamId: string | null,
 ) {
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-  const workspace = run === undefined ? undefined : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "state-write");
+  const workspace =
+    run === undefined
+      ? undefined
+      : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "state-write");
   if (run === undefined || workspace === undefined) {
     throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
   }
@@ -836,25 +1101,54 @@ async function resolveRecoverCandidate(runId: string, workspace: RecoverStateCon
   const initialCapture = await inspectRecoveryCopy(storageDir, runId, true);
   if (initialCapture.status === "promoted" && initialCapture.evidence?.promotedStateVersionId !== undefined) {
     const existing = await db.query.stateVersions.findFirst({
-      where: and(eq(stateVersions.id, initialCapture.evidence.promotedStateVersionId), eq(stateVersions.workspaceId, workspace.id)),
+      where: and(
+        eq(stateVersions.id, initialCapture.evidence.promotedStateVersionId),
+        eq(stateVersions.workspaceId, workspace.id),
+      ),
     });
     if (existing !== undefined) {
-      return { kind: "promoted" as const, status: 200, response: { data: stateVersionResource(existing, request), meta: { idempotent: true, evidenceRetained: true } } };
+      return {
+        kind: "promoted" as const,
+        status: 200,
+        response: { data: stateVersionResource(existing, request), meta: { idempotent: true, evidenceRetained: true } },
+      };
     }
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Recovery evidence says it was promoted, but the committed state version is unavailable" }] });
+    throw new StateVersionRejected(409, {
+      errors: [
+        {
+          status: "409",
+          title: "Conflict",
+          detail: "Recovery evidence says it was promoted, but the committed state version is unavailable",
+        },
+      ],
+    });
   }
   if (initialCapture.status === "incomplete" || initialCapture.status === "missing") {
     throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
   }
   if (initialCapture.status === "opaque") {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unsupported state representation", detail: statePayloadError(initialCapture.payload ?? null) }] });
+    throw new StateVersionRejected(422, {
+      errors: [
+        {
+          status: "422",
+          title: "Unsupported state representation",
+          detail: statePayloadError(initialCapture.payload ?? null),
+        },
+      ],
+    });
   }
   if (initialCapture.status !== "candidate" || initialCapture.payload === undefined) {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(initialCapture.payload ?? null) }] });
+    throw new StateVersionRejected(422, {
+      errors: [
+        { status: "422", title: "Unprocessable Entity", detail: statePayloadError(initialCapture.payload ?? null) },
+      ],
+    });
   }
   const parsed = parseTerraformStatePayload(initialCapture.payload);
   if (parsed === null) {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(initialCapture.payload) }] });
+    throw new StateVersionRejected(422, {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(initialCapture.payload) }],
+    });
   }
   return { kind: "candidate" as const, capture: initialCapture, parsed };
 }
@@ -869,16 +1163,34 @@ async function requireRecoveryQuiesced(
   const review = await recoveryReviewFor(run, workspace, user, orgId, teamId);
   const owner = review["execution-owner"] as Readonly<{ terminated?: unknown }> | undefined;
   if (owner?.terminated !== true) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "The run or its execution owner is still active; stop it or reconcile ownership before recovering state" }] });
+    throw new StateVersionRejected(409, {
+      errors: [
+        {
+          status: "409",
+          title: "Conflict",
+          detail:
+            "The run or its execution owner is still active; stop it or reconcile ownership before recovering state",
+        },
+      ],
+    });
   }
-  const reviewChecks = Array.isArray(review["checks"]) ? review["checks"] as RecoveryReviewCheck[] : [];
+  const reviewChecks = Array.isArray(review["checks"]) ? (review["checks"] as RecoveryReviewCheck[]) : [];
   const failedReview = reviewChecks.find((check): boolean => check.status === "fail");
   if (failedReview !== undefined) {
-    const status = failedReview.id === "lineage" || failedReview.id === "candidate-parse" || failedReview.id === "digest" ? 422 : 409;
-    throw new StateVersionRejected(status, { errors: [{ status: String(status), title: "Recovery precondition failed", detail: failedReview.detail }] });
+    const status =
+      failedReview.id === "lineage" || failedReview.id === "candidate-parse" || failedReview.id === "digest"
+        ? 422
+        : 409;
+    throw new StateVersionRejected(status, {
+      errors: [{ status: String(status), title: "Recovery precondition failed", detail: failedReview.detail }],
+    });
   }
   if (!ownsWorkspaceLock(workspace, lockPrincipal(user?.id, orgId, teamId))) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before recovering state" }] });
+    throw new StateVersionRejected(409, {
+      errors: [
+        { status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before recovering state" },
+      ],
+    });
   }
 }
 
@@ -888,10 +1200,21 @@ async function resolvePromotedRecovery(
 ): Promise<{ stateVersionId: string; committedSerial: number } | null> {
   if (capture.status !== "promoted" || capture.evidence?.promotedStateVersionId === undefined) return null;
   const existing = await db.query.stateVersions.findFirst({
-    where: and(eq(stateVersions.id, capture.evidence.promotedStateVersionId), eq(stateVersions.workspaceId, workspace.id)),
+    where: and(
+      eq(stateVersions.id, capture.evidence.promotedStateVersionId),
+      eq(stateVersions.workspaceId, workspace.id),
+    ),
   });
   if (existing === undefined) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Recovery evidence says it was promoted, but the committed state version is unavailable" }] });
+    throw new StateVersionRejected(409, {
+      errors: [
+        {
+          status: "409",
+          title: "Conflict",
+          detail: "Recovery evidence says it was promoted, but the committed state version is unavailable",
+        },
+      ],
+    });
   }
   return { stateVersionId: existing.id, committedSerial: existing.serial };
 }
@@ -911,9 +1234,12 @@ function assertRecoveryCandidateSerial(
   currentDigest: string | null,
   candidateDigest: string,
 ): void {
-  if (typeof candidateSerial !== "number" || !Number.isSafeInteger(candidateSerial)
-    || (current !== undefined && (candidateSerial < current.serial
-      || (candidateSerial === current.serial && currentDigest !== candidateDigest)))) {
+  if (
+    typeof candidateSerial !== "number" ||
+    !Number.isSafeInteger(candidateSerial) ||
+    (current !== undefined &&
+      (candidateSerial < current.serial || (candidateSerial === current.serial && currentDigest !== candidateDigest)))
+  ) {
     throw new StateSerialConflictError();
   }
 }
@@ -925,7 +1251,9 @@ async function promoteRecoveryCapture(
   userId: string | undefined,
 ): Promise<{ stateVersionId: string | null; committedSerial: number | null; idempotent: boolean }> {
   if (!(await acquireRecoveryPromotionLock(storageDir, runId))) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Another recovery promotion is already in progress" }] });
+    throw new StateVersionRejected(409, {
+      errors: [{ status: "409", title: "Conflict", detail: "Another recovery promotion is already in progress" }],
+    });
   }
   let stateVersionId: string | null = null;
   let committedSerial: number | null = null;
@@ -938,64 +1266,84 @@ async function promoteRecoveryCapture(
       committedSerial = promoted.committedSerial;
       idempotent = true;
     } else if (latestCapture.status !== "candidate" || latestCapture.payload === undefined) {
-      throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "The recovery copy changed while it was being reviewed" }] });
+      throw new StateVersionRejected(409, {
+        errors: [{ status: "409", title: "Conflict", detail: "The recovery copy changed while it was being reviewed" }],
+      });
     } else {
       const rawState = latestCapture.payload;
       const latestParsed = parseTerraformStatePayload(rawState);
       if (latestParsed === null) {
-        throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(rawState) }] });
-      }
-      stateVersionId = await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<string> => {
-        const t = tx as typeof db;
-        if (!(await fenceStateWorkspace(t, workspace))) throw new StateSerialConflictError();
-        await pruneStateReservations(t, workspace);
-        const current = await t.query.stateVersions.findFirst({
-          where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
-          orderBy: [desc(stateVersions.serial)],
+        throw new StateVersionRejected(422, {
+          errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(rawState) }],
         });
-        const currentLineageError = stateLineageError(current, latestParsed);
-        if (currentLineageError !== null) throw new StateSerialConflictError();
-        const candidateSerial = latestParsed["serial"];
-        const candidateDigest = createHash("sha256").update(rawState).digest("hex");
-        const currentDigest = hashCommittedStatePayload(current?.statePayload);
-        assertRecoveryCandidateSerial(candidateSerial, current, currentDigest, candidateDigest);
-        const serial = await nextStateSerialTx(t, workspace.id);
-        const promoted = statePayloadWithSerial(rawState, serial);
-        const id = crypto.randomUUID();
-        await commitStateVersionAtSerialTx(t, {
-          id,
-          workspaceId: workspace.id,
-          serial,
-          runId,
-          uploadSha256: createHash("sha256").update(promoted).digest("hex"),
-          statePayload: await encryptStatePayload(promoted),
-          jsonState: await encryptStatePayload(promoted),
-          jsonStateOutputs: await encryptStatePayload(latestParsed["outputs"] === undefined ? null : JSON.stringify(latestParsed["outputs"])),
-          createdBy: run.createdBy,
-          status: "finalized",
-          terraformVersion: typeof latestParsed["terraform_version"] === "string" ? latestParsed["terraform_version"] : null,
-          intermediate: false,
-          createdAt: Date.now(),
-        }, promoted, promoted);
-        await t.insert(auditLogs).values(auditLogValues({
-          action: "recover-state",
-          resourceType: "state-version",
-          resourceId: id,
-          orgId: workspace.orgId,
-          userId: userId ?? null,
-          details: {
-            runId,
-            workspaceId: workspace.id,
-            serial,
-            previousSerial: current?.serial ?? null,
-            before: { recoveryCapture: true },
-            after: { status: "finalized", intermediate: false, serial },
-          },
-          immutable: true,
-        }) as typeof auditLogs.$inferInsert);
-        committedSerial = serial;
-        return id;
-      }));
+      }
+      stateVersionId = await withStateSerialRetry(async () =>
+        db.transaction(async (tx: unknown): Promise<string> => {
+          const t = tx as typeof db;
+          if (!(await fenceStateWorkspace(t, workspace))) throw new StateSerialConflictError();
+          await pruneStateReservations(t, workspace);
+          const current = await t.query.stateVersions.findFirst({
+            where: and(
+              eq(stateVersions.workspaceId, workspace.id),
+              eq(stateVersions.status, "finalized"),
+              eq(stateVersions.intermediate, false),
+            ),
+            orderBy: [desc(stateVersions.serial)],
+          });
+          const currentLineageError = stateLineageError(current, latestParsed);
+          if (currentLineageError !== null) throw new StateSerialConflictError();
+          const candidateSerial = latestParsed["serial"];
+          const candidateDigest = createHash("sha256").update(rawState).digest("hex");
+          const currentDigest = hashCommittedStatePayload(current?.statePayload);
+          assertRecoveryCandidateSerial(candidateSerial, current, currentDigest, candidateDigest);
+          const serial = await nextStateSerialTx(t, workspace.id);
+          const promoted = statePayloadWithSerial(rawState, serial);
+          const id = crypto.randomUUID();
+          await commitStateVersionAtSerialTx(
+            t,
+            {
+              id,
+              workspaceId: workspace.id,
+              serial,
+              runId,
+              uploadSha256: createHash("sha256").update(promoted).digest("hex"),
+              statePayload: await encryptStatePayload(promoted),
+              jsonState: await encryptStatePayload(promoted),
+              jsonStateOutputs: await encryptStatePayload(
+                latestParsed["outputs"] === undefined ? null : JSON.stringify(latestParsed["outputs"]),
+              ),
+              createdBy: run.createdBy,
+              status: "finalized",
+              terraformVersion:
+                typeof latestParsed["terraform_version"] === "string" ? latestParsed["terraform_version"] : null,
+              intermediate: false,
+              createdAt: Date.now(),
+            },
+            promoted,
+            promoted,
+          );
+          await t.insert(auditLogs).values(
+            auditLogValues({
+              action: "recover-state",
+              resourceType: "state-version",
+              resourceId: id,
+              orgId: workspace.orgId,
+              userId: userId ?? null,
+              details: {
+                runId,
+                workspaceId: workspace.id,
+                serial,
+                previousSerial: current?.serial ?? null,
+                before: { recoveryCapture: true },
+                after: { status: "finalized", intermediate: false, serial },
+              },
+              immutable: true,
+            }) as typeof auditLogs.$inferInsert,
+          );
+          committedSerial = serial;
+          return id;
+        }),
+      );
     }
     if (stateVersionId !== null && committedSerial !== null) {
       // Keep the filesystem lock until the manifest is durable. This
@@ -1006,7 +1354,9 @@ async function promoteRecoveryCapture(
   } catch (error) {
     if (error instanceof StateVersionRejected) throw error;
     if (!(error instanceof StateSerialConflictError) && !isUniqueConstraintError(error)) throw error;
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }] });
+    throw new StateVersionRejected(409, {
+      errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }],
+    });
   } finally {
     await releaseRecoveryPromotionLock(storageDir, runId);
   }
@@ -1022,17 +1372,24 @@ async function resolveUploadWorkspace(
   orgId: string | null,
   teamId: string | null,
 ) {
-  const ws = run !== null && run.workspaceId === workspaceId
-    ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
-    : await findAuthorizedWorkspace(workspaceId, userId, orgId, teamId, "state-write");
+  const ws =
+    run !== null && run.workspaceId === workspaceId
+      ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
+      : await findAuthorizedWorkspace(workspaceId, userId, orgId, teamId, "state-write");
   if (ws === undefined) {
     throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
   }
   if (orgId !== null && orgId !== undefined) {
-    throw new StateVersionRejected(403, { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot upload state" }] });
+    throw new StateVersionRejected(403, {
+      errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot upload state" }],
+    });
   }
   if (run === null && !ownsWorkspaceLock(ws, lockPrincipal(userId, orgId, teamId))) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before writing state" }] });
+    throw new StateVersionRejected(409, {
+      errors: [
+        { status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before writing state" },
+      ],
+    });
   }
   return ws;
 }
@@ -1040,26 +1397,39 @@ async function resolveUploadWorkspace(
 async function readUploadState(body: unknown, request: Request): Promise<string> {
   const contentLength = Number(request.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > MAX_IMPORTED_STATE_BYTES) {
-    throw new StateVersionRejected(413, { errors: [{ status: "413", title: "Payload Too Large", detail: "Terraform state exceeds the 100 MiB maximum" }] });
+    throw new StateVersionRejected(413, {
+      errors: [{ status: "413", title: "Payload Too Large", detail: "Terraform state exceeds the 100 MiB maximum" }],
+    });
   }
   const rawStateResult = await requestBodyText(body, request);
   if (!rawStateResult.ok) {
-    throw new StateVersionRejected(
-      rawStateResult.reason === "too-large" ? 413 : 400,
-      { errors: [{ status: String(rawStateResult.reason === "too-large" ? 413 : 400), title: rawStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] },
-    );
+    throw new StateVersionRejected(rawStateResult.reason === "too-large" ? 413 : 400, {
+      errors: [
+        {
+          status: String(rawStateResult.reason === "too-large" ? 413 : 400),
+          title: rawStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request",
+        },
+      ],
+    });
   }
   const rawState = rawStateResult.text;
   if (Buffer.byteLength(rawState, "utf8") > MAX_IMPORTED_STATE_BYTES) {
-    throw new StateVersionRejected(413, { errors: [{ status: "413", title: "Payload Too Large", detail: "Terraform state exceeds the 100 MiB maximum" }] });
+    throw new StateVersionRejected(413, {
+      errors: [{ status: "413", title: "Payload Too Large", detail: "Terraform state exceeds the 100 MiB maximum" }],
+    });
   }
   return rawState;
 }
 
-function parseUploadState(rawState: string): { parsed: NonNullable<ReturnType<typeof parseTerraformStatePayload>>; incomingSerial: number } {
+function parseUploadState(rawState: string): {
+  parsed: NonNullable<ReturnType<typeof parseTerraformStatePayload>>;
+  incomingSerial: number;
+} {
   const parsed = parseTerraformStatePayload(rawState);
   if (parsed === null) {
-    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(rawState) }] });
+    throw new StateVersionRejected(400, {
+      errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(rawState) }],
+    });
   }
   // Migrating an existing state file into an empty workspace must accept
   // its serial as-is (issue #569): real-world files carry serials like 12
@@ -1067,7 +1437,9 @@ function parseUploadState(rawState: string): { parsed: NonNullable<ReturnType<ty
   // and CLI round-trips increment naturally from it.
   const incomingSerial = parsed["serial"];
   if (typeof incomingSerial !== "number" || !Number.isInteger(incomingSerial) || incomingSerial <= 0) {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "State serial must be a positive integer" }] });
+    throw new StateVersionRejected(422, {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: "State serial must be a positive integer" }],
+    });
   }
   return { parsed, incomingSerial };
 }
@@ -1075,7 +1447,11 @@ function parseUploadState(rawState: string): { parsed: NonNullable<ReturnType<ty
 function assertUploadMd5(request: Request, rawState: string): void {
   const contentMd5 = request.headers.get("content-md5");
   if (contentMd5 !== null && contentMd5 !== createHash("md5").update(rawState).digest("base64")) {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Content-MD5 does not match the state payload" }] });
+    throw new StateVersionRejected(422, {
+      errors: [
+        { status: "422", title: "Unprocessable Entity", detail: "Content-MD5 does not match the state payload" },
+      ],
+    });
   }
 }
 
@@ -1092,12 +1468,18 @@ async function assertUploadPreconditions(
   });
   if (latestImportedState !== undefined && incomingSerial !== latestImportedState.serial + 1) {
     if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial must be the next workspace state serial" }] });
+    throw new StateVersionRejected(422, {
+      errors: [
+        { status: "422", title: "Unprocessable Entity", detail: "serial must be the next workspace state serial" },
+      ],
+    });
   }
   const lineageError = stateLineageError(latestImportedState, parsed);
   if (lineageError !== null) {
     if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] });
+    throw new StateVersionRejected(422, {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }],
+    });
   }
 }
 
@@ -1113,55 +1495,64 @@ async function commitUploadedState(args: {
   idempotencyBegin: Awaited<ReturnType<typeof beginIdempotency>>;
 }): Promise<string> {
   try {
-    return await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<string> => {
-      const t = tx as typeof db;
-      const latest = await t.query.stateVersions.findFirst({
-        where: and(eq(stateVersions.workspaceId, args.workspaceId), eq(stateVersions.status, "finalized")),
-        orderBy: [desc(stateVersions.serial)],
-      });
-      // Race-safe serial assignment (issue #569): a concurrent first import
-      // may have landed between the pre-check and this transaction. When a
-      // latest exists, this payload must be its successor.
-      if (latest !== undefined && args.incomingSerial !== latest.serial + 1) throw new StateSerialConflictError();
-      const serial = latest === undefined ? args.incomingSerial : latest.serial + 1;
-      const id = crypto.randomUUID();
-      await t.insert(stateVersions).values({
-        id,
-        workspaceId: args.workspaceId,
-        serial,
-        uploadSha256: createHash("sha256").update(args.rawState).digest("hex"),
-        statePayload: await encryptStatePayload(args.rawState),
-        jsonState: await encryptStatePayload(args.rawState),
-        jsonStateOutputs: await encryptStatePayload(args.parsed["outputs"] === undefined ? null : JSON.stringify(args.parsed["outputs"])),
-        runId: args.run?.runId ?? null,
-        createdBy: args.runCreatedBy ?? args.userId ?? null,
-        status: "finalized",
-        terraformVersion: typeof args.parsed["terraform_version"] === "string" ? args.parsed["terraform_version"] : null,
-        intermediate: false,
-        createdAt: Date.now(),
-      });
-      await insertStateOutputIndex(t, id, args.workspaceId, args.rawState, args.rawState);
-      await t.insert(auditLogs).values(auditLogValues({
-        action: "promote",
-        resourceType: "state-version",
-        resourceId: id,
-        orgId: args.ws.orgId,
-        userId: args.userId ?? null,
-        details: {
+    return await withStateSerialRetry(async () =>
+      db.transaction(async (tx: unknown): Promise<string> => {
+        const t = tx as typeof db;
+        const latest = await t.query.stateVersions.findFirst({
+          where: and(eq(stateVersions.workspaceId, args.workspaceId), eq(stateVersions.status, "finalized")),
+          orderBy: [desc(stateVersions.serial)],
+        });
+        // Race-safe serial assignment (issue #569): a concurrent first import
+        // may have landed between the pre-check and this transaction. When a
+        // latest exists, this payload must be its successor.
+        if (latest !== undefined && args.incomingSerial !== latest.serial + 1) throw new StateSerialConflictError();
+        const serial = latest === undefined ? args.incomingSerial : latest.serial + 1;
+        const id = crypto.randomUUID();
+        await t.insert(stateVersions).values({
+          id,
           workspaceId: args.workspaceId,
-          runId: args.run?.runId ?? null,
           serial,
-          stateBytes: Buffer.byteLength(args.rawState, "utf8"),
-          after: { status: "finalized", intermediate: false, serial },
-        },
-        immutable: true,
-      }) as typeof auditLogs.$inferInsert);
-      return id;
-    }));
+          uploadSha256: createHash("sha256").update(args.rawState).digest("hex"),
+          statePayload: await encryptStatePayload(args.rawState),
+          jsonState: await encryptStatePayload(args.rawState),
+          jsonStateOutputs: await encryptStatePayload(
+            args.parsed["outputs"] === undefined ? null : JSON.stringify(args.parsed["outputs"]),
+          ),
+          runId: args.run?.runId ?? null,
+          createdBy: args.runCreatedBy ?? args.userId ?? null,
+          status: "finalized",
+          terraformVersion:
+            typeof args.parsed["terraform_version"] === "string" ? args.parsed["terraform_version"] : null,
+          intermediate: false,
+          createdAt: Date.now(),
+        });
+        await insertStateOutputIndex(t, id, args.workspaceId, args.rawState, args.rawState);
+        await t.insert(auditLogs).values(
+          auditLogValues({
+            action: "promote",
+            resourceType: "state-version",
+            resourceId: id,
+            orgId: args.ws.orgId,
+            userId: args.userId ?? null,
+            details: {
+              workspaceId: args.workspaceId,
+              runId: args.run?.runId ?? null,
+              serial,
+              stateBytes: Buffer.byteLength(args.rawState, "utf8"),
+              after: { status: "finalized", intermediate: false, serial },
+            },
+            immutable: true,
+          }) as typeof auditLogs.$inferInsert,
+        );
+        return id;
+      }),
+    );
   } catch (error: unknown) {
     if (error instanceof StateSerialConflictError || isUniqueConstraintError(error)) {
       if (args.idempotencyBegin.kind === "reserved") await abandonIdempotency(args.idempotencyBegin.id);
-      throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] });
+      throw new StateVersionRejected(409, {
+        errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }],
+      });
     }
     throw error;
   }
@@ -1197,7 +1588,9 @@ function buildStateVersionInsert(args: {
 
 async function findUploadRunCreatedBy(run: ParamCtx["run"]): Promise<string | null> {
   if (run === null) return null;
-  return (await db.query.runs.findFirst({ where: eq(runs.id, run.runId), columns: { createdBy: true } }))?.createdBy ?? null;
+  return (
+    (await db.query.runs.findFirst({ where: eq(runs.id, run.runId), columns: { createdBy: true } }))?.createdBy ?? null
+  );
 }
 
 async function requireUploadedStateVersion(
@@ -1225,36 +1618,61 @@ async function resolveRollbackWorkspace(
     throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
   }
   if (orgId !== null && orgId !== undefined) {
-    throw new StateVersionRejected(403, { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot roll back state" }] });
+    throw new StateVersionRejected(403, {
+      errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot roll back state" }],
+    });
   }
   if (!ownsWorkspaceLock(workspace, lockPrincipal(userId, orgId, teamId))) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before rollback" }] });
+    throw new StateVersionRejected(409, {
+      errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before rollback" }],
+    });
   }
   return workspace;
 }
 
 function parseRollbackRequest(body: unknown): { payload: Record<string, unknown>; sourceId: string } {
-  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-  const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data =
+    payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
+  const relationships =
+    data["relationships"] !== null && typeof data["relationships"] === "object"
+      ? (data["relationships"] as Record<string, unknown>)
+      : {};
   const rollback = relationships["rollback-state-version"];
-  const rollbackData = rollback !== null && typeof rollback === "object" ? (rollback as Record<string, unknown>)["data"] : null;
-  const sourceId = rollbackData !== null && typeof rollbackData === "object" && typeof (rollbackData as Record<string, unknown>)["id"] === "string" ? (rollbackData as Record<string, unknown>)["id"] as string : "";
+  const rollbackData =
+    rollback !== null && typeof rollback === "object" ? (rollback as Record<string, unknown>)["data"] : null;
+  const sourceId =
+    rollbackData !== null &&
+    typeof rollbackData === "object" &&
+    typeof (rollbackData as Record<string, unknown>)["id"] === "string"
+      ? ((rollbackData as Record<string, unknown>)["id"] as string)
+      : "";
   if (sourceId === "") {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: "rollback-state-version is required" }] });
+    throw new StateVersionRejected(422, {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: "rollback-state-version is required" }],
+    });
   }
   return { payload, sourceId };
 }
 
 async function resolveRollbackSource(sourceId: string, workspaceId: string) {
   const source = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, sourceId) });
-  if (source === undefined || source.workspaceId !== workspaceId || source.status !== "finalized" || source.statePayload === null) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "State version cannot be rolled back" }] });
+  if (
+    source === undefined ||
+    source.workspaceId !== workspaceId ||
+    source.status !== "finalized" ||
+    source.statePayload === null
+  ) {
+    throw new StateVersionRejected(409, {
+      errors: [{ status: "409", title: "Conflict", detail: "State version cannot be rolled back" }],
+    });
   }
   const sourcePayload = decodeStatePayload(source.statePayload);
   const parsedSource = parseTerraformStatePayload(sourcePayload);
   if (parsedSource === null) {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(sourcePayload) }] });
+    throw new StateVersionRejected(422, {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(sourcePayload) }],
+    });
   }
   return { source, sourcePayload, parsedSource };
 }
@@ -1268,37 +1686,43 @@ async function commitRollbackVersion(args: {
 }): Promise<string> {
   const id = crypto.randomUUID();
   try {
-    await withStateSerialRetry(async () => db.transaction(async (tx): Promise<void> => {
-      if (!(await fenceStateWorkspace(tx, args.workspace))) throw new StateSerialConflictError();
-      await pruneStateReservations(tx, args.workspace);
-      const latest = await tx.query.stateVersions.findFirst({ where: eq(stateVersions.workspaceId, args.workspaceId), orderBy: [desc(stateVersions.serial)] });
-      const serial = (latest?.serial ?? 0) + 1;
-      if (!Number.isSafeInteger(serial)) throw new StateSerialConflictError();
-      const promoted = statePayloadWithSerial(args.source.sourcePayload, serial);
-      await tx.insert(stateVersions).values({
-        id,
-        workspaceId: args.workspaceId,
-        serial,
-        uploadSha256: createHash("sha256").update(promoted).digest("hex"),
-        statePayload: await encryptStatePayload(promoted),
-        jsonState: await encryptStatePayload(promoted),
-        jsonStateOutputs: await encryptStatePayload(JSON.stringify(args.source.parsedSource["outputs"] ?? {})),
-        vcsCommitSha: args.source.source.vcsCommitSha,
-        vcsCommitUrl: args.source.source.vcsCommitUrl,
-        runId: null,
-        createdBy: args.userId ?? null,
-        terraformVersion: args.source.source.terraformVersion,
-        intermediate: false,
-        status: "finalized",
-        createdAt: Date.now(),
-      });
-      await insertStateOutputIndex(tx, id, args.workspaceId,
-        promoted, promoted);
-    }));
+    await withStateSerialRetry(async () =>
+      db.transaction(async (tx): Promise<void> => {
+        if (!(await fenceStateWorkspace(tx, args.workspace))) throw new StateSerialConflictError();
+        await pruneStateReservations(tx, args.workspace);
+        const latest = await tx.query.stateVersions.findFirst({
+          where: eq(stateVersions.workspaceId, args.workspaceId),
+          orderBy: [desc(stateVersions.serial)],
+        });
+        const serial = (latest?.serial ?? 0) + 1;
+        if (!Number.isSafeInteger(serial)) throw new StateSerialConflictError();
+        const promoted = statePayloadWithSerial(args.source.sourcePayload, serial);
+        await tx.insert(stateVersions).values({
+          id,
+          workspaceId: args.workspaceId,
+          serial,
+          uploadSha256: createHash("sha256").update(promoted).digest("hex"),
+          statePayload: await encryptStatePayload(promoted),
+          jsonState: await encryptStatePayload(promoted),
+          jsonStateOutputs: await encryptStatePayload(JSON.stringify(args.source.parsedSource["outputs"] ?? {})),
+          vcsCommitSha: args.source.source.vcsCommitSha,
+          vcsCommitUrl: args.source.source.vcsCommitUrl,
+          runId: null,
+          createdBy: args.userId ?? null,
+          terraformVersion: args.source.source.terraformVersion,
+          intermediate: false,
+          status: "finalized",
+          createdAt: Date.now(),
+        });
+        await insertStateOutputIndex(tx, id, args.workspaceId, promoted, promoted);
+      }),
+    );
   } catch (error) {
     if (!(error instanceof StateSerialConflictError) && !isUniqueConstraintError(error)) throw error;
     if (args.idempotencyBegin.kind === "reserved") await abandonIdempotency(args.idempotencyBegin.id);
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }] });
+    throw new StateVersionRejected(409, {
+      errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }],
+    });
   }
   return id;
 }
@@ -1308,12 +1732,20 @@ async function resolveVisibleOrgIds(
   orgId: string | null,
   teamId: string | null,
 ): Promise<string[] | null> {
-  const teamOrg = teamId === null ? undefined : await db.query.teams.findFirst({ where: eq(teams.id, teamId), columns: { orgId: true } });
+  const teamOrg =
+    teamId === null
+      ? undefined
+      : await db.query.teams.findFirst({ where: eq(teams.id, teamId), columns: { orgId: true } });
   const principalOrgId = orgId ?? teamOrg?.orgId ?? null;
   if (principalOrgId !== null) return [principalOrgId];
   if (user?.isSiteAdmin === true) return null;
   if (user === null || user === undefined) return [];
-  return (await db.query.organizationMemberships.findMany({ where: and(eq(organizationMemberships.userId, user.id), eq(organizationMemberships.status, "active")), columns: { orgId: true } })).map((membership) => membership.orgId);
+  return (
+    await db.query.organizationMemberships.findMany({
+      where: and(eq(organizationMemberships.userId, user.id), eq(organizationMemberships.status, "active")),
+      columns: { orgId: true },
+    })
+  ).map((membership) => membership.orgId);
 }
 
 async function listCandidateWorkspaces(
@@ -1323,14 +1755,20 @@ async function listCandidateWorkspaces(
   workspaceFilter: string | null,
 ): Promise<{ id: string; orgId: string }[]> {
   if (workspaceFilter !== null) {
-    return db.query.workspaces.findMany({ where: eq(workspaces.id, workspaceFilter), columns: { id: true, orgId: true } });
+    return db.query.workspaces.findMany({
+      where: eq(workspaces.id, workspaceFilter),
+      columns: { id: true, orgId: true },
+    });
   }
   const visibleOrgIds = await resolveVisibleOrgIds(user, orgId, teamId);
   if (visibleOrgIds === null) {
     return db.query.workspaces.findMany({ columns: { id: true, orgId: true } });
   }
   if (visibleOrgIds.length === 0) return [];
-  return db.query.workspaces.findMany({ where: inArray(workspaces.orgId, visibleOrgIds), columns: { id: true, orgId: true } });
+  return db.query.workspaces.findMany({
+    where: inArray(workspaces.orgId, visibleOrgIds),
+    columns: { id: true, orgId: true },
+  });
 }
 
 async function authorizeIndexWorkspaces(
@@ -1362,26 +1800,51 @@ async function fetchStateVersionIndex(
   // They stay reachable through the direct show endpoint the uploader
   // polls, but listings only ever return committed versions. The NULL arm
   // preserves legacy rows that predate the status column default.
-  const conditions = [inArray(stateVersions.workspaceId, [...allowedWorkspaceIds]), or(isNull(stateVersions.status), ne(stateVersions.status, "pending"))];
+  const conditions = [
+    inArray(stateVersions.workspaceId, [...allowedWorkspaceIds]),
+    or(isNull(stateVersions.status), ne(stateVersions.status, "pending")),
+  ];
   if (workspaceFilter !== null) conditions.push(eq(stateVersions.workspaceId, workspaceFilter));
   if (runFilter !== null) conditions.push(eq(stateVersions.runId, runFilter));
   const where = and(...conditions);
   const [versions, countRows] = await Promise.all([
-    db.query.stateVersions.findMany({ where,
+    db.query.stateVersions.findMany({
+      where,
       columns: { statePayload: false, jsonState: false, jsonStateOutputs: false },
       extras: {
-        hasRawState: sql<boolean>`${stateVersions.statePayload} IS NOT NULL AND ${stateVersions.statePayload} <> ''`.mapWith(Boolean).as("has_raw_state"),
-        hasJsonState: sql<boolean>`${stateVersions.jsonState} IS NOT NULL AND ${stateVersions.jsonState} <> ''`.mapWith(Boolean).as("has_json_state"),
-      }, orderBy: [desc(stateVersions.serial), desc(stateVersions.createdAt)], limit: size, offset: (number - 1) * size }),
+        hasRawState: sql<boolean>`${stateVersions.statePayload} IS NOT NULL AND ${stateVersions.statePayload} <> ''`
+          .mapWith(Boolean)
+          .as("has_raw_state"),
+        hasJsonState: sql<boolean>`${stateVersions.jsonState} IS NOT NULL AND ${stateVersions.jsonState} <> ''`
+          .mapWith(Boolean)
+          .as("has_json_state"),
+      },
+      orderBy: [desc(stateVersions.serial), desc(stateVersions.createdAt)],
+      limit: size,
+      offset: (number - 1) * size,
+    }),
     db.select({ total: count() }).from(stateVersions).where(where),
   ]);
   return { versions, total: countRows[0]?.total ?? 0 };
 }
 
 async function attachIndexRunData(versions: Awaited<ReturnType<typeof fetchStateVersionIndex>>["versions"]) {
-  const runIds = [...new Set(versions.map((version): string | null => version.runId).filter((id): id is string => id !== null))];
-  const runRows = runIds.length === 0 ? [] : await db.query.runs.findMany({ where: inArray(runs.id, runIds), columns: { id: true, status: true, message: true } });
-  return new Map(runRows.map((run): [string, { status: string; message: string | null }] => [run.id, { status: run.status, message: run.message }]));
+  const runIds = [
+    ...new Set(versions.map((version): string | null => version.runId).filter((id): id is string => id !== null)),
+  ];
+  const runRows =
+    runIds.length === 0
+      ? []
+      : await db.query.runs.findMany({
+          where: inArray(runs.id, runIds),
+          columns: { id: true, status: true, message: true },
+        });
+  return new Map(
+    runRows.map((run): [string, { status: string; message: string | null }] => [
+      run.id,
+      { status: run.status, message: run.message },
+    ]),
+  );
 }
 
 function assertStateOutputCaller(
@@ -1408,8 +1871,14 @@ async function findIndexedStateOutput(
     db.query.stateVersions.findFirst({ where: eq(stateVersions.id, indexed.stateVersionId) }),
     db.query.workspaces.findFirst({ where: eq(workspaces.id, indexed.workspaceId) }),
   ]);
-  if (stateVersion !== undefined && ws !== undefined && !["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(stateVersion.status ?? "")
-    && (await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs") || checkRunStateAccess(run, ws.id))) {
+  if (
+    stateVersion !== undefined &&
+    ws !== undefined &&
+    !["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(
+      stateVersion.status ?? "",
+    ) &&
+    ((await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs")) || checkRunStateAccess(run, ws.id))
+  ) {
     const output = stateOutputResources(stateVersion).find(({ id }): boolean => id === outputId);
     if (output !== undefined) return { data: output };
   }
@@ -1421,13 +1890,19 @@ async function matchLegacyCandidateOutput(
   authorizedWorkspaceIds: Set<string>,
   outputId: string,
 ): Promise<ReturnType<typeof stateOutputResources>[number] | null> {
-  if (!authorizedWorkspaceIds.has(candidate.workspaceId)
-    || ["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(candidate.status ?? "")) return null;
+  if (
+    !authorizedWorkspaceIds.has(candidate.workspaceId) ||
+    ["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(candidate.status ?? "")
+  )
+    return null;
   // Fetch one authorized payload at a time so a bounded candidate set
   // cannot retain many potentially large state documents simultaneously.
   const stateVersion = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, candidate.id) });
-  if (stateVersion === undefined
-    || ["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(stateVersion.status ?? "")) return null;
+  if (
+    stateVersion === undefined ||
+    ["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(stateVersion.status ?? "")
+  )
+    return null;
   return stateOutputResources(stateVersion).find(({ id }): boolean => id === outputId) ?? null;
 }
 
@@ -1453,7 +1928,10 @@ async function probeLegacyStateOutput(
   });
   const authorizedWorkspaceIds = new Set<string>();
   for (const ws of legacyWorkspaces) {
-    if (await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs") || checkRunStateAccess(run, ws.id)) {
+    if (
+      (await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs")) ||
+      checkRunStateAccess(run, ws.id)
+    ) {
       authorizedWorkspaceIds.add(ws.id);
     }
   }
@@ -1481,22 +1959,33 @@ async function resolveActionRollbackScope(
     throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
   }
   if (orgId !== null && orgId !== undefined) {
-    throw new StateVersionRejected(403, { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot roll back state" }] });
+    throw new StateVersionRejected(403, {
+      errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot roll back state" }],
+    });
   }
   if (!ownsWorkspaceLock(ws, lockPrincipal(userId, orgId, teamId))) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before rollback" }] });
+    throw new StateVersionRejected(409, {
+      errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before rollback" }],
+    });
   }
   return { sv, ws };
 }
 
-function parseActionRollbackSource(sv: ActionRollbackScope["sv"]): { sourcePayload: string; parsedSource: NonNullable<ReturnType<typeof parseTerraformStatePayload>> } {
+function parseActionRollbackSource(sv: ActionRollbackScope["sv"]): {
+  sourcePayload: string;
+  parsedSource: NonNullable<ReturnType<typeof parseTerraformStatePayload>>;
+} {
   if (sv.statePayload === null || sv.status !== "finalized") {
-    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: "State version cannot be rolled back" }] });
+    throw new StateVersionRejected(400, {
+      errors: [{ status: "400", title: "Bad Request", detail: "State version cannot be rolled back" }],
+    });
   }
   const sourcePayload = decodeStatePayload(sv.statePayload);
   const parsedSource = parseTerraformStatePayload(sourcePayload);
   if (parsedSource === null) {
-    throw new StateVersionRejected(422, { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(sourcePayload) }] });
+    throw new StateVersionRejected(422, {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(sourcePayload) }],
+    });
   }
   return { sourcePayload, parsedSource };
 }
@@ -1516,7 +2005,11 @@ async function resolveReservationUploadScope(
     throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
   }
   const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-  if (ws === undefined || (!validSignedApiURL(request, uploadPath, "PUT") && !(await checkWorkspacePermission(ws, userId, orgId, teamId, "state-write")))) {
+  if (
+    ws === undefined ||
+    (!validSignedApiURL(request, uploadPath, "PUT") &&
+      !(await checkWorkspacePermission(ws, userId, orgId, teamId, "state-write")))
+  ) {
     throw new StateVersionRejected(404, { errors: [{ status: "404", title: "Not Found" }] });
   }
   return { sv, ws };
@@ -1530,9 +2023,12 @@ async function readReservationUploadBody(
   const rawStateResult = await requestBodyText(body, request);
   if (!rawStateResult.ok) {
     const status = rawStateResult.reason === "too-large" ? 413 : 400;
-    const title = sv.status === "finalized" && typeof sv.statePayload === "string" && sv.statePayload !== ""
-      ? "Invalid state upload body"
-      : status === 413 ? "Payload Too Large" : "Bad Request";
+    const title =
+      sv.status === "finalized" && typeof sv.statePayload === "string" && sv.statePayload !== ""
+        ? "Invalid state upload body"
+        : status === 413
+          ? "Payload Too Large"
+          : "Bad Request";
     throw new StateVersionRejected(status, { errors: [{ status: String(status), title }] });
   }
   return rawStateResult.text;
@@ -1544,7 +2040,15 @@ function applyCommittedUpload(committed: Awaited<ReturnType<typeof commitStateVe
   }
   if (committed.kind === "invalid") {
     const status = committed.reason === "state-payload" ? 400 : 422;
-    throw new StateVersionRejected(status, { errors: [{ status: String(status), title: status === 400 ? "Bad Request" : "Unprocessable Entity", detail: committed.detail }] });
+    throw new StateVersionRejected(status, {
+      errors: [
+        {
+          status: String(status),
+          title: status === 400 ? "Bad Request" : "Unprocessable Entity",
+          detail: committed.detail,
+        },
+      ],
+    });
   }
   if (committed.kind === "conflict") {
     throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: committed.detail }] });
@@ -1554,27 +2058,43 @@ function applyCommittedUpload(committed: Awaited<ReturnType<typeof commitStateVe
 
 function assertOutputsUploadable(sv: ReservationUploadScope["sv"], ws: ReservationUploadScope["ws"]): void {
   if (typeof sv.jsonStateOutputs === "string" && sv.jsonStateOutputs !== "") {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "JSON state outputs were already uploaded" }] });
+    throw new StateVersionRejected(409, {
+      errors: [{ status: "409", title: "Conflict", detail: "JSON state outputs were already uploaded" }],
+    });
   }
   if (sv.status === "finalized") {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "State version is finalized; outputs can no longer be uploaded" }] });
+    throw new StateVersionRejected(409, {
+      errors: [
+        { status: "409", title: "Conflict", detail: "State version is finalized; outputs can no longer be uploaded" },
+      ],
+    });
   }
   if (sv.status === "pending" && stateReservationObsolete(sv, ws)) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "State upload reservation expired or its workspace lock changed" }] });
+    throw new StateVersionRejected(409, {
+      errors: [
+        { status: "409", title: "Conflict", detail: "State upload reservation expired or its workspace lock changed" },
+      ],
+    });
   }
 }
 
 async function readJsonOutputsBody(body: unknown, request: Request): Promise<string> {
   const jsonStateOutputsResult = await requestBodyText(body, request);
   if (!jsonStateOutputsResult.ok) {
-    throw new StateVersionRejected(
-      jsonStateOutputsResult.reason === "too-large" ? 413 : 400,
-      { errors: [{ status: String(jsonStateOutputsResult.reason === "too-large" ? 413 : 400), title: jsonStateOutputsResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] },
-    );
+    throw new StateVersionRejected(jsonStateOutputsResult.reason === "too-large" ? 413 : 400, {
+      errors: [
+        {
+          status: String(jsonStateOutputsResult.reason === "too-large" ? 413 : 400),
+          title: jsonStateOutputsResult.reason === "too-large" ? "Payload Too Large" : "Bad Request",
+        },
+      ],
+    });
   }
   const jsonStateOutputs = jsonStateOutputsResult.text;
   if (jsonStateOutputs === "" || parseStatePayload(jsonStateOutputs) === null) {
-    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: "JSON state outputs must be valid JSON" }] });
+    throw new StateVersionRejected(400, {
+      errors: [{ status: "400", title: "Bad Request", detail: "JSON state outputs must be valid JSON" }],
+    });
   }
   return jsonStateOutputs;
 }
@@ -1587,37 +2107,57 @@ async function commitJsonOutputsUpload(args: {
 }): Promise<void> {
   const uploaded = await db.transaction(async (tx) => {
     if (!(await fenceStateWorkspace(tx, args.ws)) || stateReservationObsolete(args.sv, args.ws)) return [];
-    return tx.update(stateVersions).set({ jsonStateOutputs: args.encrypted }).where(and(
-      eq(stateVersions.id, args.stateVersionId),
-      eq(stateVersions.status, "pending"),
-      or(isNull(stateVersions.jsonStateOutputs), eq(stateVersions.jsonStateOutputs, "")),
-    )).returning({ id: stateVersions.id });
+    return tx
+      .update(stateVersions)
+      .set({ jsonStateOutputs: args.encrypted })
+      .where(
+        and(
+          eq(stateVersions.id, args.stateVersionId),
+          eq(stateVersions.status, "pending"),
+          or(isNull(stateVersions.jsonStateOutputs), eq(stateVersions.jsonStateOutputs, "")),
+        ),
+      )
+      .returning({ id: stateVersions.id });
   });
   if (uploaded.length === 0) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "JSON state outputs were already uploaded" }] });
+    throw new StateVersionRejected(409, {
+      errors: [{ status: "409", title: "Conflict", detail: "JSON state outputs were already uploaded" }],
+    });
   }
 }
 
 function assertJsonUploadable(sv: ReservationUploadScope["sv"], ws: ReservationUploadScope["ws"]): void {
   if (typeof sv.jsonState === "string" && sv.jsonState !== "") {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "JSON state content was already uploaded" }] });
+    throw new StateVersionRejected(409, {
+      errors: [{ status: "409", title: "Conflict", detail: "JSON state content was already uploaded" }],
+    });
   }
   if (sv.status === "pending" && stateReservationObsolete(sv, ws)) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "State upload reservation expired or its workspace lock changed" }] });
+    throw new StateVersionRejected(409, {
+      errors: [
+        { status: "409", title: "Conflict", detail: "State upload reservation expired or its workspace lock changed" },
+      ],
+    });
   }
 }
 
 async function readJsonUploadBody(body: unknown, request: Request): Promise<string> {
   const jsonStateResult = await requestBodyText(body, request);
   if (!jsonStateResult.ok) {
-    throw new StateVersionRejected(
-      jsonStateResult.reason === "too-large" ? 413 : 400,
-      { errors: [{ status: String(jsonStateResult.reason === "too-large" ? 413 : 400), title: jsonStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] },
-    );
+    throw new StateVersionRejected(jsonStateResult.reason === "too-large" ? 413 : 400, {
+      errors: [
+        {
+          status: String(jsonStateResult.reason === "too-large" ? 413 : 400),
+          title: jsonStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request",
+        },
+      ],
+    });
   }
   const jsonState = jsonStateResult.text;
   if (jsonState === "" || parseStatePayload(jsonState) === null) {
-    throw new StateVersionRejected(400, { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] });
+    throw new StateVersionRejected(400, {
+      errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }],
+    });
   }
   return jsonState;
 }
@@ -1632,22 +2172,39 @@ async function commitJsonUpload(args: {
   // Issue #578: atomic conditional write plus index rebuild in one
   // transaction, so concurrent PUTs cannot both win or mix index rows.
   const uploaded = await db.transaction(async (tx): Promise<boolean> => {
-    if (args.sv.status === "pending" && (!(await fenceStateWorkspace(tx, args.ws)) || stateReservationObsolete(args.sv, args.ws))) return false;
-    const won = await tx.update(stateVersions).set({ jsonState: args.encrypted }).where(and(
-      eq(stateVersions.id, args.stateVersionId),
-      inArray(stateVersions.status, ["pending", "finalized"]),
-      or(isNull(stateVersions.jsonState), eq(stateVersions.jsonState, "")),
-    )).returning({ id: stateVersions.id, status: stateVersions.status, statePayload: stateVersions.statePayload });
+    if (
+      args.sv.status === "pending" &&
+      (!(await fenceStateWorkspace(tx, args.ws)) || stateReservationObsolete(args.sv, args.ws))
+    )
+      return false;
+    const won = await tx
+      .update(stateVersions)
+      .set({ jsonState: args.encrypted })
+      .where(
+        and(
+          eq(stateVersions.id, args.stateVersionId),
+          inArray(stateVersions.status, ["pending", "finalized"]),
+          or(isNull(stateVersions.jsonState), eq(stateVersions.jsonState, "")),
+        ),
+      )
+      .returning({ id: stateVersions.id, status: stateVersions.status, statePayload: stateVersions.statePayload });
     const row = won[0];
     if (row === undefined) return false;
     if (row.status === "finalized") {
-      await replaceStateOutputIndex(tx, args.stateVersionId, args.sv.workspaceId,
-        args.jsonState, row.statePayload === null ? null : decodeStatePayload(row.statePayload));
+      await replaceStateOutputIndex(
+        tx,
+        args.stateVersionId,
+        args.sv.workspaceId,
+        args.jsonState,
+        row.statePayload === null ? null : decodeStatePayload(row.statePayload),
+      );
     }
     return true;
   });
   if (!uploaded) {
-    throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "JSON state content was already uploaded" }] });
+    throw new StateVersionRejected(409, {
+      errors: [{ status: "409", title: "Conflict", detail: "JSON state content was already uploaded" }],
+    });
   }
 }
 
@@ -1685,520 +2242,799 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       return { data: [], ...pagination(request, number, size, 0) };
     }
     const { number, size } = pageRequest(request);
-    const { versions, total } = await fetchStateVersionIndex(allowedWorkspaceIds, workspaceFilter, runFilter, number, size);
+    const { versions, total } = await fetchStateVersionIndex(
+      allowedWorkspaceIds,
+      workspaceFilter,
+      runFilter,
+      number,
+      size,
+    );
     const runMap = await attachIndexRunData(versions);
     return {
-      data: versions.map((version): Record<string, unknown> => stateVersionSummaryResource(version, request, version.runId === null ? null : runMap.get(version.runId) ?? null, authorizedStateAccess(version.workspaceId, "state-read"))),
+      data: versions.map(
+        (version): Record<string, unknown> =>
+          stateVersionSummaryResource(
+            version,
+            request,
+            version.runId === null ? null : (runMap.get(version.runId) ?? null),
+            authorizedStateAccess(version.workspaceId, "state-read"),
+          ),
+      ),
       ...pagination(request, number, size, total),
     };
   })
-  .get("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = run !== null && run.workspaceId === workspaceId
-    ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
-    : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-read");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { number, size } = pageRequest(request);
-    // Issue #703: see the index endpoint above; listings exclude pending
-    // upload reservations (NULL statuses predate the default and stay listed).
-    const where = and(eq(stateVersions.workspaceId, workspaceId), or(isNull(stateVersions.status), ne(stateVersions.status, "pending")));
-    const [versions, countRows] = await Promise.all([
-      db.query.stateVersions.findMany({ where,
-        columns: { statePayload: false, jsonState: false, jsonStateOutputs: false },
-        extras: {
-          hasRawState: sql<boolean>`${stateVersions.statePayload} IS NOT NULL AND ${stateVersions.statePayload} <> ''`.mapWith(Boolean).as("has_raw_state"),
-          hasJsonState: sql<boolean>`${stateVersions.jsonState} IS NOT NULL AND ${stateVersions.jsonState} <> ''`.mapWith(Boolean).as("has_json_state"),
-        }, orderBy: [desc(stateVersions.serial)], limit: size, offset: (number - 1) * size }),
-      db.select({ total: count() }).from(stateVersions).where(where),
-    ]);
-    const totalCount = countRows[0]?.total ?? 0;
-    // Batch-fetch runs for state versions that have runId set
-    const runIds = [...new Set(versions.map((sv): string | null => sv.runId).filter((id): id is string => id !== null))];
-    const runMap = new Map<string, Readonly<{ status: string; message: string | null }>>();
-    if (runIds.length > 0) {
-      const runRows = await db.query.runs.findMany({
-        where: inArray(runs.id, runIds),
-        columns: { id: true, status: true, message: true },
-      });
-      for (const r of runRows) {
-        runMap.set(r.id, { status: r.status, message: r.message });
+  .get(
+    "/api/v2/workspaces/:workspace_id/state-versions",
+    async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws =
+        run !== null && run.workspaceId === workspaceId
+          ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
+          : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-read");
+      if (ws === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-    }
-    return {
-      data: versions.map((sv): Record<string, unknown> =>
-        stateVersionSummaryResource(sv, request, sv.runId !== null ? (runMap.get(sv.runId) ?? null) : null, authorizedStateAccess(sv.workspaceId, "state-read")),
-      ),
-      ...pagination(request, number, size, totalCount),
-    };
-  })
-  .get("/api/v2/workspaces/:workspace_id/current-state-version", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = run !== null && run.workspaceId === workspaceId
-      ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
-      : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-read");
-    // Remote-state consumer grant: a run in another workspace may read this
-    // workspace's current state when a consumer link / project / global grant
-    // exists (the reference format remote-state sharing). Denied reads fall through to 404.
-    const resolvedWs = ws === undefined && run !== null
-      ? await findRemoteStateReadableWorkspace(workspaceId, run.workspaceId)
-      : ws;
-    if (resolvedWs === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const sv = await db.query.stateVersions.findFirst({
-      where: and(
+      const { number, size } = pageRequest(request);
+      // Issue #703: see the index endpoint above; listings exclude pending
+      // upload reservations (NULL statuses predate the default and stay listed).
+      const where = and(
         eq(stateVersions.workspaceId, workspaceId),
-        eq(stateVersions.status, "finalized"),
-        eq(stateVersions.intermediate, false),
-      ),
-      orderBy: [desc(stateVersions.serial)],
-    });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const runData = sv.runId !== null
-      ? await db.query.runs.findFirst({ where: eq(runs.id, sv.runId), columns: { status: true, message: true } })
-      : null;
-    return { data: stateVersionResource(sv, request, true, runData ?? null, authorizedStateAccess(resolvedWs.id, "state-read")) };
-  })
-  .get("/api/v2/workspaces/:workspace_id/current-state-version-outputs", async ({ params, user, orgId, teamId, run, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const ws = run !== null && run.workspaceId === workspaceId
-      ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
-      : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-outputs");
-    // Remote-state consumer grant (see current-state-version above).
-    const resolvedWs = ws === undefined && run !== null
-      ? await findRemoteStateReadableWorkspace(workspaceId, run.workspaceId)
-      : ws;
-    if (resolvedWs === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const sv = await db.query.stateVersions.findFirst({
-      where: and(
-        eq(stateVersions.workspaceId, workspaceId),
-        eq(stateVersions.status, "finalized"),
-        eq(stateVersions.intermediate, false),
-      ),
-      orderBy: [desc(stateVersions.serial)],
-    });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (isClientEncryptedState(sv.statePayload)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unsupported state representation", detail: statePayloadError(sv.statePayload) }] };
-    }
-    return { data: stateOutputResources(sv) };
-  })
-  .patch("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    try {
-      const workspace = await resolveRollbackWorkspace(workspaceId, user?.id, orgId, teamId);
-      const { payload, sourceId } = parseRollbackRequest(body);
-      const idempotency = idempotencyContext(
-        request,
-        `state-rollback:${workspaceId}`,
-        idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
-        payload,
-        set,
+        or(isNull(stateVersions.status), ne(stateVersions.status, "pending")),
       );
-      if (idempotency === "invalid") {
-        return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+      const [versions, countRows] = await Promise.all([
+        db.query.stateVersions.findMany({
+          where,
+          columns: { statePayload: false, jsonState: false, jsonStateOutputs: false },
+          extras: {
+            hasRawState: sql<boolean>`${stateVersions.statePayload} IS NOT NULL AND ${stateVersions.statePayload} <> ''`
+              .mapWith(Boolean)
+              .as("has_raw_state"),
+            hasJsonState: sql<boolean>`${stateVersions.jsonState} IS NOT NULL AND ${stateVersions.jsonState} <> ''`
+              .mapWith(Boolean)
+              .as("has_json_state"),
+          },
+          orderBy: [desc(stateVersions.serial)],
+          limit: size,
+          offset: (number - 1) * size,
+        }),
+        db.select({ total: count() }).from(stateVersions).where(where),
+      ]);
+      const totalCount = countRows[0]?.total ?? 0;
+      // Batch-fetch runs for state versions that have runId set
+      const runIds = [
+        ...new Set(versions.map((sv): string | null => sv.runId).filter((id): id is string => id !== null)),
+      ];
+      const runMap = new Map<string, Readonly<{ status: string; message: string | null }>>();
+      if (runIds.length > 0) {
+        const runRows = await db.query.runs.findMany({
+          where: inArray(runs.id, runIds),
+          columns: { id: true, status: true, message: true },
+        });
+        for (const r of runRows) {
+          runMap.set(r.id, { status: r.status, message: r.message });
+        }
       }
-      const source = await resolveRollbackSource(sourceId, workspaceId);
-      const idempotencyBegin = await beginIdempotency(
-        idempotency,
-        "state-rollback",
-        set,
-      );
-      if (idempotencyBegin.kind === "replay") return await replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
-      if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
-      const id = await commitRollbackVersion({
-        workspaceId,
-        workspace,
-        source,
-        userId: user?.id,
-        idempotencyBegin,
+      return {
+        data: versions.map(
+          (sv): Record<string, unknown> =>
+            stateVersionSummaryResource(
+              sv,
+              request,
+              sv.runId !== null ? (runMap.get(sv.runId) ?? null) : null,
+              authorizedStateAccess(sv.workspaceId, "state-read"),
+            ),
+        ),
+        ...pagination(request, number, size, totalCount),
+      };
+    },
+  )
+  .get(
+    "/api/v2/workspaces/:workspace_id/current-state-version",
+    async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws =
+        run !== null && run.workspaceId === workspaceId
+          ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
+          : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-read");
+      // Remote-state consumer grant: a run in another workspace may read this
+      // workspace's current state when a consumer link / project / global grant
+      // exists (the reference format remote-state sharing). Denied reads fall through to 404.
+      const resolvedWs =
+        ws === undefined && run !== null ? await findRemoteStateReadableWorkspace(workspaceId, run.workspaceId) : ws;
+      if (resolvedWs === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const sv = await db.query.stateVersions.findFirst({
+        where: and(
+          eq(stateVersions.workspaceId, workspaceId),
+          eq(stateVersions.status, "finalized"),
+          eq(stateVersions.intermediate, false),
+        ),
+        orderBy: [desc(stateVersions.serial)],
       });
-      scheduleExplorerInventory(workspaceId);
-      const created = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
-      if (created === undefined) {
-        if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-        (set as { status: number }).status = 500;
-        return { errors: [{ status: "500", title: "Internal Server Error" }] };
+      if (sv === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      (set as { status: number }).status = 201;
-      const responseBody = { data: stateVersionResource(created, request, false, undefined, await stateResponseAccess(workspace, user?.id, orgId, teamId)) };
-      if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
-      return responseBody;
-    } catch (error: unknown) {
-      if (error instanceof StateVersionRejected) {
-        (set as { status: number }).status = error.status;
-        return error.body;
+      const runData =
+        sv.runId !== null
+          ? await db.query.runs.findFirst({ where: eq(runs.id, sv.runId), columns: { status: true, message: true } })
+          : null;
+      return {
+        data: stateVersionResource(
+          sv,
+          request,
+          true,
+          runData ?? null,
+          authorizedStateAccess(resolvedWs.id, "state-read"),
+        ),
+      };
+    },
+  )
+  .get(
+    "/api/v2/workspaces/:workspace_id/current-state-version-outputs",
+    async ({ params, user, orgId, teamId, run, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const ws =
+        run !== null && run.workspaceId === workspaceId
+          ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
+          : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-outputs");
+      // Remote-state consumer grant (see current-state-version above).
+      const resolvedWs =
+        ws === undefined && run !== null ? await findRemoteStateReadableWorkspace(workspaceId, run.workspaceId) : ws;
+      if (resolvedWs === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      throw error;
-    }
-  })
-  .get("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params["state_version_id"] ?? "";
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    try {
-      const ws = await resolveStateVersionRead(sv, run, user?.id, orgId, teamId);
+      const sv = await db.query.stateVersions.findFirst({
+        where: and(
+          eq(stateVersions.workspaceId, workspaceId),
+          eq(stateVersions.status, "finalized"),
+          eq(stateVersions.intermediate, false),
+        ),
+        orderBy: [desc(stateVersions.serial)],
+      });
+      if (sv === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (isClientEncryptedState(sv.statePayload)) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            { status: "422", title: "Unsupported state representation", detail: statePayloadError(sv.statePayload) },
+          ],
+        };
+      }
+      return { data: stateOutputResources(sv) };
+    },
+  )
+  .patch(
+    "/api/v2/workspaces/:workspace_id/state-versions",
+    async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      try {
+        const workspace = await resolveRollbackWorkspace(workspaceId, user?.id, orgId, teamId);
+        const { payload, sourceId } = parseRollbackRequest(body);
+        const idempotency = idempotencyContext(
+          request,
+          `state-rollback:${workspaceId}`,
+          idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
+          payload,
+          set,
+        );
+        if (idempotency === "invalid") {
+          return {
+            errors: [
+              { status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" },
+            ],
+          };
+        }
+        const source = await resolveRollbackSource(sourceId, workspaceId);
+        const idempotencyBegin = await beginIdempotency(idempotency, "state-rollback", set);
+        if (idempotencyBegin.kind === "replay")
+          return await replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
+        if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
+        const id = await commitRollbackVersion({
+          workspaceId,
+          workspace,
+          source,
+          userId: user?.id,
+          idempotencyBegin,
+        });
+        scheduleExplorerInventory(workspaceId);
+        const created = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
+        if (created === undefined) {
+          if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+          (set as { status: number }).status = 500;
+          return { errors: [{ status: "500", title: "Internal Server Error" }] };
+        }
+        (set as { status: number }).status = 201;
+        const responseBody = {
+          data: stateVersionResource(
+            created,
+            request,
+            false,
+            undefined,
+            await stateResponseAccess(workspace, user?.id, orgId, teamId),
+          ),
+        };
+        if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
+        return responseBody;
+      } catch (error: unknown) {
+        if (error instanceof StateVersionRejected) {
+          (set as { status: number }).status = error.status;
+          return error.body;
+        }
+        throw error;
+      }
+    },
+  )
+  .get(
+    "/api/v2/state-versions/:state_version_id",
+    async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
+      const stateVersionId = params["state_version_id"] ?? "";
+      const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+      if (sv === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      try {
+        const ws = await resolveStateVersionRead(sv, run, user?.id, orgId, teamId);
+        if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")) {
+          (set as { status: number }).status = 404;
+          return { errors: [{ status: "404", title: "Not Found" }] };
+        }
+        const runData =
+          sv.runId !== null
+            ? await db.query.runs.findFirst({ where: eq(runs.id, sv.runId), columns: { status: true, message: true } })
+            : null;
+        return {
+          data: stateVersionResource(sv, request, true, runData ?? null, authorizedStateAccess(ws.id, "state-read")),
+        };
+      } catch (error: unknown) {
+        if (error instanceof StateVersionRejected) {
+          (set as { status: number }).status = error.status;
+          return error.body;
+        }
+        throw error;
+      }
+    },
+  )
+  .get(
+    "/api/v2/state-versions/:state_version_id/state-version-outputs",
+    async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
+      if ((user === undefined || user === null) && orgId === null && teamId === null && run === null) {
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized" }] };
+      }
+      const stateVersionId = params["state_version_id"] ?? "";
+      const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+      if (sv === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+      if (
+        ws === undefined ||
+        (!(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs")) &&
+          !checkRunStateAccess(run, ws.id))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
       if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")) {
-        (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      const runData = sv.runId !== null
-        ? await db.query.runs.findFirst({ where: eq(runs.id, sv.runId), columns: { status: true, message: true } })
-        : null;
-      return { data: stateVersionResource(sv, request, true, runData ?? null, authorizedStateAccess(ws.id, "state-read")) };
-    } catch (error: unknown) {
-      if (error instanceof StateVersionRejected) {
-        (set as { status: number }).status = error.status;
-        return error.body;
+      if (isClientEncryptedState(sv.statePayload)) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            { status: "422", title: "Unsupported state representation", detail: statePayloadError(sv.statePayload) },
+          ],
+        };
       }
-      throw error;
-    }
-  })
-  .get("/api/v2/state-versions/:state_version_id/state-version-outputs", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    if ((user === undefined || user === null) && orgId === null && teamId === null && run === null) {
-      (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-    const stateVersionId = params["state_version_id"] ?? "";
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    if (ws === undefined || (!(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs")) && !checkRunStateAccess(run, ws.id))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (isClientEncryptedState(sv.statePayload)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unsupported state representation", detail: statePayloadError(sv.statePayload) }] };
-    }
-    const { number, size } = pageRequest(request);
-    const outputs = stateOutputResources(sv);
-    const sliced = outputs.slice((number - 1) * size, number * size);
-    return { data: sliced, ...pagination(request, number, size, outputs.length) };
-  })
-  .get("/api/v2/state-versions/:state_version_id/outputs", async ({ params, user, orgId, teamId, run, set }: ParamCtx): Promise<unknown> => {
-    if ((user === undefined || user === null) && orgId === null && teamId === null && run === null) {
-      (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-    const stateVersionId = params["state_version_id"] ?? "";
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    if (ws === undefined || (!(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs")) && !checkRunStateAccess(run, ws.id))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (isClientEncryptedState(sv.statePayload)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unsupported state representation", detail: statePayloadError(sv.statePayload) }] };
-    }
-    return { data: stateOutputResources(sv) };
-  })
-  .get("/api/v2/state-version-outputs/:state_version_output_id", async ({ params, user, orgId, teamId, run, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionOutputId = params["state_version_output_id"] ?? "";
-    if (!/^wsout-[a-f0-9]{64}$/.test(stateVersionOutputId)) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    try {
-      assertStateOutputCaller(user, orgId, teamId, run);
-      const indexed = await findIndexedStateOutput(stateVersionOutputId, user, orgId, teamId, run);
-      if (indexed !== null) return indexed;
-      const legacy = await probeLegacyStateOutput(stateVersionOutputId, user, orgId, teamId, run);
-      if (legacy !== null) return legacy;
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    } catch (error: unknown) {
-      if (error instanceof StateVersionRejected) {
-        (set as { status: number }).status = error.status;
-        return error.body;
+      const { number, size } = pageRequest(request);
+      const outputs = stateOutputResources(sv);
+      const sliced = outputs.slice((number - 1) * size, number * size);
+      return { data: sliced, ...pagination(request, number, size, outputs.length) };
+    },
+  )
+  .get(
+    "/api/v2/state-versions/:state_version_id/outputs",
+    async ({ params, user, orgId, teamId, run, set }: ParamCtx): Promise<unknown> => {
+      if ((user === undefined || user === null) && orgId === null && teamId === null && run === null) {
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized" }] };
       }
-      throw error;
-    }
-  })
-  .get("/api/v2/state-versions/:state_version_id/json-download", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params["state_version_id"] ?? "";
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    const path = `/api/v2/state-versions/${stateVersionId}/json-download`;
-    if (ws === undefined || (!validSignedApiURL(request, path) && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-read")) && !checkRunStateAccess(run, ws.id))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (
-      typeof sv.jsonState !== "string"
-      || sv.jsonState === ""
-      || ["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")
-    ) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (isClientEncryptedState(sv.statePayload)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unsupported state representation", detail: statePayloadError(sv.statePayload) }] };
-    }
-    (set.headers as Record<string, string>)["Content-Type"] = "application/json";
-    await auditLog("read", "state-version", stateVersionId, user?.id ?? null, ws.orgId, {
-      workspaceId: sv.workspaceId,
-      endpoint: "json-download",
-      stateVersionSerial: sv.serial,
-    });
-    return decodeStatePayload(sv.jsonState);
-  })
-  .delete("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params["state_version_id"] ?? "";
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "admin"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (sv.status === "pending" && sv.statePayload === null) {
-      const discarded = await db.transaction(async (tx) => discardStateReservation(tx as typeof db, sv, ws, "discarded"));
-      if (!discarded) {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "State upload completed while discarding its reservation" }] };
+      const stateVersionId = params["state_version_id"] ?? "";
+      const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+      if (sv === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-    } else {
-      await db.update(stateVersions).set({ status: "discarded", softDeletedAt: null }).where(eq(stateVersions.id, stateVersionId));
-    }
-    (set as { status: number }).status = 204;
-    return new Response(null, { status: 204 });
-  })
-  .get("/api/v2/state-versions/:state_version_id/download", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params["state_version_id"] ?? "";
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    const path = `/api/v2/state-versions/${stateVersionId}/download`;
-    if (ws === undefined || (!validSignedApiURL(request, path) && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-read")) && !checkRunStateAccess(run, ws.id))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (
-      typeof sv.statePayload !== "string"
-      || sv.statePayload === ""
-      || ["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")
-    ) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const payload = decodeStatePayload(sv.statePayload);
-    (set.headers as Record<string, string>)["Content-Type"] = "application/json";
-    await auditLog("read", "state-version", stateVersionId, user?.id ?? null, ws.orgId, {
-      workspaceId: sv.workspaceId,
-      endpoint: "download",
-      stateVersionSerial: sv.serial,
-    });
-    return payload;
-  })
-  .put("/api/v2/state-versions/:state_version_id/upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params["state_version_id"] ?? "";
-    const path = `/api/v2/state-versions/${stateVersionId}/upload`;
-    try {
-      const { sv } = await resolveReservationUploadScope(stateVersionId, request, user?.id, orgId, teamId, path);
-      // Issue #578: claim before the network-bound body transfer so two
-      // simultaneous PUTs do not both stream bodies. The domain command below
-      // remains the cross-process atomic backstop.
-      if (!tryAcquireStateUpload(stateVersionId)) {
-        throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] });
+      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+      if (
+        ws === undefined ||
+        (!(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs")) &&
+          !checkRunStateAccess(run, ws.id))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (isClientEncryptedState(sv.statePayload)) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            { status: "422", title: "Unsupported state representation", detail: statePayloadError(sv.statePayload) },
+          ],
+        };
+      }
+      return { data: stateOutputResources(sv) };
+    },
+  )
+  .get(
+    "/api/v2/state-version-outputs/:state_version_output_id",
+    async ({ params, user, orgId, teamId, run, set }: ParamCtx): Promise<unknown> => {
+      const stateVersionOutputId = params["state_version_output_id"] ?? "";
+      if (!/^wsout-[a-f0-9]{64}$/.test(stateVersionOutputId)) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
       try {
-        const rawState = await readReservationUploadBody(body, request, sv);
-        const committed = await commitStateVersion({ stateVersionId, rawState });
-        applyCommittedUpload(committed, sv.workspaceId);
-        (set as { status: number }).status = 200;
-        return {};
-      } finally {
-        releaseStateUpload(stateVersionId);
+        assertStateOutputCaller(user, orgId, teamId, run);
+        const indexed = await findIndexedStateOutput(stateVersionOutputId, user, orgId, teamId, run);
+        if (indexed !== null) return indexed;
+        const legacy = await probeLegacyStateOutput(stateVersionOutputId, user, orgId, teamId, run);
+        if (legacy !== null) return legacy;
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      } catch (error: unknown) {
+        if (error instanceof StateVersionRejected) {
+          (set as { status: number }).status = error.status;
+          return error.body;
+        }
+        throw error;
       }
-    } catch (error: unknown) {
-      if (error instanceof StateVersionRejected) {
-        (set as { status: number }).status = error.status;
-        return error.body;
+    },
+  )
+  .get(
+    "/api/v2/state-versions/:state_version_id/json-download",
+    async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
+      const stateVersionId = params["state_version_id"] ?? "";
+      const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+      if (sv === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      throw error;
-    }
-  })
-  .put("/api/v2/state-versions/:state_version_id/json-upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params["state_version_id"] ?? "";
-    const path = `/api/v2/state-versions/${stateVersionId}/json-upload`;
-    try {
-      const { sv, ws } = await resolveReservationUploadScope(stateVersionId, request, user?.id, orgId, teamId, path);
-      assertJsonUploadable(sv, ws);
-      if (!tryAcquireStateUpload(stateVersionId)) {
-        throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] });
+      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+      const path = `/api/v2/state-versions/${stateVersionId}/json-download`;
+      if (
+        ws === undefined ||
+        (!validSignedApiURL(request, path) &&
+          !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-read")) &&
+          !checkRunStateAccess(run, ws.id))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      try {
-        const jsonState = await readJsonUploadBody(body, request);
-        const encrypted = await encryptStatePayload(jsonState);
-        await commitJsonUpload({ stateVersionId, sv, ws, encrypted, jsonState });
-        scheduleExplorerInventory(sv.workspaceId);
-        (set as { status: number }).status = 200;
-        return {};
-      } finally {
-        releaseStateUpload(stateVersionId);
+      if (
+        typeof sv.jsonState !== "string" ||
+        sv.jsonState === "" ||
+        ["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-    } catch (error: unknown) {
-      if (error instanceof StateVersionRejected) {
-        (set as { status: number }).status = error.status;
-        return error.body;
+      if (isClientEncryptedState(sv.statePayload)) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            { status: "422", title: "Unsupported state representation", detail: statePayloadError(sv.statePayload) },
+          ],
+        };
       }
-      throw error;
-    }
-  })
-  .put("/api/v2/state-versions/:state_version_id/json-outputs-upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params["state_version_id"] ?? "";
-    const path = `/api/v2/state-versions/${stateVersionId}/json-outputs-upload`;
-    try {
-      const { sv, ws } = await resolveReservationUploadScope(stateVersionId, request, user?.id, orgId, teamId, path);
-      // Issue #578: outputs are single-shot on a pending version. Rewriting a
-      // finalized version would silently mutate immutable history (and the old
-      // code appended those rows to the output index). The blob remains
-      // readable as an MCP fallback once set.
-      assertOutputsUploadable(sv, ws);
-      if (!tryAcquireStateUpload(stateVersionId)) {
-        throw new StateVersionRejected(409, { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] });
-      }
-      try {
-        const jsonStateOutputs = await readJsonOutputsBody(body, request);
-        const encrypted = await encryptStatePayload(jsonStateOutputs);
-        await commitJsonOutputsUpload({ stateVersionId, sv, ws, encrypted });
-        scheduleExplorerInventory(sv.workspaceId);
-        (set as { status: number }).status = 200;
-        return {};
-      } finally {
-        releaseStateUpload(stateVersionId);
-      }
-    } catch (error: unknown) {
-      if (error instanceof StateVersionRejected) {
-        (set as { status: number }).status = error.status;
-        return error.body;
-      }
-      throw error;
-    }
-  })
-  .post("/api/v2/state-versions/:state_version_id/actions/rollback", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params["state_version_id"] ?? "";
-    try {
-      const { sv, ws } = await resolveActionRollbackScope(stateVersionId, user?.id, orgId, teamId);
-      const idempotency = idempotencyContext(
-        request,
-        `state-action-rollback:${stateVersionId}`,
-        idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
-        {},
-        set,
-      );
-      if (idempotency === "invalid") {
-        return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
-      }
-      const { sourcePayload, parsedSource } = parseActionRollbackSource(sv);
-      const idempotencyBegin = await beginIdempotency(
-        idempotency,
-        "state-action-rollback",
-        set,
-      );
-      if (idempotencyBegin.kind === "replay") return await replayStateVersion(idempotencyBegin.resourceId, sv.workspaceId, request, idempotencyBegin.body);
-      if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
-      const newId = await commitRollbackVersion({
+      (set.headers as Record<string, string>)["Content-Type"] = "application/json";
+      await auditLog("read", "state-version", stateVersionId, user?.id ?? null, ws.orgId, {
         workspaceId: sv.workspaceId,
-        workspace: ws,
-        source: { source: sv, sourcePayload, parsedSource },
-        userId: user?.id,
-        idempotencyBegin,
+        endpoint: "json-download",
+        stateVersionSerial: sv.serial,
       });
+      return decodeStatePayload(sv.jsonState);
+    },
+  )
+  .delete(
+    "/api/v2/state-versions/:state_version_id",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const stateVersionId = params["state_version_id"] ?? "";
+      const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+      if (sv === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+      if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "admin"))) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (sv.status === "pending" && sv.statePayload === null) {
+        const discarded = await db.transaction(async (tx) =>
+          discardStateReservation(tx as typeof db, sv, ws, "discarded"),
+        );
+        if (!discarded) {
+          (set as { status: number }).status = 409;
+          return {
+            errors: [
+              { status: "409", title: "Conflict", detail: "State upload completed while discarding its reservation" },
+            ],
+          };
+        }
+      } else {
+        await db
+          .update(stateVersions)
+          .set({ status: "discarded", softDeletedAt: null })
+          .where(eq(stateVersions.id, stateVersionId));
+      }
+      (set as { status: number }).status = 204;
+      return new Response(null, { status: 204 });
+    },
+  )
+  .get(
+    "/api/v2/state-versions/:state_version_id/download",
+    async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
+      const stateVersionId = params["state_version_id"] ?? "";
+      const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+      if (sv === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+      const path = `/api/v2/state-versions/${stateVersionId}/download`;
+      if (
+        ws === undefined ||
+        (!validSignedApiURL(request, path) &&
+          !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-read")) &&
+          !checkRunStateAccess(run, ws.id))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (
+        typeof sv.statePayload !== "string" ||
+        sv.statePayload === "" ||
+        ["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = decodeStatePayload(sv.statePayload);
+      (set.headers as Record<string, string>)["Content-Type"] = "application/json";
+      await auditLog("read", "state-version", stateVersionId, user?.id ?? null, ws.orgId, {
+        workspaceId: sv.workspaceId,
+        endpoint: "download",
+        stateVersionSerial: sv.serial,
+      });
+      return payload;
+    },
+  )
+  .put(
+    "/api/v2/state-versions/:state_version_id/upload",
+    async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const stateVersionId = params["state_version_id"] ?? "";
+      const path = `/api/v2/state-versions/${stateVersionId}/upload`;
+      try {
+        const { sv } = await resolveReservationUploadScope(stateVersionId, request, user?.id, orgId, teamId, path);
+        // Issue #578: claim before the network-bound body transfer so two
+        // simultaneous PUTs do not both stream bodies. The domain command below
+        // remains the cross-process atomic backstop.
+        if (!tryAcquireStateUpload(stateVersionId)) {
+          throw new StateVersionRejected(409, {
+            errors: [
+              { status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" },
+            ],
+          });
+        }
+        try {
+          const rawState = await readReservationUploadBody(body, request, sv);
+          const committed = await commitStateVersion({ stateVersionId, rawState });
+          applyCommittedUpload(committed, sv.workspaceId);
+          (set as { status: number }).status = 200;
+          return {};
+        } finally {
+          releaseStateUpload(stateVersionId);
+        }
+      } catch (error: unknown) {
+        if (error instanceof StateVersionRejected) {
+          (set as { status: number }).status = error.status;
+          return error.body;
+        }
+        throw error;
+      }
+    },
+  )
+  .put(
+    "/api/v2/state-versions/:state_version_id/json-upload",
+    async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const stateVersionId = params["state_version_id"] ?? "";
+      const path = `/api/v2/state-versions/${stateVersionId}/json-upload`;
+      try {
+        const { sv, ws } = await resolveReservationUploadScope(stateVersionId, request, user?.id, orgId, teamId, path);
+        assertJsonUploadable(sv, ws);
+        if (!tryAcquireStateUpload(stateVersionId)) {
+          throw new StateVersionRejected(409, {
+            errors: [
+              { status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" },
+            ],
+          });
+        }
+        try {
+          const jsonState = await readJsonUploadBody(body, request);
+          const encrypted = await encryptStatePayload(jsonState);
+          await commitJsonUpload({ stateVersionId, sv, ws, encrypted, jsonState });
+          scheduleExplorerInventory(sv.workspaceId);
+          (set as { status: number }).status = 200;
+          return {};
+        } finally {
+          releaseStateUpload(stateVersionId);
+        }
+      } catch (error: unknown) {
+        if (error instanceof StateVersionRejected) {
+          (set as { status: number }).status = error.status;
+          return error.body;
+        }
+        throw error;
+      }
+    },
+  )
+  .put(
+    "/api/v2/state-versions/:state_version_id/json-outputs-upload",
+    async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const stateVersionId = params["state_version_id"] ?? "";
+      const path = `/api/v2/state-versions/${stateVersionId}/json-outputs-upload`;
+      try {
+        const { sv, ws } = await resolveReservationUploadScope(stateVersionId, request, user?.id, orgId, teamId, path);
+        // Issue #578: outputs are single-shot on a pending version. Rewriting a
+        // finalized version would silently mutate immutable history (and the old
+        // code appended those rows to the output index). The blob remains
+        // readable as an MCP fallback once set.
+        assertOutputsUploadable(sv, ws);
+        if (!tryAcquireStateUpload(stateVersionId)) {
+          throw new StateVersionRejected(409, {
+            errors: [
+              { status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" },
+            ],
+          });
+        }
+        try {
+          const jsonStateOutputs = await readJsonOutputsBody(body, request);
+          const encrypted = await encryptStatePayload(jsonStateOutputs);
+          await commitJsonOutputsUpload({ stateVersionId, sv, ws, encrypted });
+          scheduleExplorerInventory(sv.workspaceId);
+          (set as { status: number }).status = 200;
+          return {};
+        } finally {
+          releaseStateUpload(stateVersionId);
+        }
+      } catch (error: unknown) {
+        if (error instanceof StateVersionRejected) {
+          (set as { status: number }).status = error.status;
+          return error.body;
+        }
+        throw error;
+      }
+    },
+  )
+  .post(
+    "/api/v2/state-versions/:state_version_id/actions/rollback",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const stateVersionId = params["state_version_id"] ?? "";
+      try {
+        const { sv, ws } = await resolveActionRollbackScope(stateVersionId, user?.id, orgId, teamId);
+        const idempotency = idempotencyContext(
+          request,
+          `state-action-rollback:${stateVersionId}`,
+          idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
+          {},
+          set,
+        );
+        if (idempotency === "invalid") {
+          return {
+            errors: [
+              { status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" },
+            ],
+          };
+        }
+        const { sourcePayload, parsedSource } = parseActionRollbackSource(sv);
+        const idempotencyBegin = await beginIdempotency(idempotency, "state-action-rollback", set);
+        if (idempotencyBegin.kind === "replay")
+          return await replayStateVersion(idempotencyBegin.resourceId, sv.workspaceId, request, idempotencyBegin.body);
+        if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
+        const newId = await commitRollbackVersion({
+          workspaceId: sv.workspaceId,
+          workspace: ws,
+          source: { source: sv, sourcePayload, parsedSource },
+          userId: user?.id,
+          idempotencyBegin,
+        });
+        scheduleExplorerInventory(sv.workspaceId);
+        const newSv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, newId) });
+        if (newSv === undefined) {
+          if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+          (set as { status: number }).status = 500;
+          return { errors: [{ status: "500", title: "Internal Server Error" }] };
+        }
+        (set as { status: number }).status = 201;
+        const responseBody = {
+          data: stateVersionResource(
+            newSv,
+            request,
+            false,
+            undefined,
+            await stateResponseAccess(ws, user?.id, orgId, teamId),
+          ),
+        };
+        if (idempotencyBegin.kind === "reserved")
+          await completeIdempotency(idempotencyBegin.id, 201, responseBody, newId);
+        return responseBody;
+      } catch (error: unknown) {
+        if (error instanceof StateVersionRejected) {
+          (set as { status: number }).status = error.status;
+          return error.body;
+        }
+        throw error;
+      }
+    },
+  )
+  .post(
+    "/api/v2/state-versions/:state_version_id/actions/soft_delete_backing_data",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const stateVersionId = params["state_version_id"] ?? "";
+      const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+      if (sv === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+      if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "admin"))) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const current = await db.query.stateVersions.findFirst({
+        where: and(
+          eq(stateVersions.workspaceId, sv.workspaceId),
+          eq(stateVersions.status, "finalized"),
+          eq(stateVersions.intermediate, false),
+        ),
+        orderBy: [desc(stateVersions.serial)],
+        columns: { id: true },
+      });
+      if (sv.status !== "finalized" || current?.id === sv.id) {
+        (set as { status: number }).status = 400;
+        return { errors: [{ status: "400", title: "Bad Request" }] };
+      }
+      const softDeletedAt = Date.now();
+      await db
+        .update(stateVersions)
+        .set({ status: "backing_data_soft_deleted", softDeletedAt })
+        .where(eq(stateVersions.id, sv.id));
+      return {
+        data: stateVersionResource(
+          { ...sv, status: "backing_data_soft_deleted", softDeletedAt },
+          request,
+          false,
+          undefined,
+          authorizedStateAccess(ws.id, "admin"),
+        ),
+      };
+    },
+  )
+  .post(
+    "/api/v2/state-versions/:state_version_id/actions/restore_backing_data",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const stateVersionId = params["state_version_id"] ?? "";
+      const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+      if (sv === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+      if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "admin"))) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (sv.status !== "backing_data_soft_deleted") {
+        (set as { status: number }).status = 400;
+        return { errors: [{ status: "400", title: "Bad Request" }] };
+      }
+      await db
+        .update(stateVersions)
+        .set({ status: "finalized", softDeletedAt: null })
+        .where(eq(stateVersions.id, sv.id));
       scheduleExplorerInventory(sv.workspaceId);
-      const newSv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, newId) });
-      if (newSv === undefined) {
-        if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-        (set as { status: number }).status = 500;
-        return { errors: [{ status: "500", title: "Internal Server Error" }] };
+      return {
+        data: stateVersionResource(
+          { ...sv, status: "finalized", softDeletedAt: null },
+          request,
+          false,
+          undefined,
+          authorizedStateAccess(ws.id, "admin"),
+        ),
+      };
+    },
+  )
+  .post(
+    "/api/v2/state-versions/:state_version_id/actions/permanently_delete_backing_data",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const stateVersionId = params["state_version_id"] ?? "";
+      const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+      if (sv === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      (set as { status: number }).status = 201;
-      const responseBody = { data: stateVersionResource(newSv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
-      if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, newId);
-      return responseBody;
-    } catch (error: unknown) {
-      if (error instanceof StateVersionRejected) {
-        (set as { status: number }).status = error.status;
-        return error.body;
+      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+      if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "admin"))) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      throw error;
-    }
-  })
-  .post("/api/v2/state-versions/:state_version_id/actions/soft_delete_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params["state_version_id"] ?? "";
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "admin"))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const current = await db.query.stateVersions.findFirst({
-      where: and(
-        eq(stateVersions.workspaceId, sv.workspaceId),
-        eq(stateVersions.status, "finalized"),
-        eq(stateVersions.intermediate, false),
-      ),
-      orderBy: [desc(stateVersions.serial)],
-      columns: { id: true },
-    });
-    if (sv.status !== "finalized" || current?.id === sv.id) {
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request" }] };
-    }
-    const softDeletedAt = Date.now();
-    await db.update(stateVersions).set({ status: "backing_data_soft_deleted", softDeletedAt }).where(eq(stateVersions.id, sv.id));
-    return { data: stateVersionResource({ ...sv, status: "backing_data_soft_deleted", softDeletedAt }, request, false, undefined, authorizedStateAccess(ws.id, "admin")) };
-  })
-  .post("/api/v2/state-versions/:state_version_id/actions/restore_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params["state_version_id"] ?? "";
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "admin"))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (sv.status !== "backing_data_soft_deleted") {
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request" }] };
-    }
-    await db.update(stateVersions).set({ status: "finalized", softDeletedAt: null }).where(eq(stateVersions.id, sv.id));
-    scheduleExplorerInventory(sv.workspaceId);
-    return { data: stateVersionResource({ ...sv, status: "finalized", softDeletedAt: null }, request, false, undefined, authorizedStateAccess(ws.id, "admin")) };
-  })
-  .post("/api/v2/state-versions/:state_version_id/actions/permanently_delete_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params["state_version_id"] ?? "";
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "admin"))) {
-      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (sv.status !== "backing_data_soft_deleted") {
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request" }] };
-    }
-    const deleted = await db.update(stateVersions).set({
-      status: "backing_data_permanently_deleted",
-      statePayload: null,
-      jsonState: null,
-      jsonStateOutputs: null,
-    }).where(and(
-      eq(stateVersions.id, sv.id),
-      eq(stateVersions.status, "backing_data_soft_deleted"),
-    )).returning({ id: stateVersions.id });
-    if (deleted.length === 0) {
-      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict" }] };
-    }
-    return {
-      data: stateVersionResource({
-        ...sv,
-        status: "backing_data_permanently_deleted",
-        statePayload: null,
-        jsonState: null,
-        jsonStateOutputs: null,
-      }, request, false, undefined, authorizedStateAccess(ws.id, "admin")),
-    };
-  })
+      if (sv.status !== "backing_data_soft_deleted") {
+        (set as { status: number }).status = 400;
+        return { errors: [{ status: "400", title: "Bad Request" }] };
+      }
+      const deleted = await db
+        .update(stateVersions)
+        .set({
+          status: "backing_data_permanently_deleted",
+          statePayload: null,
+          jsonState: null,
+          jsonStateOutputs: null,
+        })
+        .where(and(eq(stateVersions.id, sv.id), eq(stateVersions.status, "backing_data_soft_deleted")))
+        .returning({ id: stateVersions.id });
+      if (deleted.length === 0) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict" }] };
+      }
+      return {
+        data: stateVersionResource(
+          {
+            ...sv,
+            status: "backing_data_permanently_deleted",
+            statePayload: null,
+            jsonState: null,
+            jsonStateOutputs: null,
+          },
+          request,
+          false,
+          undefined,
+          authorizedStateAccess(ws.id, "admin"),
+        ),
+      };
+    },
+  )
   .get("/api/v2/runs/:run_id/recovery", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-    const workspace = run === undefined ? undefined : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "admin");
+    const workspace =
+      run === undefined ? undefined : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "admin");
     if (run === undefined || workspace === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const review = await recoveryReviewFor(run, workspace, user, orgId, teamId);
-    await auditLog("read", "run", runId, user?.id ?? null, workspace.orgId, { endpoint: "recovery-workbench", candidateStatus: review["capture"] && typeof review["capture"] === "object" ? (review["capture"] as Record<string, unknown>)["status"] : null });
+    await auditLog("read", "run", runId, user?.id ?? null, workspace.orgId, {
+      endpoint: "recovery-workbench",
+      candidateStatus:
+        review["capture"] && typeof review["capture"] === "object"
+          ? (review["capture"] as Record<string, unknown>)["status"]
+          : null,
+    });
     return {
       data: {
         id: runId,
@@ -2214,183 +3050,255 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   })
   // Alias kept for clients that name the surface after the UI rather than the
   // run resource. Both paths return exactly the same bounded review.
-  .get("/api/v2/runs/:run_id/recovery-workbench", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-    const workspace = run === undefined ? undefined : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "admin");
-    if (run === undefined || workspace === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const review = await recoveryReviewFor(run, workspace, user, orgId, teamId);
-    await auditLog("read", "run", runId, user?.id ?? null, workspace.orgId, { endpoint: "recovery-workbench", candidateStatus: review["capture"] && typeof review["capture"] === "object" ? (review["capture"] as Record<string, unknown>)["status"] : null });
-    return {
-      data: {
-        id: runId,
-        type: "recovery-reviews",
-        attributes: review,
-        relationships: {
-          run: { data: { id: runId, type: "runs" } },
-          candidate: { data: { id: "recovery-candidate", type: "state-versions" } },
-        },
-        links: { self: `/api/v2/runs/${runId}/recovery-workbench` },
-      },
-    };
-  })
-  .get("/api/v2/runs/:run_id/recovery-state", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-    const workspace = run === undefined ? undefined : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "admin");
-    if (run === undefined || workspace === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    let payload: string;
-    try {
-      const capture = await inspectRecoveryCopy(storageDir, runId, true);
-      if (capture.status !== "candidate" && capture.status !== "opaque" && capture.status !== "promoted") throw new Error("recovery capture incomplete");
-      if (capture.payload === undefined) throw new Error("recovery payload unavailable");
-      payload = capture.payload;
-    } catch {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    await auditLog("read", "state-version", runId, user?.id ?? null, workspace.orgId, {
-      workspaceId: workspace.id,
-      endpoint: "recovery-state",
-    });
-    return new Response(payload, { headers: { "Content-Type": "application/json" } });
-  })
-  .post("/api/v2/runs/:run_id/actions/recover-state", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    try {
-      const { run, workspace } = await requireRecoverStateContext(runId, user, orgId, teamId);
-      const candidate = await resolveRecoverCandidate(runId, workspace, request);
-      if (candidate.kind === "promoted") {
-        (set as { status: number }).status = candidate.status;
-        return candidate.response;
+  .get(
+    "/api/v2/runs/:run_id/recovery-workbench",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+      const workspace =
+        run === undefined
+          ? undefined
+          : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "admin");
+      if (run === undefined || workspace === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      await requireRecoveryQuiesced(run, workspace, user, orgId, teamId);
-      const promotion = await promoteRecoveryCapture(runId, run, workspace, user?.id);
-      if (promotion.stateVersionId === null || promotion.committedSerial === null) {
-        (set as { status: number }).status = 500;
-        return { errors: [{ status: "500", title: "Internal Server Error" }] };
-      }
-      const stateVersion = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, promotion.stateVersionId) });
-      if (stateVersion === undefined) {
-        (set as { status: number }).status = 500;
-        return { errors: [{ status: "500", title: "Internal Server Error" }] };
-      }
-      scheduleExplorerInventory(workspace.id);
-      (set as { status: number }).status = promotion.idempotent ? 200 : 201;
-      return {
-        data: stateVersionResource(stateVersion, request, false, undefined, authorizedStateAccess(workspace.id, "admin")),
-        ...(promotion.idempotent ? { meta: { idempotent: true, evidenceRetained: true } } : {}),
-      };
-    } catch (error: unknown) {
-      if (error instanceof StateVersionRejected) {
-        (set as { status: number }).status = error.status;
-        return error.body;
-      }
-      throw error;
-    }
-  })
-
-  .post("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    let idempotencyBegin: Awaited<ReturnType<typeof beginIdempotency>> | undefined;
-    try {
-      const ws = await resolveStateVersionWorkspace(workspaceId, run, user?.id, orgId, teamId);
-      const parsed = parseStateVersionPayload(body);
-      const idempotency = resolveStateVersionIdempotency(request, workspaceId, user?.id, orgId, teamId, parsed.payload, set);
-      assertStateVersionCreatable(parsed, run, orgId);
-      const bodies = decodeStateVersionBodies(parsed.inlineState, parsed.inlineJsonState, parsed.inlineJsonStateOutputs);
-      const runId = run?.runId ?? parsed.requestedRunId;
-      const relatedRunCreatedBy = await resolveStateVersionRun(runId, workspaceId);
-      const serial = assertStateVersionSerial(parsed.serial);
-      assertStateVersionWritable(run, ws, user?.id, orgId, teamId, parsed.intermediate);
-      const parsedTerraformState = parseAndAssertStatePayload(bodies.statePayload, parsed.expectedLineage, serial, parsed.attributes["md5"]);
-      idempotencyBegin = await beginIdempotency(
-        idempotency,
-        "state-versions",
-        set,
-      );
-      if (idempotencyBegin.kind === "replay") return await replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
-      if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
-      await assertStateVersionAdvances(workspaceId, serial, parsedTerraformState, bodies.jsonState);
-      const id = crypto.randomUUID();
-      await insertStateVersionRecord(buildStateVersionInsert({
-        id,
-        workspaceId,
-        serial,
-        parsed,
-        bodies,
-        runId,
-        relatedRunCreatedBy,
-        userId: user?.id,
-        ws,
-      }));
-      return await completeStateVersionCreation(id, workspaceId, request, ws, user?.id, orgId, teamId, set, idempotencyBegin);
-    } catch (error: unknown) {
-      if (error instanceof StateVersionRejected) {
-        if (idempotencyBegin?.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
-        (set as { status: number }).status = error.status;
-        return error.body;
-      }
-      throw error;
-    }
-  })
-  .post("/api/v2/workspaces/:workspace_id/state-versions/upload", async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    try {
-      const ws = await resolveUploadWorkspace(workspaceId, run, user?.id, orgId, teamId);
-      const rawState = await readUploadState(body, request);
-      const { parsed, incomingSerial } = parseUploadState(rawState);
-      assertUploadMd5(request, rawState);
-      const contentMd5 = request.headers.get("content-md5");
-      const idempotency = idempotencyContext(
-        request,
-        `state-versions-upload:${workspaceId}`,
-        idempotencyPrincipal({ userId: user?.id, orgId, teamId, runId: run?.runId }),
-        { rawState, contentMd5 },
-        set,
-      );
-      if (idempotency === "invalid") {
-        return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
-      }
-      const idempotencyBegin = await beginIdempotency(
-        idempotency,
-        "state-versions-upload",
-        set,
-      );
-      if (idempotencyBegin.kind === "replay") return await replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
-      if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
-
-      await assertUploadPreconditions(workspaceId, incomingSerial, parsed, idempotencyBegin);
-      const runCreatedBy = await findUploadRunCreatedBy(run);
-
-      const stateVersionId = await commitUploadedState({
-        workspaceId,
-        ws,
-        rawState,
-        parsed,
-        incomingSerial,
-        run,
-        runCreatedBy,
-        userId: user?.id,
-        idempotencyBegin,
+      const review = await recoveryReviewFor(run, workspace, user, orgId, teamId);
+      await auditLog("read", "run", runId, user?.id ?? null, workspace.orgId, {
+        endpoint: "recovery-workbench",
+        candidateStatus:
+          review["capture"] && typeof review["capture"] === "object"
+            ? (review["capture"] as Record<string, unknown>)["status"]
+            : null,
       });
-      const sv = await requireUploadedStateVersion(stateVersionId, idempotencyBegin);
-      scheduleExplorerInventory(sv.workspaceId);
-      (set as { status: number }).status = 201;
-      const responseBody = { data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
-      if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, stateVersionId);
-      return responseBody;
-    } catch (error: unknown) {
-      if (error instanceof StateVersionRejected) {
-        (set as { status: number }).status = error.status;
-        return error.body;
+      return {
+        data: {
+          id: runId,
+          type: "recovery-reviews",
+          attributes: review,
+          relationships: {
+            run: { data: { id: runId, type: "runs" } },
+            candidate: { data: { id: "recovery-candidate", type: "state-versions" } },
+          },
+          links: { self: `/api/v2/runs/${runId}/recovery-workbench` },
+        },
+      };
+    },
+  )
+  .get(
+    "/api/v2/runs/:run_id/recovery-state",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+      const workspace =
+        run === undefined
+          ? undefined
+          : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "admin");
+      if (run === undefined || workspace === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      throw error;
-    }
-  });
+      let payload: string;
+      try {
+        const capture = await inspectRecoveryCopy(storageDir, runId, true);
+        if (capture.status !== "candidate" && capture.status !== "opaque" && capture.status !== "promoted")
+          throw new Error("recovery capture incomplete");
+        if (capture.payload === undefined) throw new Error("recovery payload unavailable");
+        payload = capture.payload;
+      } catch {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await auditLog("read", "state-version", runId, user?.id ?? null, workspace.orgId, {
+        workspaceId: workspace.id,
+        endpoint: "recovery-state",
+      });
+      return new Response(payload, { headers: { "Content-Type": "application/json" } });
+    },
+  )
+  .post(
+    "/api/v2/runs/:run_id/actions/recover-state",
+    async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      try {
+        const { run, workspace } = await requireRecoverStateContext(runId, user, orgId, teamId);
+        const candidate = await resolveRecoverCandidate(runId, workspace, request);
+        if (candidate.kind === "promoted") {
+          (set as { status: number }).status = candidate.status;
+          return candidate.response;
+        }
+        await requireRecoveryQuiesced(run, workspace, user, orgId, teamId);
+        const promotion = await promoteRecoveryCapture(runId, run, workspace, user?.id);
+        if (promotion.stateVersionId === null || promotion.committedSerial === null) {
+          (set as { status: number }).status = 500;
+          return { errors: [{ status: "500", title: "Internal Server Error" }] };
+        }
+        const stateVersion = await db.query.stateVersions.findFirst({
+          where: eq(stateVersions.id, promotion.stateVersionId),
+        });
+        if (stateVersion === undefined) {
+          (set as { status: number }).status = 500;
+          return { errors: [{ status: "500", title: "Internal Server Error" }] };
+        }
+        scheduleExplorerInventory(workspace.id);
+        (set as { status: number }).status = promotion.idempotent ? 200 : 201;
+        return {
+          data: stateVersionResource(
+            stateVersion,
+            request,
+            false,
+            undefined,
+            authorizedStateAccess(workspace.id, "admin"),
+          ),
+          ...(promotion.idempotent ? { meta: { idempotent: true, evidenceRetained: true } } : {}),
+        };
+      } catch (error: unknown) {
+        if (error instanceof StateVersionRejected) {
+          (set as { status: number }).status = error.status;
+          return error.body;
+        }
+        throw error;
+      }
+    },
+  )
+
+  .post(
+    "/api/v2/workspaces/:workspace_id/state-versions",
+    async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      let idempotencyBegin: Awaited<ReturnType<typeof beginIdempotency>> | undefined;
+      try {
+        const ws = await resolveStateVersionWorkspace(workspaceId, run, user?.id, orgId, teamId);
+        const parsed = parseStateVersionPayload(body);
+        const idempotency = resolveStateVersionIdempotency(
+          request,
+          workspaceId,
+          user?.id,
+          orgId,
+          teamId,
+          parsed.payload,
+          set,
+        );
+        assertStateVersionCreatable(parsed, run, orgId);
+        const bodies = decodeStateVersionBodies(
+          parsed.inlineState,
+          parsed.inlineJsonState,
+          parsed.inlineJsonStateOutputs,
+        );
+        const runId = run?.runId ?? parsed.requestedRunId;
+        const relatedRunCreatedBy = await resolveStateVersionRun(runId, workspaceId);
+        const serial = assertStateVersionSerial(parsed.serial);
+        assertStateVersionWritable(run, ws, user?.id, orgId, teamId, parsed.intermediate);
+        const parsedTerraformState = parseAndAssertStatePayload(
+          bodies.statePayload,
+          parsed.expectedLineage,
+          serial,
+          parsed.attributes["md5"],
+        );
+        idempotencyBegin = await beginIdempotency(idempotency, "state-versions", set);
+        if (idempotencyBegin.kind === "replay")
+          return await replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
+        if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
+        await assertStateVersionAdvances(workspaceId, serial, parsedTerraformState, bodies.jsonState);
+        const id = crypto.randomUUID();
+        await insertStateVersionRecord(
+          buildStateVersionInsert({
+            id,
+            workspaceId,
+            serial,
+            parsed,
+            bodies,
+            runId,
+            relatedRunCreatedBy,
+            userId: user?.id,
+            ws,
+          }),
+        );
+        return await completeStateVersionCreation(
+          id,
+          workspaceId,
+          request,
+          ws,
+          user?.id,
+          orgId,
+          teamId,
+          set,
+          idempotencyBegin,
+        );
+      } catch (error: unknown) {
+        if (error instanceof StateVersionRejected) {
+          if (idempotencyBegin?.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+          (set as { status: number }).status = error.status;
+          return error.body;
+        }
+        throw error;
+      }
+    },
+  )
+  .post(
+    "/api/v2/workspaces/:workspace_id/state-versions/upload",
+    async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      try {
+        const ws = await resolveUploadWorkspace(workspaceId, run, user?.id, orgId, teamId);
+        const rawState = await readUploadState(body, request);
+        const { parsed, incomingSerial } = parseUploadState(rawState);
+        assertUploadMd5(request, rawState);
+        const contentMd5 = request.headers.get("content-md5");
+        const idempotency = idempotencyContext(
+          request,
+          `state-versions-upload:${workspaceId}`,
+          idempotencyPrincipal({ userId: user?.id, orgId, teamId, runId: run?.runId }),
+          { rawState, contentMd5 },
+          set,
+        );
+        if (idempotency === "invalid") {
+          return {
+            errors: [
+              { status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" },
+            ],
+          };
+        }
+        const idempotencyBegin = await beginIdempotency(idempotency, "state-versions-upload", set);
+        if (idempotencyBegin.kind === "replay")
+          return await replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
+        if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
+
+        await assertUploadPreconditions(workspaceId, incomingSerial, parsed, idempotencyBegin);
+        const runCreatedBy = await findUploadRunCreatedBy(run);
+
+        const stateVersionId = await commitUploadedState({
+          workspaceId,
+          ws,
+          rawState,
+          parsed,
+          incomingSerial,
+          run,
+          runCreatedBy,
+          userId: user?.id,
+          idempotencyBegin,
+        });
+        const sv = await requireUploadedStateVersion(stateVersionId, idempotencyBegin);
+        scheduleExplorerInventory(sv.workspaceId);
+        (set as { status: number }).status = 201;
+        const responseBody = {
+          data: stateVersionResource(
+            sv,
+            request,
+            false,
+            undefined,
+            await stateResponseAccess(ws, user?.id, orgId, teamId),
+          ),
+        };
+        if (idempotencyBegin.kind === "reserved")
+          await completeIdempotency(idempotencyBegin.id, 201, responseBody, stateVersionId);
+        return responseBody;
+      } catch (error: unknown) {
+        if (error instanceof StateVersionRejected) {
+          (set as { status: number }).status = error.status;
+          return error.body;
+        }
+        throw error;
+      }
+    },
+  );

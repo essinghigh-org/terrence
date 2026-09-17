@@ -57,7 +57,8 @@ export function verifyBrandIcons(root = publicDir): void {
       throw new Error(`Invalid generated icon dimensions: ${path}`);
     }
     const actualHash = sha256(readFileSync(path));
-    if (recorded.sha256 !== actualHash) throw new Error(`Stale generated icon: ${path}. Run frontend/scripts/brand-icons.ts.`);
+    if (recorded.sha256 !== actualHash)
+      throw new Error(`Stale generated icon: ${path}. Run frontend/scripts/brand-icons.ts.`);
   }
 }
 
@@ -74,12 +75,29 @@ export function generateBrandIcons(root = publicDir): void {
     for (const spec of regular) rasterize(source, join(outputDir, spec.name), spec.size);
     const mark = join(temporaryDir, "mark-360.png");
     rasterize(source, mark, 360);
-    execFileSync("magick", ["-size", "512x512", "xc:#233654", mark, "-gravity", "center", "-compose", "over", "-composite", `PNG32:${join(outputDir, "maskable-512.png")}`], { stdio: "inherit" });
+    execFileSync(
+      "magick",
+      [
+        "-size",
+        "512x512",
+        "xc:#233654",
+        mark,
+        "-gravity",
+        "center",
+        "-compose",
+        "over",
+        "-composite",
+        `PNG32:${join(outputDir, "maskable-512.png")}`,
+      ],
+      { stdio: "inherit" },
+    );
 
-    const icons = Object.fromEntries(iconSpecs.map((spec): [string, { size: number; sha256: string }] => {
-      const path = join(outputDir, spec.name);
-      return [spec.name, { size: pngSize(path), sha256: sha256(readFileSync(path)) }];
-    }));
+    const icons = Object.fromEntries(
+      iconSpecs.map((spec): [string, { size: number; sha256: string }] => {
+        const path = join(outputDir, spec.name);
+        return [spec.name, { size: pngSize(path), sha256: sha256(readFileSync(path)) }];
+      }),
+    );
     const manifest: IconManifest = { version: 1, sourceSha256: sha256(readFileSync(source)), icons };
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   } finally {

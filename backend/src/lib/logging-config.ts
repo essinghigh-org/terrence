@@ -3,11 +3,11 @@ import { parseSyslogTarget } from "./syslog-transport";
 export const loggingLevels = ["error", "warn", "info", "debug"] as const;
 type Level = (typeof loggingLevels)[number];
 export type LoggingEnvironment = Readonly<
-  Record<"LOG_LEVEL" | "TERRENCE_SYSLOG_LEVEL", Level>
-  & Record<"TERRENCE_SYSLOG_TARGETS", readonly string[]>
-  & Record<"TERRENCE_SYSLOG_HOSTNAME", string | null>
-  & Record<"TERRENCE_SYSLOG_APP", string>
-  & Record<"TERRENCE_SYSLOG_FORMAT", "json" | "rfc5424">
+  Record<"LOG_LEVEL" | "TERRENCE_SYSLOG_LEVEL", Level> &
+    Record<"TERRENCE_SYSLOG_TARGETS", readonly string[]> &
+    Record<"TERRENCE_SYSLOG_HOSTNAME", string | null> &
+    Record<"TERRENCE_SYSLOG_APP", string> &
+    Record<"TERRENCE_SYSLOG_FORMAT", "json" | "rfc5424">
 >;
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -21,7 +21,8 @@ function level(raw: string | undefined, fallback: Level): Level {
 function identity(raw: string | undefined, fallback: string | null, maximum: number): string | null {
   if (raw === undefined) return fallback;
   const value = raw.trim();
-  if (!/^[\x21-\x7E]+$/u.test(value) || value.length > maximum) throw new Error("Invalid syslog identity configuration");
+  if (!/^[\x21-\x7E]+$/u.test(value) || value.length > maximum)
+    throw new Error("Invalid syslog identity configuration");
   return value;
 }
 

@@ -2,11 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 
 import { formatDateTime } from "../src/lib/utils";
-import {
-  getDisplayTimeFormat,
-  resolveDisplayTimeFormat,
-  setDisplayTimeFormat,
-} from "../src/lib/display-time-format";
+import { getDisplayTimeFormat, resolveDisplayTimeFormat, setDisplayTimeFormat } from "../src/lib/display-time-format";
 
 const timestamp = "2026-08-07T12:00:00Z";
 
@@ -49,7 +45,9 @@ describe("display time format preference", () => {
     // value at import time (module-scope currentFormat).
     const result = spawnSync(
       "bun",
-      ["-e", `
+      [
+        "-e",
+        `
         globalThis.window = {
           localStorage: {
             getItem: (key) => (key === "terrence-display-time-format" ? "12" : null),
@@ -58,7 +56,8 @@ describe("display time format preference", () => {
         };
         const { getDisplayTimeFormat, resolveDisplayTimeFormat } = await import("./src/lib/display-time-format.ts");
         console.log(JSON.stringify({ loaded: getDisplayTimeFormat(), resolved: resolveDisplayTimeFormat() }));
-      `],
+      `,
+      ],
       { cwd: process.cwd(), env: { ...process.env }, encoding: "utf8" },
     );
     expect(result.status).toBe(0);

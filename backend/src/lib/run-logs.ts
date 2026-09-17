@@ -9,7 +9,9 @@ import { logs } from "../db/schema";
 import { isDiskFullError, markStorageDegraded } from "./storage-health";
 import { recordFailure } from "./process-metrics";
 
-export type StoredRunLog = Readonly<Pick<typeof logs.$inferSelect, "id" | "runId" | "phase" | "outputText" | "createdAt">>;
+export type StoredRunLog = Readonly<
+  Pick<typeof logs.$inferSelect, "id" | "runId" | "phase" | "outputText" | "createdAt">
+>;
 export type RunLogPage = Readonly<{ number: number; size: number }>;
 
 const storageDirectory = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "run-logs");
@@ -32,9 +34,13 @@ type RunLogArchiveEnvelope = Readonly<{
 function isArchiveEnvelope(value: unknown): value is RunLogArchiveEnvelope {
   if (typeof value !== "object" || value === null) return false;
   const envelope = value as Record<string, unknown>;
-  return envelope["version"] === 1 && Array.isArray(envelope["logs"])
-    && typeof envelope["truncated"] === "boolean"
-    && Number.isSafeInteger(envelope["totalCount"]) && (envelope["totalCount"] as number) >= envelope["logs"].length;
+  return (
+    envelope["version"] === 1 &&
+    Array.isArray(envelope["logs"]) &&
+    typeof envelope["truncated"] === "boolean" &&
+    Number.isSafeInteger(envelope["totalCount"]) &&
+    (envelope["totalCount"] as number) >= envelope["logs"].length
+  );
 }
 
 const compress = promisify(gzip);
@@ -61,25 +67,48 @@ async function withArchiveSlot<T>(operation: () => Promise<T>): Promise<T> {
   pendingArchives++;
   const result = archiveTail.then(operation);
   archiveTail = result.catch((): void => undefined);
-  return result.finally((): void => { pendingArchives--; });
+  return result.finally((): void => {
+    pendingArchives--;
+  });
 }
 
-async function snapshotLogSizes(runId: string): Promise<{ totalCount: number; sizes: { id: string; phase: string; length: number }[] }> {
+async function snapshotLogSizes(
+  runId: string,
+): Promise<{ totalCount: number; sizes: { id: string; phase: string; length: number }[] }> {
   const [countRow] = await db.select({ total: count() }).from(logs).where(eq(logs.runId, runId));
   const totalCount = countRow?.total ?? 0;
   if (totalCount === 0) return { totalCount, sizes: [] };
-  const sizes = (await db.select({ id: logs.id, phase: logs.phase, length: outputByteLength }).from(logs)
-    .where(eq(logs.runId, runId)).orderBy(desc(logs.createdAt), desc(logs.id)).limit(MAX_RUN_LOGS_PER_RUN)).reverse();
+  const sizes = (
+    await db
+      .select({ id: logs.id, phase: logs.phase, length: outputByteLength })
+      .from(logs)
+      .where(eq(logs.runId, runId))
+      .orderBy(desc(logs.createdAt), desc(logs.id))
+      .limit(MAX_RUN_LOGS_PER_RUN)
+  ).reverse();
   if (totalCount < sizes.length) throw new Error("Run logs changed during archival; live logs retained");
-  if (sizes.some((row): boolean => row.length > MAX_ROW_BYTES) || sizes.reduce((total, row): number => total + row.length, 0) > MAX_ARCHIVE_BYTES) {
+  if (
+    sizes.some((row): boolean => row.length > MAX_ROW_BYTES) ||
+    sizes.reduce((total, row): number => total + row.length, 0) > MAX_ARCHIVE_BYTES
+  ) {
     throw new Error("Run log archive exceeds 64 MiB or a row exceeds 1 MiB; live logs retained");
   }
   return { totalCount, sizes };
 }
 
-function verifyArchivedRows(allRows: readonly Readonly<{ id: string; phase: string; outputText: string }>[], sizes: readonly ArchiveRow[]): void {
-  if (allRows.length !== sizes.length || allRows.some((row, i): boolean => row.id !== sizes[i]?.id
-    || row.phase !== sizes[i]?.phase || Buffer.byteLength(row.outputText) !== sizes[i]?.length)) {
+function verifyArchivedRows(
+  allRows: readonly Readonly<{ id: string; phase: string; outputText: string }>[],
+  sizes: readonly ArchiveRow[],
+): void {
+  if (
+    allRows.length !== sizes.length ||
+    allRows.some(
+      (row, i): boolean =>
+        row.id !== sizes[i]?.id ||
+        row.phase !== sizes[i]?.phase ||
+        Buffer.byteLength(row.outputText) !== sizes[i]?.length,
+    )
+  ) {
     throw new Error("Run logs changed during archival; live logs retained");
   }
 }
@@ -104,7 +133,7 @@ async function writeArchiveChunks(
 ): Promise<void> {
   const chunks: ArchiveChunk[] = [];
   let offset = 0;
-  for (let start = 0; start < sizes.length;) {
+  for (let start = 0; start < sizes.length; ) {
     const end = nextChunkEnd(sizes, start);
     const rows = sizes.slice(start, end);
     // allRows is verified 1:1 against sizes above, so the same window applies.
@@ -116,7 +145,9 @@ async function writeArchiveChunks(
     offset += bytes.length;
     if (offset > MAX_ARCHIVE_BYTES) throw new Error("Compressed run log archive exceeds limit; live logs retained");
   }
-  const index = Buffer.from(JSON.stringify({ version: 2, totalCount, truncated: totalCount > sizes.length, chunks } satisfies ArchiveIndex));
+  const index = Buffer.from(
+    JSON.stringify({ version: 2, totalCount, truncated: totalCount > sizes.length, chunks } satisfies ArchiveIndex),
+  );
   if (index.length > MAX_INDEX_BYTES) throw new Error("Run log archive index exceeds limit");
   const footer = Buffer.alloc(8);
   footer.writeUInt32LE(index.length);
@@ -135,8 +166,14 @@ export async function archiveRunLogs(runId: string): Promise<boolean> {
     // mutation — every fetched row must match it exactly. Same window as
     // the sizes query (newest-first, capped, then reversed): an
     // oldest-first fetch would grab a different slice of an over-cap run.
-    const allRows = (await db.select().from(logs)
-      .where(eq(logs.runId, runId)).orderBy(desc(logs.createdAt), desc(logs.id)).limit(MAX_RUN_LOGS_PER_RUN)).reverse();
+    const allRows = (
+      await db
+        .select()
+        .from(logs)
+        .where(eq(logs.runId, runId))
+        .orderBy(desc(logs.createdAt), desc(logs.id))
+        .limit(MAX_RUN_LOGS_PER_RUN)
+    ).reverse();
     verifyArchivedRows(allRows, sizes);
     let temporary: string | null = null;
     try {
@@ -145,7 +182,9 @@ export async function archiveRunLogs(runId: string): Promise<boolean> {
       const file = await open(temporary, "wx", 0o600);
       try {
         await writeArchiveChunks(file, sizes, allRows, totalCount);
-      } finally { await file.close(); }
+      } finally {
+        await file.close();
+      }
       // Publish the index and every chunk together. Failure keeps the old
       // archive intact and prevents retention from deleting the live rows.
       await rename(temporary, runLogArchivePath(runId));
@@ -160,14 +199,32 @@ export async function archiveRunLogs(runId: string): Promise<boolean> {
   });
 }
 
-function indexChunkTotals(chunk: ArchiveChunk, expectedOffset: number, ids: Readonly<Pick<Set<string>, "has" | "add">>): { offset: number; rowCount: number; bytes: number } {
-  if (chunk.offset !== expectedOffset || !Number.isSafeInteger(chunk.length) || chunk.length <= 0
-    || !Array.isArray(chunk.rows) || chunk.rows.length === 0 || chunk.rows.length > CHUNK_ROWS) throw new Error("Invalid run log archive format");
+function indexChunkTotals(
+  chunk: ArchiveChunk,
+  expectedOffset: number,
+  ids: Readonly<Pick<Set<string>, "has" | "add">>,
+): { offset: number; rowCount: number; bytes: number } {
+  if (
+    chunk.offset !== expectedOffset ||
+    !Number.isSafeInteger(chunk.length) ||
+    chunk.length <= 0 ||
+    !Array.isArray(chunk.rows) ||
+    chunk.rows.length === 0 ||
+    chunk.rows.length > CHUNK_ROWS
+  )
+    throw new Error("Invalid run log archive format");
   let rowCount = 0;
   let bytes = 0;
   for (const row of chunk.rows as readonly ArchiveRow[]) {
-    if (typeof row.id !== "string" || ids.has(row.id) || typeof row.phase !== "string"
-      || !Number.isSafeInteger(row.length) || row.length < 0 || row.length > MAX_ROW_BYTES) throw new Error("Invalid run log archive format");
+    if (
+      typeof row.id !== "string" ||
+      ids.has(row.id) ||
+      typeof row.phase !== "string" ||
+      !Number.isSafeInteger(row.length) ||
+      row.length < 0 ||
+      row.length > MAX_ROW_BYTES
+    )
+      throw new Error("Invalid run log archive format");
     ids.add(row.id);
     rowCount++;
     bytes += row.length;
@@ -177,8 +234,14 @@ function indexChunkTotals(chunk: ArchiveChunk, expectedOffset: number, ids: Read
 
 function parseArchiveIndex(value: unknown, dataLength: number): ArchiveIndex {
   const index = value as ArchiveIndex | null;
-  if (index?.version !== 2 || !Array.isArray(index.chunks) || typeof index.truncated !== "boolean"
-    || !Number.isSafeInteger(index.totalCount) || index.totalCount < 0) throw new Error("Invalid run log archive format");
+  if (
+    index?.version !== 2 ||
+    !Array.isArray(index.chunks) ||
+    typeof index.truncated !== "boolean" ||
+    !Number.isSafeInteger(index.totalCount) ||
+    index.totalCount < 0
+  )
+    throw new Error("Invalid run log archive format");
   let offset = 0;
   let rowCount = 0;
   let bytes = 0;
@@ -189,13 +252,22 @@ function parseArchiveIndex(value: unknown, dataLength: number): ArchiveIndex {
     rowCount += totals.rowCount;
     bytes += totals.bytes;
   }
-  if (offset !== dataLength || rowCount > MAX_RUN_LOGS_PER_RUN || index.totalCount < rowCount || bytes > MAX_ARCHIVE_BYTES) {
+  if (
+    offset !== dataLength ||
+    rowCount > MAX_RUN_LOGS_PER_RUN ||
+    index.totalCount < rowCount ||
+    bytes > MAX_ARCHIVE_BYTES
+  ) {
     throw new Error("Invalid run log archive format");
   }
   return index;
 }
 
-async function readFileRange(file: Readonly<Pick<Awaited<ReturnType<typeof open>>, "read" | "writeFile">>, offset: number, length: number): Promise<Buffer> {
+async function readFileRange(
+  file: Readonly<Pick<Awaited<ReturnType<typeof open>>, "read" | "writeFile">>,
+  offset: number,
+  length: number,
+): Promise<Buffer> {
   const bytes = Buffer.alloc(length);
   let consumed = 0;
   while (consumed < length) {
@@ -206,14 +278,26 @@ async function readFileRange(file: Readonly<Pick<Awaited<ReturnType<typeof open>
   return bytes;
 }
 
-function decodeChunkRows(decoded: unknown, chunk: ArchiveChunk, runId: string, selected: Readonly<Pick<ReadonlySet<string>, "has">>): StoredRunLog[] {
-  if (!Array.isArray(decoded) || decoded.length !== chunk.rows.length) throw new Error("Invalid run log archive format");
+function decodeChunkRows(
+  decoded: unknown,
+  chunk: ArchiveChunk,
+  runId: string,
+  selected: Readonly<Pick<ReadonlySet<string>, "has">>,
+): StoredRunLog[] {
+  if (!Array.isArray(decoded) || decoded.length !== chunk.rows.length)
+    throw new Error("Invalid run log archive format");
   const result: StoredRunLog[] = [];
   for (let i = 0; i < decoded.length; i++) {
     const row = decoded[i] as StoredRunLog;
     const meta = chunk.rows[i];
-    if (row.id !== meta?.id || row.phase !== meta.phase || row.runId !== runId || typeof row.outputText !== "string"
-      || Buffer.byteLength(row.outputText) !== meta.length) throw new Error("Invalid run log archive format");
+    if (
+      row.id !== meta?.id ||
+      row.phase !== meta.phase ||
+      row.runId !== runId ||
+      typeof row.outputText !== "string" ||
+      Buffer.byteLength(row.outputText) !== meta.length
+    )
+      throw new Error("Invalid run log archive format");
     if (selected.has(row.id)) result.push(row);
   }
   return result;
@@ -227,13 +311,22 @@ async function readV2Archive(
   indexLength: number,
 ): Promise<ArchiveRead> {
   if (indexLength > MAX_INDEX_BYTES || indexLength > size - 8) throw new Error("Invalid run log archive format");
-  const index = parseArchiveIndex(JSON.parse((await readFileRange(file, size - 8 - indexLength, indexLength)).toString()), size - 8 - indexLength);
+  const index = parseArchiveIndex(
+    JSON.parse((await readFileRange(file, size - 8 - indexLength, indexLength)).toString()),
+    size - 8 - indexLength,
+  );
   const sizes = index.chunks.flatMap((chunk): readonly ArchiveRow[] => chunk.rows);
   const selected = new Set(select?.(sizes) ?? sizes.map((row): string => row.id));
   const result: StoredRunLog[] = [];
   for (const chunk of index.chunks) {
     if (!chunk.rows.some((row): boolean => selected.has(row.id))) continue;
-    const decoded: unknown = JSON.parse((await decompress(await readFileRange(file, chunk.offset, chunk.length), { maxOutputLength: MAX_CHUNK_JSON_BYTES })).toString());
+    const decoded: unknown = JSON.parse(
+      (
+        await decompress(await readFileRange(file, chunk.offset, chunk.length), {
+          maxOutputLength: MAX_CHUNK_JSON_BYTES,
+        })
+      ).toString(),
+    );
     result.push(...decodeChunkRows(decoded, chunk, runId, selected));
   }
   return { version: 1, totalCount: index.totalCount, truncated: index.truncated, logs: result, sizes };
@@ -246,13 +339,22 @@ async function readLegacyArchive(
 ): Promise<ArchiveRead> {
   // Existing v1 and bare-array archives remain readable. Their format
   // requires whole-document parsing, capped here rather than unbounded.
-  const parsed: unknown = JSON.parse((await decompress(await readFileRange(file, 0, size), { maxOutputLength: MAX_ARCHIVE_BYTES })).toString());
+  const parsed: unknown = JSON.parse(
+    (await decompress(await readFileRange(file, 0, size), { maxOutputLength: MAX_ARCHIVE_BYTES })).toString(),
+  );
   if (!Array.isArray(parsed) && !isArchiveEnvelope(parsed)) throw new Error("Invalid run log archive format");
   const envelope: RunLogArchiveEnvelope = Array.isArray(parsed)
-    ? { version: 1, truncated: parsed.length >= MAX_RUN_LOGS_PER_RUN, totalCount: Math.min(parsed.length, MAX_RUN_LOGS_PER_RUN), logs: (parsed as StoredRunLog[]).slice(0, MAX_RUN_LOGS_PER_RUN) }
+    ? {
+        version: 1,
+        truncated: parsed.length >= MAX_RUN_LOGS_PER_RUN,
+        totalCount: Math.min(parsed.length, MAX_RUN_LOGS_PER_RUN),
+        logs: (parsed as StoredRunLog[]).slice(0, MAX_RUN_LOGS_PER_RUN),
+      }
     : parsed;
   const rows = envelope.logs.slice(0, MAX_RUN_LOGS_PER_RUN);
-  const sizes = rows.map((row): ArchiveRow => ({ id: row.id, phase: row.phase, length: Buffer.byteLength(row.outputText) }));
+  const sizes = rows.map(
+    (row): ArchiveRow => ({ id: row.id, phase: row.phase, length: Buffer.byteLength(row.outputText) }),
+  );
   const selected = select === undefined ? null : new Set(select(sizes));
   return { ...envelope, logs: selected === null ? rows : rows.filter((row): boolean => selected.has(row.id)), sizes };
 }
@@ -271,7 +373,9 @@ async function readArchivedRunLogs(runId: string, select?: ArchiveSelection): Pr
           return await readV2Archive(file, size, runId, select, footer.readUInt32LE());
         }
         return await readLegacyArchive(file, size, select);
-      } finally { await file.close(); }
+      } finally {
+        await file.close();
+      }
     } catch (error: unknown) {
       if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") {
         return { version: 1, truncated: false, totalCount: 0, logs: [], sizes: [] };
@@ -289,7 +393,9 @@ export async function readRunLogs(runId: string, phase?: string): Promise<Stored
   });
   if (liveLogs.length > 0) return liveLogs.reverse();
 
-  const archived = await readArchivedRunLogs(runId, (sizes): readonly string[] => sizes.filter((row): boolean => phase === undefined || row.phase === phase).map((row): string => row.id));
+  const archived = await readArchivedRunLogs(runId, (sizes): readonly string[] =>
+    sizes.filter((row): boolean => phase === undefined || row.phase === phase).map((row): string => row.id),
+  );
   return phase === undefined ? archived.logs : archived.logs.filter((log): boolean => log.phase === phase);
 }
 
@@ -377,11 +483,7 @@ function logStreamTotalBytes(sizes: readonly LogSizeRow[]): number {
 }
 
 /** Locate the rows covering [offsetBytes, endBytes) in the joined stream. */
-function locateLogWindow(
-  sizes: readonly LogSizeRow[],
-  offsetBytes: number,
-  endBytes: number,
-): LogWindow | null {
+function locateLogWindow(sizes: readonly LogSizeRow[], offsetBytes: number, endBytes: number): LogWindow | null {
   const totalBytes = logStreamTotalBytes(sizes);
   // Row i occupies [start, start+len), preceded by one separator byte when
   // i > 0. Find the first row intersecting the window.
@@ -434,7 +536,10 @@ export async function readRunLogSlice(
   // retry once from a fresh snapshot; the second miss falls back to an
   // approximate window rather than failing a log tail.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const sizes = await db.select({ id: logs.id, length: outputByteLength }).from(logs).where(where)
+    const sizes = await db
+      .select({ id: logs.id, length: outputByteLength })
+      .from(logs)
+      .where(where)
       .orderBy(asc(logs.createdAt), asc(logs.id));
     if (sizes.length === 0) return readArchivedLogSlice(runId, phase, offsetBytes, limitBytes);
 
@@ -444,7 +549,9 @@ export async function readRunLogSlice(
     if (window === null) {
       return { bytes: new Uint8Array(0), totalBytes, totalCount: sizes.length, truncated: false };
     }
-    const rows = await db.select({ id: logs.id, outputText: logs.outputText }).from(logs)
+    const rows = await db
+      .select({ id: logs.id, outputText: logs.outputText })
+      .from(logs)
       .where(and(where, inArray(logs.id, [...window.ids])));
     const textById = new Map(rows.map((row): readonly [string, string] => [row.id, row.outputText]));
     if (attempt === 0 && window.ids.some((id): boolean => !textById.has(id))) continue;
@@ -479,7 +586,11 @@ async function readArchivedLogSlice(
   const archived = await readArchivedRunLogs(runId, (sizes): readonly string[] => {
     const filtered = sizes.filter((row): boolean => row.phase === phase);
     totalBytes = logStreamTotalBytes(filtered);
-    const window = locateLogWindow(filtered, offsetBytes, Number.isFinite(limitBytes) ? offsetBytes + limitBytes : totalBytes);
+    const window = locateLogWindow(
+      filtered,
+      offsetBytes,
+      Number.isFinite(limitBytes) ? offsetBytes + limitBytes : totalBytes,
+    );
     rowStart = window?.rowStart ?? offsetBytes;
     return window?.ids ?? [];
   });

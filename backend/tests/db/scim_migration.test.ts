@@ -32,14 +32,16 @@ test("creates the SCIM admin persistence tables on a fresh database", async () =
     ]);
     if (exitCode !== 0) console.error(stderr);
     expect(exitCode).toBe(0);
-    expect(JSON.parse(stdout)).toEqual(expect.arrayContaining([
-      "scim_group_memberships",
-      "scim_groups",
-      "scim_settings",
-      "scim_tokens",
-      "scim_user_identities",
-      "team_scim_group_mappings",
-    ]));
+    expect(JSON.parse(stdout)).toEqual(
+      expect.arrayContaining([
+        "scim_group_memberships",
+        "scim_groups",
+        "scim_settings",
+        "scim_tokens",
+        "scim_user_identities",
+        "team_scim_group_mappings",
+      ]),
+    );
   } finally {
     await rm(testDir, { recursive: true, force: true });
   }

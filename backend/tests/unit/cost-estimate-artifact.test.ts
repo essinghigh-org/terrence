@@ -61,9 +61,7 @@ describe("readCostEstimateArtifact", (): void => {
   it("throws when the artifact contains a non-object value", async (): Promise<void> => {
     if (costDir === undefined) throw new Error("setup failed");
     writeFileSync(join(costDir, "run-arr.json"), JSON.stringify([1, 2]));
-    expect(cost.readCostEstimateArtifact("run-arr")).rejects.toThrow(
-      "Stored cost estimate must be an object.",
-    );
+    expect(cost.readCostEstimateArtifact("run-arr")).rejects.toThrow("Stored cost estimate must be an object.");
   });
 });
 

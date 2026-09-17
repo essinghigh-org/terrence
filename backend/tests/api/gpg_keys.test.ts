@@ -43,14 +43,16 @@ describe("private registry GPG keys", () => {
   let previousBinary: string | undefined;
 
   const request = (path: string, method = "GET", body?: unknown, token = userToken): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   const payload = (namespace: string, armor = asciiArmor): Record<string, unknown> => ({
     data: {
@@ -62,13 +64,16 @@ describe("private registry GPG keys", () => {
   beforeAll(async () => {
     directory = await mkdtemp(join(tmpdir(), "terrence-gpg-api-"));
     const binary = join(directory, "gpg");
-    await writeFile(binary, [
-      "#!/bin/sh",
-      "cat >/dev/null",
-      `printf '%s\\n' 'pub:-:2048:1:${keyId}:1785256911:::-:::scSC::::::23::0:'`,
-      `printf '%s\\n' 'fpr:::::::::${fingerprint}:'`,
-      "",
-    ].join("\n"));
+    await writeFile(
+      binary,
+      [
+        "#!/bin/sh",
+        "cat >/dev/null",
+        `printf '%s\\n' 'pub:-:2048:1:${keyId}:1785256911:::-:::scSC::::::23::0:'`,
+        `printf '%s\\n' 'fpr:::::::::${fingerprint}:'`,
+        "",
+      ].join("\n"),
+    );
     await chmod(binary, 0o700);
     previousBinary = process.env["GPG_BINARY_PATH"];
     process.env["GPG_BINARY_PATH"] = binary;
@@ -137,14 +142,11 @@ describe("private registry GPG keys", () => {
   it("validates, lists, moves, and deletes signing keys with namespace authorization", async () => {
     expect((await request("/api/registry/private/v2/gpg-keys")).status).toBe(400);
     expect((await request("/api/registry/public/v2/gpg-keys", "POST", payload(orgName))).status).toBe(403);
-    expect((await request("/api/registry/private/v2/gpg-keys", "POST", payload(orgName, "not a key"))).status).toBe(422);
-
-    const createResponse = await request(
-      "/api/registry/private/v2/gpg-keys",
-      "POST",
-      payload(orgName),
-      moduleToken,
+    expect((await request("/api/registry/private/v2/gpg-keys", "POST", payload(orgName, "not a key"))).status).toBe(
+      422,
     );
+
+    const createResponse = await request("/api/registry/private/v2/gpg-keys", "POST", payload(orgName), moduleToken);
     expect(createResponse.status).toBe(201);
     const created = await createResponse.json();
     expect(created.data.attributes).toMatchObject({
@@ -174,32 +176,43 @@ describe("private registry GPG keys", () => {
     const providerVersion = await providerVersionResponse.json();
     const providerVersionId = providerVersion.data.id as string;
     expect(providerVersion.data.attributes["key-id"]).toBe(keyId);
-    const platformResponse = await request(`/api/v2/registry-provider-versions/${providerVersionId}/platforms`, "POST", {
-      data: {
-        type: "registry-provider-platforms",
-        attributes: {
-          os: "linux",
-          arch: "amd64",
-          filename: "terraform-provider-cloud_linux_amd64.zip",
-          "download-url": "https://example.invalid/provider.zip",
-          shasum: "a".repeat(64),
+    const platformResponse = await request(
+      `/api/v2/registry-provider-versions/${providerVersionId}/platforms`,
+      "POST",
+      {
+        data: {
+          type: "registry-provider-platforms",
+          attributes: {
+            os: "linux",
+            arch: "amd64",
+            filename: "terraform-provider-cloud_linux_amd64.zip",
+            "download-url": "https://example.invalid/provider.zip",
+            shasum: "a".repeat(64),
+          },
         },
       },
-    });
+    );
     expect(platformResponse.status).toBe(201);
     const download = await request(`/api/registry/v1/providers/${orgName}/cloud-${suffix}/1.0.0/download/linux/amd64`);
     expect(download.status).toBe(200);
-    expect((await download.json()).signing_keys.gpg_public_keys).toEqual([{
-      key_id: keyId,
-      ascii_armor: asciiArmor,
-    }]);
-
-    const moduleVersionResponse = await request(`/api/v2/registry-modules/${moduleId}/versions`, "POST", {
-      data: {
-        type: "registry-module-versions",
-        attributes: { version: "2.0.0", "key-id": keyId },
+    expect((await download.json()).signing_keys.gpg_public_keys).toEqual([
+      {
+        key_id: keyId,
+        ascii_armor: asciiArmor,
       },
-    }, moduleToken);
+    ]);
+
+    const moduleVersionResponse = await request(
+      `/api/v2/registry-modules/${moduleId}/versions`,
+      "POST",
+      {
+        data: {
+          type: "registry-module-versions",
+          attributes: { version: "2.0.0", "key-id": keyId },
+        },
+      },
+      moduleToken,
+    );
     expect(moduleVersionResponse.status).toBe(201);
     const moduleVersion = await moduleVersionResponse.json();
     const moduleVersionId = moduleVersion.data.id as string;
@@ -207,7 +220,9 @@ describe("private registry GPG keys", () => {
     expect((await request(keyPath, "DELETE")).status).toBe(409);
 
     expect((await request(`/api/v2/registry-provider-versions/${providerVersionId}`, "DELETE")).status).toBe(204);
-    expect((await request(`/api/v2/registry-module-versions/${moduleVersionId}`, "DELETE", undefined, moduleToken)).status).toBe(204);
+    expect(
+      (await request(`/api/v2/registry-module-versions/${moduleVersionId}`, "DELETE", undefined, moduleToken)).status,
+    ).toBe(204);
     const moveResponse = await request(keyPath, "PATCH", {
       data: { type: "gpg-keys", attributes: { namespace: otherOrgName } },
     });

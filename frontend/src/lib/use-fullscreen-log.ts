@@ -29,14 +29,16 @@ export function useFullscreenLog(): FullscreenLog {
     // The overlay renders after this effect commits, so the close button ref
     // is already populated; move focus into the dialog. Remember the trigger
     // so cleanup can hand focus back when the dialog goes away.
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+    // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
     triggerRef.current = document.activeElement as HTMLElement | null;
     closeRef.current?.focus();
-    const onKeyDown = (event: Readonly<{
-      key: string;
-      shiftKey: boolean;
-      preventDefault: () => void;
-    }>): void => {
+    const onKeyDown = (
+      event: Readonly<{
+        key: string;
+        shiftKey: boolean;
+        preventDefault: () => void;
+      }>,
+    ): void => {
       if (event.key === "Escape") {
         event.preventDefault();
         setFullscreenLog(null);

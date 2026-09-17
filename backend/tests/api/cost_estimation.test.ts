@@ -4,14 +4,7 @@ import { eq } from "drizzle-orm";
 
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens,
-  organizationMemberships,
-  organizations,
-  runs,
-  users,
-  workspaces,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, runs, users, workspaces } from "../../src/db/schema";
 import {
   deleteCostEstimateArtifact,
   parseInfracostOutput,
@@ -29,15 +22,19 @@ describe("Cost estimate API persistence", () => {
   const finishedAt = "2026-07-28T09:00:01.000Z";
 
   const request = (path: string): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgId });
     await db.insert(organizationMemberships).values({ id: `membership-${suffix}`, userId, orgId, role: "owner" });
-    await db.insert(apiTokens).values({ id: `token-${suffix}`, token: createHash("sha256").update(token).digest("hex"), userId });
+    await db
+      .insert(apiTokens)
+      .values({ id: `token-${suffix}`, token: createHash("sha256").update(token).digest("hex"), userId });
     await db.insert(workspaces).values({ id: workspaceId, name: workspaceId, orgId });
     await db.insert(runs).values({
       id: runId,
@@ -50,32 +47,42 @@ describe("Cost estimate API persistence", () => {
       },
       createdAt: Date.now(),
     });
-    await writeCostEstimateArtifact(runId, parseInfracostOutput({
-      currency: "USD",
-      pastTotalMonthlyCost: "100.00",
-      totalMonthlyCost: "125.50",
-      diffTotalMonthlyCost: "25.50",
-      summary: {
-        totalDetectedResources: 2,
-        totalSupportedResources: 1,
-        totalUnsupportedResources: 1,
-      },
-      projects: [{
-        name: "production",
-        diff: {
-          resources: [{
-            name: "aws_instance.app",
-            resourceType: "aws_instance",
-            monthlyCost: "25.50",
-            action: "modify",
-          }],
+    await writeCostEstimateArtifact(
+      runId,
+      parseInfracostOutput(
+        {
+          currency: "USD",
+          pastTotalMonthlyCost: "100.00",
+          totalMonthlyCost: "125.50",
+          diffTotalMonthlyCost: "25.50",
+          summary: {
+            totalDetectedResources: 2,
+            totalSupportedResources: 1,
+            totalUnsupportedResources: 1,
+          },
+          projects: [
+            {
+              name: "production",
+              diff: {
+                resources: [
+                  {
+                    name: "aws_instance.app",
+                    resourceType: "aws_instance",
+                    monthlyCost: "25.50",
+                    action: "modify",
+                  },
+                ],
+              },
+            },
+          ],
         },
-      }],
-    }, {
-      "queued-at": "2026-07-28T08:59:59.000Z",
-      "pending-at": pendingAt,
-      "finished-at": finishedAt,
-    }));
+        {
+          "queued-at": "2026-07-28T08:59:59.000Z",
+          "pending-at": pendingAt,
+          "finished-at": finishedAt,
+        },
+      ),
+    );
   });
 
   afterAll(async () => {
@@ -88,10 +95,7 @@ describe("Cost estimate API persistence", () => {
     await db.delete(users).where(eq(users.id, userId));
   });
 
-  for (const path of [
-    `/api/v2/runs/${runId}/cost-estimate`,
-    `/api/v2/cost-estimates/ce-${runId}`,
-  ]) {
+  for (const path of [`/api/v2/runs/${runId}/cost-estimate`, `/api/v2/cost-estimates/ce-${runId}`]) {
     it(`returns the persisted estimate from ${path}`, async () => {
       const response = await request(path);
       expect(response.status).toBe(200);

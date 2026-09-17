@@ -85,7 +85,9 @@ function scheduleFetch(key: string): void {
 
 export function useProviderIcon(providerName: string | null | undefined): string | null | undefined {
   const key = providerKey(providerName);
-  const [url, setUrl] = useState<string | null | undefined>((): string | null | undefined => (key === null ? null : iconCache.get(key)));
+  const [url, setUrl] = useState<string | null | undefined>((): string | null | undefined =>
+    key === null ? null : iconCache.get(key),
+  );
 
   useEffect((): (() => void) | undefined => {
     if (key === null) {
@@ -137,7 +139,10 @@ export function ProviderIcon({
   size = 14,
   alt = "",
   fallback,
-}: Readonly<{ providerName: string | null | undefined; size?: number; alt?: string; fallback?: ReactNode }>): React.JSX.Element | ReactNode | null {
+}: Readonly<{ providerName: string | null | undefined; size?: number; alt?: string; fallback?: ReactNode }>):
+  | React.JSX.Element
+  | ReactNode
+  | null {
   const url = useProviderIcon(providerName);
   const [imageFailed, setImageFailed] = useState(false);
   useEffect((): void => {

@@ -54,7 +54,7 @@ function handleMockApi(req: Request): Response | null {
           ...jsonHeaders,
           "set-cookie": "terrence_refresh=1; HttpOnly; Path=/; SameSite=Lax",
         },
-      }
+      },
     );
   }
 
@@ -101,7 +101,7 @@ function handleMockApi(req: Request): Response | null {
           },
         ],
       }),
-      { headers: jsonHeaders }
+      { headers: jsonHeaders },
     );
   }
 
@@ -123,7 +123,7 @@ function handleMockApi(req: Request): Response | null {
           },
         },
       }),
-      { headers: jsonHeaders }
+      { headers: jsonHeaders },
     );
   }
 
@@ -162,7 +162,7 @@ function handleMockApi(req: Request): Response | null {
           pagination: { "current-page": 1, "total-pages": 1, "total-count": 1 },
         },
       }),
-      { headers: jsonHeaders }
+      { headers: jsonHeaders },
     );
   }
 
@@ -204,7 +204,7 @@ function handleMockApi(req: Request): Response | null {
           },
         },
       }),
-      { headers: jsonHeaders }
+      { headers: jsonHeaders },
     );
   }
 
@@ -246,7 +246,7 @@ function handleMockApi(req: Request): Response | null {
           pagination: { "current-page": 1, "total-pages": 1, "total-count": 1 },
         },
       }),
-      { headers: jsonHeaders }
+      { headers: jsonHeaders },
     );
   }
 
@@ -319,7 +319,7 @@ function handleMockApi(req: Request): Response | null {
           },
         ],
       }),
-      { headers: jsonHeaders }
+      { headers: jsonHeaders },
     );
   }
 
@@ -338,7 +338,7 @@ function handleMockApi(req: Request): Response | null {
           },
         },
       }),
-      { headers: jsonHeaders }
+      { headers: jsonHeaders },
     );
   }
 
@@ -356,7 +356,7 @@ function handleMockApi(req: Request): Response | null {
           },
         },
       }),
-      { headers: jsonHeaders }
+      { headers: jsonHeaders },
     );
   }
 
@@ -376,7 +376,7 @@ function handleMockApi(req: Request): Response | null {
           },
         },
       }),
-      { headers: jsonHeaders }
+      { headers: jsonHeaders },
     );
   }
 
@@ -396,7 +396,7 @@ function handleMockApi(req: Request): Response | null {
           },
         },
       }),
-      { headers: jsonHeaders }
+      { headers: jsonHeaders },
     );
   }
 
@@ -412,17 +412,23 @@ function handleMockApi(req: Request): Response | null {
           },
         },
       }),
-      { headers: jsonHeaders }
+      { headers: jsonHeaders },
     );
   }
 
-  if (path.includes("/relationships/") || path.endsWith("/vars") || path.endsWith("/resources") || path.endsWith("/projects") || path.endsWith("/agent-pools")) {
+  if (
+    path.includes("/relationships/") ||
+    path.endsWith("/vars") ||
+    path.endsWith("/resources") ||
+    path.endsWith("/projects") ||
+    path.endsWith("/agent-pools")
+  ) {
     return new Response(
       JSON.stringify({
         data: [],
         meta: { "current-page": 1, "total-pages": 1, "total-count": 0 },
       }),
-      { headers: jsonHeaders }
+      { headers: jsonHeaders },
     );
   }
 
@@ -442,7 +448,7 @@ function handleMockApi(req: Request): Response | null {
           },
         },
       }),
-      { headers: jsonHeaders }
+      { headers: jsonHeaders },
     );
   }
 
@@ -461,7 +467,7 @@ function handleMockApi(req: Request): Response | null {
           },
         },
       }),
-      { headers: jsonHeaders }
+      { headers: jsonHeaders },
     );
   }
 
@@ -471,7 +477,7 @@ function handleMockApi(req: Request): Response | null {
       data: [],
       meta: { message: "Mock endpoint fallback" },
     }),
-    { headers: jsonHeaders }
+    { headers: jsonHeaders },
   );
 }
 
@@ -575,7 +581,8 @@ export async function startStaticServer(customDistDir?: string): Promise<TestSer
   return {
     baseUrl: `http://127.0.0.1:${server.port}`,
     apiUrl: `http://127.0.0.1:${server.port}/api`,
-    fetch: async (path: string): Promise<Response> => await server.fetch(new Request(`http://127.0.0.1:${server.port}${path}`)),
+    fetch: async (path: string): Promise<Response> =>
+      await server.fetch(new Request(`http://127.0.0.1:${server.port}${path}`)),
     close: async (): Promise<void> => {
       await server.stop(true);
     },

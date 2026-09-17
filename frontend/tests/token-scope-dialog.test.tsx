@@ -32,10 +32,7 @@ function mockApi(options: { orgs?: MockOrg[]; projects?: MockChild[]; workspaces
   const projects: MockChild[] = options.projects ?? [];
   const workspaces: MockChild[] = options.workspaces ?? [];
   let posted: PostedBody = null;
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     const orgName = url.split("/")[4] ?? "";
     const org = orgs.find((o): boolean => o.id === orgName);
@@ -59,7 +56,7 @@ function mockApi(options: { orgs?: MockOrg[]; projects?: MockChild[]; workspaces
       });
     }
     if (url === "/api/v2/tokens" && init?.method === "POST") {
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       posted = JSON.parse(init.body as string);
       return json({ data: { id: "tok-1", type: "tokens", attributes: { token: "secret", scopes: null } } });
     }
@@ -83,15 +80,34 @@ function tagGroupQueries(dialog: HTMLElement) {
     rootKeys: (): HTMLElement[] => outsideNested(within(root()).getAllByLabelText("Tag key")),
     nestedKeys: inNested,
     rootCombinator: (): HTMLElement => outsideNested(within(root()).getAllByLabelText("Combine with"))[0]!,
-    nestedCombinator: (): HTMLElement => (nested()!) ? within(nested()!).getByLabelText("Combine with") : (() => { throw new Error("no nested group"); })(),
-    rootAddCondition: (): HTMLElement => outsideNested(within(root()).getAllByRole("button", { name: "Add condition" }))[0]!,
-    nestedAddCondition: (): HTMLElement => (nested()!) ? within(nested()!).getByRole("button", { name: "Add condition" }) : (() => { throw new Error("no nested group"); })(),
+    nestedCombinator: (): HTMLElement =>
+      nested()!
+        ? within(nested()!).getByLabelText("Combine with")
+        : (() => {
+            throw new Error("no nested group");
+          })(),
+    rootAddCondition: (): HTMLElement =>
+      outsideNested(within(root()).getAllByRole("button", { name: "Add condition" }))[0]!,
+    nestedAddCondition: (): HTMLElement =>
+      nested()!
+        ? within(nested()!).getByRole("button", { name: "Add condition" })
+        : (() => {
+            throw new Error("no nested group");
+          })(),
   };
 }
 
 async function openFineGrainedDialog(): Promise<HTMLElement> {
   const view = render(
-    <TokenScopeDialog open onOpenChange={(): void => { /* noop */ }} onCreated={(): void => { /* noop */ }} />,
+    <TokenScopeDialog
+      open
+      onOpenChange={(): void => {
+        /* noop */
+      }}
+      onCreated={(): void => {
+        /* noop */
+      }}
+    />,
   );
   const dialog = await view.findByRole("dialog");
   fireEvent.click(within(dialog).getByText("Fine-grained"));
@@ -112,16 +128,24 @@ test("lists organizations from JSON:API attributes and scopes the token to the r
     projects: [{ id: "prj-1", name: "payments" }],
     workspaces: [{ id: "ws-1", name: "prod-us" }],
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   let created: CreatedToken | null = null;
   const view = render(
-    <TokenScopeDialog open onOpenChange={(): void => { /* noop */ }} onCreated={(token): void => { created = token; }} />,
+    <TokenScopeDialog
+      open
+      onOpenChange={(): void => {
+        /* noop */
+      }}
+      onCreated={(token): void => {
+        created = token;
+      }}
+    />,
   );
 
   const dialog = await view.findByRole("dialog");
   fireEvent.click(within(dialog).getByText("Fine-grained"));
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const orgSelect = within(dialog).getByLabelText("Organization") as HTMLSelectElement;
   await waitFor((): void => {
     expect(orgSelect.options.length).toBe(2);
@@ -149,7 +173,7 @@ test("lists organizations from JSON:API attributes and scopes the token to the r
   await waitFor((): void => {
     expect(postedBody()).not.toBeNull();
   });
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+  // SAFETY: the fixture matches the JSON:API envelope the component consumes.
   const attributes = postedBody()!.data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,
@@ -168,11 +192,11 @@ test("lists organizations from JSON:API attributes and scopes the token to the r
 
 test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
   const { postedBody, fetchMock } = mockApi();
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const dialog = await openFineGrainedDialog();
   await waitFor((): void => {
-// SAFETY: the component renders this element type for the queried role/label.
+    // SAFETY: the component renders this element type for the queried role/label.
     expect((within(dialog).getByLabelText("Organization") as HTMLSelectElement).options.length).toBe(1);
   });
   const q = tagGroupQueries(dialog);
@@ -214,7 +238,7 @@ test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
   await waitFor((): void => {
     expect(postedBody()).not.toBeNull();
   });
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+  // SAFETY: the fixture matches the JSON:API envelope the component consumes.
   const attributes = postedBody()!.data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,
@@ -224,7 +248,13 @@ test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
     tags: {
       combinator: "OR",
       rules: [
-        { combinator: "AND", rules: [{ key: "foo", value: "bar" }, { key: "baz", value: "bing" }] },
+        {
+          combinator: "AND",
+          rules: [
+            { key: "foo", value: "bar" },
+            { key: "baz", value: "bing" },
+          ],
+        },
         { key: "xyz", value: "abc" },
       ],
     },
@@ -234,11 +264,11 @@ test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
 
 test("root combinator changes leave nested groups untouched, and empty rows are pruned", async () => {
   const { postedBody, fetchMock } = mockApi();
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const dialog = await openFineGrainedDialog();
   await waitFor((): void => {
-// SAFETY: the component renders this element type for the queried role/label.
+    // SAFETY: the component renders this element type for the queried role/label.
     expect((within(dialog).getByLabelText("Organization") as HTMLSelectElement).options.length).toBe(1);
   });
   const q = tagGroupQueries(dialog);
@@ -272,7 +302,7 @@ test("root combinator changes leave nested groups untouched, and empty rows are 
   await waitFor((): void => {
     expect(postedBody()).not.toBeNull();
   });
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+  // SAFETY: the fixture matches the JSON:API envelope the component consumes.
   const attributes = postedBody()!.data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,
@@ -282,7 +312,13 @@ test("root combinator changes leave nested groups untouched, and empty rows are 
     tags: {
       combinator: "AND",
       rules: [
-        { combinator: "OR", rules: [{ key: "foo", value: "bar" }, { key: "baz", value: "bing" }] },
+        {
+          combinator: "OR",
+          rules: [
+            { key: "foo", value: "bar" },
+            { key: "baz", value: "bing" },
+          ],
+        },
       ],
     },
     permissions: {},
@@ -291,10 +327,16 @@ test("root combinator changes leave nested groups untouched, and empty rows are 
 
 test("supports permission presets (Read-only, All, Clear) and search filtering", async () => {
   const { postedBody, fetchMock } = mockApi({
-    projects: [{ id: "prj-1", name: "payments" }, { id: "prj-2", name: "auth" }],
-    workspaces: [{ id: "ws-1", name: "prod-us" }, { id: "ws-2", name: "staging" }],
+    projects: [
+      { id: "prj-1", name: "payments" },
+      { id: "prj-2", name: "auth" },
+    ],
+    workspaces: [
+      { id: "ws-1", name: "prod-us" },
+      { id: "ws-2", name: "staging" },
+    ],
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const dialog = await openFineGrainedDialog();
   await waitFor((): void => {
@@ -342,7 +384,7 @@ test("supports permission presets (Read-only, All, Clear) and search filtering",
 
 test("plan preset keeps its explicit grants in the visible and stored summaries", async () => {
   const { postedBody, fetchMock } = mockApi();
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
   const dialog = await openFineGrainedDialog();
   await waitFor((): void => {
     expect((within(dialog).getByLabelText("Organization") as HTMLSelectElement).options.length).toBe(1);
@@ -354,7 +396,9 @@ test("plan preset keeps its explicit grants in the visible and stored summaries"
   expect(summary.textContent).toContain("expiry: account policy");
 
   fireEvent.click(within(dialog).getByRole("button", { name: "Create token" }));
-  await waitFor((): void => { expect(postedBody()).not.toBeNull(); });
+  await waitFor((): void => {
+    expect(postedBody()).not.toBeNull();
+  });
   const scopes = postedBody()!.data.attributes["scopes"];
   expect(summary.textContent).toContain(summarizeTokenScopes(scopes));
   expect(summarizeTokenScopes(scopes, null)).toContain("expires: never");

@@ -41,8 +41,8 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
     setLoading(true);
     setError("");
     try {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const response = await fetchApi(path) as { data?: SshKey[] };
+      // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+      const response = (await fetchApi(path)) as { data?: SshKey[] };
       setKeys(Array.isArray(response.data) ? response.data : []);
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : "Could not load SSH keys");
@@ -68,8 +68,8 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
     setSaving(true);
     setFormError("");
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(path, {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(path, {
         method: "POST",
         body: JSON.stringify({
           data: {
@@ -77,8 +77,10 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
             attributes: { name: newName.trim(), value: newValue.trim() },
           },
         }),
-      }) as { data: SshKey };
-      setKeys((current: SshKey[]): SshKey[] => [...current, response.data].sort((a, b): number => a.attributes.name.localeCompare(b.attributes.name)));
+      })) as { data: SshKey };
+      setKeys((current: SshKey[]): SshKey[] =>
+        [...current, response.data].sort((a, b): number => a.attributes.name.localeCompare(b.attributes.name)),
+      );
       setDialogOpen(false);
       toast.add({ title: "SSH key created", type: "success" });
     } catch (caught: unknown) {
@@ -113,10 +115,9 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
         <div className="flex flex-col gap-1">
           <CardTitle>SSH Keys</CardTitle>
           <CardDescription>
-            These private SSH keys are used for downloading private Terraform modules
-            with Git-based sources during a Terraform run. SSH keys for downloading modules are
-            assigned per-workspace. Separately, SSH Keys for VCS Providers are added directly to
-            each connection.
+            These private SSH keys are used for downloading private Terraform modules with Git-based sources during a
+            Terraform run. SSH keys for downloading modules are assigned per-workspace. Separately, SSH Keys for VCS
+            Providers are added directly to each connection.
           </CardDescription>
         </div>
         <Button type="button" onClick={openCreate}>
@@ -130,7 +131,16 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
         ) : error !== "" ? (
           <div role="alert" className="px-5 py-8 text-center text-sm text-destructive">
             Could not load SSH keys: {error}
-            <Button size="sm" variant="outline" className="ml-3" onClick={(): void => { void load(); }}>Try again</Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-3"
+              onClick={(): void => {
+                void load();
+              }}
+            >
+              Try again
+            </Button>
           </div>
         ) : keys.length === 0 ? (
           <p className="px-5 py-8 text-center text-sm text-muted-foreground">No SSH keys created yet.</p>
@@ -143,21 +153,25 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
               </TableRow>
             </TableHeader>
             <TableBody>
-              {keys.map((key): React.JSX.Element => (
-                <TableRow key={key.id}>
-                  <TableCell className="font-medium">{key.attributes.name}</TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`Delete ${key.attributes.name}`}
-                      onClick={(): void => { setToDelete(key); }}
-                    >
-                      <Trash2 />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {keys.map(
+                (key): React.JSX.Element => (
+                  <TableRow key={key.id}>
+                    <TableCell className="font-medium">{key.attributes.name}</TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Delete ${key.attributes.name}`}
+                        onClick={(): void => {
+                          setToDelete(key);
+                        }}
+                      >
+                        <Trash2 />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ),
+              )}
             </TableBody>
           </Table>
         )}
@@ -168,34 +182,63 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
           <DialogHeader>
             <DialogTitle>Add a Private SSH key</DialogTitle>
             <DialogDescription>
-              Generate a new key with <code className="text-xs bg-muted px-1 rounded">ssh-keygen -t rsa -m PEM</code>, and paste the private key.
-              The contents should begin with <code className="text-xs bg-muted px-1 rounded">-----BEGIN RSA PRIVATE KEY-----</code>.
+              Generate a new key with <code className="text-xs bg-muted px-1 rounded">ssh-keygen -t rsa -m PEM</code>,
+              and paste the private key. The contents should begin with{" "}
+              <code className="text-xs bg-muted px-1 rounded">-----BEGIN RSA PRIVATE KEY-----</code>.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={create}>
             <div className="space-y-4">
               <div className="space-y-1.5">
-                <label htmlFor="ssh-name" className="text-sm font-medium">Name</label>
-                <Input id="ssh-name" name="ssh-key-name" autoComplete="off" spellCheck={false} value={newName} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setNewName(event.currentTarget.value); }} placeholder="Example Key" />
+                <label htmlFor="ssh-name" className="text-sm font-medium">
+                  Name
+                </label>
+                <Input
+                  id="ssh-name"
+                  name="ssh-key-name"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={newName}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                    setNewName(event.currentTarget.value);
+                  }}
+                  placeholder="Example Key"
+                />
               </div>
               <div className="space-y-1.5">
-                <label htmlFor="ssh-value" className="text-sm font-medium">Private SSH Key</label>
+                <label htmlFor="ssh-value" className="text-sm font-medium">
+                  Private SSH Key
+                </label>
                 <Textarea
                   id="ssh-value"
                   name="private-ssh-key"
                   autoComplete="off"
                   spellCheck={false}
                   value={newValue}
-                  onInput={(event: React.SyntheticEvent<HTMLTextAreaElement>): void => { setNewValue(event.currentTarget.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLTextAreaElement>): void => {
+                    setNewValue(event.currentTarget.value);
+                  }}
                   placeholder={"-----BEGIN RSA PRIVATE KEY-----\n…"}
                   rows={6}
                   className="font-mono text-xs"
                 />
               </div>
-              {formError !== "" && <p role="alert" className="text-sm text-destructive">{formError}</p>}
+              {formError !== "" && (
+                <p role="alert" className="text-sm text-destructive">
+                  {formError}
+                </p>
+              )}
             </div>
             <DialogFooter className="mt-4">
-              <Button type="button" variant="outline" onClick={(): void => { setDialogOpen(false); }}>Cancel</Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={(): void => {
+                  setDialogOpen(false);
+                }}
+              >
+                Cancel
+              </Button>
               <Button type="submit" disabled={saving || newName.trim() === "" || newValue.trim() === ""}>
                 {saving ? "Adding…" : "Add SSH key"}
               </Button>
@@ -206,7 +249,9 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
 
       <ConfirmDialog
         open={toDelete !== null}
-        onOpenChange={(open: boolean): void => { if (!open) setToDelete(null); }}
+        onOpenChange={(open: boolean): void => {
+          if (!open) setToDelete(null);
+        }}
         title={`Deleting SSH key ${toDelete?.attributes.name ?? ""}`}
         description="Any workspaces configured with this SSH key will no longer use it to download Terraform modules. This operation cannot be undone. Are you sure?"
         confirmText={deleting ? "Deleting…" : "Delete SSH key"}

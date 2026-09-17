@@ -8,9 +8,10 @@ import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 
-const json = (data: JsonValue): Response => new Response(JSON.stringify(data), {
-  headers: { "Content-Type": "application/vnd.api+json" },
-});
+const json = (data: JsonValue): Response =>
+  new Response(JSON.stringify(data), {
+    headers: { "Content-Type": "application/vnd.api+json" },
+  });
 
 const urlOf = (input: string | URL | Request): string =>
   isString(input) ? input : input instanceof URL ? input.toString() : input.url;
@@ -33,15 +34,7 @@ test("shows durable migration checkpoints and explains a blocked cutover", async
             updatedAt: "2026-09-06T11:05:00.000Z",
             targetUrl: "postgres://internal",
             targetMasked: "postgres://***",
-            steps: [
-              "compatibility",
-              "maintenance",
-              "drain",
-              "checkpoint",
-              "schema",
-              "copy",
-              "verify",
-            ].map((key) => ({
+            steps: ["compatibility", "maintenance", "drain", "checkpoint", "schema", "copy", "verify"].map((key) => ({
               key,
               status: "passed",
               startedAt: "2026-09-06T11:00:00.000Z",

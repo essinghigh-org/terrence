@@ -1,10 +1,6 @@
 import { integerSetting } from "./runtime-config";
 import { join, resolve } from "node:path";
-import {
-  isVersionCacheFresh,
-  loadVersionCacheFile,
-  saveVersionCacheFile,
-} from "./version-cache";
+import { isVersionCacheFresh, loadVersionCacheFile, saveVersionCacheFile } from "./version-cache";
 
 // Latest-version lookup for the hashicorp/tfe provider. Feeds the
 // provider-surface freshness chip and the refresh-provider-surface script.

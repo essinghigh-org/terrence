@@ -39,7 +39,9 @@ export function appVersion(): string {
     return cachedAppVersion;
   }
   try {
-    const parsed = JSON.parse(readFileSync(join(import.meta.dir, "../../../package.json"), "utf8")) as { version?: unknown };
+    const parsed = JSON.parse(readFileSync(join(import.meta.dir, "../../../package.json"), "utf8")) as {
+      version?: unknown;
+    };
     if (typeof parsed.version === "string" && parsed.version.trim() !== "") {
       cachedAppVersion = parsed.version.trim();
       return cachedAppVersion;
@@ -51,7 +53,9 @@ export function appVersion(): string {
   return cachedAppVersion;
 }
 
-type SetCtx = Readonly<{ set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }> }>;
+type SetCtx = Readonly<{
+  set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
+}>;
 type MetricsCtx = Readonly<{
   request: Readonly<{ url: string }>;
   set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -111,7 +115,7 @@ async function pingSsoSnapshot(): Promise<PingSsoSnapshot> {
 }
 
 function prometheusLabel(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("\n", "\\n");
+  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n");
 }
 
 function poolLabels(pool: AgentPoolMetrics): string {
@@ -183,13 +187,16 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
     // Journey labels are a fixed allow-list from process-metrics.ts. Do not
     // add workspace IDs, run IDs, or resource addresses to this map.
     metrics["terrence_request_latency"] = Object.fromEntries(
-      Object.entries(snapshot.journeys).map(([journey, stats]): [string, Record<string, number | null>] => [journey, {
-        requests: stats.requests,
-        sample_count: stats.sampleCount,
-        p50_ms: stats.p50Ms,
-        p95_ms: stats.p95Ms,
-        max_ms: stats.maxMs,
-      }]),
+      Object.entries(snapshot.journeys).map(([journey, stats]): [string, Record<string, number | null>] => [
+        journey,
+        {
+          requests: stats.requests,
+          sample_count: stats.sampleCount,
+          p50_ms: stats.p50Ms,
+          p95_ms: stats.p95Ms,
+          max_ms: stats.maxMs,
+        },
+      ]),
     );
     metrics["terrence_event_loop_delay"] = {
       sample_count: snapshot.eventLoopDelay.sampleCount,
@@ -205,23 +212,32 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
       last_poll_at: snapshot.worker.lastPollAt,
       last_poll_duration_ms: snapshot.worker.lastPollDurationMs,
       last_poll_ok: snapshot.worker.lastPollOk,
-      pollers: Object.fromEntries(Object.entries(snapshot.worker.pollers).map(([name, stats]): [string, Record<string, number | boolean | null>] => [name, {
-        runs: stats.runs,
-        errors: stats.errors,
-        last_duration_ms: stats.lastDurationMs,
-        last_ok: stats.lastOk,
-      }])),
+      pollers: Object.fromEntries(
+        Object.entries(snapshot.worker.pollers).map(
+          ([name, stats]): [string, Record<string, number | boolean | null>] => [
+            name,
+            {
+              runs: stats.runs,
+              errors: stats.errors,
+              last_duration_ms: stats.lastDurationMs,
+              last_ok: stats.lastOk,
+            },
+          ],
+        ),
+      ),
     };
     metrics["terrence_process_history"] = {
       interval_ms: history.intervalMs,
       max_samples: history.maxSamples,
-      samples: history.samples.map((sample): Record<string, number> => ({
-        at: sample.at,
-        rss: sample.rss,
-        heap_used: sample.heapUsed,
-        requests_in_flight: sample.requestsInFlight,
-        worker_polls: sample.workerPolls,
-      })),
+      samples: history.samples.map(
+        (sample): Record<string, number> => ({
+          at: sample.at,
+          rss: sample.rss,
+          heap_used: sample.heapUsed,
+          requests_in_flight: sample.requestsInFlight,
+          worker_polls: sample.workerPolls,
+        }),
+      ),
       stats: {
         rss: {
           min: history.stats.rss.min,
@@ -239,24 +255,28 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
     };
   }
   if (collection.orgs !== null) {
-    metrics["organizations"] = collection.orgs.map((org): Record<string, unknown> => ({
-      org_id: org.orgId,
-      workspaces: org.workspaces,
-      runs_by_status: org.runsByStatus,
-    }));
+    metrics["organizations"] = collection.orgs.map(
+      (org): Record<string, unknown> => ({
+        org_id: org.orgId,
+        workspaces: org.workspaces,
+        runs_by_status: org.runsByStatus,
+      }),
+    );
   }
   metrics["terrence_agent_pools_total"] = collection.agentPoolsTotal;
-  metrics["agent_pools"] = collection.agentPools.map((pool): Record<string, unknown> => ({
-    id: pool.id,
-    name: pool.name,
-    org_id: pool.orgId,
-    agents_by_status: pool.agentsByStatus,
-    agents_stale: pool.staleAgents,
-    jobs_queued: pool.jobsQueued,
-    jobs_claimed: pool.jobsClaimed,
-    jobs_errored: pool.jobsErrored,
-    oldest_queued_wait_seconds: pool.oldestQueuedWaitSeconds,
-  }));
+  metrics["agent_pools"] = collection.agentPools.map(
+    (pool): Record<string, unknown> => ({
+      id: pool.id,
+      name: pool.name,
+      org_id: pool.orgId,
+      agents_by_status: pool.agentsByStatus,
+      agents_stale: pool.staleAgents,
+      jobs_queued: pool.jobsQueued,
+      jobs_claimed: pool.jobsClaimed,
+      jobs_errored: pool.jobsErrored,
+      oldest_queued_wait_seconds: pool.oldestQueuedWaitSeconds,
+    }),
+  );
   return metrics;
 }
 
@@ -276,8 +296,8 @@ function pushInstanceLines(lines: string[], instance: NonNullable<MetricsCollect
     `terrence_runs_total ${instance.runs}`,
     "# HELP tfe_run_current_count Current runs by status.",
     "# TYPE tfe_run_current_count gauge",
-    ...Object.entries(instance.runsByStatus).map(([status, value]): string =>
-      `tfe_run_current_count{status="${prometheusLabel(status)}"} ${value}`,
+    ...Object.entries(instance.runsByStatus).map(
+      ([status, value]): string => `tfe_run_current_count{status="${prometheusLabel(status)}"} ${value}`,
     ),
     "# HELP terrence_database_size_bytes Database file size on disk.",
     "# TYPE terrence_database_size_bytes gauge",
@@ -314,13 +334,13 @@ function pushInstanceLines(lines: string[], instance: NonNullable<MetricsCollect
     `terrence_outbox_oldest_pending_seconds ${instance.outboxQueue.oldestPendingSeconds}`,
     "# HELP terrence_resource_budget_queued Durable jobs waiting for capacity, by class.",
     "# TYPE terrence_resource_budget_queued gauge",
-    ...Object.entries(instance.resourceBudgets.queuedByClass).map(([jobClass, value]): string =>
-      `terrence_resource_budget_queued{class="${prometheusLabel(jobClass)}"} ${value}`,
+    ...Object.entries(instance.resourceBudgets.queuedByClass).map(
+      ([jobClass, value]): string => `terrence_resource_budget_queued{class="${prometheusLabel(jobClass)}"} ${value}`,
     ),
     "# HELP terrence_resource_budget_running Durable jobs consuming capacity, by class.",
     "# TYPE terrence_resource_budget_running gauge",
-    ...Object.entries(instance.resourceBudgets.runningByClass).map(([jobClass, value]): string =>
-      `terrence_resource_budget_running{class="${prometheusLabel(jobClass)}"} ${value}`,
+    ...Object.entries(instance.resourceBudgets.runningByClass).map(
+      ([jobClass, value]): string => `terrence_resource_budget_running{class="${prometheusLabel(jobClass)}"} ${value}`,
     ),
     "# HELP terrence_resource_budget_queue_limit Configured aggregate durable queue limit.",
     "# TYPE terrence_resource_budget_queue_limit gauge",
@@ -376,10 +396,14 @@ function pushPoolLines(lines: string[], instance: NonNullable<MetricsCollection[
       `terrence_database_query_budget_completed_total{kind="${budget.kind}"} ${budget.completed}`,
     );
   }
-  const fps = (instance.database as unknown as { slowFingerprints?: Readonly<Record<string, number>> }).slowFingerprints ?? {};
-  const fpLines = Object.entries(fps).slice(0, 10).map(([fp, count]): string =>
-    `terrence_database_slow_fingerprint_total{fingerprint="${prometheusLabel(fp)}"} ${count}`,
-  );
+  const fps =
+    (instance.database as unknown as { slowFingerprints?: Readonly<Record<string, number>> }).slowFingerprints ?? {};
+  const fpLines = Object.entries(fps)
+    .slice(0, 10)
+    .map(
+      ([fp, count]): string =>
+        `terrence_database_slow_fingerprint_total{fingerprint="${prometheusLabel(fp)}"} ${count}`,
+    );
   if (fpLines.length > 0) {
     lines.push(
       "# HELP terrence_database_slow_fingerprint_total Normalized slow-query fingerprint occurrences.",
@@ -444,9 +468,15 @@ function pushProcessLines(lines: string[], process: NonNullable<MetricsCollectio
     "# TYPE terrence_request_duration_samples counter",
     ...Object.entries(snapshot.journeys).flatMap(([journey, stats]): string[] => [
       `terrence_request_duration_samples{journey="${prometheusLabel(journey)}"} ${stats.sampleCount}`,
-      ...(stats.p50Ms === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="0.5"} ${stats.p50Ms}`]),
-      ...(stats.p95Ms === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="0.95"} ${stats.p95Ms}`]),
-      ...(stats.maxMs === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="max"} ${stats.maxMs}`]),
+      ...(stats.p50Ms === null
+        ? []
+        : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="0.5"} ${stats.p50Ms}`]),
+      ...(stats.p95Ms === null
+        ? []
+        : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="0.95"} ${stats.p95Ms}`]),
+      ...(stats.maxMs === null
+        ? []
+        : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="max"} ${stats.maxMs}`]),
     ]),
     "# HELP terrence_event_loop_delay_ms Event-loop delay from the bounded runtime histogram.",
     "# TYPE terrence_event_loop_delay_ms gauge",
@@ -455,8 +485,8 @@ function pushProcessLines(lines: string[], process: NonNullable<MetricsCollectio
     `terrence_event_loop_delay_samples ${snapshot.eventLoopDelay.sampleCount}`,
     "# HELP terrence_failures_total Best-effort subsystem write failures (audit log, run logs).",
     "# TYPE terrence_failures_total counter",
-    ...Object.entries(snapshot.failures).map(([kind, value]): string =>
-      `terrence_failures_total{kind="${prometheusLabel(kind)}"} ${value}`,
+    ...Object.entries(snapshot.failures).map(
+      ([kind, value]): string => `terrence_failures_total{kind="${prometheusLabel(kind)}"} ${value}`,
     ),
     "# HELP terrence_worker_polls_total Background queue poll cycles since boot.",
     "# TYPE terrence_worker_polls_total counter",
@@ -490,7 +520,9 @@ function pushProcessLines(lines: string[], process: NonNullable<MetricsCollectio
     lines.push(
       `terrence_event_loop_delay_ms{quantile="0.5"} ${snapshot.eventLoopDelay.meanMs ?? snapshot.eventLoopDelay.p95Ms}`,
       `terrence_event_loop_delay_ms{quantile="0.95"} ${snapshot.eventLoopDelay.p95Ms}`,
-      ...(snapshot.eventLoopDelay.maxMs === null ? [] : [`terrence_event_loop_delay_ms{quantile="max"} ${snapshot.eventLoopDelay.maxMs}`]),
+      ...(snapshot.eventLoopDelay.maxMs === null
+        ? []
+        : [`terrence_event_loop_delay_ms{quantile="max"} ${snapshot.eventLoopDelay.maxMs}`]),
     );
   }
   for (const [poller, stats] of Object.entries(snapshot.worker.pollers)) {
@@ -506,14 +538,15 @@ function pushOrgLines(lines: string[], orgs: NonNullable<MetricsCollection["orgs
   lines.push(
     "# HELP terrence_org_workspaces_total Workspaces visible to the caller per org.",
     "# TYPE terrence_org_workspaces_total gauge",
-    ...orgs.map((org): string =>
-      `terrence_org_workspaces_total{org="${prometheusLabel(org.orgId)}"} ${org.workspaces}`,
+    ...orgs.map(
+      (org): string => `terrence_org_workspaces_total{org="${prometheusLabel(org.orgId)}"} ${org.workspaces}`,
     ),
     "# HELP tfe_run_current_count Current runs visible to the caller by org and status.",
     "# TYPE tfe_run_current_count gauge",
     ...orgs.flatMap((org): string[] =>
-      Object.entries(org.runsByStatus).map(([status, value]): string =>
-        `tfe_run_current_count{org="${prometheusLabel(org.orgId)}",status="${prometheusLabel(status)}"} ${value}`,
+      Object.entries(org.runsByStatus).map(
+        ([status, value]): string =>
+          `tfe_run_current_count{org="${prometheusLabel(org.orgId)}",status="${prometheusLabel(status)}"} ${value}`,
       ),
     ),
   );
@@ -563,14 +596,19 @@ async function resolveMetricsCollection(
   allowInstanceMetrics: boolean,
   set: MetricsCtx["set"],
 ): Promise<{ collection: MetricsCollection } | { error: unknown }> {
-  const collection = scopes !== null
-    ? await collectScopedMetrics(scopes, userId, tokenOrgId, teamId)
-    : allowInstanceMetrics
-      ? await collectLegacyMetrics()
-      : null;
+  const collection =
+    scopes !== null
+      ? await collectScopedMetrics(scopes, userId, tokenOrgId, teamId)
+      : allowInstanceMetrics
+        ? await collectLegacyMetrics()
+        : null;
   if (collection === null) {
     (set as { status: number }).status = 403;
-    return { error: { errors: [{ status: "403", title: "Forbidden", detail: "Metrics require a bearer token with sufficient scope" }] } };
+    return {
+      error: {
+        errors: [{ status: "403", title: "Forbidden", detail: "Metrics require a bearer token with sufficient scope" }],
+      },
+    };
   }
   return { collection };
 }
@@ -589,9 +627,14 @@ async function probeDatabaseReadiness(timeoutSeconds: number): Promise<Readiness
   // accumulate.
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
-    db.query.users.findFirst().then((): "OK" => "OK").catch((): "ERROR" => "ERROR"),
+    db.query.users
+      .findFirst()
+      .then((): "OK" => "OK")
+      .catch((): "ERROR" => "ERROR"),
     new Promise<"ERROR">((resolve): void => {
-      timer = setTimeout((): void => { resolve("ERROR"); }, timeout);
+      timer = setTimeout((): void => {
+        resolve("ERROR");
+      }, timeout);
     }),
   ]).finally((): void => {
     if (timer !== undefined) clearTimeout(timer);
@@ -606,8 +649,12 @@ function probeSandboxReadiness(): { sandboxAbiStatus: ReadinessStatus; netPolicy
   const hostAbi = probeLandlockAbi();
   const sandboxAbiStatus: "OK" | "ERROR" =
     sandboxMinAbi !== null
-      ? hostAbi < sandboxMinAbi ? "ERROR" : "OK"
-      : runSandboxRequired() && hostAbi < 1 ? "ERROR" : "OK";
+      ? hostAbi < sandboxMinAbi
+        ? "ERROR"
+        : "OK"
+      : runSandboxRequired() && hostAbi < 1
+        ? "ERROR"
+        : "OK";
   // SEC-10: never advertise a healthy sandbox when the requested TCP network
   // denial cannot be installed (Landlock ABI < 4), and never crash readiness
   // on a misspelled policy (startup validation rejects it; belt and braces).
@@ -628,7 +675,8 @@ function resolveReadinessStatus(
   set: SetCtx["set"],
 ): { status: ReadinessOverall; draining: boolean } {
   const maintenance = maintenanceSnapshot();
-  const draining = maintenance.active || ["draining", "maintenance"].includes(integrationSetting("TERRENCE_NODE_STATUS"));
+  const draining =
+    maintenance.active || ["draining", "maintenance"].includes(integrationSetting("TERRENCE_NODE_STATUS"));
   const status =
     database === "ERROR" || disk === "ERROR" || sandboxAbiStatus === "ERROR" || netPolicyStatus === "ERROR"
       ? "ERROR"
@@ -670,7 +718,9 @@ async function buildReadinessResult(
     const { databaseSchemaVersion } = await import("../db");
     const schemaVersion = databaseSchemaVersion();
     if (schemaVersion !== null) result.checks.push({ check: "database-schema", status: schemaVersion });
-  } catch { /* journal missing on fresh boot is not readiness failure */ }
+  } catch {
+    /* journal missing on fresh boot is not readiness failure */
+  }
   return result;
 }
 
@@ -688,30 +738,34 @@ async function persistReadinessNode(
   // upsert must not silently let the node disappear from /api/v1/nodes.
   if (database === "OK" && persistNode) {
     const now = Date.now();
-    await db.insert(controlPlaneNodes).values({
-      id: readinessNodeId(),
-      hostname: readinessNodeId(),
-      address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
-      version: appVersion(),
-      status: status === "ERROR" ? "error" : draining ? "draining" : "active",
-      readinessChecks: checks,
-      registeredAt: now,
-      lastHeartbeatAt: now,
-    }).onConflictDoUpdate({
-      target: controlPlaneNodes.id,
-      set: {
+    await db
+      .insert(controlPlaneNodes)
+      .values({
+        id: readinessNodeId(),
         hostname: readinessNodeId(),
         address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
         version: appVersion(),
         status: status === "ERROR" ? "error" : draining ? "draining" : "active",
         readinessChecks: checks,
+        registeredAt: now,
         lastHeartbeatAt: now,
-      },
-    }).catch((error: unknown): void => {
-      log.warn("Unable to record control-plane node heartbeat", {
-        error: error instanceof Error ? error.message : String(error),
+      })
+      .onConflictDoUpdate({
+        target: controlPlaneNodes.id,
+        set: {
+          hostname: readinessNodeId(),
+          address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
+          version: appVersion(),
+          status: status === "ERROR" ? "error" : draining ? "draining" : "active",
+          readinessChecks: checks,
+          lastHeartbeatAt: now,
+        },
+      })
+      .catch((error: unknown): void => {
+        log.warn("Unable to record control-plane node heartbeat", {
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
-    });
   }
 }
 
@@ -744,7 +798,14 @@ async function readinessResponse(
   const sandbox = probeSandboxReadiness();
   const resolved = resolveReadinessStatus(database, disk, sandbox.sandboxAbiStatus, sandbox.netPolicyStatus, set);
 
-  const result = await buildReadinessResult(resolved.status, database, disk, worker, sandbox.sandboxAbiStatus, sandbox.netPolicyStatus);
+  const result = await buildReadinessResult(
+    resolved.status,
+    database,
+    disk,
+    worker,
+    sandbox.sandboxAbiStatus,
+    sandbox.netPolicyStatus,
+  );
   await persistReadinessNode(database, persistNode, resolved.status, resolved.draining, result.checks);
   const text = readinessPlainText(request, set, resolved.status);
   if ("response" in text) return text.response;
@@ -758,10 +819,14 @@ type ReadinessResult = {
 };
 
 export async function markControlPlaneNodeDraining(): Promise<void> {
-  await db.update(controlPlaneNodes).set({
-    status: "draining",
-    lastHeartbeatAt: Date.now(),
-  }).where(eq(controlPlaneNodes.id, readinessNodeId())).catch((): void => undefined);
+  await db
+    .update(controlPlaneNodes)
+    .set({
+      status: "draining",
+      lastHeartbeatAt: Date.now(),
+    })
+    .where(eq(controlPlaneNodes.id, readinessNodeId()))
+    .catch((): void => undefined);
 }
 
 export function startControlPlaneHeartbeat(): void {
@@ -771,7 +836,9 @@ export function startControlPlaneHeartbeat(): void {
     await readinessResponse(set, 1, undefined, true).catch((): void => undefined);
   };
   void heartbeat();
-  nodeHeartbeatTimer = setInterval((): void => { void heartbeat(); }, NODE_HEARTBEAT_INTERVAL_MS);
+  nodeHeartbeatTimer = setInterval((): void => {
+    void heartbeat();
+  }, NODE_HEARTBEAT_INTERVAL_MS);
   nodeHeartbeatTimer.unref?.();
 }
 
@@ -793,11 +860,25 @@ type SystemHealthContext = Readonly<{
   run?: unknown;
 }>;
 
-const systemHealthGuard = ({ systemToken, token, user, orgId, teamId, run, set }: SystemHealthContext): Record<string, unknown> | undefined => {
-  const authError = systemAuthError({ systemToken, token, user, orgId, teamId, run }, set as { status?: number; headers: Record<string, string | number> });
+const systemHealthGuard = ({
+  systemToken,
+  token,
+  user,
+  orgId,
+  teamId,
+  run,
+  set,
+}: SystemHealthContext): Record<string, unknown> | undefined => {
+  const authError = systemAuthError(
+    { systemToken, token, user, orgId, teamId, run },
+    set as { status?: number; headers: Record<string, string | number> },
+  );
   if (authError !== undefined) return authError;
-  if (systemToken !== null && systemToken !== undefined
-    && systemRateLimited(systemToken.id, set as { status?: number; headers: Record<string, string | number> })) {
+  if (
+    systemToken !== null &&
+    systemToken !== undefined &&
+    systemRateLimited(systemToken.id, set as { status?: number; headers: Record<string, string | number> })
+  ) {
     (set as { status: number }).status = 429;
     return { errors: [{ status: "429", title: "Too Many Requests" }] };
   }
@@ -808,55 +889,102 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
   .use(authPlugin)
   .onBeforeHandle(systemHealthGuard)
   .get("/api/v1/ping", (): string => "pong")
-  .get("/api/v1/readiness", async ({ set, request }: SetCtx & { request: Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }> }): Promise<unknown> => {
-    const timeout = readinessTimeout(request, 1);
-    if (timeout === null) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "timeout must be an integer from 1 to 30" }] }; }
-    return readinessResponse(set, timeout, request);
-  })
-  .get("/api/v1/health/readiness", async ({ set, request }: SetCtx & { request: Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }> }): Promise<unknown> => {
-    const timeout = readinessTimeout(request, 1);
-    if (timeout === null) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "timeout must be an integer from 1 to 30" }] }; }
-    return readinessResponse(set, timeout, request);
-  })
-  .get("/api/v1/nodes/readiness", async ({ set, request }: SetCtx & { request: Readonly<{ url: string }> }): Promise<unknown> => {
-    const timeout = readinessTimeout(request, 5);
-    if (timeout === null) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "timeout must be an integer from 1 to 30" }] }; }
-    const current = await readinessResponse(set, timeout);
-    if (current instanceof Response) throw new Error("Unexpected plain-text readiness response");
-    const nodes = await db.query.controlPlaneNodes.findMany({
-      where: gte(controlPlaneNodes.lastHeartbeatAt, Date.now() - NODE_HEARTBEAT_TIMEOUT_MS),
-      orderBy: [desc(controlPlaneNodes.registeredAt)],
-    }).catch(() => []);
-    const byId = new Map(nodes.map((node): [string, typeof node] => [node.id, node]));
-    byId.set(readinessNodeId(), {
-      id: readinessNodeId(), hostname: readinessNodeId(), address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
-      version: appVersion(), status: current.status.toLowerCase(), readinessChecks: current.checks,
-      registeredAt: Date.now(), lastHeartbeatAt: Date.now(),
-    });
-    return {
-      data: [...byId.values()].map((node): Record<string, unknown> => ({
-        id: node.id,
-        type: "nodes",
-        attributes: {
-          status: node.id === readinessNodeId() ? current.status : (node.status === "error" ? "ERROR" : node.status === "draining" ? "DRAINING" : "OK"),
-          checks: node.id === readinessNodeId() ? current.checks : node.readinessChecks,
-        },
-      })),
-      links: { self: "/api/v1/nodes/readiness" },
-    };
-  })
+  .get(
+    "/api/v1/readiness",
+    async ({
+      set,
+      request,
+    }: SetCtx & {
+      request: Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>;
+    }): Promise<unknown> => {
+      const timeout = readinessTimeout(request, 1);
+      if (timeout === null) {
+        (set as { status: number }).status = 400;
+        return { errors: [{ status: "400", title: "Bad Request", detail: "timeout must be an integer from 1 to 30" }] };
+      }
+      return readinessResponse(set, timeout, request);
+    },
+  )
+  .get(
+    "/api/v1/health/readiness",
+    async ({
+      set,
+      request,
+    }: SetCtx & {
+      request: Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>;
+    }): Promise<unknown> => {
+      const timeout = readinessTimeout(request, 1);
+      if (timeout === null) {
+        (set as { status: number }).status = 400;
+        return { errors: [{ status: "400", title: "Bad Request", detail: "timeout must be an integer from 1 to 30" }] };
+      }
+      return readinessResponse(set, timeout, request);
+    },
+  )
+  .get(
+    "/api/v1/nodes/readiness",
+    async ({ set, request }: SetCtx & { request: Readonly<{ url: string }> }): Promise<unknown> => {
+      const timeout = readinessTimeout(request, 5);
+      if (timeout === null) {
+        (set as { status: number }).status = 400;
+        return { errors: [{ status: "400", title: "Bad Request", detail: "timeout must be an integer from 1 to 30" }] };
+      }
+      const current = await readinessResponse(set, timeout);
+      if (current instanceof Response) throw new Error("Unexpected plain-text readiness response");
+      const nodes = await db.query.controlPlaneNodes
+        .findMany({
+          where: gte(controlPlaneNodes.lastHeartbeatAt, Date.now() - NODE_HEARTBEAT_TIMEOUT_MS),
+          orderBy: [desc(controlPlaneNodes.registeredAt)],
+        })
+        .catch(() => []);
+      const byId = new Map(nodes.map((node): [string, typeof node] => [node.id, node]));
+      byId.set(readinessNodeId(), {
+        id: readinessNodeId(),
+        hostname: readinessNodeId(),
+        address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
+        version: appVersion(),
+        status: current.status.toLowerCase(),
+        readinessChecks: current.checks,
+        registeredAt: Date.now(),
+        lastHeartbeatAt: Date.now(),
+      });
+      return {
+        data: [...byId.values()].map(
+          (node): Record<string, unknown> => ({
+            id: node.id,
+            type: "nodes",
+            attributes: {
+              status:
+                node.id === readinessNodeId()
+                  ? current.status
+                  : node.status === "error"
+                    ? "ERROR"
+                    : node.status === "draining"
+                      ? "DRAINING"
+                      : "OK",
+              checks: node.id === readinessNodeId() ? current.checks : node.readinessChecks,
+            },
+          }),
+        ),
+        links: { self: "/api/v1/nodes/readiness" },
+      };
+    },
+  )
   .get("/api/v1/metadata", (): { version: string; build: string } => ({
     version: appVersion(),
     build: process.env["BUILD_SHA"] ?? "unknown",
   }))
   .get("/api/v1/nodes", async (): Promise<{ data: { id: string; type: "nodes" }[]; links: { self: string } }> => {
-    const nodes = await db.query.controlPlaneNodes.findMany({
-      where: gte(controlPlaneNodes.lastHeartbeatAt, Date.now() - NODE_HEARTBEAT_TIMEOUT_MS),
-      orderBy: [desc(controlPlaneNodes.registeredAt)],
-    }).catch(() => []);
+    const nodes = await db.query.controlPlaneNodes
+      .findMany({
+        where: gte(controlPlaneNodes.lastHeartbeatAt, Date.now() - NODE_HEARTBEAT_TIMEOUT_MS),
+        orderBy: [desc(controlPlaneNodes.registeredAt)],
+      })
+      .catch(() => []);
     return {
-      data: [...new Set([readinessNodeId(), ...nodes.map((node): string => node.id)])]
-        .map((id): { id: string; type: "nodes" } => ({ id, type: "nodes" })),
+      data: [...new Set([readinessNodeId(), ...nodes.map((node): string => node.id)])].map(
+        (id): { id: string; type: "nodes" } => ({ id, type: "nodes" }),
+      ),
       links: { self: "/api/v1/nodes" },
     };
   });
@@ -871,7 +999,10 @@ export const healthRoutes = new Elysia({ name: "health" })
     h["X-TFE-Version"] = COMPATIBILITY_VERSION;
     const rateLimits = {
       general: { max: integerSetting("RATE_LIMIT_MAX"), "window-ms": 1_000 },
-      "workspace-run-history": { max: integerSetting("RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX"), "window-ms": integerSetting("RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS") },
+      "workspace-run-history": {
+        max: integerSetting("RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX"),
+        "window-ms": integerSetting("RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS"),
+      },
       sensitive: { max: integerSetting("RATE_LIMIT_SENSITIVE_MAX"), "window-ms": 60_000 },
       "sso-get": { max: integerSetting("RATE_LIMIT_SSO_GET_MAX"), "window-ms": 60_000 },
       "scim-settings": { max: integerSetting("RATE_LIMIT_SCIM_SETTINGS_MAX"), "window-ms": 1_000 },
@@ -892,21 +1023,24 @@ export const healthRoutes = new Elysia({ name: "health" })
       },
     };
   })
-  .get("/.well-known/terraform.json", (): Record<string, unknown> => ({
-    "login.v1": {
-      client: "terraform-cli",
-      grant_types: ["authz_code"],
-      authz: "/oauth/authorization",
-      token: "/oauth/token",
-      ports: [10000, 10010],
-    },
-    "tfe.v2": "/api/v2/",
-    "tfe.v2.1": "/api/v2/",
-    "tfe.v2.2": "/api/v2/",
-    "state.v2": "/api/v2/",
-    "modules.v1": "/api/registry/v1/modules/",
-    "providers.v1": "/api/registry/v1/providers/",
-  }))
+  .get(
+    "/.well-known/terraform.json",
+    (): Record<string, unknown> => ({
+      "login.v1": {
+        client: "terraform-cli",
+        grant_types: ["authz_code"],
+        authz: "/oauth/authorization",
+        token: "/oauth/token",
+        ports: [10000, 10010],
+      },
+      "tfe.v2": "/api/v2/",
+      "tfe.v2.1": "/api/v2/",
+      "tfe.v2.2": "/api/v2/",
+      "state.v2": "/api/v2/",
+      "modules.v1": "/api/registry/v1/modules/",
+      "providers.v1": "/api/registry/v1/providers/",
+    }),
+  )
   .get("/api", (): string => "Terrence API")
   .get("/api/v2/ping", async ({ set }: SetCtx): Promise<unknown> => {
     const headers = set.headers as Record<string, string | number>;
@@ -927,7 +1061,9 @@ export const healthRoutes = new Elysia({ name: "health" })
     try {
       sso = await pingSsoSnapshot();
     } catch (error: unknown) {
-      log.error("Unable to read SSO configuration for ping", { error: error instanceof Error ? error.message : String(error) });
+      log.error("Unable to read SSO configuration for ping", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       const lastKnown = pingSsoLastKnown;
       return {
         "signup-enabled": signupEnabled,
@@ -945,110 +1081,125 @@ export const healthRoutes = new Elysia({ name: "health" })
       sso: { saml: sso.samlEnabled, oidc: sso.oidcEnabled, ldap: sso.ldapEnabled },
     };
   })
-  .get("/api/v2/meta", ({ user, set }: MetricsCtx): {
-    data: {
-      id: string;
-      type: "meta";
-      attributes: {
-        "run-sandbox": {
-          enabled: boolean;
-          available: boolean;
-          abi: number;
-          reason: string | null;
-          "extra-rw-allowed": boolean;
-          "net-policy": "allow" | "deny" | "invalid";
-          "net-scope": "tcp-bind-connect" | null;
-          docs: string;
-        };
-      };
-    };
-  } | { errors: { status: string; title: string }[] } => {
-    if (user === null || user === undefined) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-    const sandboxRequired = runSandboxRequired();
-    const abi = probeLandlockAbi();
-    let reason: string | null = null;
-    if (abi < 1) {
-      reason = process.env["TERRENCE_LANDLOCK_RUNNER"]
-        ? "landlock-runner missing or Landlock not enabled in the kernel"
-        : "Landlock is not available on this kernel (needs Linux >= 5.13 with CONFIG_SECURITY_LANDLOCK)";
-    }
-    const extraRwAllowed = envFlag("TERRENCE_SANDBOX_EXTRA_RW_ALLOWED");
-    // SEC-10: expose the effective run network policy and its enforcement
-    // scope. `deny` restricts TCP bind/connect only (Landlock ABI >= 4);
-    // UDP, DNS and other families are unaffected. Never throw here: an
-    // invalid value is rejected at startup, but meta must stay servable.
-    let netPolicy: "allow" | "deny" | "invalid" = "invalid";
-    try {
-      netPolicy = runNetPolicy();
-    } catch {
-      netPolicy = "invalid";
-    }
-    return {
-      data: {
-        id: "meta",
-        type: "meta",
-        attributes: {
-          "run-sandbox": {
-            enabled: sandboxRequired,
-            available: abi >= 1,
-            abi,
-            reason,
-            "extra-rw-allowed": extraRwAllowed,
-            "net-policy": netPolicy,
-            "net-scope": netPolicy === "deny" ? "tcp-bind-connect" : null,
-            docs: "https://docs.kernel.org/userspace-api/landlock.html",
+  .get(
+    "/api/v2/meta",
+    ({
+      user,
+      set,
+    }: MetricsCtx):
+      | {
+          data: {
+            id: string;
+            type: "meta";
+            attributes: {
+              "run-sandbox": {
+                enabled: boolean;
+                available: boolean;
+                abi: number;
+                reason: string | null;
+                "extra-rw-allowed": boolean;
+                "net-policy": "allow" | "deny" | "invalid";
+                "net-scope": "tcp-bind-connect" | null;
+                docs: string;
+              };
+            };
+          };
+        }
+      | { errors: { status: string; title: string }[] } => {
+      if (user === null || user === undefined) {
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized" }] };
+      }
+      const sandboxRequired = runSandboxRequired();
+      const abi = probeLandlockAbi();
+      let reason: string | null = null;
+      if (abi < 1) {
+        reason = process.env["TERRENCE_LANDLOCK_RUNNER"]
+          ? "landlock-runner missing or Landlock not enabled in the kernel"
+          : "Landlock is not available on this kernel (needs Linux >= 5.13 with CONFIG_SECURITY_LANDLOCK)";
+      }
+      const extraRwAllowed = envFlag("TERRENCE_SANDBOX_EXTRA_RW_ALLOWED");
+      // SEC-10: expose the effective run network policy and its enforcement
+      // scope. `deny` restricts TCP bind/connect only (Landlock ABI >= 4);
+      // UDP, DNS and other families are unaffected. Never throw here: an
+      // invalid value is rejected at startup, but meta must stay servable.
+      let netPolicy: "allow" | "deny" | "invalid" = "invalid";
+      try {
+        netPolicy = runNetPolicy();
+      } catch {
+        netPolicy = "invalid";
+      }
+      return {
+        data: {
+          id: "meta",
+          type: "meta",
+          attributes: {
+            "run-sandbox": {
+              enabled: sandboxRequired,
+              available: abi >= 1,
+              abi,
+              reason,
+              "extra-rw-allowed": extraRwAllowed,
+              "net-policy": netPolicy,
+              "net-scope": netPolicy === "deny" ? "tcp-bind-connect" : null,
+              docs: "https://docs.kernel.org/userspace-api/landlock.html",
+            },
           },
         },
-      },
-    };
-  })
+      };
+    },
+  )
   .get("/healthz", (): string => "ok")
-  .get("/metrics", async ({ request, set, user, orgId, teamId, systemToken }: MetricsCtx): Promise<unknown> => {
-    // Token-authenticated. Fine-grained tokens get only the org/workspace/
-    // agent data their scope is eligible for. Instance-wide counters require
-    // a dedicated System API token or an explicitly site-admin user.
-    //
-    // Instance-wide metrics are reserved for verified legacy API tokens,
-    // System API tokens, and site admins. A browser-session access token
-    // (issued by login, tracked in refresh_sessions) must not fall through
-    // to the legacy collector even though it carries no scopes: that would
-    // leak instance-wide counters to any logged-in UI user. Site-admin
-    // session tokens ARE accepted (the admin UI has no other bearer to
-    // present); ordinary session principals fail closed with 403.
-    const scopes = currentTokenScopes();
-    // The auth derive is global, so `user` is the full users row here.
-    // currentSiteAdmin() can be unavailable on this plugin instance (the
-    // request-cache hook lives on the main app), so read the row directly.
-    const isSiteAdmin = (user as Readonly<{ isSiteAdmin?: boolean | null }> | null)?.isSiteAdmin === true;
-    // A site admin's browser-session access token is an accepted credential
-    // for instance-wide metrics: the UI cannot attach any other bearer to a
-    // fetch, and the session already grants full administrative reach.
-    // Ordinary (non-admin) session principals keep the fail-closed 403, as do
-    // ordinary legacy API tokens — instance counters were never available to
-    // them and the pinned test below keeps it that way.
-    const allowInstanceMetrics = scopes === null
-      && ((systemToken !== null && systemToken !== undefined) || (isSiteAdmin && user !== null && user !== undefined));
+  .get(
+    "/metrics",
+    async ({ request, set, user, orgId, teamId, systemToken }: MetricsCtx): Promise<unknown> => {
+      // Token-authenticated. Fine-grained tokens get only the org/workspace/
+      // agent data their scope is eligible for. Instance-wide counters require
+      // a dedicated System API token or an explicitly site-admin user.
+      //
+      // Instance-wide metrics are reserved for verified legacy API tokens,
+      // System API tokens, and site admins. A browser-session access token
+      // (issued by login, tracked in refresh_sessions) must not fall through
+      // to the legacy collector even though it carries no scopes: that would
+      // leak instance-wide counters to any logged-in UI user. Site-admin
+      // session tokens ARE accepted (the admin UI has no other bearer to
+      // present); ordinary session principals fail closed with 403.
+      const scopes = currentTokenScopes();
+      // The auth derive is global, so `user` is the full users row here.
+      // currentSiteAdmin() can be unavailable on this plugin instance (the
+      // request-cache hook lives on the main app), so read the row directly.
+      const isSiteAdmin = (user as Readonly<{ isSiteAdmin?: boolean | null }> | null)?.isSiteAdmin === true;
+      // A site admin's browser-session access token is an accepted credential
+      // for instance-wide metrics: the UI cannot attach any other bearer to a
+      // fetch, and the session already grants full administrative reach.
+      // Ordinary (non-admin) session principals keep the fail-closed 403, as do
+      // ordinary legacy API tokens — instance counters were never available to
+      // them and the pinned test below keeps it that way.
+      const allowInstanceMetrics =
+        scopes === null &&
+        ((systemToken !== null && systemToken !== undefined) || (isSiteAdmin && user !== null && user !== undefined));
 
-    const resolved = await resolveMetricsCollection(scopes, user?.id, orgId, teamId, allowInstanceMetrics, set);
-    if ("error" in resolved) return resolved.error;
-    const collection = resolved.collection;
+      const resolved = await resolveMetricsCollection(scopes, user?.id, orgId, teamId, allowInstanceMetrics, set);
+      if ("error" in resolved) return resolved.error;
+      const collection = resolved.collection;
 
-    const format = new URL(request.url).searchParams.get("format");
-    if (format !== null && format !== "" && format !== "json" && format !== "prometheus") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "format must be 'json' or 'prometheus'" }] };
-    }
-    if (format !== "prometheus") {
-      return { metrics: collectionToJson(collection) };
-    }
+      const format = new URL(request.url).searchParams.get("format");
+      if (format !== null && format !== "" && format !== "json" && format !== "prometheus") {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [{ status: "422", title: "Unprocessable Entity", detail: "format must be 'json' or 'prometheus'" }],
+        };
+      }
+      if (format !== "prometheus") {
+        return { metrics: collectionToJson(collection) };
+      }
 
-    const headers = set.headers as Record<string, string | number>;
-    headers["Content-Type"] = "text/plain; version=0.0.4; charset=utf-8";
-    return `${prometheusLines(collection).join("\n")}\n`;
-  }, { systemAuth: true })
+      const headers = set.headers as Record<string, string | number>;
+      headers["Content-Type"] = "text/plain; version=0.0.4; charset=utf-8";
+      return `${prometheusLines(collection).join("\n")}\n`;
+    },
+    { systemAuth: true },
+  )
   .get("/readyz", async ({ set }: SetCtx): Promise<string> => {
     try {
       await db.query.users.findFirst();

@@ -27,9 +27,11 @@ describe("policy check output (audit finding 4)", () => {
   const outsiderToken = `outsider-${suffix}`;
 
   const request = (path: string, auth?: string) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      headers: auth === undefined ? {} : { Authorization: "Bearer " + auth },
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        headers: auth === undefined ? {} : { Authorization: "Bearer " + auth },
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([

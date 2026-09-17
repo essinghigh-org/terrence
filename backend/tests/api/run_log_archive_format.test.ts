@@ -5,7 +5,13 @@ import { gzipSync } from "node:zlib";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
 import { logs, runs, workspaces } from "../../src/db/schema";
-import { archiveRunLogs, deleteRunLogArchive, readRunLogSlice, readRunLogsPage, runLogArchivePath } from "../../src/lib/run-logs";
+import {
+  archiveRunLogs,
+  deleteRunLogArchive,
+  readRunLogSlice,
+  readRunLogsPage,
+  runLogArchivePath,
+} from "../../src/lib/run-logs";
 import { isStorageDegraded, resetStorageHealthForTests } from "../../src/lib/storage-health";
 import { cleanupSeed, persistSeed, seedOrg } from "./compat_contract_helpers";
 
@@ -14,8 +20,11 @@ test("indexed archives select chunks, preserve byte windows and legacy data, and
   const workspaceId = `ws-${seed.suffix}`;
   const runId = `run-${seed.suffix}`;
   const rows = Array.from({ length: 83 }, (_, i) => ({
-    id: `log-${seed.suffix}-${i}`, runId, phase: i % 3 === 0 ? "plan" : "apply",
-    outputText: i % 7 === 0 ? "" : `${i}:héllo-✓`, createdAt: i,
+    id: `log-${seed.suffix}-${i}`,
+    runId,
+    phase: i % 3 === 0 ? "plan" : "apply",
+    outputText: i % 7 === 0 ? "" : `${i}:héllo-✓`,
+    createdAt: i,
   }));
   try {
     await persistSeed(seed);
@@ -36,7 +45,10 @@ test("indexed archives select chunks, preserve byte windows and legacy data, and
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const write = prototype.writeFile;
     let writes = 0;
-    const failure = spyOn(prototype, "writeFile").mockImplementation(async function (this: typeof handle, ...args: Parameters<typeof write>) {
+    const failure = spyOn(prototype, "writeFile").mockImplementation(async function (
+      this: typeof handle,
+      ...args: Parameters<typeof write>
+    ) {
       if (++writes === 2) throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
       await write.apply(this, args);
     });
@@ -44,7 +56,10 @@ test("indexed archives select chunks, preserve byte windows and legacy data, and
       const error: unknown = await archiveRunLogs(runId).catch((error: unknown) => error);
       expect(error).toMatchObject({ code: "ENOSPC" });
       expect(isStorageDegraded()).toBe(true);
-    } finally { failure.mockRestore(); resetStorageHealthForTests(); }
+    } finally {
+      failure.mockRestore();
+      resetStorageHealthForTests();
+    }
     expect(await readFile(path)).toEqual(original);
     expect((await readdir(dirname(path))).filter((name) => name.startsWith(`${runId}.json.gz.`))).toEqual([]);
     expect((await readRunLogsPage(runId, { number: 1, size: 100 })).logs).toHaveLength(83);

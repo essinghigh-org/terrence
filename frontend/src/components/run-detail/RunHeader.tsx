@@ -10,16 +10,13 @@ import type { RunAttributes } from "@/lib/run-view-state";
 import { StatusBadge } from "../ui/status-badge";
 import { Badge } from "../ui/badge";
 import { Button, buttonVariants } from "../ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "../ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { toast } from "../ui/toast";
 
-function useCopyRunLink(runPermalink: string, runId: string): Readonly<{
+function useCopyRunLink(
+  runPermalink: string,
+  runId: string,
+): Readonly<{
   copiedPermalink: boolean;
   copyRunPermalink: () => Promise<void>;
   copyRunId: () => Promise<void>;
@@ -68,7 +65,11 @@ function useCopyRunLink(runPermalink: string, runId: string): Readonly<{
   return { copiedPermalink, copyRunPermalink, copyRunId };
 }
 
-function RunStatusBadges({ attributes, status, speculativeRun }: Readonly<{
+function RunStatusBadges({
+  attributes,
+  status,
+  speculativeRun,
+}: Readonly<{
   attributes: RunAttributes;
   status: string;
   speculativeRun: boolean;
@@ -78,12 +79,34 @@ function RunStatusBadges({ attributes, status, speculativeRun }: Readonly<{
       {/* One badge, one status vocabulary (lib/run-status). The page used
           to hand-roll this mapping here and in six other places. */}
       <StatusBadge status={status} className="rounded" />
-      <span aria-live="polite" className="sr-only">Run status: {formatRunStatus(status)}</span>
-      {attributes["plan-only"] === true && <Badge variant="outline" className="rounded">Plan only</Badge>}
-      {speculativeRun && <Badge variant="outline" className="rounded" title="This speculative plan never applies">Speculative</Badge>}
-      {attributes["is-destroy"] === true && <Badge variant="destructive" className="rounded">Destroy</Badge>}
-      {attributes["refresh-only"] === true && <Badge variant="outline" className="rounded text-primary border-primary/30 bg-primary/10">Refresh only</Badge>}
-      {attributes["allow-empty-apply"] === true && <Badge variant="outline" className="rounded text-primary border-primary/30 bg-primary/10">Allow empty apply</Badge>}
+      <span aria-live="polite" className="sr-only">
+        Run status: {formatRunStatus(status)}
+      </span>
+      {attributes["plan-only"] === true && (
+        <Badge variant="outline" className="rounded">
+          Plan only
+        </Badge>
+      )}
+      {speculativeRun && (
+        <Badge variant="outline" className="rounded" title="This speculative plan never applies">
+          Speculative
+        </Badge>
+      )}
+      {attributes["is-destroy"] === true && (
+        <Badge variant="destructive" className="rounded">
+          Destroy
+        </Badge>
+      )}
+      {attributes["refresh-only"] === true && (
+        <Badge variant="outline" className="rounded text-primary border-primary/30 bg-primary/10">
+          Refresh only
+        </Badge>
+      )}
+      {attributes["allow-empty-apply"] === true && (
+        <Badge variant="outline" className="rounded text-primary border-primary/30 bg-primary/10">
+          Allow empty apply
+        </Badge>
+      )}
     </div>
   );
 }
@@ -95,8 +118,10 @@ function VcsReference({ attributes }: Readonly<{ attributes: RunAttributes }>): 
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
       <span>{isString(attributes.branch) ? attributes.branch : "Default branch"}</span>
-      {commitSha !== undefined && commitSha !== null && commitSha !== "" && (
-        commitUrl !== null ? (
+      {commitSha !== undefined &&
+        commitSha !== null &&
+        commitSha !== "" &&
+        (commitUrl !== null ? (
           <a
             href={commitUrl}
             target="_blank"
@@ -109,13 +134,22 @@ function VcsReference({ attributes }: Readonly<{ attributes: RunAttributes }>): 
           </a>
         ) : (
           <code title={commitSha}>{commitSha.slice(0, 12)}</code>
-        )
-      )}
+        ))}
     </div>
   );
 }
 
-function RunHeaderActions({ workspacePath, canRerun, rerunBlockedReason, rerunPending, pendingAction, rerunError, copiedPermalink, onCopyPermalink, onOpenRerunDialog }: Readonly<{
+function RunHeaderActions({
+  workspacePath,
+  canRerun,
+  rerunBlockedReason,
+  rerunPending,
+  pendingAction,
+  rerunError,
+  copiedPermalink,
+  onCopyPermalink,
+  onOpenRerunDialog,
+}: Readonly<{
   workspacePath: string;
   canRerun: boolean;
   rerunBlockedReason: string | null;
@@ -128,13 +162,7 @@ function RunHeaderActions({ workspacePath, canRerun, rerunBlockedReason, rerunPe
 }>): React.JSX.Element {
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2 lg:max-w-sm lg:justify-end">
-      <Button
-        variant="outline"
-        size="sm"
-        className="gap-1.5"
-        aria-label="Copy run permalink"
-        onClick={onCopyPermalink}
-      >
+      <Button variant="outline" size="sm" className="gap-1.5" aria-label="Copy run permalink" onClick={onCopyPermalink}>
         <Link2 className="size-3.5" aria-hidden="true" />
         {copiedPermalink ? "Copied" : "Copy link"}
       </Button>
@@ -165,7 +193,9 @@ function RunHeaderActions({ workspacePath, canRerun, rerunBlockedReason, rerunPe
         <span className="w-full text-xs text-muted-foreground lg:text-right">{rerunBlockedReason}</span>
       )}
       {rerunError !== "" && (
-        <p role="alert" className="w-full text-xs text-destructive">{rerunError}</p>
+        <p role="alert" className="w-full text-xs text-destructive">
+          {rerunError}
+        </p>
       )}
       {/* Cancel, force cancel, apply, discard and override all live in the
           decision panel below. They used to be split between here and a
@@ -175,7 +205,12 @@ function RunHeaderActions({ workspacePath, canRerun, rerunBlockedReason, rerunPe
   );
 }
 
-function RerunDialog({ open, onOpenChange, rerunPending, onRerun }: Readonly<{
+function RerunDialog({
+  open,
+  onOpenChange,
+  rerunPending,
+  onRerun,
+}: Readonly<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
   rerunPending: boolean;
@@ -187,14 +222,28 @@ function RerunDialog({ open, onOpenChange, rerunPending, onRerun }: Readonly<{
         <DialogHeader>
           <DialogTitle>Choose rerun inputs</DialogTitle>
           <DialogDescription>
-            A rerun creates a new run. Choose the immutable inputs captured for this run, or the workspace settings currently configured.
+            A rerun creates a new run. Choose the immutable inputs captured for this run, or the workspace settings
+            currently configured.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-          <Button type="button" variant="outline" disabled={rerunPending} onClick={(): void => { onRerun("original"); }}>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={rerunPending}
+            onClick={(): void => {
+              onRerun("original");
+            }}
+          >
             Original inputs
           </Button>
-          <Button type="button" disabled={rerunPending} onClick={(): void => { onRerun("current"); }}>
+          <Button
+            type="button"
+            disabled={rerunPending}
+            onClick={(): void => {
+              onRerun("current");
+            }}
+          >
             Current settings
           </Button>
         </div>
@@ -238,7 +287,8 @@ export function RunHeader(props: RunHeaderProps): React.JSX.Element {
           </h1>
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <p>
-              {formatRunSource(attributes.source, attributes["trigger-reason"])} · Created {formatDate(attributes["created-at"])}
+              {formatRunSource(attributes.source, attributes["trigger-reason"])} · Created{" "}
+              {formatDate(attributes["created-at"])}
             </p>
             <div className="flex items-center gap-1">
               <span>Run ID:</span>
@@ -248,7 +298,9 @@ export function RunHeader(props: RunHeaderProps): React.JSX.Element {
                 variant="ghost"
                 size="icon-xs"
                 aria-label="Copy run ID"
-                onClick={(): void => { void copyRunId(); }}
+                onClick={(): void => {
+                  void copyRunId();
+                }}
               >
                 <Copy aria-hidden="true" />
               </Button>
@@ -264,15 +316,21 @@ export function RunHeader(props: RunHeaderProps): React.JSX.Element {
           pendingAction={props.pendingAction}
           rerunError={props.rerunError}
           copiedPermalink={copiedPermalink}
-          onCopyPermalink={(): void => { void copyRunPermalink(); }}
-          onOpenRerunDialog={(): void => { props.setRerunDialogOpen(true); }}
+          onCopyPermalink={(): void => {
+            void copyRunPermalink();
+          }}
+          onOpenRerunDialog={(): void => {
+            props.setRerunDialogOpen(true);
+          }}
         />
       </header>
       <RerunDialog
         open={props.rerunDialogOpen}
         onOpenChange={props.setRerunDialogOpen}
         rerunPending={props.rerunPending}
-        onRerun={(mode): void => { props.onRerun(mode); }}
+        onRerun={(mode): void => {
+          props.onRerun(mode);
+        }}
       />
     </>
   );

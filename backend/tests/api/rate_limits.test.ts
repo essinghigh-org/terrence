@@ -26,13 +26,15 @@ async function seedUser(tokenCount: number): Promise<SeededUser> {
     passwordHash: await Bun.password.hash(password, { algorithm: "bcrypt", cost: 4 }),
   });
   if (tokens.length > 0) {
-    await db.insert(apiTokens).values(tokens.map((token: string, index: number) => ({
-      id: `rate-token-${crypto.randomUUID()}`,
-      token: createHash("sha256").update(token).digest("hex"),
-      userId: id,
-      description: `Rate limit token ${String(index + 1)}`,
-      createdAt: Date.now(),
-    })));
+    await db.insert(apiTokens).values(
+      tokens.map((token: string, index: number) => ({
+        id: `rate-token-${crypto.randomUUID()}`,
+        token: createHash("sha256").update(token).digest("hex"),
+        userId: id,
+        description: `Rate limit token ${String(index + 1)}`,
+        createdAt: Date.now(),
+      })),
+    );
   }
   const seeded = { id, password, tokens, username };
   seededUsers.push(seeded);
@@ -93,9 +95,10 @@ describe("rate limiting", () => {
     // never consume the per-IP API bucket or every cold cache trips a 429.
     // Same client IP for the asset burst and the ping, so the ping would 429
     // if assets were counted (40 > 30/s sliding window).
-    const client = (path: string): Request => new Request(`http://localhost${path}`, {
-      headers: { "X-Forwarded-For": "192.0.2.77" },
-    });
+    const client = (path: string): Request =>
+      new Request(`http://localhost${path}`, {
+        headers: { "X-Forwarded-For": "192.0.2.77" },
+      });
     for (let index = 0; index < 40; index += 1) {
       const response = await app.handle(client(`/assets/chunk-${String(index)}.js`));
       // 404 when frontend/dist is absent from the unit env, 200 in prod;
@@ -142,16 +145,17 @@ describe("rate limiting", () => {
   it("applies the lower unauthenticated limit to login and bootstrap independently", async () => {
     const user = seededUsers[2];
     expect(user).toBeDefined();
-    const loginRequest = (): Request => new Request("http://localhost/api/v2/users/login", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/vnd.api+json",
-        "X-Forwarded-For": "192.0.2.10",
-      },
-      body: JSON.stringify({
-        data: { attributes: { username: user!.username, password: user!.password } },
-      }),
-    });
+    const loginRequest = (): Request =>
+      new Request("http://localhost/api/v2/users/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "X-Forwarded-For": "192.0.2.10",
+        },
+        body: JSON.stringify({
+          data: { attributes: { username: user!.username, password: user!.password } },
+        }),
+      });
     // Window boundaries are shared process-global state: a 60s boundary
     // falling mid-burst restarts the streak (reproduced locally by anchoring
     // the bucket, sleeping 59s, then bursting: all six logins return 200).
@@ -177,22 +181,24 @@ describe("rate limiting", () => {
     expect(throttledLogin.status).toBe(429);
     expect(throttledLogin.headers.get("x-ratelimit-limit")).toBe("5");
 
-    const bootstrapRequest = (): Request => new Request("http://localhost/admin/initial-admin-user?token=invalid", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Forwarded-For": "192.0.2.10",
-      },
-      body: "{}",
-    });
+    const bootstrapRequest = (): Request =>
+      new Request("http://localhost/admin/initial-admin-user?token=invalid", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Forwarded-For": "192.0.2.10",
+        },
+        body: "{}",
+      });
     expect((await pollToThrottle(5, 404, (): Promise<Response> => app.handle(bootstrapRequest()))).status).toBe(429);
   });
 
   it("applies the sensitive bucket to OAuth GET and MFA verification/removal endpoints", async () => {
     for (const [index, path] of ["/oauth/authorization", "/oauth/authorization/complete"].entries()) {
-      const request = (): Request => new Request(`http://localhost${path}`, {
-        headers: { "X-Forwarded-For": `198.51.100.${String(index + 10)}` },
-      });
+      const request = (): Request =>
+        new Request(`http://localhost${path}`, {
+          headers: { "X-Forwarded-For": `198.51.100.${String(index + 10)}` },
+        });
       for (let attempt = 0; attempt < 5; attempt += 1) {
         expect((await app.handle(request())).status).toBe(400);
       }
@@ -204,14 +210,15 @@ describe("rate limiting", () => {
     const user = await seedUser(1);
     const token = user.tokens[0];
     expect(token).toBeDefined();
-    const mfaRequest = (method: "POST" | "DELETE", path: string): Request => new Request(`http://localhost${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/vnd.api+json",
-      },
-      body: JSON.stringify({ data: { type: "mfa", attributes: { code: "000000" } } }),
-    });
+    const mfaRequest = (method: "POST" | "DELETE", path: string): Request =>
+      new Request(`http://localhost${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({ data: { type: "mfa", attributes: { code: "000000" } } }),
+      });
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
       expect((await app.handle(mfaRequest("POST", "/api/v2/account/mfa/verify"))).status).toBe(401);

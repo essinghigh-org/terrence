@@ -51,24 +51,24 @@ export type TransferColumn = {
   readonly notNull: boolean;
   /** For date columns: "timestamp" (epoch seconds), "timestamp_ms", ... when set. */
   readonly mode: string | undefined;
-}
+};
 
 export type TransferTable = {
   readonly name: string;
   readonly columns: readonly TransferColumn[];
-}
+};
 
 /** One foreign-key edge used for topological table ordering. */
 export type ForeignKeyEdge = {
   readonly child: string;
   readonly parent: string;
-}
+};
 
 export type UniqueIndex = {
   readonly name: string;
   readonly table: string;
   readonly columns: readonly string[];
-}
+};
 
 /**
  * Read side of a transfer. All methods are awaited; streamRows delivers
@@ -107,7 +107,7 @@ export type TransferSource = {
   beginSnapshot(): Promise<void>;
   /** Close the snapshot and release the connection. */
   endSnapshot(): Promise<void>;
-}
+};
 
 /** Write side of a transfer. */
 export type TransferTarget = {
@@ -117,11 +117,7 @@ export type TransferTarget = {
   /** Remove existing rows so a retried transfer re-copies cleanly. */
   beginTable(name: string): Promise<void>;
   /** Insert normalized rows (all in one transaction per table). */
-  insertRows(
-    name: string,
-    columns: readonly TransferColumn[],
-    rows: readonly (readonly unknown[])[],
-  ): Promise<void>;
+  insertRows(name: string, columns: readonly TransferColumn[], rows: readonly (readonly unknown[])[]): Promise<void>;
   /** Commit the table's transaction. */
   commitTable(name: string): Promise<void>;
   count(name: string): Promise<number>;
@@ -144,7 +140,7 @@ export type TransferTarget = {
   foreignKeysEnabled(): Promise<boolean>;
   /** Fold the WAL into the main file and close (leaves a self-contained file). */
   finishAndClose(): Promise<void>;
-}
+};
 
 // ---------------------------------------------------------------------------
 // Drizzle schema introspection
@@ -196,7 +192,14 @@ function normalizeJson(value: unknown): string {
 }
 
 function normalizeDate(value: unknown, column: TransferColumn): number | null {
-  const ms = value instanceof Date ? value.getTime() : typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : Number(value);
+  const ms =
+    value instanceof Date
+      ? value.getTime()
+      : typeof value === "number"
+        ? value
+        : typeof value === "string"
+          ? Date.parse(value)
+          : Number(value);
   if (!Number.isFinite(ms)) return null;
   return column.mode === "timestamp_ms" ? ms : Math.floor(ms / 1000);
 }
@@ -228,12 +231,18 @@ function normalizeText(value: unknown): string {
 export function normalizeValue(value: unknown, column: TransferColumn): unknown {
   if (value === null || value === undefined) return null;
   switch (column.dataType) {
-    case "boolean": return normalizeBoolean(value);
-    case "json": return normalizeJson(value);
-    case "date": return normalizeDate(value, column);
-    case "buffer": return normalizeBuffer(value);
-    case "number": return normalizeNumber(value);
-    default: return normalizeText(value);
+    case "boolean":
+      return normalizeBoolean(value);
+    case "json":
+      return normalizeJson(value);
+    case "date":
+      return normalizeDate(value, column);
+    case "buffer":
+      return normalizeBuffer(value);
+    case "number":
+      return normalizeNumber(value);
+    default:
+      return normalizeText(value);
   }
 }
 
@@ -252,7 +261,7 @@ type Digestable = {
     orderColumns: readonly string[],
     limit: number,
   ): Promise<readonly (readonly unknown[])[]>;
-}
+};
 
 export function toColumnMode(column: TransferColumn): ColumnMode {
   switch (column.dataType) {
@@ -306,7 +315,9 @@ export async function digestTable(
 
   // Sample digest: first rows by PK (or a sorted set for PK-less tables).
   const sampled = await source.readSampleRows(table.name, table.columns, orderColumns, sampleLimit);
-  const frames = sampled.map((row) => JSON.stringify(row.map((value, i): string => canonicalCell(value, modes[i] ?? "text"))));
+  const frames = sampled.map((row) =>
+    JSON.stringify(row.map((value, i): string => canonicalCell(value, modes[i] ?? "text"))),
+  );
   if (orderColumns.length === 0) frames.sort();
   const digest = new Bun.CryptoHasher("sha256").update(frames.join("\n")).digest("hex");
   return { digest, rows: sampled.length, full: false };
@@ -357,7 +368,7 @@ export function topologicalOrder(tables: readonly string[], edges: readonly Fore
 export type SqliteTargetOptions = {
   /** Run the Drizzle migrations to create the schema (default true). */
   readonly createSchema?: boolean;
-}
+};
 
 export class SqliteTransferTarget implements TransferTarget {
   readonly #client: Database;
@@ -409,7 +420,9 @@ export class SqliteTransferTarget implements TransferTarget {
           payload TEXT NOT NULL
         )
       `);
-      client.run("CREATE INDEX IF NOT EXISTS oauth_handshake_states_expires_idx ON oauth_handshake_states (expires_at)");
+      client.run(
+        "CREATE INDEX IF NOT EXISTS oauth_handshake_states_expires_idx ON oauth_handshake_states (expires_at)",
+      );
       client.run(`
         CREATE TABLE IF NOT EXISTS registry_sync_leases (
           key TEXT PRIMARY KEY NOT NULL,
@@ -435,9 +448,11 @@ export class SqliteTransferTarget implements TransferTarget {
   }
 
   public async listForeignKeys(): Promise<readonly ForeignKeyEdge[]> {
-    const tables = this.#client.query(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != '__drizzle_migrations'",
-    ).all() as { name: string }[];
+    const tables = this.#client
+      .query(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != '__drizzle_migrations'",
+      )
+      .all() as { name: string }[];
     const edges: ForeignKeyEdge[] = [];
     for (const { name } of tables) {
       const fks = this.#client.query(`PRAGMA foreign_key_list("${name}")`).all() as { table: string }[];
@@ -447,9 +462,11 @@ export class SqliteTransferTarget implements TransferTarget {
   }
 
   public async listUniqueIndexes(): Promise<readonly UniqueIndex[]> {
-    const indexes = this.#client.query(
-      "SELECT name, tbl_name AS tableName, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL AND upper(sql) LIKE '%UNIQUE%'",
-    ).all() as { name: string; tableName: string; sql: string }[];
+    const indexes = this.#client
+      .query(
+        "SELECT name, tbl_name AS tableName, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL AND upper(sql) LIKE '%UNIQUE%'",
+      )
+      .all() as { name: string; tableName: string; sql: string }[];
     const out: UniqueIndex[] = [];
     for (const index of indexes) {
       const cols = this.#client.query(`PRAGMA index_info("${index.name}")`).all() as { name: string | null }[];
@@ -504,9 +521,9 @@ export class SqliteTransferTarget implements TransferTarget {
 
   public async queryDistinctCount(name: string, columns: readonly string[]): Promise<number> {
     const quoted = columns.map((c) => `"${c}"`).join(",");
-    const row = this.#client.query(`SELECT COUNT(*) AS n FROM (SELECT DISTINCT ${quoted} FROM "${name}")`).get() as
-      | { n: number }
-      | null;
+    const row = this.#client.query(`SELECT COUNT(*) AS n FROM (SELECT DISTINCT ${quoted} FROM "${name}")`).get() as {
+      n: number;
+    } | null;
     return row?.n ?? 0;
   }
 
@@ -599,10 +616,13 @@ async function streamSqliteRows(
     let last: unknown = null;
     let started = false;
     for (;;) {
-      const rows = (started
-        ? client.query(`SELECT ${quotedCols} FROM "${name}" WHERE "${primaryColumn}" > ? ORDER BY "${primaryColumn}" LIMIT ${batchSize}`)
-        : client.query(`SELECT ${quotedCols} FROM "${name}" ORDER BY "${primaryColumn}" LIMIT ${batchSize}`))
-        .all(...(started ? [last as string | number | bigint | null] : [])) as Record<string, unknown>[];
+      const rows = (
+        started
+          ? client.query(
+              `SELECT ${quotedCols} FROM "${name}" WHERE "${primaryColumn}" > ? ORDER BY "${primaryColumn}" LIMIT ${batchSize}`,
+            )
+          : client.query(`SELECT ${quotedCols} FROM "${name}" ORDER BY "${primaryColumn}" LIMIT ${batchSize}`)
+      ).all(...(started ? [last as string | number | bigint | null] : [])) as Record<string, unknown>[];
       if (rows.length === 0) return;
       await onBatch(rows.map((row) => columns.map((c) => row[c.name])));
       started = true;
@@ -613,9 +633,9 @@ async function streamSqliteRows(
   let offset = 0;
   const orderByAll = columns.map((c) => `"${c.name}"`).join(",");
   for (;;) {
-    const rows = client.query(
-      `SELECT ${quotedCols} FROM "${name}" ORDER BY ${orderByAll} LIMIT ${batchSize} OFFSET ${offset}`,
-    ).all() as Record<string, unknown>[];
+    const rows = client
+      .query(`SELECT ${quotedCols} FROM "${name}" ORDER BY ${orderByAll} LIMIT ${batchSize} OFFSET ${offset}`)
+      .all() as Record<string, unknown>[];
     if (rows.length === 0) return;
     await onBatch(rows.map((row) => columns.map((c) => row[c.name])));
     offset += rows.length;
@@ -634,9 +654,10 @@ export class SqliteTransferSource implements TransferSource {
   }
 
   public async hasTable(name: string): Promise<boolean> {
-    const row = this.#client.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) as
-      | Record<string, unknown>
-      | null;
+    const row = this.#client.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) as Record<
+      string,
+      unknown
+    > | null;
     return row !== null && row !== undefined;
   }
 
@@ -645,18 +666,22 @@ export class SqliteTransferSource implements TransferSource {
     return row?.n ?? 0;
   }
 
-  public async countWhere(name: string, condition: string, params: readonly (string | number | bigint | null)[]): Promise<number> {
-    const row = this.#client.query(`SELECT COUNT(*) AS n FROM "${name}" WHERE ${condition}`).get(...params) as
-      | { n: number }
-      | null;
+  public async countWhere(
+    name: string,
+    condition: string,
+    params: readonly (string | number | bigint | null)[],
+  ): Promise<number> {
+    const row = this.#client.query(`SELECT COUNT(*) AS n FROM "${name}" WHERE ${condition}`).get(...params) as {
+      n: number;
+    } | null;
     return row?.n ?? 0;
   }
 
   public async queryDistinctCount(name: string, columns: readonly string[]): Promise<number> {
     const quoted = columns.map((c) => `"${c}"`).join(",");
-    const row = this.#client.query(`SELECT COUNT(*) AS n FROM (SELECT DISTINCT ${quoted} FROM "${name}")`).get() as
-      | { n: number }
-      | null;
+    const row = this.#client.query(`SELECT COUNT(*) AS n FROM (SELECT DISTINCT ${quoted} FROM "${name}")`).get() as {
+      n: number;
+    } | null;
     return row?.n ?? 0;
   }
 
@@ -701,9 +726,9 @@ export class SqliteTransferSource implements TransferSource {
 export type BunSqlConnection = {
   unsafe<T = unknown>(query: string, values?: readonly unknown[]): Promise<readonly T[]>;
   end(options?: { readonly timeout?: number }): Promise<void>;
-}
+};
 
-type BunSqlClientConstructor = new (options: { url: string; max?: number }) => BunSqlConnection
+type BunSqlClientConstructor = new (options: { url: string; max?: number }) => BunSqlConnection;
 
 const BUN_SQL_CLIENT_PROPERTY = "SQL";
 function loadBunSqlClient(): BunSqlClientConstructor {
@@ -742,19 +767,19 @@ export class PgTransferSource implements TransferSource {
   }
 
   public async hasTable(name: string): Promise<boolean> {
-    const rows = await this.#connection.unsafe<{ exists: boolean }>(
-      "SELECT to_regclass($1) IS NOT NULL AS exists",
-      [name],
-    );
+    const rows = await this.#connection.unsafe<{ exists: boolean }>("SELECT to_regclass($1) IS NOT NULL AS exists", [
+      name,
+    ]);
     return rows[0]?.exists === true;
   }
 
   async #sourceColumns(name: string): Promise<ReadonlySet<string>> {
     const cached = this.#columns.get(name);
     if (cached !== undefined) return cached;
-    // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
-    const pending = this.#connection.unsafe<{ column_name: string }>(
-      `WITH resolved AS (
+    const pending = this.#connection
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
+      .unsafe<{ column_name: string }>(
+        `WITH resolved AS (
         SELECT n.nspname AS table_schema, c.relname AS table_name
         FROM pg_class AS c
         JOIN pg_namespace AS n ON n.oid = c.relnamespace
@@ -766,8 +791,9 @@ export class PgTransferSource implements TransferSource {
         ON columns.table_schema = resolved.table_schema
        AND columns.table_name = resolved.table_name
       ORDER BY columns.ordinal_position`,
-      [name],
-    ).then((rows): ReadonlySet<string> => new Set(rows.map((row): string => row.column_name)));
+        [name],
+      )
+      .then((rows): ReadonlySet<string> => new Set(rows.map((row): string => row.column_name)));
     this.#columns.set(name, pending);
     return pending;
   }
@@ -776,14 +802,16 @@ export class PgTransferSource implements TransferSource {
     const available = await this.#sourceColumns(name);
     const defaults = POSTGRES_COMPATIBLE_DEFAULTS[name] ?? {};
     const quote = (value: string): string => `"${value.replaceAll('"', '""')}"`;
-    return columns.map((column): string => {
-      if (available.has(column.name)) return quote(column.name);
-      const fallback = defaults[column.name];
-      if (fallback === undefined) {
-        throw new Error(`Source database table "${name}" is missing required column "${column.name}"`);
-      }
-      return `${fallback} AS ${quote(column.name)}`;
-    }).join(",");
+    return columns
+      .map((column): string => {
+        if (available.has(column.name)) return quote(column.name);
+        const fallback = defaults[column.name];
+        if (fallback === undefined) {
+          throw new Error(`Source database table "${name}" is missing required column "${column.name}"`);
+        }
+        return `${fallback} AS ${quote(column.name)}`;
+      })
+      .join(",");
   }
 
   public async count(name: string): Promise<number> {
@@ -791,12 +819,19 @@ export class PgTransferSource implements TransferSource {
     return Number(rows[0]?.n ?? 0);
   }
 
-  public async countWhere(name: string, condition: string, params: readonly (string | number | bigint | null)[]): Promise<number> {
+  public async countWhere(
+    name: string,
+    condition: string,
+    params: readonly (string | number | bigint | null)[],
+  ): Promise<number> {
     // Bun's sql client does not support `?` placeholders (it rejects them with
     // a server-side syntax error); rewrite them to $1..$n positionally. The
     // condition itself comes from callers written against the sqlite dialect.
     let index = 0;
-    const pgCondition = condition.replace(/\?/g, (): string => { index += 1; return `$${index}`; });
+    const pgCondition = condition.replace(/\?/g, (): string => {
+      index += 1;
+      return `$${index}`;
+    });
     const rows = await this.#connection.unsafe<{ n: string | number }>(
       `SELECT COUNT(*) AS n FROM "${name}" WHERE ${pgCondition}`,
       [...params],
@@ -831,10 +866,7 @@ export class PgTransferSource implements TransferSource {
           : `SELECT ${quotedCols} FROM "${name}" ORDER BY "${primaryColumn}" LIMIT $1`;
         let rows: readonly Record<string, unknown>[];
         try {
-          rows = await this.#connection.unsafe<Record<string, unknown>>(
-            sql,
-            started ? [last, batchSize] : [batchSize],
-          );
+          rows = await this.#connection.unsafe<Record<string, unknown>>(sql, started ? [last, batchSize] : [batchSize]);
         } catch (error: unknown) {
           const message = error instanceof Error ? error.message : String(error);
           throw new Error(`PgTransferSource.streamRows failed on table "${name}" (${sql}): ${message}`);
@@ -900,17 +932,17 @@ export class PgTransferSource implements TransferSource {
 export type TransferProgress = {
   readonly table: string;
   readonly rowsCopied: number;
-}
+};
 
 export type TransferTableReport = {
   readonly name: string;
   readonly rowsCopied: number;
-}
+};
 
 export type TransferReport = {
   readonly tables: readonly TransferTableReport[];
   readonly totalRows: number;
-}
+};
 
 export type TransferOptions = {
   readonly batchSize?: number;
@@ -921,7 +953,7 @@ export type TransferOptions = {
    * then responsible for calling source.endSnapshot().
    */
   readonly keepSnapshotOpen?: boolean;
-}
+};
 
 /** Copy every schema table from source to target, parents before children. */
 export async function transferDatabase(
@@ -931,7 +963,10 @@ export async function transferDatabase(
 ): Promise<TransferReport> {
   const tables = schemaTables();
   const edges = await target.listForeignKeys();
-  const ordered = topologicalOrder(tables.map((t) => t.name), edges);
+  const ordered = topologicalOrder(
+    tables.map((t) => t.name),
+    edges,
+  );
   const byName = new Map(tables.map((t) => [t.name, t]));
 
   await source.ping();
@@ -987,7 +1022,7 @@ export type UniqueCheckResult = {
   readonly source: number;
   readonly target: number;
   readonly match: boolean;
-}
+};
 
 export type TableVerification = {
   readonly table: string;
@@ -1003,7 +1038,7 @@ export type TableVerification = {
     /** "full" when every row was hashed, "sample" when only the first rowsHashed rows were. */
     readonly coverage: "full" | "sample";
   };
-}
+};
 
 export type VerificationReport = {
   readonly tables: readonly TableVerification[];
@@ -1012,7 +1047,7 @@ export type VerificationReport = {
   readonly allPassed: boolean;
   readonly totalRowsSource: number;
   readonly totalRowsTarget: number;
-}
+};
 
 export type VerifyOptions = {
   /** Max rows hashed per table (sample hash). */
@@ -1021,7 +1056,7 @@ export type VerifyOptions = {
    * of a sample hash. Exposed (was a fixed 5000) so large instances can
    * raise it; the report states per-table coverage either way. */
   readonly fullDigestLimit?: number;
-}
+};
 
 const SAMPLE_LIMIT_DEFAULT = 1000;
 
@@ -1095,10 +1130,9 @@ export async function verifyTransfer(
   // gate here. `foreignKeysEnabled` is reported for context but is NOT part
   // of allPassed: the SQLite target deliberately copies with enforcement OFF
   // (it is restored and validated by finishAndClose, which throws on failure).
-  const allPassed = foreignKeyViolations.length === 0
-    && perTable.every((t) => t.countMatch
-      && t.uniqueChecks.every((u) => u.match)
-      && t.sampleHash.match);
+  const allPassed =
+    foreignKeyViolations.length === 0 &&
+    perTable.every((t) => t.countMatch && t.uniqueChecks.every((u) => u.match) && t.sampleHash.match);
   return {
     tables: perTable,
     foreignKeyViolations,

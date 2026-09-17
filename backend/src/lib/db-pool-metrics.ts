@@ -33,7 +33,8 @@ let sqliteWriteContention = 0;
 
 export function recordSqliteWriteContention(error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
-  if (/SQLITE_BUSY|SQLITE_LOCKED|database is locked|database table is locked/i.test(message)) sqliteWriteContention += 1;
+  if (/SQLITE_BUSY|SQLITE_LOCKED|database is locked|database table is locked/i.test(message))
+    sqliteWriteContention += 1;
 }
 
 export type DbQueryBudgetKind = "export" | "index";
@@ -117,7 +118,8 @@ export type DbQueryBudgetMetrics = Readonly<{
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- waiter owns cancellation handles whose methods are intentionally invoked here.
 function clearWaiter(waiter: MutableBudgetWaiter): void {
   if (waiter.timer !== undefined) clearTimeout(waiter.timer);
-  if (waiter.signal !== undefined && waiter.onAbort !== undefined) waiter.signal.removeEventListener("abort", waiter.onAbort);
+  if (waiter.signal !== undefined && waiter.onAbort !== undefined)
+    waiter.signal.removeEventListener("abort", waiter.onAbort);
 }
 
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- releasing a slot mutates the shared budget counters.
@@ -137,8 +139,12 @@ function releaseBudget(state: BudgetState): () => void {
   };
 }
 
-// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- AbortSignal is a platform cancellation handle.
-async function acquireDbQueryBudget(kind: DbQueryBudgetKind, signal?: AbortSignal, waitMs = integerSetting("TERRENCE_DB_QUERY_BUDGET_WAIT_MS")): Promise<() => void> {
+async function acquireDbQueryBudget(
+  kind: DbQueryBudgetKind,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- AbortSignal is a platform cancellation handle.
+  signal?: AbortSignal,
+  waitMs = integerSetting("TERRENCE_DB_QUERY_BUDGET_WAIT_MS"),
+): Promise<() => void> {
   const state = budgetStates[kind];
   if (signal?.aborted === true) {
     state.cancelled += 1;
@@ -164,9 +170,14 @@ async function acquireDbQueryBudget(kind: DbQueryBudgetKind, signal?: AbortSigna
       state.cancelled += 1;
       reject(error);
     };
-    waiter.onAbort = (): void => { cancel(new DbQueryBudgetCancelledError(kind)); };
+    waiter.onAbort = (): void => {
+      cancel(new DbQueryBudgetCancelledError(kind));
+    };
     if (signal !== undefined) signal.addEventListener("abort", waiter.onAbort, { once: true });
-    if (waitMs > 0) waiter.timer = setTimeout((): void => { cancel(new DbQueryBudgetCancelledError(kind)); }, waitMs);
+    if (waitMs > 0)
+      waiter.timer = setTimeout((): void => {
+        cancel(new DbQueryBudgetCancelledError(kind));
+      }, waitMs);
     state.queued.push(waiter);
   });
 }
@@ -197,7 +208,9 @@ export function dbQueryBudgetMetrics(): Readonly<Record<DbQueryBudgetKind, DbQue
   };
 }
 
-export function isDbQueryBudgetError(error: unknown): error is DbQueryBudgetRejectedError | DbQueryBudgetCancelledError {
+export function isDbQueryBudgetError(
+  error: unknown,
+): error is DbQueryBudgetRejectedError | DbQueryBudgetCancelledError {
   return error instanceof DbQueryBudgetRejectedError || error instanceof DbQueryBudgetCancelledError;
 }
 

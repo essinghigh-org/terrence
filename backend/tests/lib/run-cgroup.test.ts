@@ -167,7 +167,11 @@ describe("run cgroups (kanban 8/9)", () => {
       const exitCode = await child.exited;
       expect(exitCode).not.toBe(0); // killed, not exited cleanly
     } finally {
-      try { child.kill(9); } catch { /* already dead */ }
+      try {
+        child.kill(9);
+      } catch {
+        /* already dead */
+      }
     }
   });
 

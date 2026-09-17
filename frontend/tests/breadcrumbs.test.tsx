@@ -12,7 +12,11 @@ describe("Breadcrumbs (kanban 14.19)", () => {
   ];
 
   it("renders all items with the last marked as the current page", () => {
-    const { getByText, getByLabelText } = render(<MemoryRouter><Breadcrumbs items={items} /></MemoryRouter>);
+    const { getByText, getByLabelText } = render(
+      <MemoryRouter>
+        <Breadcrumbs items={items} />
+      </MemoryRouter>,
+    );
     expect(getByLabelText("Breadcrumb")).toBeDefined();
     for (const item of items) {
       expect(getByText(item.label)).toBeDefined();
@@ -21,7 +25,11 @@ describe("Breadcrumbs (kanban 14.19)", () => {
   });
 
   it("renders ancestors as links and the current item as plain text", () => {
-    const { getByText } = render(<MemoryRouter><Breadcrumbs items={items} /></MemoryRouter>);
+    const { getByText } = render(
+      <MemoryRouter>
+        <Breadcrumbs items={items} />
+      </MemoryRouter>,
+    );
     const orgLink = getByText("org-a").closest("a");
     expect(orgLink?.getAttribute("href")).toBe("/app/org-a");
     const runsLink = getByText("Runs").closest("a");
@@ -30,7 +38,11 @@ describe("Breadcrumbs (kanban 14.19)", () => {
   });
 
   it("handles a single-item trail", () => {
-    const { getByText } = render(<MemoryRouter><Breadcrumbs items={[{ label: "Home" }]} /></MemoryRouter>);
+    const { getByText } = render(
+      <MemoryRouter>
+        <Breadcrumbs items={[{ label: "Home" }]} />
+      </MemoryRouter>,
+    );
     expect(getByText("Home").getAttribute("aria-current")).toBe("page");
     expect(getByText("Home").closest("a")).toBeNull();
   });

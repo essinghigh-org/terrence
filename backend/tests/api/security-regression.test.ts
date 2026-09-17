@@ -3,7 +3,12 @@ import { app, handleAppError } from "../../src/app";
 import { COMPATIBILITY_PROMISE } from "../../src/lib/constants";
 import { db } from "../../src/db";
 import {
-  users, workspaces, configurationVersions, apiTokens, organizations, organizationMemberships,
+  users,
+  workspaces,
+  configurationVersions,
+  apiTokens,
+  organizations,
+  organizationMemberships,
 } from "../../src/db/schema";
 import { createHash } from "node:crypto";
 import { validTarGzip } from "./test-archives";
@@ -28,19 +33,27 @@ describe("Security Regression — Configuration Version Upload Authorization", (
     const adminId = `admin-${suffix}`;
     adminToken = `admin-token-${suffix}`;
     await db.insert(users).values([{ id: adminId, username: `admin-${suffix}`, passwordHash: "h", isSiteAdmin: true }]);
-    await db.insert(apiTokens).values([{
-      id: `tok-admin-${suffix}`, token: createHash("sha256").update(adminToken).digest("hex"),
-      userId: adminId,
-    }]);
+    await db.insert(apiTokens).values([
+      {
+        id: `tok-admin-${suffix}`,
+        token: createHash("sha256").update(adminToken).digest("hex"),
+        userId: adminId,
+      },
+    ]);
 
     // Regular user (no plan permission by default)
     const readOnlyId = `ro-${suffix}`;
     readOnlyToken = `ro-token-${suffix}`;
-    await db.insert(users).values([{ id: readOnlyId, username: `ro-${suffix}`, passwordHash: "h", isSiteAdmin: false }]);
-    await db.insert(apiTokens).values([{
-      id: `tok-ro-${suffix}`, token: createHash("sha256").update(readOnlyToken).digest("hex"),
-      userId: readOnlyId,
-    }]);
+    await db
+      .insert(users)
+      .values([{ id: readOnlyId, username: `ro-${suffix}`, passwordHash: "h", isSiteAdmin: false }]);
+    await db.insert(apiTokens).values([
+      {
+        id: `tok-ro-${suffix}`,
+        token: createHash("sha256").update(readOnlyToken).digest("hex"),
+        userId: readOnlyId,
+      },
+    ]);
 
     // Org + membership + workspace
     const orgId = `org-${suffix}`;
@@ -52,9 +65,14 @@ describe("Security Regression — Configuration Version Upload Authorization", (
 
     // Pending configuration version
     cvId = `cv-${crypto.randomUUID()}`;
-    await db.insert(configurationVersions).values([{
-      id: cvId, workspaceId, status: "pending", createdAt: Date.now(),
-    }]);
+    await db.insert(configurationVersions).values([
+      {
+        id: cvId,
+        workspaceId,
+        status: "pending",
+        createdAt: Date.now(),
+      },
+    ]);
   });
 
   it("returns 401 when uploading without authentication (isAuth guard)", async () => {
@@ -106,7 +124,7 @@ describe("Security Regression — Signup Disabled by Default", () => {
     delete process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"];
     try {
       const res = await app.handle(new Request("http://localhost/api/v2/ping"));
-      const body = await res.json() as { "signup-enabled": boolean };
+      const body = (await res.json()) as { "signup-enabled": boolean };
       expect(body["signup-enabled"]).toBe(false);
     } finally {
       if (previous !== undefined) process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"] = previous;
@@ -139,9 +157,11 @@ describe("Security Regression — CORS Defaults", () => {
     try {
       // A non-allowlisted origin must NOT receive an access-control-allow-origin
       // header — neither the (removed) localhost hardcode nor the origin itself.
-      const response = await app.handle(new Request("http://localhost/api/v2/ping", {
-        headers: { Origin: "https://malicious.example" },
-      }));
+      const response = await app.handle(
+        new Request("http://localhost/api/v2/ping", {
+          headers: { Origin: "https://malicious.example" },
+        }),
+      );
       expect(response.headers.get("access-control-allow-origin")).toBeNull();
     } finally {
       if (previous === undefined) delete process.env["CORS_ORIGIN"];
@@ -153,9 +173,11 @@ describe("Security Regression — CORS Defaults", () => {
     const previous = process.env["CORS_ORIGIN"];
     process.env["CORS_ORIGIN"] = "https://app.example,https://dev.example";
     try {
-      const response = await app.handle(new Request("http://localhost/api/v2/ping", {
-        headers: { Origin: "https://dev.example" },
-      }));
+      const response = await app.handle(
+        new Request("http://localhost/api/v2/ping", {
+          headers: { Origin: "https://dev.example" },
+        }),
+      );
       expect(response.headers.get("access-control-allow-origin")).toBe("https://dev.example");
     } finally {
       if (previous === undefined) delete process.env["CORS_ORIGIN"];
@@ -248,9 +270,11 @@ describe("Security Regression — CORS Vary: Origin", () => {
   it("reflects a matching origin and advertises Vary: Origin", async () => {
     process.env["CORS_ORIGIN"] = "https://app.example,https://dev.example";
     try {
-      const res = await app.handle(new Request("http://localhost/api/v2/ping", {
-        headers: { Origin: "https://app.example" },
-      }));
+      const res = await app.handle(
+        new Request("http://localhost/api/v2/ping", {
+          headers: { Origin: "https://app.example" },
+        }),
+      );
       expect(res.headers.get("access-control-allow-origin")).toBe("https://app.example");
       expect(res.headers.get("vary")).toContain("Origin");
     } finally {
@@ -261,9 +285,11 @@ describe("Security Regression — CORS Vary: Origin", () => {
   it("does not reflect a non-allowlisted origin but still varries by Origin", async () => {
     process.env["CORS_ORIGIN"] = "https://app.example";
     try {
-      const res = await app.handle(new Request("http://localhost/api/v2/ping", {
-        headers: { Origin: "https://evil.example" },
-      }));
+      const res = await app.handle(
+        new Request("http://localhost/api/v2/ping", {
+          headers: { Origin: "https://evil.example" },
+        }),
+      );
       expect(res.headers.get("access-control-allow-origin")).toBeNull();
       expect(res.headers.get("vary")).toContain("Origin");
     } finally {
@@ -305,9 +331,18 @@ describe("Security Regression — Internal Errors", () => {
   });
 
   it("preserves safe framework client-error statuses", () => {
-    for (const [code, status] of [["PARSE", 400], ["INVALID_COOKIE_SIGNATURE", 400], ["VALIDATION", 422]] as const) {
+    for (const [code, status] of [
+      ["PARSE", 400],
+      ["INVALID_COOKIE_SIGNATURE", 400],
+      ["VALIDATION", 422],
+    ] as const) {
       const set = { headers: {} as Record<string, string | number>, status: 200 };
-      const result = handleAppError({ code, error: new Error("unsafe detail"), request: { url: "http://localhost/api/v2/items" }, set });
+      const result = handleAppError({
+        code,
+        error: new Error("unsafe detail"),
+        request: { url: "http://localhost/api/v2/items" },
+        set,
+      });
       expect(set.status).toBe(status);
       expect(set.headers["Content-Type"]).toBe("application/vnd.api+json");
       expect(JSON.stringify(result)).not.toContain("unsafe detail");
@@ -316,13 +351,25 @@ describe("Security Regression — Internal Errors", () => {
 
   it("formats API and non-API not-found responses separately", () => {
     const apiSet = { headers: {} as Record<string, string | number>, status: 200 };
-    expect(handleAppError({ code: "NOT_FOUND", error: new Error(), request: { url: "http://localhost/api/missing" }, set: apiSet }))
-      .toEqual({ errors: [{ status: "404", title: "Not Found", detail: COMPATIBILITY_PROMISE }] });
+    expect(
+      handleAppError({
+        code: "NOT_FOUND",
+        error: new Error(),
+        request: { url: "http://localhost/api/missing" },
+        set: apiSet,
+      }),
+    ).toEqual({ errors: [{ status: "404", title: "Not Found", detail: COMPATIBILITY_PROMISE }] });
     expect(apiSet.headers["Content-Type"]).toBe("application/vnd.api+json");
 
     const pageSet = { headers: {} as Record<string, string | number>, status: 200 };
-    expect(handleAppError({ code: "NOT_FOUND", error: new Error(), request: { url: "http://localhost/missing" }, set: pageSet }))
-      .toContain("Page not found");
+    expect(
+      handleAppError({
+        code: "NOT_FOUND",
+        error: new Error(),
+        request: { url: "http://localhost/missing" },
+        set: pageSet,
+      }),
+    ).toContain("Page not found");
     expect(pageSet.headers["Content-Type"]).toBe("text/html; charset=utf-8");
   });
 });

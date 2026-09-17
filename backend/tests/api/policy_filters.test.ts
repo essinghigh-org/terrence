@@ -3,10 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens, organizationMemberships, organizations, policies,
-  policySets, users,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, policies, policySets, users } from "../../src/db/schema";
 
 /**
  * POL-001: filter[kind] and search[name] on policies + policy-sets list endpoints.
@@ -27,14 +24,16 @@ describe("Policy & policy-set list filters (POL-001)", () => {
   const token = `token-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   const sentinelPolicyId = `pol-sentinel-${suffix}`;
   const opaPolicyId = `pol-opa-${suffix}`;
@@ -45,14 +44,24 @@ describe("Policy & policy-set list filters (POL-001)", () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({
-      id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
+      id: `mem-${suffix}`,
+      userId,
+      orgId,
+      role: "owner",
+      status: "active",
     });
     await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
     await db.insert(policies).values({
-      id: sentinelPolicyId, orgId, name: "Sentinel Policy Alpha", kind: "sentinel",
+      id: sentinelPolicyId,
+      orgId,
+      name: "Sentinel Policy Alpha",
+      kind: "sentinel",
     });
     await db.insert(policies).values({
-      id: opaPolicyId, orgId, name: "OPA Policy Beta", kind: "opa",
+      id: opaPolicyId,
+      orgId,
+      name: "OPA Policy Beta",
+      kind: "opa",
     });
     await db.insert(policySets).values({ id: sentinelSetId, orgId, name: "Sentinel Set", kind: "sentinel" });
     await db.insert(policySets).values({ id: opaSetId, orgId, name: "OPA Set", kind: "opa" });

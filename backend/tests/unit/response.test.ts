@@ -1,5 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { applyResource, planResource, stateVersionResource, userResource, variableSetVariableResource, workspaceVariableResource } from "../../src/lib/response";
+import {
+  applyResource,
+  planResource,
+  stateVersionResource,
+  userResource,
+  variableSetVariableResource,
+  workspaceVariableResource,
+} from "../../src/lib/response";
 import { authorizedRunCapability, authorizedStateAccess } from "../../src/lib/authorized-resources";
 
 describe("userResource", () => {
@@ -42,10 +49,7 @@ describe("userResource", () => {
   });
 
   it("marks as service account when authenticatedResource is not users", () => {
-    const result = userResource(
-      { id: "agent-1", username: "agent" },
-      { id: "agent-1", type: "agent-pools" },
-    );
+    const result = userResource({ id: "agent-1", username: "agent" }, { id: "agent-1", type: "agent-pools" });
     expect(result.attributes["is-service-account"]).toBeTrue();
     expect(result.relationships["authenticated-resource"].data).toEqual({
       id: "agent-1",
@@ -80,10 +84,7 @@ describe("userResource", () => {
   });
 
   it("restricts permissions for non-user types", () => {
-    const result = userResource(
-      { id: "api-1", username: "api-token" },
-      { id: "api-1", type: "api-tokens" },
-    );
+    const result = userResource({ id: "api-1", username: "api-token" }, { id: "api-1", type: "api-tokens" });
     const perms = result.attributes.permissions as Record<string, boolean>;
     expect(perms["can-create-organizations"]).toBeFalse();
     expect(perms["can-change-email"]).toBeFalse();
@@ -98,9 +99,7 @@ describe("userResource", () => {
   it("includes authentication-tokens relationship link", () => {
     const result = userResource({ id: "user-rel", username: "rel" });
     const rel = result.relationships["authentication-tokens"] as Record<string, unknown>;
-    expect((rel["links"] as Record<string, string>)["related"]).toBe(
-      "/api/v2/users/user-rel/authentication-tokens",
-    );
+    expect((rel["links"] as Record<string, string>)["related"]).toBe("/api/v2/users/user-rel/authentication-tokens");
   });
 });
 
@@ -115,8 +114,11 @@ describe("run phase resources", () => {
     } as unknown as Parameters<typeof planResource>[0];
 
     expect((planResource(run, request)["attributes"] as Record<string, unknown>)["log-read-url"]).toBeNull();
-    expect((planResource(run, request, authorizedRunCapability(run, "run-read"))["attributes"] as Record<string, unknown>)["log-read-url"])
-      .toMatch(/\/api\/v2\/runs\/run-capability\/plan\/log\/\d+\.[a-f0-9]{64}$/);
+    expect(
+      (planResource(run, request, authorizedRunCapability(run, "run-read"))["attributes"] as Record<string, unknown>)[
+        "log-read-url"
+      ],
+    ).toMatch(/\/api\/v2\/runs\/run-capability\/plan\/log\/\d+\.[a-f0-9]{64}$/);
   });
 
   it("only issues state download URLs for matching state-read capability", () => {
@@ -138,9 +140,27 @@ describe("run phase resources", () => {
     } as unknown as Parameters<typeof stateVersionResource>[0];
 
     const withoutCapability = stateVersionResource(state, request)["attributes"] as Record<string, unknown>;
-    const runRead = stateVersionResource(state, request, false, undefined, authorizedStateAccess("workspace-capability", "state-outputs"))["attributes"] as Record<string, unknown>;
-    const stateRead = stateVersionResource(state, request, false, undefined, authorizedStateAccess("workspace-capability", "state-read"))["attributes"] as Record<string, unknown>;
-    const wrongWorkspace = stateVersionResource(state, request, false, undefined, authorizedStateAccess("other-workspace", "state-read"))["attributes"] as Record<string, unknown>;
+    const runRead = stateVersionResource(
+      state,
+      request,
+      false,
+      undefined,
+      authorizedStateAccess("workspace-capability", "state-outputs"),
+    )["attributes"] as Record<string, unknown>;
+    const stateRead = stateVersionResource(
+      state,
+      request,
+      false,
+      undefined,
+      authorizedStateAccess("workspace-capability", "state-read"),
+    )["attributes"] as Record<string, unknown>;
+    const wrongWorkspace = stateVersionResource(
+      state,
+      request,
+      false,
+      undefined,
+      authorizedStateAccess("other-workspace", "state-read"),
+    )["attributes"] as Record<string, unknown>;
 
     expect(withoutCapability["hosted-state-download-url"]).toBeNull();
     expect(runRead["hosted-state-download-url"]).toBeNull();

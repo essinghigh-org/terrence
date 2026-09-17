@@ -44,7 +44,11 @@ export type PersistedJobPayload = Readonly<Record<string, unknown>>;
 type PersistedContext = Readonly<{ field: string; rowId?: string; schemaVersion?: number }>;
 
 function persistedContext(field: string, rowId?: string, schemaVersion?: number): PersistedContext {
-  return { field, ...(rowId === undefined ? {} : { rowId }), ...(schemaVersion === undefined ? {} : { schemaVersion }) };
+  return {
+    field,
+    ...(rowId === undefined ? {} : { rowId }),
+    ...(schemaVersion === undefined ? {} : { schemaVersion }),
+  };
 }
 
 function persistedFailure(
@@ -60,7 +64,12 @@ function persistedFailure(
 
 function persistedVersion(version: number | undefined, field: string, rowId?: string): 0 | 1 {
   if (version === undefined) return 0;
-  if (!Number.isSafeInteger(version) || version < 0) persistedFailure(persistedContext(field, rowId, version), "version", "schema version must be a non-negative integer");
+  if (!Number.isSafeInteger(version) || version < 0)
+    persistedFailure(
+      persistedContext(field, rowId, version),
+      "version",
+      "schema version must be a non-negative integer",
+    );
   if (version !== 0 && version !== PERSISTED_JSON_SCHEMA_VERSION) {
     persistedFailure(persistedContext(field, rowId, version), "version", `unsupported schema version ${version}`);
   }
@@ -74,14 +83,11 @@ function persistedRecord(value: unknown, context: PersistedContext): Readonly<Re
   return value;
 }
 
-function persistedStringArray(
-  value: unknown,
-  context: PersistedContext,
-  nullable: boolean,
-): readonly string[] | null {
+function persistedStringArray(value: unknown, context: PersistedContext, nullable: boolean): readonly string[] | null {
   if (value === null && nullable) return null;
   if (value === undefined) persistedFailure(context, "missing", "value is missing");
-  if (!Array.isArray(value)) persistedFailure(context, value === null ? "null" : "type", "value must be an array or null");
+  if (!Array.isArray(value))
+    persistedFailure(context, value === null ? "null" : "type", "value must be an array or null");
   if (!value.every((entry: unknown): entry is string => typeof entry === "string")) {
     persistedFailure(context, "field", "array entries must be strings");
   }
@@ -103,7 +109,10 @@ function recordExtensions(
   };
 }
 
-function assertVariableCategory(value: unknown, context: PersistedContext): asserts value is "terraform" | "env" | undefined {
+function assertVariableCategory(
+  value: unknown,
+  context: PersistedContext,
+): asserts value is "terraform" | "env" | undefined {
   if (value !== undefined && value !== "terraform" && value !== "env") {
     persistedFailure(context, "field", "variable category must be terraform or env");
   }
@@ -123,12 +132,18 @@ function assertVariableValueEncrypted(value: unknown, context: PersistedContext)
 
 function persistedRunVariable(value: unknown, context: PersistedContext): PersistedRunVariable {
   const record = persistedRecord(value, context);
-  if (typeof record["key"] !== "string" || record["key"] === "") persistedFailure(context, "field", "variable key must be a non-empty string");
+  if (typeof record["key"] !== "string" || record["key"] === "")
+    persistedFailure(context, "field", "variable key must be a non-empty string");
   if (typeof record["value"] !== "string") persistedFailure(context, "field", "variable value must be a string");
   assertVariableCategory(record["category"], context);
   assertVariableSensitive(record["sensitive"], context);
   assertVariableValueEncrypted(record["valueEncrypted"], context);
-  const extensions = recordExtensions(record, record["extensions"], new Set(["key", "value", "category", "sensitive", "valueEncrypted", "extensions"]), context);
+  const extensions = recordExtensions(
+    record,
+    record["extensions"],
+    new Set(["key", "value", "category", "sensitive", "valueEncrypted", "extensions"]),
+    context,
+  );
   return {
     key: record["key"],
     value: record["value"],
@@ -145,32 +160,71 @@ export function parsePersistedRunInputs(raw: unknown, schemaVersion = 0, rowId?:
   const context = persistedContext("runs.inputs", rowId, version);
   const record = persistedRecord(raw, context);
   const declaredExtensions = record["extensions"];
-  if (declaredExtensions !== undefined && !isRecordObject(declaredExtensions)) persistedFailure(context, "field", "extensions must be an object");
+  if (declaredExtensions !== undefined && !isRecordObject(declaredExtensions))
+    persistedFailure(context, "field", "extensions must be an object");
   const known = new Set(["targetAddrs", "replaceAddrs", "invokeActionAddrs", "variables", "extensions"]);
   const extensions = {
     ...(declaredExtensions ?? {}),
     ...Object.fromEntries(Object.entries(record).filter(([key]) => !known.has(key))),
   };
-  const variables = record["variables"] === null ? null : (() => {
-    if (!Array.isArray(record["variables"])) persistedFailure(persistedContext("runs.variables", rowId, version), "type", "variables must be an array or null");
-    return record["variables"].map((entry: unknown, index: number) => persistedRunVariable(entry, persistedContext(`runs.variables[${index}]`, rowId, version)));
-  })();
+  const variables =
+    record["variables"] === null
+      ? null
+      : (() => {
+          if (!Array.isArray(record["variables"]))
+            persistedFailure(
+              persistedContext("runs.variables", rowId, version),
+              "type",
+              "variables must be an array or null",
+            );
+          return record["variables"].map((entry: unknown, index: number) =>
+            persistedRunVariable(entry, persistedContext(`runs.variables[${index}]`, rowId, version)),
+          );
+        })();
   return {
-    targetAddrs: persistedStringArray(record["targetAddrs"], persistedContext("runs.targetAddrs", rowId, version), true),
-    replaceAddrs: persistedStringArray(record["replaceAddrs"], persistedContext("runs.replaceAddrs", rowId, version), true),
-    invokeActionAddrs: persistedStringArray(record["invokeActionAddrs"], persistedContext("runs.invokeActionAddrs", rowId, version), true),
+    targetAddrs: persistedStringArray(
+      record["targetAddrs"],
+      persistedContext("runs.targetAddrs", rowId, version),
+      true,
+    ),
+    replaceAddrs: persistedStringArray(
+      record["replaceAddrs"],
+      persistedContext("runs.replaceAddrs", rowId, version),
+      true,
+    ),
+    invokeActionAddrs: persistedStringArray(
+      record["invokeActionAddrs"],
+      persistedContext("runs.invokeActionAddrs", rowId, version),
+      true,
+    ),
     variables,
     ...(Object.keys(extensions).length === 0 ? {} : { extensions }),
   };
 }
 
-export function encodePersistedRunInputs(value: PersistedRunInputs, extensions?: Readonly<Record<string, unknown>>): ReturnType<typeof versionedJson<PersistedRunInputs>> {
+export function encodePersistedRunInputs(
+  value: PersistedRunInputs,
+  extensions?: Readonly<Record<string, unknown>>,
+): ReturnType<typeof versionedJson<PersistedRunInputs>> {
   return versionedJson(value, extensions);
 }
 
-export function decodePersistedRunInputs(raw: unknown, rowId?: string): Readonly<{ value: PersistedRunInputs; schemaVersion: number; extensions: Readonly<Record<string, unknown>> }> {
-  const decoded = readVersionedJson<PersistedRunInputs>(raw, "runs.inputs", (value, context) => parsePersistedRunInputs(value, PERSISTED_RUN_INPUT_SCHEMA_VERSION, context.rowId), { rowId });
-  if (decoded.value === null) persistedFailure(persistedContext("runs.inputs", rowId, decoded.schemaVersion), "null", "run inputs cannot be null");
+export function decodePersistedRunInputs(
+  raw: unknown,
+  rowId?: string,
+): Readonly<{ value: PersistedRunInputs; schemaVersion: number; extensions: Readonly<Record<string, unknown>> }> {
+  const decoded = readVersionedJson<PersistedRunInputs>(
+    raw,
+    "runs.inputs",
+    (value, context) => parsePersistedRunInputs(value, PERSISTED_RUN_INPUT_SCHEMA_VERSION, context.rowId),
+    { rowId },
+  );
+  if (decoded.value === null)
+    persistedFailure(
+      persistedContext("runs.inputs", rowId, decoded.schemaVersion),
+      "null",
+      "run inputs cannot be null",
+    );
   return { value: decoded.value, schemaVersion: decoded.schemaVersion, extensions: decoded.extensions };
 }
 
@@ -186,7 +240,12 @@ export function parsePersistedStatusMetadata(
   const record = persistedRecord(raw, persistedContext("statusTimestamps", rowId, version));
   for (const [key, value] of Object.entries(record)) {
     if (key === "extensions") continue;
-    if (typeof value !== "string") persistedFailure(persistedContext(`statusTimestamps.${key}`, rowId, version), "field", "status metadata values must be strings");
+    if (typeof value !== "string")
+      persistedFailure(
+        persistedContext(`statusTimestamps.${key}`, rowId, version),
+        "field",
+        "status metadata values must be strings",
+      );
   }
   return Object.fromEntries(Object.entries(record).filter(([key]) => key !== "extensions")) as PersistedStatusMetadata;
 }
@@ -203,16 +262,32 @@ export function parsePersistedArtifact(
   return persistedRecord(raw, persistedContext("assessmentResults.artifact", rowId, version));
 }
 
-export function encodePersistedArtifact(value: PersistedArtifact, extensions?: Readonly<Record<string, unknown>>): ReturnType<typeof versionedJson<PersistedArtifact>> {
+export function encodePersistedArtifact(
+  value: PersistedArtifact,
+  extensions?: Readonly<Record<string, unknown>>,
+): ReturnType<typeof versionedJson<PersistedArtifact>> {
   return versionedJson(value, extensions);
 }
 
-export function decodePersistedArtifact(raw: unknown, rowId?: string): Readonly<{ value: PersistedArtifact | null; schemaVersion: number; extensions: Readonly<Record<string, unknown>> }> {
-  const decoded = readVersionedJson<PersistedArtifact>(raw, "assessmentResults.artifact", (value, context) => {
-    const parsed = parsePersistedArtifact(value, PERSISTED_ARTIFACT_SCHEMA_VERSION, context.rowId);
-    if (parsed === null) persistedFailure(persistedContext("assessmentResults.artifact", context.rowId), "null", "artifact envelope cannot contain null data");
-    return parsed;
-  }, { rowId, nullable: true });
+export function decodePersistedArtifact(
+  raw: unknown,
+  rowId?: string,
+): Readonly<{ value: PersistedArtifact | null; schemaVersion: number; extensions: Readonly<Record<string, unknown>> }> {
+  const decoded = readVersionedJson<PersistedArtifact>(
+    raw,
+    "assessmentResults.artifact",
+    (value, context) => {
+      const parsed = parsePersistedArtifact(value, PERSISTED_ARTIFACT_SCHEMA_VERSION, context.rowId);
+      if (parsed === null)
+        persistedFailure(
+          persistedContext("assessmentResults.artifact", context.rowId),
+          "null",
+          "artifact envelope cannot contain null data",
+        );
+      return parsed;
+    },
+    { rowId, nullable: true },
+  );
   return { value: decoded.value, schemaVersion: decoded.schemaVersion, extensions: decoded.extensions };
 }
 
@@ -238,7 +313,11 @@ function parsePlanExplanationPayload(readers: JobPayloadReaders): void {
   readers.known["runId"] = readers.requiredString("runId");
   const explanationKind = readers.requiredString("kind");
   if (explanationKind !== "plan" && explanationKind !== "apply") {
-    persistedFailure(persistedContext(`${readers.context.field}.kind`, readers.rowId, readers.version), "field", "kind must be plan or apply");
+    persistedFailure(
+      persistedContext(`${readers.context.field}.kind`, readers.rowId, readers.version),
+      "field",
+      "kind must be plan or apply",
+    );
   }
   readers.known["kind"] = explanationKind;
 }
@@ -247,15 +326,32 @@ function parsePlanExplanationPayload(readers: JobPayloadReaders): void {
 function parseVcsWebhookPayload(readers: JobPayloadReaders): void {
   const provider = readers.requiredString("provider");
   if (provider !== "github" && provider !== "gitlab" && provider !== "bitbucket") {
-    persistedFailure(persistedContext(`${readers.context.field}.provider`, readers.rowId, readers.version), "field", "provider must be github, gitlab, or bitbucket");
+    persistedFailure(
+      persistedContext(`${readers.context.field}.provider`, readers.rowId, readers.version),
+      "field",
+      "provider must be github, gitlab, or bitbucket",
+    );
   }
   readers.known["provider"] = provider;
   readers.known["eventName"] = readers.requiredString("eventName");
-  const payload = persistedRecord(readers.record["payload"], persistedContext(`${readers.context.field}.payload`, readers.rowId, readers.version));
+  const payload = persistedRecord(
+    readers.record["payload"],
+    persistedContext(`${readers.context.field}.payload`, readers.rowId, readers.version),
+  );
   readers.known["payload"] = payload;
   const deliveryId = readers.record["deliveryId"];
-  if (deliveryId === undefined) persistedFailure(persistedContext(`${readers.context.field}.deliveryId`, readers.rowId, readers.version), "missing", "deliveryId is missing");
-  if (deliveryId !== null && typeof deliveryId !== "string") persistedFailure(persistedContext(`${readers.context.field}.deliveryId`, readers.rowId, readers.version), "field", "deliveryId must be a string or null");
+  if (deliveryId === undefined)
+    persistedFailure(
+      persistedContext(`${readers.context.field}.deliveryId`, readers.rowId, readers.version),
+      "missing",
+      "deliveryId is missing",
+    );
+  if (deliveryId !== null && typeof deliveryId !== "string")
+    persistedFailure(
+      persistedContext(`${readers.context.field}.deliveryId`, readers.rowId, readers.version),
+      "field",
+      "deliveryId must be a string or null",
+    );
   readers.known["deliveryId"] = deliveryId;
 }
 
@@ -276,12 +372,22 @@ export function parsePersistedJobPayload(
   const record = persistedRecord(raw, context);
   const requiredString = (field: string): string => {
     const value = record[field];
-    if (typeof value !== "string" || value === "") persistedFailure(persistedContext(`${context.field}.${field}`, rowId, version), "field", `${field} must be a non-empty string`);
+    if (typeof value !== "string" || value === "")
+      persistedFailure(
+        persistedContext(`${context.field}.${field}`, rowId, version),
+        "field",
+        `${field} must be a non-empty string`,
+      );
     return value;
   };
   const optionalBoolean = (field: string): boolean | undefined => {
     const value = record[field];
-    if (value !== undefined && typeof value !== "boolean") persistedFailure(persistedContext(`${context.field}.${field}`, rowId, version), "field", `${field} must be boolean`);
+    if (value !== undefined && typeof value !== "boolean")
+      persistedFailure(
+        persistedContext(`${context.field}.${field}`, rowId, version),
+        "field",
+        `${field} must be boolean`,
+      );
     return value;
   };
   const known: Record<string, unknown> = {};
@@ -314,17 +420,39 @@ export function parsePersistedJobPayload(
     default:
       persistedFailure(context, "field", `unsupported durable job kind ${kind}`);
   }
-  const extensions = recordExtensions(record, record["extensions"], new Set([...Object.keys(known), "extensions"]), context);
+  const extensions = recordExtensions(
+    record,
+    record["extensions"],
+    new Set([...Object.keys(known), "extensions"]),
+    context,
+  );
   return { ...known, ...(Object.keys(extensions).length === 0 ? {} : { extensions }) };
 }
 
-export function encodePersistedJobPayload(value: PersistedJobPayload, extensions?: Readonly<Record<string, unknown>>): ReturnType<typeof versionedJson<PersistedJobPayload>> {
+export function encodePersistedJobPayload(
+  value: PersistedJobPayload,
+  extensions?: Readonly<Record<string, unknown>>,
+): ReturnType<typeof versionedJson<PersistedJobPayload>> {
   return versionedJson(value, extensions);
 }
 
-export function decodePersistedJobPayload(kind: string, raw: unknown, rowId?: string): Readonly<{ value: PersistedJobPayload; schemaVersion: number; extensions: Readonly<Record<string, unknown>> }> {
-  const decoded = readVersionedJson<PersistedJobPayload>(raw, `durableJobs.${kind}.payload`, (value, context) => parsePersistedJobPayload(kind, value, PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION, context.rowId), { rowId });
-  if (decoded.value === null) persistedFailure(persistedContext(`durableJobs.${kind}.payload`, rowId, decoded.schemaVersion), "null", "job payload cannot be null");
+export function decodePersistedJobPayload(
+  kind: string,
+  raw: unknown,
+  rowId?: string,
+): Readonly<{ value: PersistedJobPayload; schemaVersion: number; extensions: Readonly<Record<string, unknown>> }> {
+  const decoded = readVersionedJson<PersistedJobPayload>(
+    raw,
+    `durableJobs.${kind}.payload`,
+    (value, context) => parsePersistedJobPayload(kind, value, PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION, context.rowId),
+    { rowId },
+  );
+  if (decoded.value === null)
+    persistedFailure(
+      persistedContext(`durableJobs.${kind}.payload`, rowId, decoded.schemaVersion),
+      "null",
+      "job payload cannot be null",
+    );
   return { value: decoded.value, schemaVersion: decoded.schemaVersion, extensions: decoded.extensions };
 }
 
@@ -441,10 +569,12 @@ export function isUniqueConstraintError(error: unknown): boolean {
   const items: unknown[] = [error, (error as Record<string, unknown> | undefined)?.["cause"]];
   return items.some((item: unknown): boolean => {
     const i = item as Record<string, unknown> | undefined;
-    return i?.["code"] === "SQLITE_CONSTRAINT_UNIQUE"
-      || i?.["code"] === "23505" // PostgreSQL unique_violation
-      || (typeof i?.["message"] === "string" && i["message"].includes("UNIQUE constraint failed"))
-      || (typeof i?.["message"] === "string" && i["message"].includes("duplicate key value violates unique constraint"));
+    return (
+      i?.["code"] === "SQLITE_CONSTRAINT_UNIQUE" ||
+      i?.["code"] === "23505" || // PostgreSQL unique_violation
+      (typeof i?.["message"] === "string" && i["message"].includes("UNIQUE constraint failed")) ||
+      (typeof i?.["message"] === "string" && i["message"].includes("duplicate key value violates unique constraint"))
+    );
   });
 }
 
@@ -479,7 +609,9 @@ export function decodeStatePayload(state: unknown): string {
 export function parseStatePayload(payload: string | null): Record<string, unknown> | null {
   try {
     const state = JSON.parse(payload === null ? "{}" : decodeStatePayload(payload)) as unknown;
-    return state !== null && typeof state === "object" && !Array.isArray(state) ? (state as Record<string, unknown>) : null;
+    return state !== null && typeof state === "object" && !Array.isArray(state)
+      ? (state as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
@@ -489,7 +621,8 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-export const CLIENT_ENCRYPTED_STATE_ERROR = "Client-encrypted OpenTofu state is unsupported. Keep the encrypted state and its keys in an encryption-capable backend; Terrence requires plaintext v4 state for indexing and serial-safe recovery. See /app/docs/state.";
+export const CLIENT_ENCRYPTED_STATE_ERROR =
+  "Client-encrypted OpenTofu state is unsupported. Keep the encrypted state and its keys in an encryption-capable backend; Terrence requires plaintext v4 state for indexing and serial-safe recovery. See /app/docs/state.";
 
 /** The OpenTofu envelope is JSON, but its contents cannot be inspected without client keys. */
 export function isClientEncryptedState(payload: string | null): boolean {
@@ -498,50 +631,56 @@ export function isClientEncryptedState(payload: string | null): boolean {
 }
 
 export function statePayloadError(payload: string | null): string {
-  return isClientEncryptedState(payload) ? CLIENT_ENCRYPTED_STATE_ERROR : "State content must be a valid plaintext Terraform/OpenTofu v4 state file";
+  return isClientEncryptedState(payload)
+    ? CLIENT_ENCRYPTED_STATE_ERROR
+    : "State content must be a valid plaintext Terraform/OpenTofu v4 state file";
 }
 
 function isTerraformStateInstance(value: unknown): boolean {
   if (!isObjectRecord(value) || !isObjectRecord(value["attributes"])) return false;
-  return (value["schema_version"] === undefined || Number.isSafeInteger(value["schema_version"]))
-    && (value["sensitive_attributes"] === undefined || Array.isArray(value["sensitive_attributes"]))
-    && (value["dependencies"] === undefined || Array.isArray(value["dependencies"]));
+  return (
+    (value["schema_version"] === undefined || Number.isSafeInteger(value["schema_version"])) &&
+    (value["sensitive_attributes"] === undefined || Array.isArray(value["sensitive_attributes"])) &&
+    (value["dependencies"] === undefined || Array.isArray(value["dependencies"]))
+  );
 }
 
 function isTerraformStateResource(value: unknown): boolean {
   if (!isObjectRecord(value)) return false;
-  return (value["mode"] === "managed" || value["mode"] === "data")
-    && typeof value["type"] === "string"
-    && value["type"] !== ""
-    && typeof value["name"] === "string"
-    && value["name"] !== ""
-    && typeof value["provider"] === "string"
-    && value["provider"] !== ""
-    && Array.isArray(value["instances"])
-    && value["instances"].every((instance: unknown): boolean => isTerraformStateInstance(instance));
+  return (
+    (value["mode"] === "managed" || value["mode"] === "data") &&
+    typeof value["type"] === "string" &&
+    value["type"] !== "" &&
+    typeof value["name"] === "string" &&
+    value["name"] !== "" &&
+    typeof value["provider"] === "string" &&
+    value["provider"] !== "" &&
+    Array.isArray(value["instances"]) &&
+    value["instances"].every((instance: unknown): boolean => isTerraformStateInstance(instance))
+  );
 }
 
 /** Validate the core Terraform/OpenTofu v4 state shape without rejecting optional fields. */
 export function parseTerraformStatePayload(payload: string | null): Record<string, unknown> | null {
   const state = parseStatePayload(payload);
   if (
-    state === null
-    || "encryption_version" in state
-    || "encrypted_data" in state
-    || state["version"] !== 4
-    || !Number.isSafeInteger(state["serial"])
-    || (state["serial"] as number) < 0
-    || typeof state["lineage"] !== "string"
-    || state["lineage"] === ""
-    || !Array.isArray(state["resources"])
-    || !state["resources"].every((resource: unknown): boolean => isTerraformStateResource(resource))
-  ) return null;
+    state === null ||
+    "encryption_version" in state ||
+    "encrypted_data" in state ||
+    state["version"] !== 4 ||
+    !Number.isSafeInteger(state["serial"]) ||
+    (state["serial"] as number) < 0 ||
+    typeof state["lineage"] !== "string" ||
+    state["lineage"] === "" ||
+    !Array.isArray(state["resources"]) ||
+    !state["resources"].every((resource: unknown): boolean => isTerraformStateResource(resource))
+  )
+    return null;
 
   if (state["terraform_version"] !== undefined && typeof state["terraform_version"] !== "string") return null;
   if (state["outputs"] !== undefined && !isObjectRecord(state["outputs"])) return null;
   return state;
 }
-
 
 /** Change state metadata without rounding arbitrary resource numbers through JS floats. */
 export function statePayloadWithSerial(payload: string, serial: number): string {
@@ -549,6 +688,7 @@ export function statePayloadWithSerial(payload: string, serial: number): string 
   // Bun exposes the native JSON source-text proposal; TypeScript's JSON type lags it.
   const rawJson = JSON as typeof JSON & { rawJSON: (source: string) => unknown };
   const state = JSON.parse(payload, (_key: string, value: unknown, context?: Readonly<{ source?: string }>): unknown =>
-    typeof value === "number" && context?.source !== undefined ? rawJson.rawJSON(context.source) : value) as Record<string, unknown>;
+    typeof value === "number" && context?.source !== undefined ? rawJson.rawJSON(context.source) : value,
+  ) as Record<string, unknown>;
   return JSON.stringify({ ...state, serial });
 }

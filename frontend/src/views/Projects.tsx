@@ -57,48 +57,62 @@ function ProjectTableBody({
 }>): React.JSX.Element {
   return (
     <TableBody>
-      {projects.map((project): React.JSX.Element => (
-        <TableRow key={project.id}>
-          <TableCell className="font-medium">
-            <Link
-              to={`${orgPath}/projects/${encodeURIComponent(project.id)}`}
-              className="text-primary hover:underline"
-            >
-              {project.attributes.name}
-            </Link>
-          </TableCell>
-          <TableCell className="text-muted-foreground">{project.attributes.description ?? "—"}</TableCell>
-          <TableCell><Badge variant="secondary">{workspaceCount(project.id)}</Badge></TableCell>
-          {canManageProjects && <TableCell>
-            <div className="flex justify-end gap-1">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Edit ${project.attributes.name}`}
-                onClick={(): void => { onEdit(project); }}
+      {projects.map(
+        (project): React.JSX.Element => (
+          <TableRow key={project.id}>
+            <TableCell className="font-medium">
+              <Link
+                to={`${orgPath}/projects/${encodeURIComponent(project.id)}`}
+                className="text-primary hover:underline"
               >
-                <Pencil />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Delete ${project.attributes.name}`}
-                onClick={(): void => { onDeleteRequest(project); }}
-              >
-                <Trash2 />
-              </Button>
-            </div>
-          </TableCell>}
-        </TableRow>
-      ))}
+                {project.attributes.name}
+              </Link>
+            </TableCell>
+            <TableCell className="text-muted-foreground">{project.attributes.description ?? "—"}</TableCell>
+            <TableCell>
+              <Badge variant="secondary">{workspaceCount(project.id)}</Badge>
+            </TableCell>
+            {canManageProjects && (
+              <TableCell>
+                <div className="flex justify-end gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Edit ${project.attributes.name}`}
+                    onClick={(): void => {
+                      onEdit(project);
+                    }}
+                  >
+                    <Pencil />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Delete ${project.attributes.name}`}
+                    onClick={(): void => {
+                      onDeleteRequest(project);
+                    }}
+                  >
+                    <Trash2 />
+                  </Button>
+                </div>
+              </TableCell>
+            )}
+          </TableRow>
+        ),
+      )}
       {projects.length === 0 && (
         <TableRow>
           <TableCell colSpan={canManageProjects ? 4 : 3} className="py-10 text-center text-muted-foreground">
-            <EmptyState compact illustration={loadError === "" ? "empty" : undefined}
+            <EmptyState
+              compact
+              illustration={loadError === "" ? "empty" : undefined}
               title={loadError === "" ? "No projects yet" : "Projects unavailable"}
-              description={loadError === ""
-                ? "Projects group related workspaces so they can share settings and access. Most homelabs never need one — workspaces work fine on their own."
-                : "Use Try again above to reload projects."}
+              description={
+                loadError === ""
+                  ? "Projects group related workspaces so they can share settings and access. Most homelabs never need one — workspaces work fine on their own."
+                  : "Use Try again above to reload projects."
+              }
               {...(loadError === "" && canManageProjects
                 ? {
                     actionLabel: "Create a project",
@@ -140,26 +154,37 @@ function AssignmentsDialog({
         </DialogHeader>
         <Table>
           <TableHeader>
-            <TableRow><TableHead>Workspace</TableHead><TableHead>Project</TableHead></TableRow>
+            <TableRow>
+              <TableHead>Workspace</TableHead>
+              <TableHead>Project</TableHead>
+            </TableRow>
           </TableHeader>
           <TableBody>
-            {workspaces.map((workspace): React.JSX.Element => (
-              <TableRow key={workspace.id}>
-                <TableCell className="font-medium">{workspace.attributes.name}</TableCell>
-                <TableCell>
-                  <Select
-                    aria-label={`Project for ${workspace.attributes.name}`}
-                    value={workspace.relationships?.project?.data?.id ?? ""}
-                    disabled={assigningWorkspaceId === workspace.id}
-                    onValueChange={(projectId): void => { onAssign(workspace, projectId); }}
-                  >
-                    {projects.map((project): React.JSX.Element => (
-                      <option key={project.id} value={project.id}>{project.attributes.name}</option>
-                    ))}
-                  </Select>
-                </TableCell>
-              </TableRow>
-            ))}
+            {workspaces.map(
+              (workspace): React.JSX.Element => (
+                <TableRow key={workspace.id}>
+                  <TableCell className="font-medium">{workspace.attributes.name}</TableCell>
+                  <TableCell>
+                    <Select
+                      aria-label={`Project for ${workspace.attributes.name}`}
+                      value={workspace.relationships?.project?.data?.id ?? ""}
+                      disabled={assigningWorkspaceId === workspace.id}
+                      onValueChange={(projectId): void => {
+                        onAssign(workspace, projectId);
+                      }}
+                    >
+                      {projects.map(
+                        (project): React.JSX.Element => (
+                          <option key={project.id} value={project.id}>
+                            {project.attributes.name}
+                          </option>
+                        ),
+                      )}
+                    </Select>
+                  </TableCell>
+                </TableRow>
+              ),
+            )}
             {workspaces.length === 0 && (
               <TableRow>
                 <TableCell colSpan={2}>
@@ -198,11 +223,15 @@ function DeleteProjectConfirm({
   return (
     <ConfirmDialog
       open={project !== null}
-      onOpenChange={(open): void => { if (!open) onClose(); }}
+      onOpenChange={(open): void => {
+        if (!open) onClose();
+      }}
       title="Delete Project"
       description={
         <>
-          Are you sure you want to delete the project <strong className="text-foreground">{project?.attributes.name}</strong>? Workspaces under this project will be unassigned.
+          Are you sure you want to delete the project{" "}
+          <strong className="text-foreground">{project?.attributes.name}</strong>? Workspaces under this project will be
+          unassigned.
         </>
       }
       confirmText="Delete Project"
@@ -247,8 +276,12 @@ export function Projects(): React.JSX.Element {
     try {
       // SAFETY: all three endpoints return the JSON:API envelope per contract.
       const [projectResponse, workspaceResponse, organizationResponse] = await Promise.all([
-        fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/projects`) as Promise<{ data?: Project[] }>,
-        fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/workspaces?page%5Bsize%5D=100`) as Promise<{ data?: Workspace[] }>,
+        fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/projects`) as Promise<{
+          data?: Project[];
+        }>,
+        fetchApi(
+          `/organizations/${encodeURIComponent(requestedOrganizationName)}/workspaces?page%5Bsize%5D=100`,
+        ) as Promise<{ data?: Workspace[] }>,
         fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}`) as Promise<{
           data?: { attributes?: { permissions?: { "can-manage-projects"?: boolean } } };
         }>,
@@ -360,10 +393,14 @@ export function Projects(): React.JSX.Element {
         }),
       });
       if (activeOrganizationName.current !== orgName) return;
-      setWorkspaces((current): Workspace[] => current.map((item): Workspace =>
-        item.id === workspace.id
-          ? { ...item, relationships: { ...item.relationships, project: { data: { id: projectId } } } }
-          : item));
+      setWorkspaces((current): Workspace[] =>
+        current.map(
+          (item): Workspace =>
+            item.id === workspace.id
+              ? { ...item, relationships: { ...item.relationships, project: { data: { id: projectId } } } }
+              : item,
+        ),
+      );
       toast.add({ title: `${workspace.attributes.name} reassigned`, type: "success" });
     } catch (error: unknown) {
       toast.add({
@@ -382,30 +419,47 @@ export function Projects(): React.JSX.Element {
   return (
     <PageShell>
       <PageHeader
-        breadcrumbs={[
-          { label: orgName, to: `${orgPath}/workspaces` },
-          { label: "Projects" },
-        ]}
+        breadcrumbs={[{ label: orgName, to: `${orgPath}/workspaces` }, { label: "Projects" }]}
         title="Projects"
         description={`Organize workspaces under ${orgName}.`}
-        action={canManageProjects ? (
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={(): void => { setAssignmentsOpen(true); }}>
-              <Layers data-icon="inline-start" />
-              Assign workspaces
-            </Button>
-            <Button onClick={(): void => { openProjectDialog(null); }}>
-              <Plus data-icon="inline-start" />
-              Create project
-            </Button>
-          </div>
-        ) : undefined}
+        action={
+          canManageProjects ? (
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={(): void => {
+                  setAssignmentsOpen(true);
+                }}
+              >
+                <Layers data-icon="inline-start" />
+                Assign workspaces
+              </Button>
+              <Button
+                onClick={(): void => {
+                  openProjectDialog(null);
+                }}
+              >
+                <Plus data-icon="inline-start" />
+                Create project
+              </Button>
+            </div>
+          ) : undefined
+        }
       />
 
       {loadError !== "" && (
-        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
           <span>Could not load projects: {loadError}</span>
-          <Button type="button" variant="outline" onClick={(): void => { void loadData(); }}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={(): void => {
+              void loadData();
+            }}
+          >
             Try again
           </Button>
         </div>
@@ -414,7 +468,9 @@ export function Projects(): React.JSX.Element {
       <Card>
         <CardHeader>
           <CardTitle>Organization projects</CardTitle>
-          <CardDescription>{projects.length} project{projects.length === 1 ? "" : "s"}</CardDescription>
+          <CardDescription>
+            {projects.length} project{projects.length === 1 ? "" : "s"}
+          </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
@@ -435,8 +491,12 @@ export function Projects(): React.JSX.Element {
                 projects={projects}
                 loadError={loadError}
                 workspaceCount={workspaceCount}
-                onCreate={(): void => { openProjectDialog(null); }}
-                onEdit={(project: Project): void => { openProjectDialog(project); }}
+                onCreate={(): void => {
+                  openProjectDialog(null);
+                }}
+                onEdit={(project: Project): void => {
+                  openProjectDialog(project);
+                }}
                 onDeleteRequest={(project: Project): void => {
                   const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
                   if (isTestEnv) {
@@ -467,7 +527,9 @@ export function Projects(): React.JSX.Element {
                   autoComplete="off"
                   spellCheck={false}
                   value={name}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                    setName(event.currentTarget.value);
+                  }}
                   aria-invalid={formError !== ""}
                 />
               </Field>
@@ -479,13 +541,23 @@ export function Projects(): React.JSX.Element {
                   autoComplete="off"
                   spellCheck={false}
                   value={description}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(event.currentTarget.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                    setDescription(event.currentTarget.value);
+                  }}
                 />
               </Field>
               {formError !== "" && <FieldError>{formError}</FieldError>}
             </FieldGroup>
             <DialogFooter className="mt-6">
-              <Button type="button" variant="outline" onClick={(): void => { setDialogOpen(false); }}>Cancel</Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={(): void => {
+                  setDialogOpen(false);
+                }}
+              >
+                Cancel
+              </Button>
               <Button type="submit" disabled={saving}>
                 {saving && <Spinner data-icon="inline-start" />}
                 {editingProject === null ? "Create project" : "Save project"}
@@ -502,13 +574,17 @@ export function Projects(): React.JSX.Element {
         workspaces={workspaces}
         projects={projects}
         assigningWorkspaceId={assigningWorkspaceId}
-        onAssign={(workspace: Workspace, projectId: string): void => { void assignWorkspace(workspace, projectId); }}
+        onAssign={(workspace: Workspace, projectId: string): void => {
+          void assignWorkspace(workspace, projectId);
+        }}
       />
 
       <DeleteProjectConfirm
         project={projectToDelete}
         deleting={deletingProject}
-        onClose={(): void => { setProjectToDelete(null); }}
+        onClose={(): void => {
+          setProjectToDelete(null);
+        }}
         onConfirm={async (): Promise<void> => {
           if (projectToDelete !== null) {
             await deleteProject(projectToDelete);
