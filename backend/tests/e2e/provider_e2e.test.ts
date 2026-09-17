@@ -1730,35 +1730,31 @@ describe("tfe provider e2e", () => {
             return o[key]!.value;
           };
           // HYOK key-version data sources — the config auto-generates a key
-          // version on create; fetch its id so the second apply can read it.
-          // Fail loudly if the fixture cannot be resolved: silently skipping
-          // the data sources would drop provider coverage without failing.
-          let hyokDsTf = "";
+          // version on create. Keep the generated HCL static and pass the API-returned
+          // id via a sensitive Terraform variable so network data is never persisted.
           const hyid = o["hyid"]?.value;
           expect(typeof hyid, "hyid output must resolve").toBe("string");
-          if (typeof hyid === "string") {
-            const hyokRes = await api(
-              backend.port,
-              "GET",
-              `/api/v2/hyok-configurations/${hyid}`,
-              undefined,
-              auth.token,
-            );
-            const kvRel = hyokRes.json["data"]?.relationships?.["hyok-customer-key-versions"]?.data as
-              | { id: string }[]
-              | undefined;
-            const kid = kvRel?.[0]?.id;
-            expect(typeof kid, "hyok key version must exist").toBe("string");
-            if (typeof kid === "string") {
-              hyokDsTf = `data "tfe_hyok_customer_key_version" "d_hyok" {
-  id = "${kid}"
+          if (typeof hyid !== "string") throw new Error("hyid output must resolve");
+          const hyokRes = await api(backend.port, "GET", `/api/v2/hyok-configurations/${hyid}`, undefined, auth.token);
+          expect(hyokRes.status).toBe(200);
+          const kvRel = hyokRes.json["data"]?.relationships?.["hyok-customer-key-versions"]?.data as
+            | { id: string }[]
+            | undefined;
+          const kid = kvRel?.[0]?.id;
+          expect(typeof kid, "hyok key version must exist").toBe("string");
+          if (typeof kid !== "string") throw new Error("hyok key version must exist");
+          cliEnv["TF_VAR_hyok_key_version_id"] = kid;
+          const hyokDsTf = `variable "hyok_key_version_id" {
+  type      = string
+  sensitive = true
+}
+data "tfe_hyok_customer_key_version" "d_hyok" {
+  id = var.hyok_key_version_id
 }
 data "tfe_hyok_encrypted_data_key" "d_hyok_dek" {
-  id = "${kid}"
+  id = var.hyok_key_version_id
 }
 `;
-            }
-          }
           expect(val("ds_org_name")).toBe(`pe2e-org-${suffix}`);
           expect(val("ds_orgs_names")).toEqual(expect.arrayContaining([`pe2e-org-${suffix}`]));
           expect(val("ds_ws_name")).toBe(`pe2e-ws-${suffix}`);
@@ -2013,41 +2009,44 @@ data "tfe_scim_token" "d_stok" {
 `;
 
           // tfe_no_code_module needs a PUBLISHED registry module version
-          // (status "ok"). Create + upload one between applies, then reference
-          // it with a version_pin in the second apply.
-          let noCodeTf = "";
-          {
-            const modRes = await api(
-              backend.port,
-              "GET",
-              `/api/v2/organizations/pe2e-org-${suffix}/registry-modules/private/pe2e-org-${suffix}/pe2e-mod-${suffix}/aws`,
-              undefined,
-              auth.token,
-            );
-            const moduleId = modRes.json["data"]?.id as string | undefined;
-            if (typeof moduleId === "string") {
-              const verRes = await api(
-                backend.port,
-                "POST",
-                `/api/v2/registry-modules/${moduleId}/versions`,
-                {
-                  data: { type: "registry-module-versions", attributes: { version: "1.0.0" } },
-                },
-                auth.token,
-              );
-              const versionId = verRes.json["data"]?.id as string | undefined;
-              if (typeof versionId === "string") {
-                await makeRegistryModuleArchive(join(workDir, "modver.tar.gz"));
-                const upload = await fetch(
-                  `http://127.0.0.1:${backend.port}/api/v2/registry-module-versions/${versionId}/upload`,
-                  {
-                    method: "PUT",
-                    headers: { "Content-Type": "application/octet-stream", Authorization: `Bearer ${auth.token}` },
-                    body: await Bun.file(join(workDir, "modver.tar.gz")).arrayBuffer(),
-                  },
-                );
-                if (upload.status === 200) {
-                  noCodeTf = `resource "tfe_no_code_module" "ncm" {
+          // (status "ok"). Treat fixture setup failures as test failures so the HCL
+          // remains static and never depends on network-returned values.
+          const modRes = await api(
+            backend.port,
+            "GET",
+            `/api/v2/organizations/pe2e-org-${suffix}/registry-modules/private/pe2e-org-${suffix}/pe2e-mod-${suffix}/aws`,
+            undefined,
+            auth.token,
+          );
+          expect(modRes.status).toBe(200);
+          const moduleId = modRes.json["data"]?.id as string | undefined;
+          expect(typeof moduleId).toBe("string");
+          if (typeof moduleId !== "string") throw new Error("registry module fixture id missing");
+          const verRes = await api(
+            backend.port,
+            "POST",
+            `/api/v2/registry-modules/${moduleId}/versions`,
+            {
+              data: { type: "registry-module-versions", attributes: { version: "1.0.0" } },
+            },
+            auth.token,
+          );
+          expect(verRes.status).toBe(201);
+          const versionId = verRes.json["data"]?.id as string | undefined;
+          expect(typeof versionId).toBe("string");
+          if (typeof versionId !== "string") throw new Error("registry module version fixture id missing");
+          await makeRegistryModuleArchive(join(workDir, "modver.tar.gz"));
+          const upload = await fetch(
+            `http://127.0.0.1:${backend.port}/api/v2/registry-module-versions/${versionId}/upload`,
+            {
+              method: "PUT",
+              headers: { "Content-Type": "application/octet-stream", Authorization: `Bearer ${auth.token}` },
+              body: await Bun.file(join(workDir, "modver.tar.gz")).arrayBuffer(),
+            },
+          );
+          expect(upload.status).toBe(200);
+          await upload.body?.cancel();
+          const noCodeTf = `resource "tfe_no_code_module" "ncm" {
   organization    = "pe2e-org-${suffix}"
   registry_module = tfe_registry_module.regmod.id
   version_pin     = "1.0.0"
@@ -2056,10 +2055,6 @@ data "tfe_no_code_module" "d_ncm" {
   id = tfe_no_code_module.ncm.id
 }
 `;
-                }
-              }
-            }
-          }
 
           // tfe_workspace_run triggers a real run on pe2e-ws, whose config was
           // uploaded by planAndApply above; the run executes via the worker.
@@ -2115,10 +2110,8 @@ data "tfe_no_code_module" "d_ncm" {
             expect(stateList2.out).toContain("tfe_scim_group_mapping.sgm");
             expect(stateList2.out).toContain("data.tfe_scim_group.d_sgroup");
             expect(stateList2.out).toContain("data.tfe_scim_token.d_stok");
-            if (noCodeTf !== "") {
-              expect(stateList2.out).toContain("tfe_no_code_module.ncm");
-              expect(stateList2.out).toContain("data.tfe_no_code_module.d_ncm");
-            }
+            expect(stateList2.out).toContain("tfe_no_code_module.ncm");
+            expect(stateList2.out).toContain("data.tfe_no_code_module.d_ncm");
           }
           // tfe_workspace_run should be present after the second apply.
           {
@@ -2131,10 +2124,8 @@ data "tfe_no_code_module" "d_ncm" {
             expect(stateList3.out).toContain("data.tfe_github_app_installation.d_gh");
             expect(stateList3.out).toContain("tfe_stack.stack");
             expect(stateList3.out).toContain("tfe_stack_variable_set.stack_vs");
-            if (hyokDsTf !== "") {
-              expect(stateList3.out).toContain("data.tfe_hyok_customer_key_version.d_hyok");
-              expect(stateList3.out).toContain("data.tfe_hyok_encrypted_data_key.d_hyok_dek");
-            }
+            expect(stateList3.out).toContain("data.tfe_hyok_customer_key_version.d_hyok");
+            expect(stateList3.out).toContain("data.tfe_hyok_encrypted_data_key.d_hyok_dek");
           }
           await rm(join(cfgDir, "build-outputs.tf"), { force: true });
 
