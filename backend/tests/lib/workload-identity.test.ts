@@ -53,7 +53,7 @@ describe("workload identity", () => {
 
     await revokeWorkloadIdentityTokens(runId);
     const revoked = verifyWorkloadIdentityToken(issued.token, "aws.workload.identity");
-    await expect(revoked).rejects.toThrow("revoked");
+    expect(revoked).rejects.toThrow("revoked");
   });
 
   test("injects one token for each manual audience", async () => {

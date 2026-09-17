@@ -13,7 +13,7 @@ test("confirm stays disabled until the checkbox is ticked (kanban 26.17)", () =>
   const view = render(
     <ConfirmDialog
       open={true}
-      onOpenChange={(): void => {}}
+      onOpenChange={(): void => undefined}
       title="Delete Organization"
       description="This permanently deletes the organization and all of its data."
       confirmText="Delete Organization"
@@ -50,7 +50,7 @@ test("checkbox requirement resets when the dialog closes and reopens (kanban 26.
           onOpenChange={setOpen}
           title="Delete Organization"
           requireCheckbox="I understand the consequences."
-          onConfirm={(): void => {}}
+          onConfirm={(): void => undefined}
         />
       </>
     );
@@ -81,7 +81,7 @@ test("destructive confirm stays disabled until the exact object name is typed (k
   const view = render(
     <ConfirmDialog
       open={true}
-      onOpenChange={(): void => {}}
+      onOpenChange={(): void => undefined}
       title="Delete Agent Pool"
       description="Workspaces using this pool will fail to run until reassigned. This cannot be undone."
       confirmText="Delete Pool"

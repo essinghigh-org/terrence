@@ -226,7 +226,7 @@ export type TerraformVariableSkip = Readonly<{
   reason: "invalid-name" | "unbalanced-braces";
 }>;
 
-function recordSkippedVariable(skipped: TerraformVariableSkip[], name: string | undefined): void {
+function recordSkippedVariable(skipped: Readonly<Pick<TerraformVariableSkip[], "push" | "length">>, name: string | undefined): void {
   if (skipped.length >= TERRAFORM_VARIABLE_PARSER_LIMITS.maxDiagnostics) {
     throw new TerraformVariableParseError(
       "output-too-large",

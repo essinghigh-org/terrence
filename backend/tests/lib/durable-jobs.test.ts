@@ -16,7 +16,7 @@ const previousBudget = process.env[RESOURCE_BUDGET_ENV];
 
 afterEach(async (): Promise<void> => {
   await db.delete(durableJobs).where(eq(durableJobs.kind, kind));
-  if (previousBudget === undefined) delete process.env[RESOURCE_BUDGET_ENV];
+  if (previousBudget === undefined) Reflect.deleteProperty(process.env, RESOURCE_BUDGET_ENV);
   else process.env[RESOURCE_BUDGET_ENV] = previousBudget;
 });
 
@@ -95,7 +95,7 @@ describe("durable job leases", () => {
       { workspaceId: "occupying-workspace" },
       { dedupeKey: "budget-occupying-job", budget: { organizationId, jobClass: "background" } },
     );
-    await expect(enqueueDurableJob(
+    expect(enqueueDurableJob(
       kind,
       { workspaceId: "terminal-workspace", refreshed: true },
       { dedupeKey: "budget-terminal-job", budget: { organizationId, jobClass: "background" } },

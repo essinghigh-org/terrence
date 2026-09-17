@@ -901,7 +901,6 @@ function OrgNav({
   hasOrg,
   currentOrgName,
   canReadProjects,
-  visitsRevision,
 }: Readonly<{
   collapsed: boolean;
   onNavigate: () => void;
@@ -940,7 +939,6 @@ function OrgNav({
 
   // Sidebar shortcuts are re-read on every navigation (visitsRevision
   // bumps when a workspace is visited, so the list stays current).
-  visitsRevision;
   const pinned = getPinnedWorkspaces().filter((entry): boolean => entry.orgName === orgName);
   const recent = getRecentWorkspaces()
     .filter((entry): boolean => entry.orgName === orgName)
@@ -1348,7 +1346,7 @@ export function Layout({
       }
       if (organizationsResult.status === "fulfilled") {
         for (const organization of organizationsResult.value) {
-          if (organization.id && organization.attributes?.name) {
+          if (organization.id !== "" && organization.attributes?.name !== undefined && organization.attributes.name !== "") {
             registerOrganizationScope(organization.id, organization.attributes.name);
           }
         }

@@ -3999,7 +3999,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
  * callers can report "engine unavailable" instead of "policy failed".
  */
 class PolicyEngineMissingError extends Error {
-  readonly engine: "opa" | "sentinel";
+  public readonly engine: "opa" | "sentinel";
   constructor(engine: "opa" | "sentinel", message: string) {
     super(message);
     this.name = "PolicyEngineMissingError";

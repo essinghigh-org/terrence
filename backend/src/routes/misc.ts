@@ -256,7 +256,7 @@ async function pagedAuditLogs(where: SQL | undefined, page: AuditLogPage): Promi
       orderBy: [desc(auditLogs.createdAt), desc(auditLogs.id)],
     }),
   ]);
-  return { logs, total: Number(totalRows[0]?.total ?? 0) };
+  return { logs, total: totalRows[0]?.total ?? 0 };
 }
 
 const AUDIT_LOG_ACCESS_DENIED = Symbol("audit-log-access-denied");

@@ -6,6 +6,7 @@ import { readPlanJsonArtifact, sanitizePlanJson, PUBLIC_PLAN_VERSION } from "./p
 import { collectExplainSecrets, redactKnownSecrets } from "./explain-secrets";
 import { auditLog, strictAuditEnabled } from "./utils";
 import { auditLogValues } from "./audit-trail";
+import type { DeepReadonly } from "./types";
 import { readRunLogs } from "./run-logs";
 import { log } from "./log";
 
@@ -325,6 +326,7 @@ type InlineDeltaState = { buffer: string; thinking: boolean };
 type DeltaHandler = (channel: "thinking" | "content", text: string) => void | Promise<void>;
 
 async function emitInlineContent(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- state.buffer/thinking accumulate inline deltas across chunks by design
   state: InlineDeltaState,
   onDelta: DeltaHandler,
   text: string,
@@ -357,6 +359,7 @@ function reasoningDelta(delta: Readonly<Record<string, unknown>>): string {
 
 async function processUpstreamLine(
   line: string,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- state is mutated downstream by emitInlineContent
   state: InlineDeltaState,
   onDelta: DeltaHandler,
 ): Promise<void> {
@@ -379,7 +382,7 @@ async function processUpstreamLine(
 }
 
 export async function forEachUpstreamDelta(
-  upstream: Readonly<Response>,
+  upstream: DeepReadonly<Response>,
   onDelta: DeltaHandler,
   onChunk?: () => void,
 ): Promise<void> {
@@ -415,7 +418,7 @@ export async function fetchUpstream<T>(
   prompt: string,
   stream: boolean,
   signal: Readonly<AbortSignal> | undefined,
-  consume: (upstream: Readonly<Response>, tick: () => void) => Promise<T>,
+  consume: (upstream: DeepReadonly<Response>, tick: () => void) => Promise<T>,
 ): Promise<T> {
   const controller = new AbortController();
   const abortWithTimeout = (): void => { controller.abort(new Error("request timed out")); };

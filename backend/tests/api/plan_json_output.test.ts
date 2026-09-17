@@ -40,7 +40,7 @@ describe("plan JSON output availability semantics", () => {
   });
 
   afterAll(async () => {
-    await deletePlanJsonArtifact(runId).catch((): void => {});
+    await deletePlanJsonArtifact(runId).catch((): void => undefined);
     await db.delete(runs).where(eq(runs.id, runId));
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     await cleanupSeed(seed);
@@ -169,11 +169,11 @@ describe("plan JSON output availability semantics", () => {
       // review): sibling suites share seed.orgId, so filtering by org or
       // workspace would delete their fixtures.
       const suiteTeamIds = [readTeamId, noStateTeamId, adminTeamId];
-      await db.delete(apiTokens).where(eq(apiTokens.teamId, readTeamId)).catch((): void => {});
-      await db.delete(apiTokens).where(eq(apiTokens.teamId, noStateTeamId)).catch((): void => {});
-      await db.delete(apiTokens).where(eq(apiTokens.teamId, adminTeamId)).catch((): void => {});
-      await db.delete(teamWorkspaces).where(inArray(teamWorkspaces.teamId, suiteTeamIds)).catch((): void => {});
-      await db.delete(teams).where(inArray(teams.id, suiteTeamIds)).catch((): void => {});
+      await db.delete(apiTokens).where(eq(apiTokens.teamId, readTeamId)).catch((): void => undefined);
+      await db.delete(apiTokens).where(eq(apiTokens.teamId, noStateTeamId)).catch((): void => undefined);
+      await db.delete(apiTokens).where(eq(apiTokens.teamId, adminTeamId)).catch((): void => undefined);
+      await db.delete(teamWorkspaces).where(inArray(teamWorkspaces.teamId, suiteTeamIds)).catch((): void => undefined);
+      await db.delete(teams).where(inArray(teams.id, suiteTeamIds)).catch((): void => undefined);
     });
 
     it("serves raw plan JSON to read teams (read includes state-read)", async () => {

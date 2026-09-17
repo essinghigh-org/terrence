@@ -93,7 +93,7 @@ async function insertAction(
   name: string,
   attrs: Record<string, unknown>,
 ): Promise<typeof actions.$inferSelect> {
-  const actionType = typeof attrs["action-type"] === "string" ? String(attrs["action-type"]) : "custom";
+  const actionType = typeof attrs["action-type"] === "string" ? attrs["action-type"] : "custom";
   const description = typeof attrs["description"] === "string" ? attrs["description"] : null;
   const configuration = attrs["configuration"] !== null && typeof attrs["configuration"] === "object" ? (attrs["configuration"] as Record<string, unknown>) : {};
   const id = newResourceId("action");
@@ -130,8 +130,8 @@ async function checkInvocationTargets(
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
   const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? (data["attributes"] as Record<string, unknown>) : {};
-  const runId = typeof attrs["run-id"] === "string" ? String(attrs["run-id"]) : typeof attrs["runId"] === "string" ? String(attrs["runId"]) : null;
-  const stackId = typeof attrs["stack-id"] === "string" ? String(attrs["stack-id"]) : typeof attrs["stackId"] === "string" ? String(attrs["stackId"]) : null;
+  const runId = typeof attrs["run-id"] === "string" ? attrs["run-id"] : typeof attrs["runId"] === "string" ? attrs["runId"] : null;
+  const stackId = typeof attrs["stack-id"] === "string" ? attrs["stack-id"] : typeof attrs["stackId"] === "string" ? attrs["stackId"] : null;
   if (runId !== null) {
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined) {
@@ -164,7 +164,7 @@ async function insertInvocation(
     orgId: action.orgId,
     runId,
     stackId,
-    deploymentId: typeof attrs["deploymentId"] === "string" ? String(attrs["deploymentId"]) : null,
+    deploymentId: typeof attrs["deploymentId"] === "string" ? attrs["deploymentId"] : null,
     status: "pending",
     output,
     createdAt: now,

@@ -10,6 +10,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { DeepReadonly } from '../lib/types';
 import { join } from 'path';
 import * as schema from './schema';
 import { envFlag } from '../lib/env';
@@ -41,7 +42,17 @@ let queryLogEnabled = envFlag("TERRENCE_QUERY_LOG");
 // ---------------------------------------------------------------------------
 let sqliteClient: Database | null = null;
 let sqliteTransactionCompletion: Promise<void> | null = null;
-let prepareSqliteStatement: ((sqlText: string, ...params: unknown[]) => unknown) | null = null;
+let prepareSqliteStatement: ((sqlText: string, ...params: readonly unknown[]) => unknown) | null = null;
+
+function requireSqliteClient(): Database {
+  if (sqliteClient === null) throw new Error("SQLite client is not initialized");
+  return sqliteClient;
+}
+
+function requirePrepareSqliteStatement(): (sqlText: string, ...params: readonly unknown[]) => unknown {
+  if (prepareSqliteStatement === null) throw new Error("SQLite prepare hook is not installed");
+  return prepareSqliteStatement;
+}
 const gatedSqliteQueryMethods = new Set(["run", "all", "get", "values"]);
 const sqliteTransactionContext = new AsyncLocalStorage<symbol>();
 
@@ -52,14 +63,20 @@ type SQLiteTransactionInternals = TerrenceSQLiteTransaction & {
   readonly session: SQLiteBunSession<Record<string, unknown>, never>;
   readonly nestedIndex: number;
 };
-type NestedSQLiteTransactionCallback<T> = (tx: TerrenceSQLiteTransaction) => T;
+type NestedSQLiteTransactionCallback<T> = (
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- drizzle transaction class carries mutable/private state; DeepReadonly drops its private members
+  tx: TerrenceSQLiteTransaction
+) => T;
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   if ((typeof value !== "object" && typeof value !== "function") || value === null) return false;
   return typeof Reflect.get(value, "then") === "function";
 }
 
-function patchNestedSqliteTransaction(tx: TerrenceSQLiteTransaction): TerrenceSQLiteTransaction {
+function patchNestedSqliteTransaction(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- reassigns tx.transaction by design (see below)
+  tx: TerrenceSQLiteTransaction,
+): TerrenceSQLiteTransaction {
   const transaction = tx as SQLiteTransactionInternals;
   const transactionWithPatchedMethod = tx as unknown as {
     transaction: <T>(callback: NestedSQLiteTransactionCallback<T>) => T;
@@ -103,7 +120,7 @@ function gateSqlitePreparedQuery<T extends object>(query: T): T {
     get(target: T, property: string | symbol, receiver: unknown): unknown {
       const value = Reflect.get(target, property, receiver);
       if (typeof value !== "function" || !gatedSqliteQueryMethods.has(String(property))) return value;
-      return (...args: unknown[]): unknown => {
+      return (...args: readonly unknown[]): unknown => {
         const execute = (): unknown => {
           try {
             return Reflect.apply(value, target, args);
@@ -144,7 +161,7 @@ if (!isPostgres) {
   };
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types, @typescript-eslint/explicit-function-return-type -- mirrors bun:sqlite's generic prepare() signature that an explicit return type cannot widen.
   client.prepare = ((sqlText: string, ...params: unknown[]) =>
-    prepareSqliteStatement!(sqlText, ...params)) as typeof client.prepare;
+    requirePrepareSqliteStatement()(sqlText, ...params)) as typeof client.prepare;
 }
 
 // ---------------------------------------------------------------------------
@@ -206,8 +223,8 @@ export function wrapPgQuery<T>(queryObj: T, queryText: string): T {
 
     for (const method of PG_QUERY_DERIVERS) {
       if (typeof query[method] !== 'function') continue;
-      const original = query[method].bind(target) as (...args: unknown[]) => unknown;
-      query[method] = (...args: unknown[]): unknown => {
+      const original = query[method].bind(target) as (...args: readonly unknown[]) => unknown;
+      query[method] = (...args: readonly unknown[]): unknown => {
         const derived = original(...args);
         attach(derived);
         return derived;
@@ -219,6 +236,11 @@ export function wrapPgQuery<T>(queryObj: T, queryText: string): T {
 }
 
 let pgClient: BunSQL | null = null;
+
+function requirePgClient(): BunSQL {
+  if (pgClient === null) throw new Error("Postgres client is not initialized");
+  return pgClient;
+}
 if (isPostgres) {
   const statementTimeoutMs = integerSetting("TERRENCE_DB_STATEMENT_TIMEOUT_MS");
   const lockTimeoutMs = integerSetting("TERRENCE_DB_LOCK_TIMEOUT_MS");
@@ -243,7 +265,7 @@ if (isPostgres) {
   {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
     // eslint-disable-next-line @typescript-eslint/promise-function-async -- mirrors Bun.SQL's non-async unsafe() signature; the cast below is the type boundary.
-    pgClient.unsafe = ((queryText: string, values?: unknown[] | Record<string, unknown>): ReturnType<BunSQL['unsafe']> => {
+    pgClient.unsafe = ((queryText: string, values?: readonly unknown[] | Readonly<Record<string, unknown>>): ReturnType<BunSQL['unsafe']> => {
       const queryObj = originalUnsafe(queryText, values as never);
       return wrapPgQuery(queryObj, queryText);
     }) as typeof pgClient.unsafe;
@@ -251,7 +273,7 @@ if (isPostgres) {
   if (envFlag("TERRENCE_QUERY_COUNT")) {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
     // eslint-disable-next-line @typescript-eslint/promise-function-async -- mirrors Bun.SQL's non-async unsafe() signature; the cast below is the type boundary.
-    pgClient.unsafe = ((queryText: string, values?: unknown[] | Record<string, unknown>): ReturnType<BunSQL['unsafe']> => {
+    pgClient.unsafe = ((queryText: string, values?: readonly unknown[] | Readonly<Record<string, unknown>>): ReturnType<BunSQL['unsafe']> => {
       queryCount += 1;
       if (queryLogEnabled) queryLog.push(queryText);
       return originalUnsafe(queryText, values as never);
@@ -299,7 +321,7 @@ if (pgDb !== null) {
   // Drizzle exposes transactions on the database object rather than through
   // postgres.js's query hook, so instrument the boundary explicitly.
   const instrumented = pgDb as unknown as {
-    transaction: (...args: never[]) => Promise<unknown>;
+    transaction: (...args: readonly never[]) => Promise<unknown>;
   };
   const originalTransaction = instrumented.transaction.bind(instrumented);
   instrumented.transaction = (async (callback: unknown, config?: unknown): Promise<unknown> => {
@@ -320,7 +342,7 @@ export const db = (isPostgres ? pgDb : sqliteDb) as unknown as AppDb;
 // migrations, so none of it applies there.
 // ---------------------------------------------------------------------------
 if (!isPostgres) {
-  const client = sqliteClient!;
+  const client = requireSqliteClient();
 
   // bun:sqlite's native transaction() rolls back only when its callback throws
   // synchronously; drizzle-orm/bun-sqlite delegates transaction() straight to it, so
@@ -333,13 +355,13 @@ if (!isPostgres) {
   const mainSession = sharedDatabase.session;
   const mainInternals = mainSession as unknown as { dialect: SQLiteSyncDialect; schema: unknown };
   const originalPrepareQuery = mainSession.prepareQuery.bind(mainSession);
-  (mainSession as unknown as { prepareQuery: (...args: never[]) => unknown }).prepareQuery = (...args: never[]): unknown =>
+  (mainSession as unknown as { prepareQuery: (...args: readonly never[]) => unknown }).prepareQuery = (...args: readonly never[]): unknown =>
     gateSqlitePreparedQuery(Reflect.apply(originalPrepareQuery, mainSession, args) as object);
   const rawClient = new Proxy(client, {
-    get(target: Database, property: string | symbol, receiver: unknown): unknown {
-      const value = Reflect.get(target, property, receiver);
+    get(target: Readonly<Database>, property: string | symbol, receiver: unknown): unknown {
+      const value: unknown = Reflect.get(target, property, receiver);
       if (property === "prepare" && typeof value === "function") {
-        return (...args: unknown[]): unknown => prepareSqliteStatement!(...(args as [string, ...unknown[]]));
+        return (...args: readonly unknown[]): unknown => requirePrepareSqliteStatement()(...(args as [string, ...unknown[]]));
       }
       return typeof value === "function" ? value.bind(target) : value;
     },
@@ -356,7 +378,7 @@ if (!isPostgres) {
     }
     const run = async (): Promise<unknown> => {
       let finishTransaction!: () => void;
-      const completion = new Promise<void>((resolve) => {
+      const completion = new Promise<void>((resolve): void => {
         finishTransaction = resolve;
       });
       sqliteTransactionCompletion = completion;
@@ -377,7 +399,7 @@ if (!isPostgres) {
       try {
         client.run(`BEGIN${behavior}`);
         began = true;
-        const result = await sqliteTransactionContext.run(Symbol("sqlite-transaction"), async () => fn(tx));
+        const result = await sqliteTransactionContext.run(Symbol("sqlite-transaction"), async (): Promise<unknown> => fn(tx));
         client.run('COMMIT');
         return result;
       } catch (err) {
@@ -407,6 +429,7 @@ if (!isPostgres) {
     try {
       const bundledFolder = join(import.meta.dir, '../../drizzle');
       const entries = readBundledMigrationJournal(bundledFolder);
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
       const appliedRows = (client.query("SELECT hash, created_at FROM __drizzle_migrations").all() as { hash: string; created_at: number }[]).map(
         (row): { readonly hash: string; readonly createdAt: number } => ({ hash: row.hash, createdAt: row.created_at }),
       );
@@ -417,6 +440,7 @@ if (!isPostgres) {
         (client.query("SELECT name FROM sqlite_master WHERE type = 'index'").all() as { name: string }[]).map((row): string => row.name),
       );
       const columns = new Set(
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
         (client.query("SELECT m.name AS tbl_name, p.name AS name FROM sqlite_master AS m, pragma_table_info(m.name) AS p WHERE m.type = 'table'").all() as { tbl_name: string; name: string }[]).map(
           (row): string => `${row.tbl_name}.${row.name}`,
         ),
@@ -586,7 +610,7 @@ if (!isPostgres) {
  */
 export function checkpointWal(): void {
   if (isPostgres) return;
-  const client = sqliteClient!;
+  const client = requireSqliteClient();
   // wal_checkpoint(TRUNCATE) reports { busy, log, checkpointed }; a nonzero
   // busy count means frames could not be flushed (a concurrent writer or a
   // read transaction still holding the WAL), so the main DB file is not yet
@@ -608,12 +632,13 @@ async function postgresDatabaseMetrics(): Promise<Readonly<{
   cacheSizeBytes: number | null;
   freelistBytes: number | null;
 }>> {
-  const client = pgClient!;
+  const client = pgClient;
+  if (client === null) throw new Error("PostgreSQL client is not initialized");
   const rows = await client.unsafe(
     "SELECT pg_database_size(current_database()) AS size, current_setting('block_size')::int AS \"blockSize\"",
   ) as unknown as readonly { size: number | bigint; blockSize: number }[];
   const sizeBytes = Number(rows[0]?.size ?? 0);
-  const pageSize = Number(rows[0]?.blockSize ?? 8192);
+  const pageSize = rows[0]?.blockSize ?? 8192;
   // The URL may embed credentials; surface only host + database name.
   let path = "postgres";
   try {
@@ -675,23 +700,28 @@ export async function databaseMetrics(): Promise<Readonly<{
   freelistBytes: number | null;
 }>> {
   if (isPostgres) return postgresDatabaseMetrics();
-  const client = sqliteClient!;
+  const client = requireSqliteClient();
   const dbPath = databaseUrl === ':memory:' ? ':memory:' : databaseUrl.replace(/^file:/, '');
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
   const pageSize = (client.query("PRAGMA page_size").get() as { page_size: number } | null)?.page_size ?? 4096;
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
   const pageCount = (client.query("PRAGMA page_count").get() as { page_count: number } | null)?.page_count ?? 0;
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
   const journalMode = (client.query("PRAGMA journal_mode").get() as { journal_mode: string } | null)?.journal_mode ?? "unknown";
   const { sizeBytes, walSizeBytes } = sqliteFileSizes(dbPath);
   return { sizeBytes, walSizeBytes, journalMode, pageSize, pageCount, path: dbPath, cacheSizeBytes: sqliteCacheSizeBytes(client, pageSize), freelistBytes: sqliteFreelistBytes(client, pageSize) };
 }
 
 /** SQLite page-cache budget in bytes: PRAGMA cache_size is pages when positive, KiB when negative. */
-function sqliteCacheSizeBytes(client: Database, pageSize: number): number {
+function sqliteCacheSizeBytes(client: Readonly<Database>, pageSize: number): number {
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
   const raw = (client.query("PRAGMA cache_size").get() as { cache_size: number } | null)?.cache_size ?? 0;
   return raw > 0 ? raw * pageSize : -raw * 1024;
 }
 
 /** SQLite freelist footprint in bytes (free pages not yet returned to the OS). */
-function sqliteFreelistBytes(client: Database, pageSize: number): number {
+function sqliteFreelistBytes(client: Readonly<Database>, pageSize: number): number {
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
   const freelist = (client.query("PRAGMA freelist_count").get() as { freelist_count: number } | null)?.freelist_count ?? 0;
   return freelist * pageSize;
 }
@@ -701,7 +731,7 @@ function sqliteFreelistBytes(client: Database, pageSize: number): number {
  * sqlite returns rows synchronously; postgres returns a promise — `await`
  * handles both.
  */
-export function rawQueryAll<T>(fragment: SQL): Promise<T[]> | T[] {
+export function rawQueryAll<T>(fragment: DeepReadonly<SQL>): Promise<T[]> | T[] {
   if (isPostgres) {
     const dbInstance = pgDb;
     if (dbInstance === null) throw new Error("postgres backend not initialized");
@@ -770,7 +800,7 @@ export async function applyPgMigrations(): Promise<void> {
   pgMigrationsPromise = (async (): Promise<void> => {
     const instance = pgDb;
     if (instance === null) throw new Error("postgres backend not initialized");
-    const pg = pgClient!;
+    const pg = requirePgClient();
     const durableJobsTable = await pg.unsafe<{ exists: boolean }[]>("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'durable_jobs') AS exists");
     if (durableJobsTable[0]?.exists === true) {
       await pg.unsafe(`

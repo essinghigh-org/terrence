@@ -7,6 +7,7 @@ import { getSettings, invalidateSettingsCache } from "../../lib/settings";
 import { ldapSettings } from "../../lib/sso";
 import { invalidatePingSsoCache } from "../health";
 import type { ParamCtx } from "./types";
+import { toComparableString } from "../../lib/utils";
 import { SAML_SETTINGS_ID, withAuthSettingsLock, currentSamlSettings, authLockoutResponse, samlSettingsResource, samlInput, type SamlSettings } from "./helpers";
 
 function checkSamlEnvelopeType(
@@ -15,7 +16,7 @@ function checkSamlEnvelopeType(
 ): { ok: true } | { error: unknown } {
   if (data["type"] !== undefined && data["type"] !== "" && data["type"] !== "saml-settings" && data["type"] !== "admin-saml-settings") {
     (set as { status: number }).status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: `data.type must be saml-settings (got ${String(data["type"])})` }] } };
+    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: `data.type must be saml-settings (got ${toComparableString(data["type"])})` }] } };
   }
   return { ok: true };
 }

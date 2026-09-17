@@ -6,7 +6,7 @@ import {
   slowQueriesSnapshot,
   withDbQueryBudget,
   DbQueryBudgetCancelledError,
-  _resetPoolMetrics,
+  resetPoolMetrics,
   type SlowQuery,
 } from "../../src/lib/db-pool-metrics";
 
@@ -19,11 +19,11 @@ function thenable<T>(promise: Promise<T>): Pick<Promise<T>, "then" | "catch"> {
 
 describe("Bun.SQL Drizzle wrapper & metrics instrumentation", () => {
   beforeEach((): void => {
-    _resetPoolMetrics();
+    resetPoolMetrics();
   });
 
   afterEach((): void => {
-    _resetPoolMetrics();
+    resetPoolMetrics();
   });
 
   it("handles raw unsafe query success and returns pool pending to baseline", async () => {
@@ -64,7 +64,7 @@ describe("Bun.SQL Drizzle wrapper & metrics instrumentation", () => {
 
   it("tracks execute/raw/simple/values derived queries through one lifecycle", async () => {
     for (const method of ["execute", "raw", "simple", "values"] as const) {
-      _resetPoolMetrics();
+      resetPoolMetrics();
       const baseline = poolMetrics("postgres", 10);
       const rows = [["row1"], ["row2"]];
       const derived = thenable(Promise.resolve(rows));

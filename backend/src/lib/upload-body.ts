@@ -10,6 +10,7 @@ function directUploadBytes(body: unknown): Uint8Array | null {
 }
 
 async function writeUploadStream(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- the stream reader is consumed (read/cancel) by design
   reader: ReadableStreamDefaultReader<Uint8Array>,
   path: string,
   limit: number,
@@ -44,7 +45,7 @@ async function writeUploadStream(
       failure ??= error;
     }
   }
-  if (failure !== undefined) throw failure;
+  if (failure !== undefined) throw failure instanceof Error ? failure : new Error("upload stream failed", { cause: failure });
   if (total === 0) throw new Error("empty");
   return total;
 }

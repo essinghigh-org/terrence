@@ -2,13 +2,14 @@ import { describe, expect, it, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type * as costEstimateModule from "../../src/lib/cost-estimate";
 
 // costEstimateDirectory is resolved lazily from STORAGE_DIR, so we can point
 // it at a throwaway temp dir for the duration of this suite.
 const previousStorageDir = process.env["STORAGE_DIR"];
 const storage = mkdtempSync(join(tmpdir(), "cost-artifact-"));
 
-let cost: typeof import("../../src/lib/cost-estimate");
+let cost: typeof costEstimateModule;
 let costDir: string;
 
 beforeAll(async (): Promise<void> => {
@@ -54,13 +55,13 @@ describe("readCostEstimateArtifact", (): void => {
   it("throws when the artifact contains malformed JSON", async (): Promise<void> => {
     if (costDir === undefined) throw new Error("setup failed");
     writeFileSync(join(costDir, "run-bad.json"), "{ not valid json");
-    await expect(cost.readCostEstimateArtifact("run-bad")).rejects.toThrow();
+    expect(cost.readCostEstimateArtifact("run-bad")).rejects.toThrow();
   });
 
   it("throws when the artifact contains a non-object value", async (): Promise<void> => {
     if (costDir === undefined) throw new Error("setup failed");
     writeFileSync(join(costDir, "run-arr.json"), JSON.stringify([1, 2]));
-    await expect(cost.readCostEstimateArtifact("run-arr")).rejects.toThrow(
+    expect(cost.readCostEstimateArtifact("run-arr")).rejects.toThrow(
       "Stored cost estimate must be an object.",
     );
   });

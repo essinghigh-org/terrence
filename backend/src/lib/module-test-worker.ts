@@ -17,6 +17,7 @@ import { revokeWorkloadIdentityTokens, type CredentialProvider } from "./workloa
 import { enqueueDurableJob, type DurableJobContext } from "./durable-jobs";
 import { log } from "./log";
 import { jitteredPollDelay } from "./poll-jitter";
+import type { DeepReadonly } from "./types";
 
 type Job = Readonly<typeof durableJobs.$inferSelect>;
 type ModuleTestRun = Readonly<typeof moduleTestRuns.$inferSelect>;
@@ -45,12 +46,12 @@ type SupervisorInput = Readonly<{
   oidcValues: Record<string, unknown>;
 }>;
 
-function runIdFromJob(job: Job): string | undefined {
+function runIdFromJob(job: DeepReadonly<Job>): string | undefined {
   const value = job.payload["runId"];
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
-function testConfiguration(run: ModuleTestRun): ModuleTestConfiguration {
+function testConfiguration(run: DeepReadonly<ModuleTestRun>): ModuleTestConfiguration {
   return {
     verbose: run.verbose,
     filters: run.filters,
@@ -108,7 +109,7 @@ async function resultAt(path: string): Promise<ModuleTestResult | undefined> {
   }
 }
 
-async function startSupervisor(input: SupervisorInput): Promise<number> {
+async function startSupervisor(input: DeepReadonly<SupervisorInput>): Promise<number> {
   await mkdir(MODULE_TEST_EXECUTION_DIR, { recursive: true, mode: 0o700 });
   const executionDirectory = join(MODULE_TEST_EXECUTION_DIR, input.runId);
   await mkdir(executionDirectory, { recursive: true, mode: 0o700 });
@@ -152,8 +153,8 @@ async function resultAfterSupervisorExit(resultPath: string): Promise<ModuleTest
 }
 
 async function waitForSupervisor(
-  run: ModuleTestRun,
-  context: DurableJobContext,
+  run: DeepReadonly<ModuleTestRun>,
+  context: DeepReadonly<DurableJobContext>,
 ): Promise<ModuleTestResult | undefined> {
   const pid = run.executionPid;
   const resultPath = run.executionResultPath;
@@ -183,7 +184,7 @@ async function waitForSupervisor(
 }
 
 function oidcInput(
-  configuration: Readonly<typeof moduleTestConfigurations.$inferSelect> | undefined,
+  configuration: DeepReadonly<typeof moduleTestConfigurations.$inferSelect> | undefined,
 ): Readonly<{ provider: CredentialProvider | null; values: Record<string, unknown> }> {
   if (configuration?.oidcEnabled !== true || configuration.oidcProvider === null || !["aws", "gcp", "azure", "vault"].includes(configuration.oidcProvider)) {
     return { provider: null, values: {} };
@@ -203,7 +204,7 @@ type ModuleTestInputs = Readonly<{
   archivePath: string;
 }>;
 
-async function markLostModuleTestCheckpoint(run: ModuleTestRun): Promise<boolean> {
+async function markLostModuleTestCheckpoint(run: DeepReadonly<ModuleTestRun>): Promise<boolean> {
   if (run.status !== "running" || run.executionPid !== null || run.executionResultPath !== null) return false;
   await db.update(moduleTestRuns).set({
     status: "errored",
@@ -213,7 +214,7 @@ async function markLostModuleTestCheckpoint(run: ModuleTestRun): Promise<boolean
   return true;
 }
 
-async function markStalledModuleTestSupervisor(run: ModuleTestRun): Promise<boolean> {
+async function markStalledModuleTestSupervisor(run: DeepReadonly<ModuleTestRun>): Promise<boolean> {
   if (run.status !== "running" || run.executionPid !== null || run.executionStage !== "starting"
     || (run.executionStartedAt ?? 0) >= Date.now() - SUPERVISOR_START_TIMEOUT_MS) return false;
   const marker = run.executionDirectory === null ? undefined : await readSupervisorMarker(run.executionDirectory);
@@ -222,13 +223,13 @@ async function markStalledModuleTestSupervisor(run: ModuleTestRun): Promise<bool
   return true;
 }
 
-async function requeueStartingModuleTest(run: ModuleTestRun): Promise<boolean> {
+async function requeueStartingModuleTest(run: DeepReadonly<ModuleTestRun>): Promise<boolean> {
   if (run.status !== "running" || run.executionPid !== null || run.executionStage !== "starting") return false;
   await enqueueDurableJob("module-test", { runId: run.id }, { dedupeKey: run.id, runAfter: Date.now() + SUPERVISOR_START_TIMEOUT_MS, rescheduleRunning: true });
   return true;
 }
 
-async function loadModuleTestInputs(run: ModuleTestRun, context: DurableJobContext): Promise<ModuleTestInputs> {
+async function loadModuleTestInputs(run: DeepReadonly<ModuleTestRun>, context: DeepReadonly<DurableJobContext>): Promise<ModuleTestInputs> {
   try {
     const [module, version, oidcConfiguration] = await Promise.all([
       db.query.registryModules.findFirst({ where: eq(registryModules.id, run.moduleId) }),
@@ -260,12 +261,12 @@ async function stopCanceledModuleTestSupervisor(runId: string, executionDirector
 }
 
 async function prepareModuleTestSupervisor(
-  run: ModuleTestRun,
-  input: SupervisorInput,
+  run: DeepReadonly<ModuleTestRun>,
+  input: DeepReadonly<SupervisorInput>,
   executionDirectory: string,
   resultPath: string,
-  context: DurableJobContext,
-): Promise<ModuleTestRun | undefined> {
+  context: DeepReadonly<DurableJobContext>,
+): Promise<DeepReadonly<ModuleTestRun> | undefined> {
   if (run.executionPid !== null) return run;
   if (run.executionStage === "starting") return undefined;
   if (!await context.heartbeat()) return undefined;
@@ -319,7 +320,7 @@ async function persistFinishedModuleTestRun(runId: string, executionPid: number,
   }).where(and(eq(moduleTestRuns.id, runId), eq(moduleTestRuns.executionPid, executionPid), inArray(moduleTestRuns.status, ["running", "queued"])));
 }
 
-async function markModuleTestRunFailed(runId: string, context: DurableJobContext, error: unknown): Promise<void> {
+async function markModuleTestRunFailed(runId: string, context: DeepReadonly<DurableJobContext>, error: unknown): Promise<void> {
   const latest = await db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, runId) });
   if (latest?.status !== "canceled" && !(await context.canceled())) {
     await db.update(moduleTestRuns).set({
@@ -332,7 +333,7 @@ async function markModuleTestRunFailed(runId: string, context: DurableJobContext
   }
 }
 
-async function cleanupModuleTestTokens(runId: string, context: DurableJobContext): Promise<void> {
+async function cleanupModuleTestTokens(runId: string, context: DeepReadonly<DurableJobContext>): Promise<void> {
   const latest = await db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, runId) });
   const ownershipLost = latest?.status === "running" && await context.canceled();
   if (!ownershipLost) {
@@ -343,9 +344,9 @@ async function cleanupModuleTestTokens(runId: string, context: DurableJobContext
 }
 
 async function finishModuleTestRun(
-  run: ModuleTestRun,
+  run: DeepReadonly<ModuleTestRun>,
   resultPath: string,
-  context: DurableJobContext,
+  context: DeepReadonly<DurableJobContext>,
 ): Promise<void> {
   try {
     const result = await waitForSupervisor(run, context);
@@ -366,7 +367,7 @@ async function finishModuleTestRun(
   }
 }
 
-export async function runModuleTestJob(job: Job, context: DurableJobContext): Promise<void> {
+export async function runModuleTestJob(job: DeepReadonly<Job>, context: DeepReadonly<DurableJobContext>): Promise<void> {
   const runId = runIdFromJob(job);
   if (runId === undefined) throw new Error("module-test job is missing runId");
   const initial = await db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, runId) });
@@ -384,7 +385,7 @@ export async function runModuleTestJob(job: Job, context: DurableJobContext): Pr
   const executionDirectory = join(MODULE_TEST_EXECUTION_DIR, initial.id);
   const resultPath = initial.executionResultPath ?? join(executionDirectory, "result.json");
   const oidc = oidcInput(inputs.oidcConfiguration);
-  const input: SupervisorInput = {
+  const input: DeepReadonly<SupervisorInput> = {
     runId: initial.id,
     versionId: inputs.version.id,
     archivePath: inputs.archivePath,

@@ -47,7 +47,7 @@ export function compatibilityPage(input: readonly unknown[]): string {
       throw new Error("Invalid CLI lifecycle evidence");
     }
     try {
-      assertLifecycleEvidence(providerLifecycleContract, report.lifecycle_contract as LifecycleEvidence);
+      assertLifecycleEvidence(providerLifecycleContract, report.lifecycle_contract);
     } catch (error) {
       throw new Error(`Invalid provider lifecycle contract evidence: ${error instanceof Error ? error.message : String(error)}`);
     }

@@ -8,7 +8,7 @@ describe("inArray chunking #344", (): void => {
     const testDir = await mkdtemp(join(tmpdir(), "terrence-inarray-"));
     try {
       const dbPath = join(testDir, "terrence.db");
-      const result = await Bun.spawn({
+      const result = Bun.spawn({
         cmd: ["bun", "-e", `
           const { mkdtemp } = await import("node:fs/promises");
           const { db } = await import("./src/db/index.ts");

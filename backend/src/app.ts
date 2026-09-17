@@ -627,7 +627,7 @@ function recordAfterHandleMetrics(
   const method = meta.method;
   const path = meta.path;
   const status = unacceptable ? 406 : set.status ?? (response instanceof Response ? response.status : 200);
-  const numericStatus = typeof status === "number" ? status : Number.parseInt(String(status), 10) || 200;
+  const numericStatus = typeof status === "number" ? status : Number.parseInt(status, 10) || 200;
   recordRequestLatency(path, duration);
   requestFinished(numericStatus);
   // Idempotent bookkeeping: the WeakMap entry is consumed here so an
@@ -661,7 +661,7 @@ function applyTransportSecurityHeaders(
 ): void {
   try {
     if (shouldSendHsts(request)) {
-      if (headers["Strict-Transport-Security"] === undefined) headers["Strict-Transport-Security"] = HSTS_VALUE;
+      headers["Strict-Transport-Security"] ??= HSTS_VALUE;
     }
   } catch { /* HSTS is best-effort */ }
   if (headers["Content-Type"] === undefined) {
@@ -698,9 +698,9 @@ function applyCacheVaryHeaders(
 
 function applyDeprecationHeaders(headers: Record<string, string | number>, pathname: string): void {
   if (pathname.startsWith("/api/v1/support-bundle-requests")) {
-    if (headers["Deprecation"] === undefined) headers["Deprecation"] = "true";
-    if (headers["Sunset"] === undefined) headers["Sunset"] = "Sat, 31 Dec 2028 23:59:59 GMT";
-    if (headers["Link"] === undefined) headers["Link"] = "</api/v1/support/bundle-requests>; rel=\"successor-version\"";
+    headers["Deprecation"] ??= "true";
+    headers["Sunset"] ??= "Sat, 31 Dec 2028 23:59:59 GMT";
+    headers["Link"] ??= "</api/v1/support/bundle-requests>; rel=\"successor-version\"";
   }
 }
 
@@ -801,7 +801,7 @@ function applyDocumentEtag(
   if (!isJsonDocument || (pathname !== "/api" && !pathname.startsWith("/api/"))) return null;
   try {
     const etag = strongDocumentEtag(response);
-    if (headers["ETag"] === undefined) headers["ETag"] = etag;
+    headers["ETag"] ??= etag;
     return handleIfNoneMatch(request, headers, etag);
   } catch (error: unknown) {
     // ETag generation must never silently mask a failure — log at debug so operators can observe.
@@ -1086,7 +1086,7 @@ export const app = new Elysia()
     headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type,Idempotency-Key,If-Match,If-None-Match,MCP-Protocol-Version,Mcp-Method,Mcp-Name";
     headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,Retry-After,Idempotency-Replayed,X-Request-Id,ETag,Deprecation,Sunset";
   })
-  .onAfterHandle(({ request, response, set }: AfterHandleContext): Response | void => {
+  .onAfterHandle(({ request, response, set }: AfterHandleContext): Response | undefined => {
     const doc = classifyResponseDocument(response);
     const pathname = new URL(request.url).pathname;
     const declaredContentType = resolveResponseContentType(set, doc.responseHeaders);
@@ -1316,15 +1316,13 @@ export const systemApiApp = new Elysia({ name: "system-api-listener" })
   // so responses must carry the same hardening and error shapes.
   .onAfterHandle(({ set }): void => {
     applySecurityHeaders(set.headers);
-    if (set.headers["Cache-Control"] === undefined) {
-      set.headers["Cache-Control"] = "no-store";
-    }
+    set.headers["Cache-Control"] ??= "no-store";
   })
   .onError(({ code, error, set, request }) => handleAppError({
     code: String(code),
     error,
     set,
-    request: { url: String(request.url) },
+    request: { url: request.url },
   }));
 
 // Start the background worker queue. Deferred out of module evaluation:

@@ -47,7 +47,7 @@ const CHUNK_BYTES = 256 * 1024;
 const MAX_ROW_BYTES = 1024 * 1024;
 const MAX_CHUNK_JSON_BYTES = 8 * 1024 * 1024;
 type ArchiveRow = Readonly<{ id: string; phase: string; length: number }>;
-type ArchiveChunk = Readonly<{ offset: number; length: number; rows: ArchiveRow[] }>;
+type ArchiveChunk = Readonly<{ offset: number; length: number; rows: readonly ArchiveRow[] }>;
 type ArchiveIndex = Readonly<{ version: 2; totalCount: number; truncated: boolean; chunks: ArchiveChunk[] }>;
 type ArchiveSelection = (rows: readonly ArchiveRow[]) => readonly string[];
 type ArchiveRead = RunLogArchiveEnvelope & Readonly<{ sizes: readonly ArchiveRow[] }>;
@@ -77,14 +77,14 @@ async function snapshotLogSizes(runId: string): Promise<{ totalCount: number; si
   return { totalCount, sizes };
 }
 
-function verifyArchivedRows(allRows: { id: string; phase: string; outputText: string }[], sizes: readonly { id: string; phase: string; length: number }[]): void {
+function verifyArchivedRows(allRows: readonly Readonly<{ id: string; phase: string; outputText: string }>[], sizes: readonly ArchiveRow[]): void {
   if (allRows.length !== sizes.length || allRows.some((row, i): boolean => row.id !== sizes[i]?.id
     || row.phase !== sizes[i]?.phase || Buffer.byteLength(row.outputText) !== sizes[i]?.length)) {
     throw new Error("Run logs changed during archival; live logs retained");
   }
 }
 
-function nextChunkEnd(sizes: readonly { length: number }[], start: number): number {
+function nextChunkEnd(sizes: readonly Readonly<{ length: number }>[], start: number): number {
   let end = start;
   let chunkBytes = 0;
   while (end < sizes.length && end - start < CHUNK_ROWS) {
@@ -97,9 +97,9 @@ function nextChunkEnd(sizes: readonly { length: number }[], start: number): numb
 }
 
 async function writeArchiveChunks(
-  file: Awaited<ReturnType<typeof open>>,
-  sizes: { id: string; phase: string; length: number }[],
-  allRows: { id: string; phase: string; outputText: string }[],
+  file: Readonly<Pick<Awaited<ReturnType<typeof open>>, "read" | "writeFile">>,
+  sizes: readonly ArchiveRow[],
+  allRows: readonly Readonly<{ id: string; phase: string; outputText: string }>[],
   totalCount: number,
 ): Promise<void> {
   const chunks: ArchiveChunk[] = [];
@@ -160,12 +160,12 @@ export async function archiveRunLogs(runId: string): Promise<boolean> {
   });
 }
 
-function indexChunkTotals(chunk: ArchiveChunk, expectedOffset: number, ids: Set<string>): { offset: number; rowCount: number; bytes: number } {
+function indexChunkTotals(chunk: ArchiveChunk, expectedOffset: number, ids: Readonly<Pick<Set<string>, "has" | "add">>): { offset: number; rowCount: number; bytes: number } {
   if (chunk.offset !== expectedOffset || !Number.isSafeInteger(chunk.length) || chunk.length <= 0
     || !Array.isArray(chunk.rows) || chunk.rows.length === 0 || chunk.rows.length > CHUNK_ROWS) throw new Error("Invalid run log archive format");
   let rowCount = 0;
   let bytes = 0;
-  for (const row of chunk.rows) {
+  for (const row of chunk.rows as readonly ArchiveRow[]) {
     if (typeof row.id !== "string" || ids.has(row.id) || typeof row.phase !== "string"
       || !Number.isSafeInteger(row.length) || row.length < 0 || row.length > MAX_ROW_BYTES) throw new Error("Invalid run log archive format");
     ids.add(row.id);
@@ -195,7 +195,7 @@ function parseArchiveIndex(value: unknown, dataLength: number): ArchiveIndex {
   return index;
 }
 
-async function readFileRange(file: Awaited<ReturnType<typeof open>>, offset: number, length: number): Promise<Buffer> {
+async function readFileRange(file: Readonly<Pick<Awaited<ReturnType<typeof open>>, "read" | "writeFile">>, offset: number, length: number): Promise<Buffer> {
   const bytes = Buffer.alloc(length);
   let consumed = 0;
   while (consumed < length) {
@@ -206,7 +206,7 @@ async function readFileRange(file: Awaited<ReturnType<typeof open>>, offset: num
   return bytes;
 }
 
-function decodeChunkRows(decoded: unknown, chunk: ArchiveChunk, runId: string, selected: ReadonlySet<string>): StoredRunLog[] {
+function decodeChunkRows(decoded: unknown, chunk: ArchiveChunk, runId: string, selected: Readonly<Pick<ReadonlySet<string>, "has">>): StoredRunLog[] {
   if (!Array.isArray(decoded) || decoded.length !== chunk.rows.length) throw new Error("Invalid run log archive format");
   const result: StoredRunLog[] = [];
   for (let i = 0; i < decoded.length; i++) {
@@ -220,7 +220,7 @@ function decodeChunkRows(decoded: unknown, chunk: ArchiveChunk, runId: string, s
 }
 
 async function readV2Archive(
-  file: Awaited<ReturnType<typeof open>>,
+  file: Readonly<Pick<Awaited<ReturnType<typeof open>>, "read" | "writeFile">>,
   size: number,
   runId: string,
   select: ArchiveSelection | undefined,
@@ -228,7 +228,7 @@ async function readV2Archive(
 ): Promise<ArchiveRead> {
   if (indexLength > MAX_INDEX_BYTES || indexLength > size - 8) throw new Error("Invalid run log archive format");
   const index = parseArchiveIndex(JSON.parse((await readFileRange(file, size - 8 - indexLength, indexLength)).toString()), size - 8 - indexLength);
-  const sizes = index.chunks.flatMap((chunk): ArchiveRow[] => chunk.rows);
+  const sizes = index.chunks.flatMap((chunk): readonly ArchiveRow[] => chunk.rows);
   const selected = new Set(select?.(sizes) ?? sizes.map((row): string => row.id));
   const result: StoredRunLog[] = [];
   for (const chunk of index.chunks) {
@@ -240,7 +240,7 @@ async function readV2Archive(
 }
 
 async function readLegacyArchive(
-  file: Awaited<ReturnType<typeof open>>,
+  file: Readonly<Pick<Awaited<ReturnType<typeof open>>, "read" | "writeFile">>,
   size: number,
   select: ArchiveSelection | undefined,
 ): Promise<ArchiveRead> {

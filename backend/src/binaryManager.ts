@@ -6,6 +6,7 @@ import { envFlag } from "./lib/env";
 import { log } from "./lib/log";
 import { sha256File } from "./lib/file-hash";
 import { isVersionCacheFresh, loadVersionCacheFile, saveVersionCacheFile } from "./lib/version-cache";
+import type { DeepReadonly } from "./lib/types";
 
 const STORAGE_DIR = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../storage"));
 // TERRENCE_BINARY_CACHE_DIR lets tests share one disk-backed binary cache
@@ -56,12 +57,12 @@ async function listZipEntries(zipPath: string): Promise<string[] | null> {
 // `revalidateInstalledBinaries` sweeps the whole cache at startup.
 // ---------------------------------------------------------------------------
 
-export type BinaryIntegrity = {
+export type BinaryIntegrity = Readonly<{
   tool: "tofu" | "terraform";
   version: string;
   /** SHA-256 hex digest of the installed executable file, not the archive. */
   binarySha256: string;
-}
+}>
 
 export function integrityFilePath(targetDir: string): string {
   return join(targetDir, ".integrity.json");
@@ -189,7 +190,7 @@ let rateLimitedUntil = 0;
 
 /** Apply GitHub's X-RateLimit-* headers to our own fetch discipline.
  * Throws when the limit is known to be exhausted. */
-function guardUpstreamRateLimit(response: Response, context: string): void {
+function guardUpstreamRateLimit(response: DeepReadonly<Response>, context: string): void {
   const remainingRaw = response.headers.get("x-ratelimit-remaining");
   const resetRaw = response.headers.get("x-ratelimit-reset");
   if (remainingRaw === null || resetRaw === null) return;
@@ -302,7 +303,7 @@ export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<
       // IP across parallel jobs and exhaust it. Authenticate when a token is
       // available (5000 req/hr).
       const githubToken = process.env["GITHUB_TOKEN"] ?? process.env["GH_TOKEN"] ?? "";
-      const authHeaders: Record<string, string> = githubToken !== ""
+      const authHeaders: Readonly<Record<string, string>> = githubToken !== ""
         ? { Authorization: `Bearer ${githubToken}` }
         : {};
       const res = await fetch("https://api.github.com/repos/opentofu/opentofu/releases/latest", {
@@ -384,7 +385,7 @@ function githubAuthHeaders(): Record<string, string> {
   return githubToken !== "" ? { Authorization: `Bearer ${githubToken}` } : {};
 }
 
-function tofuReleaseVersions(data: readonly Record<string, unknown>[]): string[] {
+function tofuReleaseVersions(data: readonly Readonly<Record<string, unknown>>[]): string[] {
   return data
     .map((r: Readonly<Record<string, unknown>>): string | undefined => {
       const tagName = r["tag_name"];
@@ -393,7 +394,7 @@ function tofuReleaseVersions(data: readonly Record<string, unknown>[]): string[]
     .filter((v: string | undefined): v is string => v !== undefined && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v));
 }
 
-async function fetchTofuVersions(authHeaders: Record<string, string>): Promise<string[]> {
+async function fetchTofuVersions(authHeaders: Readonly<Record<string, string>>): Promise<string[]> {
   // Paginate through all GitHub releases
   const versions: string[] = [];
   let page = 1;
@@ -814,7 +815,6 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
   // resolved version exactly. Falling back is therefore safe for pending runs
   // whose managed cache disappeared during a restart, including exact-version
   // runs; ALLOW_TOOL_FALLBACK remains reserved for alternate-tool fallback.
-  const allowSystemFallback = true;
 
 async function checkCachedBinary(tool: "tofu" | "terraform", version: string, targetDir: string, binaryPath: string): Promise<BinaryResolution | "stale" | "absent"> {
   if (!(await exists(binaryPath))) return "absent";
@@ -1013,12 +1013,10 @@ async function installBinary(tool: "tofu" | "terraform", version: string, target
     console.warn(`[terrence] Dynamic download failed for ${tool} v${version}: ${errMsg}`);
   }
 
-  if (allowSystemFallback) {
-    const fallback = await systemBinaryFallback(tool, version);
-    if (fallback !== null) {
-      log.info(`System-installed ${tool} v${fallback.version} satisfies constraint "${version}" at ${fallback.binaryPath}`);
-      return fallback;
-    }
+  const fallback = await systemBinaryFallback(tool, version);
+  if (fallback !== null) {
+    log.info(`System-installed ${tool} v${fallback.version} satisfies constraint "${version}" at ${fallback.binaryPath}`);
+    return fallback;
   }
 
   // Alternate-tool fallback ONLY if opt-in via environment flag

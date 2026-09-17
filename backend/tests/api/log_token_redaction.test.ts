@@ -49,7 +49,7 @@ afterAll(async () => {
 });
 
 test("request log redacts the run log capability token (#609)", async () => {
-  const logSpy = spyOn(console, "log").mockImplementation(() => {});
+  const logSpy = spyOn(console, "log").mockImplementation(() => undefined);
   try {
     const ok = await request(runLogURL({ id: runId, logToken }, "plan", { url: "http://terrence.test" })!);
     expect(ok.status).toBe(200);

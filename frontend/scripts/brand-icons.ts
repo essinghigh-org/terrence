@@ -21,6 +21,7 @@ type IconManifest = Readonly<{
   icons: Readonly<Record<string, Readonly<{ size: number; sha256: string }>>>;
 }>;
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- crypto.update requires a typed-array view; it does not modify the bytes
 function sha256(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -52,7 +53,7 @@ export function verifyBrandIcons(root = publicDir): void {
   for (const spec of iconSpecs) {
     const path = join(root, "icons", spec.name);
     const recorded = manifest.icons[spec.name];
-    if (recorded === undefined || recorded.size !== spec.size || pngSize(path) !== spec.size) {
+    if (recorded?.size !== spec.size || pngSize(path) !== spec.size) {
       throw new Error(`Invalid generated icon dimensions: ${path}`);
     }
     const actualHash = sha256(readFileSync(path));

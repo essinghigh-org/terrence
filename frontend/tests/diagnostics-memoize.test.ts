@@ -6,7 +6,7 @@ describe("diagnostics memoize #366", (): void => {
     const { join } = await import("node:path");
     const source = await readFile(join(import.meta.dir, "../src/views/RunDetail.tsx"), "utf8");
     // Should have 2 extractDiagnostics calls (one per log type), not 4
-    const matches = source.match(/extractDiagnostics\(/g) || [];
+    const matches = source.match(/extractDiagnostics\(/g) ?? [];
     expect(matches.length).toBe(2);
     expect(source).toContain("planDiagnostics");
     expect(source).toContain("applyDiagnostics");

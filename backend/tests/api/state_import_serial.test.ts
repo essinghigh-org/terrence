@@ -59,12 +59,12 @@ describe("state import accepts migrated serials (#569)", () => {
   });
 
   afterAll(async () => {
-    await db.delete(stateVersions).where(eq(stateVersions.workspaceId, wsId)).catch((): void => {});
-    await db.delete(workspaces).where(eq(workspaces.orgId, orgId)).catch((): void => {});
-    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => {});
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`)).catch((): void => {});
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => {});
-    await db.delete(users).where(eq(users.id, userId)).catch((): void => {});
+    await db.delete(stateVersions).where(eq(stateVersions.workspaceId, wsId)).catch((): void => undefined);
+    await db.delete(workspaces).where(eq(workspaces.orgId, orgId)).catch((): void => undefined);
+    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => undefined);
+    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`)).catch((): void => undefined);
+    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
+    await db.delete(users).where(eq(users.id, userId)).catch((): void => undefined);
   });
 
   it("accepts a migrated serial on an empty workspace and stores it", async () => {

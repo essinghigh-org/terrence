@@ -31,14 +31,22 @@ function isGroupQuantifier(pattern: string, index: number): boolean {
   return char === "*" || char === "+" || char === "?" || isBraceQuantifierStart(pattern, index);
 }
 
-function closeRegexGroup(pattern: string, index: number, openGroups: boolean[]): boolean {
+function closeRegexGroup(
+  pattern: string,
+  index: number,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- the group stack is popped and flagged while scanning by design
+  openGroups: boolean[],
+): boolean {
   const nested = openGroups.pop() ?? false;
   if (nested && isGroupQuantifier(pattern, index + 1)) return true;
   if (nested && openGroups.length > 0) openGroups[openGroups.length - 1] = true;
   return false;
 }
 
-function markRegexGroupQuantifier(openGroups: boolean[]): void {
+function markRegexGroupQuantifier(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- the group stack is flagged while scanning by design
+  openGroups: boolean[],
+): void {
   if (openGroups.length > 0) openGroups[openGroups.length - 1] = true;
 }
 

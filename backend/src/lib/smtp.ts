@@ -9,6 +9,7 @@
 // is selected for legacy port-465 settings, and plaintext is opt-in only.
 
 import { connect, type Socket } from "bun";
+import type { DeepReadonly } from "./types";
 
 export const SMTP_ENCRYPTION_MODES = ["starttls", "tls", "plain"] as const;
 export type SmtpEncryption = (typeof SMTP_ENCRYPTION_MODES)[number];
@@ -202,7 +203,7 @@ function smtpEncryption(settings: SmtpSettings): SmtpEncryption {
   return settings.encryption;
 }
 
-async function negotiateStartTls(session: Session, encryption: SmtpEncryption, step: SmtpStep): Promise<void> {
+async function negotiateStartTls(session: DeepReadonly<Session>, encryption: SmtpEncryption, step: SmtpStep): Promise<void> {
   if (encryption !== "starttls") return;
   const startTls = await step(session.send("STARTTLS"), "STARTTLS");
   if (startTls.code === 220) {
@@ -216,7 +217,7 @@ async function negotiateStartTls(session: Session, encryption: SmtpEncryption, s
   throw new SmtpError(`STARTTLS is required but unavailable: ${startTls.code} ${startTls.message}`, startTls.code);
 }
 
-async function authenticateSmtp(settings: SmtpSettings, authMode: string, session: Session, step: SmtpStep): Promise<void> {
+async function authenticateSmtp(settings: SmtpSettings, authMode: string, session: DeepReadonly<Session>, step: SmtpStep): Promise<void> {
   if (authMode === "none" || settings.username === null || settings.username === "") return;
   if (authMode === "plain") {
     const authLine = `AUTH PLAIN ${Buffer.from(`\0${settings.username}\0${settings.password ?? ""}`).toString("base64")}`;
@@ -271,7 +272,7 @@ function composeSmtpMessage(settings: SmtpSettings, message: EmailMessage): stri
   return stuffed.endsWith("\r\n") ? `${stuffed}.` : `${stuffed}\r\n.`;
 }
 
-async function sendSmtpMessage(settings: SmtpSettings, message: EmailMessage, session: Session, step: SmtpStep): Promise<void> {
+async function sendSmtpMessage(settings: SmtpSettings, message: EmailMessage, session: DeepReadonly<Session>, step: SmtpStep): Promise<void> {
   const mail = await step(session.send(`MAIL FROM:<${settings.senderEmail}>`), "MAIL FROM");
   if (mail.code !== 250) {
     throw new SmtpError(`MAIL FROM rejected: ${mail.code} ${mail.message}`, mail.code);

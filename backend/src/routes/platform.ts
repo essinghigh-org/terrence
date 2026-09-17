@@ -334,7 +334,7 @@ function driftIncidentPayload(
         ...artifactPayload(existing),
         "latest-assessment-id": assessment.id,
         "assessment-age-ms": Math.max(0, now - assessment.createdAt),
-        history: [...(Array.isArray(existing.payload["history"]) ? existing.payload["history"] : []), historyEntry].slice(-100),
+        history: [...(Array.isArray(existing.payload["history"]) ? existing.payload["history"] as unknown[] : []), historyEntry].slice(-100),
       };
 }
 
@@ -365,7 +365,7 @@ function incidentResolutionError(attrs: Record<string, unknown>, status: string)
 function parseIncidentSnooze(attrs: Record<string, unknown>, status: string): { snoozeUntil: number | null } | { error: { detail: string } } {
   const until = attrs["snooze-until"] ?? attrs["snoozeUntil"];
   const snoozeUntil = status === "snoozed" ? typeof until === "string" ? Date.parse(until) : typeof until === "number" ? until : Number.NaN : null;
-  if (status === "snoozed" && (!Number.isFinite(snoozeUntil) || (snoozeUntil!) <= Date.now() || (snoozeUntil!) > Date.now() + 30 * 86_400_000)) {
+  if (status === "snoozed" && (snoozeUntil === null || !Number.isFinite(snoozeUntil) || snoozeUntil <= Date.now() || snoozeUntil > Date.now() + 30 * 86_400_000)) {
     return { error: { detail: "snooze-until must be between now and 30 days from now" } };
   }
   return { snoozeUntil };
@@ -379,7 +379,7 @@ function incidentUpdatePayload(
 ): Record<string, unknown> {
   const classification = stringAttribute(attrs, "resolution-classification", "resolutionClassification");
   const comment = stringAttribute(attrs, "comment");
-  const comments = Array.isArray(artifact.payload["comments"]) ? [...artifact.payload["comments"]] : [];
+  const comments = Array.isArray(artifact.payload["comments"]) ? [...artifact.payload["comments"] as unknown[]] : [];
   if (comment !== null) comments.push({ body: comment, actorId: userId, createdAt: new Date().toISOString() });
   const assignee = stringAttribute(attrs, "assignee", "assigned-to");
   const evidence = stringAttribute(attrs, "evidence-assessment-id", "evidenceAssessmentId");

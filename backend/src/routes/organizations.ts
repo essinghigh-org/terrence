@@ -416,6 +416,7 @@ type ValidatedCreateOrgFields = CreateOrgFields & {
   defaultExecutionMode: string;
   sessionTimeout: number | null;
   sessionRemember: boolean | null;
+  collaboratorAuthPolicy: "password" | "sso";
 };
 function assertCreateName(fields: CreateOrgFields): void {
   if (fields.name === "") {
@@ -435,7 +436,7 @@ function requireOrganizationCreator(user: ParamCtx["user"]): Exclude<ParamCtx["u
 }
 
 function assertCreateSettings(fields: CreateOrgFields): asserts fields is ValidatedCreateOrgFields {
-  if (!["tofu", "terraform"].includes(fields.defaultIacBinary) || fields.defaultTerraformVersion === "" || fields.sessionTimeout === undefined || fields.sessionRemember === undefined || !["password", "sso"].includes(String(fields.collaboratorAuthPolicy)) || fields.defaultExecutionMode === undefined) {
+  if (!["tofu", "terraform"].includes(fields.defaultIacBinary) || fields.defaultTerraformVersion === "" || fields.sessionTimeout === undefined || fields.sessionRemember === undefined || (fields.collaboratorAuthPolicy !== "password" && fields.collaboratorAuthPolicy !== "sso") || fields.defaultExecutionMode === undefined) {
     throw new OrgPatchError(422, { errors: [{ status: "422", title: "Unprocessable Entity" }] });
   }
 }
@@ -460,7 +461,7 @@ async function insertOrganization(args: {
     costEstimationEnabled: args.fields.costEstimationEnabled,
     sessionTimeout: args.fields.sessionTimeout,
     sessionRemember: args.fields.sessionRemember,
-    collaboratorAuthPolicy: String(args.fields.collaboratorAuthPolicy),
+    collaboratorAuthPolicy: args.fields.collaboratorAuthPolicy,
     userTokensEnabled: args.fields.userTokensEnabled,
     defaultAgentPoolId: null,
     assessmentsEnforced: args.fields.assessmentsEnforced,

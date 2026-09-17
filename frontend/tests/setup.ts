@@ -107,7 +107,7 @@ Object.defineProperty(win, "alert", {
 const elemProto = win.Element.prototype as Element & Record<string, unknown>;
 elemProto["attachEvent"] = elemProto["attachEvent"] ?? noop;
 elemProto["detachEvent"] = elemProto["detachEvent"] ?? noop;
-elemProto["scrollIntoView"] = elemProto["scrollIntoView"] ?? noop;
+if (typeof elemProto.scrollIntoView !== "function") elemProto.scrollIntoView = noop;
 
 // SAFETY: the test stubs the global with a mock before exercising the component.
 testGlobal["HTMLElement"] = win.HTMLElement;
@@ -145,7 +145,7 @@ testGlobal["confirm"] = win.confirm;
 testGlobal["alert"] = win.alert;
 // SAFETY: the test stubs the global with a mock before exercising the component.
 testGlobal["requestAnimationFrame"] = (callback: FrameRequestCallback): number =>
-  win.setTimeout((): void => callback(Date.now()), 0);
+  win.setTimeout((): void => { callback(Date.now()); }, 0);
 // SAFETY: the test stubs the global with a mock before exercising the component.
 testGlobal["cancelAnimationFrame"] = (handle: number): void => {
   win.clearTimeout(handle);

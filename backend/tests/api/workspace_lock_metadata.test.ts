@@ -57,13 +57,13 @@ describe("workspace lock metadata and force-unlock (#568)", () => {
   });
 
   afterAll(async () => {
-    await db.delete(workspaces).where(eq(workspaces.id, wsId)).catch((): void => {});
-    await db.delete(apiTokens).where(eq(apiTokens.userId, ownerId)).catch((): void => {});
-    await db.delete(apiTokens).where(eq(apiTokens.userId, otherId)).catch((): void => {});
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId)).catch((): void => {});
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => {});
-    await db.delete(users).where(eq(users.id, ownerId)).catch((): void => {});
-    await db.delete(users).where(eq(users.id, otherId)).catch((): void => {});
+    await db.delete(workspaces).where(eq(workspaces.id, wsId)).catch((): void => undefined);
+    await db.delete(apiTokens).where(eq(apiTokens.userId, ownerId)).catch((): void => undefined);
+    await db.delete(apiTokens).where(eq(apiTokens.userId, otherId)).catch((): void => undefined);
+    await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId)).catch((): void => undefined);
+    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
+    await db.delete(users).where(eq(users.id, ownerId)).catch((): void => undefined);
+    await db.delete(users).where(eq(users.id, otherId)).catch((): void => undefined);
   });
 
   it("exposes lock owner, reason, and timestamp on lock", async () => {

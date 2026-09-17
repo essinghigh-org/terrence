@@ -1,4 +1,5 @@
 import { isAbsolute, normalize, resolve, sep } from "path";
+import type { DeepReadonly } from "./lib/types";
 
 export const MAX_ARCHIVE_METADATA_BYTES = 4 * 1024 * 1024;
 export const ARCHIVE_LIST_TIMEOUT_MS = 5_000;
@@ -7,7 +8,7 @@ export const ARCHIVE_LIST_TIMEOUT_MS = 5_000;
  * buffer unbounded data. Kills and reaps the process when the byte cap or
  * the deadline is exceeded; null on any failure. Moved here from the
  * workspaces route so archive listing shares the same bounds. */
-export async function readBoundedProcessOutput(process: Readonly<{
+export async function readBoundedProcessOutput(process: DeepReadonly<{
   exited: Promise<number>;
   stdout: Readonly<ReadableStream<Uint8Array>>;
   kill: (exitCode?: number | NodeJS.Signals) => void;
@@ -18,6 +19,7 @@ export async function readBoundedProcessOutput(process: Readonly<{
     let bytes = 0;
     let output = "";
     try {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- intentional infinite read loop; termination is via break on done below
       while (true) {
         const result = await reader.read();
         if (result.done) break;

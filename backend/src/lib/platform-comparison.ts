@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { isClientEncryptedState, parseTerraformStatePayload } from "./validation";
 import { sanitizePlanJson, type PlanJson } from "./plan-json";
 import { canonicalJson, sha256Hex } from "./run-provenance";
+import type { DeepReadonly } from "./types";
 
-type JsonRecord = Record<string, unknown>;
+type JsonRecord = Readonly<Record<string, unknown>>;
 
 function record(value: unknown): value is JsonRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -49,7 +50,11 @@ function sensitivePathSet(value: unknown): ReadonlySet<string> {
   return new Set(paths);
 }
 
-function isSensitivePath(path: string, paths: ReadonlySet<string>): boolean {
+function isSensitivePath(
+  path: string,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Set has no rule-verifiable readonly form; the set is only read here
+  paths: ReadonlySet<string>,
+): boolean {
   if (paths.has("") || paths.has(path)) return true;
   for (const prefix of paths) {
     if (path.startsWith(`${prefix}.`) || path.startsWith(`${prefix}[`)) return true;
@@ -57,7 +62,13 @@ function isSensitivePath(path: string, paths: ReadonlySet<string>): boolean {
   return false;
 }
 
-function safeValue(value: unknown, path: string, sensitive: ReadonlySet<string>, depth: number): unknown {
+function safeValue(
+  value: unknown,
+  path: string,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Set has no rule-verifiable readonly form; the set is only read here
+  sensitive: ReadonlySet<string>,
+  depth: number,
+): unknown {
   if (isSensitivePath(path, sensitive)) return SENSITIVE_VALUE;
   if (value === null || typeof value === "boolean" || typeof value === "number") return value;
   if (typeof value === "string") return value.length > 256 ? UNKNOWN_VALUE : value;
@@ -322,7 +333,7 @@ function planActions(raw: JsonRecord): readonly string[] {
   return Array.isArray(change["actions"]) ? change["actions"].filter((action): action is string => typeof action === "string") : [];
 }
 
-function classifyNewPlanResource(current: JsonRecord, beforeMap: Map<string, JsonRecord>): { kind: "moved"; from: string } | { kind: "added" } {
+function classifyNewPlanResource(current: JsonRecord, beforeMap: Readonly<Pick<ReadonlyMap<string, JsonRecord>, "has">>): { kind: "moved"; from: string } | { kind: "added" } {
   const previousAddress = typeof current["previous_address"] === "string" ? current["previous_address"] : null;
   return previousAddress !== null && beforeMap.has(previousAddress)
     ? { kind: "moved", from: previousAddress }
@@ -431,7 +442,7 @@ export function stateInventoryObservations(version: StateVersionComparisonInput)
   }));
 }
 
-export function driftFingerprint(input: Readonly<{ workspaceId: string; assessmentId?: string; drifted: boolean | null; checks: readonly Record<string, unknown>[]; }>): string {
+export function driftFingerprint(input: DeepReadonly<{ workspaceId: string; assessmentId?: string; drifted: boolean | null; checks: readonly Record<string, unknown>[]; }>): string {
   const checks = input.checks.map((check): Record<string, unknown> => ({
     address: check["address"] ?? null,
     status: check["status"] ?? null,
@@ -488,7 +499,7 @@ export type ImportMapping = Readonly<{ address: string; providerId: string; prov
 
 const IMPORT_ADDRESS_PATTERN = /^(?:module\.[A-Za-z0-9_\-.]+)?[A-Za-z0-9_]+\.[A-Za-z0-9_]+(?:\[[^\]]+\])?$/;
 
-function validateImportMapping(value: unknown, index: number, ids: Set<string>): { mapping: ImportMapping | null; errors: string[] } {
+function validateImportMapping(value: unknown, index: number, ids: Readonly<Pick<Set<string>, "has" | "add">>): { mapping: ImportMapping | null; errors: string[] } {
   const errors: string[] = [];
   if (!record(value)) return { mapping: null, errors: [`mappings[${index}] must be an object`] };
   const address = stringValue(value["address"]);

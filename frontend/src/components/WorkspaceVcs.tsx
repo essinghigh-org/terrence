@@ -542,7 +542,7 @@ export function WorkspaceVcs({
         const list = res.data;
         if (Array.isArray(list)) setVcsRepositories(list.map((item) => item.attributes));
       })
-      .catch((): void => {})
+      .catch((): void => undefined)
       .finally((): void => { if (!controller.signal.aborted) setVcsRepositoriesLoading(false); });
     return (): void => {
       controller.abort();

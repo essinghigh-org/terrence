@@ -9,6 +9,7 @@ import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
+const originalLocation = window.location;
 
 function json(data: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/vnd.api+json" } });
@@ -23,6 +24,7 @@ function account(): Response {
 afterEach((): void => {
   cleanup();
   globalThis.fetch = originalFetch;
+  Reflect.set(window, "location", originalLocation);
 });
 
 test("enrolls MFA after verifying an authenticator code", async () => {
@@ -111,16 +113,18 @@ test("disables MFA with a current authenticator code and password", async () => 
 
 test("completes an MFA login challenge with oauth_state and redirects to OAuth completion", async () => {
   let assignedHref = "";
-  // @ts-expect-error Mocking window.location in test
-  window.location = {
-    ...window.location,
+  Reflect.set(window, "location", {
+    origin: window.location.origin,
+    pathname: window.location.pathname,
+    search: window.location.search,
+    hash: window.location.hash,
     set href(val: string) {
       assignedHref = val;
     },
     get href() {
       return assignedHref;
     },
-  };
+  });
 
   globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const requestUrl = url(input);

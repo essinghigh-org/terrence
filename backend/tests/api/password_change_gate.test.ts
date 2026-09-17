@@ -44,8 +44,8 @@ describe("forced password change gates all surfaces (#570)", () => {
   });
 
   afterAll(async () => {
-    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => {});
-    await db.delete(users).where(eq(users.id, userId)).catch((): void => {});
+    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => undefined);
+    await db.delete(users).where(eq(users.id, userId)).catch((): void => undefined);
   });
 
   it("leaves account details readable", async () => {

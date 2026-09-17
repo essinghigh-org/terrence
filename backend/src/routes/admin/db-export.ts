@@ -13,7 +13,7 @@
 //   GET  /api/v2/admin/db-export/files/:file_name  download an export file
 //   DELETE /api/v2/admin/db-export/files/:file_name  remove an export file
 // ---------------------------------------------------------------------------
-import { Elysia } from "elysia";
+import { Elysia, type AnyElysia } from "elysia";
 import { authPlugin } from "../../auth";
 import { runDbExport, listExportFiles, deleteExportFile, exportFilePath } from "../../lib/db-export";
 import { DbExportError } from "../../lib/db-export";
@@ -95,7 +95,7 @@ export type DbExportRouteDeps = {
   readonly sourceFactory?: (url: string) => TransferSource;
 }
 
-export function createDbExportRoutes(deps: DbExportRouteDeps = {}) {
+export function createDbExportRoutes(deps: DbExportRouteDeps = {}): AnyElysia {
   const sourceFactory = deps.sourceFactory ?? ((url: string): TransferSource => createPgSource(url));
 
   return new Elysia({ name: "admin-db-export" })

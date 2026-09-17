@@ -262,9 +262,9 @@ function parseCostTotals(root: JsonObject): { proposed: string; prior: string; d
 
 function parseCostCounts(
   summary: JsonObject | undefined,
-  currentResources: JsonObject[],
-  pastResources: JsonObject[],
-  diffResources: JsonObject[],
+  currentResources: readonly JsonObject[],
+  pastResources: readonly JsonObject[],
+  diffResources: readonly JsonObject[],
 ): { detected: number; matched: number; unmatched: number } {
   const detected = count(summary?.["totalDetectedResources"])
     ?? Math.max(currentResources.length, pastResources.length, diffResources.length);
@@ -320,7 +320,7 @@ function costComparison(input: Readonly<{
   prior: string;
   pastCurrency: string | null;
   baselineReason: string | null;
-  warnings: string[];
+  warnings: readonly string[];
   projects: readonly unknown[];
 }>): CostEstimateComparison {
   return {

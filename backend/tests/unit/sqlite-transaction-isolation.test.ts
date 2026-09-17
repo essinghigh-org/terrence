@@ -18,7 +18,7 @@ sqliteTest("plain statements cannot observe an uncommitted async transaction", a
 
   const transaction = db.transaction(async (tx) => {
     await tx.insert(organizations).values({ id: organizationId, name: "uncommitted" });
-    await expect(
+    expect(
       Promise.resolve(db.query.organizations.findFirst({ where: eq(organizations.id, organizationId) })),
     ).rejects.toThrow("outer db handle");
     signalTransactionStarted();
@@ -55,7 +55,7 @@ sqliteTest("nested async sqlite transactions roll back rejected savepoints", asy
   try {
     await db.transaction(async (tx) => {
       await tx.insert(organizations).values({ id: outerOrganizationId, name: "outer" });
-      await expect(
+      expect(
         Promise.resolve(tx.transaction(async (nestedTx) => {
           await nestedTx.insert(organizations).values({ id: nestedOrganizationId, name: "nested" });
           throw new Error("nested rollback probe");

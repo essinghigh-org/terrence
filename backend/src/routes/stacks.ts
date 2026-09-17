@@ -4,6 +4,7 @@ import { and, desc, eq, inArray, notInArray, or } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { db } from "../db";
 import { agentPools, durableJobs, githubAppInstallations, oauthClients, oauthTokens, organizations, projects, stackAgentJobs, stackRecords, stackStateLocks, stacks } from "../db/schema";
+import type { users } from "../db/schema";
 import { checkOrganizationPermission, pageRequest, pagination, signedApiURL, validSignedApiURL, type DeepReadonly } from "../lib/utils";
 import { isValidTagsRegex } from "../lib/vcs-repo";
 import { cachedOrgByName } from "../lib/cached-lookups";
@@ -18,7 +19,7 @@ type ParamCtx = Readonly<{
   readonly params: Readonly<Record<string, string>>;
   readonly query?: Readonly<Record<string, string>>;
   readonly body?: unknown;
-  readonly user?: DeepReadonly<typeof import("../db/schema").users.$inferSelect> | null;
+  readonly user?: DeepReadonly<typeof users.$inferSelect> | null;
   readonly orgId?: string | null;
   readonly teamId?: string | null;
   readonly request: Readonly<{ readonly url: string; readonly headers: Readonly<{ get(name: string): string | null }>; readonly arrayBuffer: () => Promise<ArrayBuffer> }>;

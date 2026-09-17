@@ -20,6 +20,7 @@ import {
 } from "./resource-budgets";
 import { PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION, parsePersistedJobPayload } from "./validation";
 import { createOperationContext } from "./operation-context";
+import type { DeepReadonly } from "./types";
 
 export type DurableJobKind = "module-test" | "stack-configuration" | "stack-deployment" | "explorer-inventory" | "explorer-catalog" | "plan-explanation" | "vcs-webhook" | "outbox-delivery";
 export type DurableJob = Readonly<typeof durableJobs.$inferSelect>;
@@ -28,7 +29,11 @@ export type DurableJobContext = Readonly<{
   canceled: () => Promise<boolean>;
   signal: Readonly<AbortSignal>;
 }>;
-export type DurableJobHandler = (job: DurableJob, context: DurableJobContext) => Promise<void>;
+export type DurableJobHandler = (
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- public handler contract; registered implementations narrow job to their own row types
+  job: DurableJob,
+  context: DurableJobContext,
+) => Promise<void>;
 export type DurableJobBudgetOptions = Readonly<{
   organizationId?: string | null;
   jobClass?: ResourceJobClass;
@@ -111,13 +116,13 @@ async function assertDurableJobBudget(row: ResourceBudgetJob, excludeJobId?: str
 }
 
 function resourceBudgetJobFromInsert(
-  row: Readonly<{ id: string; kind: string; payload: Record<string, unknown>; runAfter: number; createdAt: number }>,
+  row: Readonly<{ id: string; kind: string; payload: Readonly<Record<string, unknown>>; runAfter: number; createdAt: number }>,
 ): ResourceBudgetJob {
   return resourceBudgetJobFromDurable(row);
 }
 
 async function requeueExistingDurableJob(
-  existing: DurableJob,
+  existing: DeepReadonly<DurableJob>,
   payload: Readonly<Record<string, unknown>>,
   options: EnqueueDurableJobOptions,
   runAfter: number,
@@ -178,7 +183,7 @@ async function enqueueExistingDurableJob(
 
 export async function enqueueDurableJob(
   kind: DurableJobKind,
-  payload: Record<string, unknown>,
+  payload: Readonly<Record<string, unknown>>,
   options: EnqueueDurableJobOptions = {},
 ): Promise<DurableJob> {
   const durablePayload = payloadWithBudgetMetadata(payload, options.budget);
@@ -357,7 +362,7 @@ export async function collectDurableJobQueueInspector(
   };
 }
 
-export async function heartbeatDurableJob(job: DurableJob, now = Date.now()): Promise<boolean> {
+export async function heartbeatDurableJob(job: DeepReadonly<DurableJob>, now = Date.now()): Promise<boolean> {
   const updated = await db.update(durableJobs).set({
     leaseExpiresAt: now + LEASE_MS,
     heartbeatAt: now,
@@ -371,14 +376,14 @@ export async function heartbeatDurableJob(job: DurableJob, now = Date.now()): Pr
 }
 
 /** @public Intentional surface: benchmark/test hook or cross-module API. */
-export async function isDurableJobCanceled(job: DurableJob): Promise<boolean> {
+export async function isDurableJobCanceled(job: DeepReadonly<DurableJob>): Promise<boolean> {
   const row = await db.query.durableJobs.findFirst({ where: eq(durableJobs.id, job.id) });
   return row?.status === "canceled";
 }
 
 // Stop stale work too: cancellation, deletion, lease reclamation, or a new
 // lock token all mean this worker no longer owns the durable job.
-async function isDurableJobStopped(job: DurableJob): Promise<boolean> {
+async function isDurableJobStopped(job: DeepReadonly<DurableJob>): Promise<boolean> {
   const row = await db.query.durableJobs.findFirst({ where: eq(durableJobs.id, job.id) });
   return row === undefined || row.status !== "running" || row.lockToken !== job.lockToken;
 }
@@ -400,7 +405,7 @@ export async function cancelDurableJobs(kind: DurableJobKind, dedupeKey: string)
   return updated.length;
 }
 
-async function finishDurableJob(job: DurableJob, status: "succeeded" | "failed" | "queued", error?: string): Promise<boolean> {
+async function finishDurableJob(job: DeepReadonly<DurableJob>, status: "succeeded" | "failed" | "queued", error?: string): Promise<boolean> {
   const now = Date.now();
   const retry = status === "queued";
   const updated = await db.update(durableJobs).set({
@@ -420,7 +425,11 @@ async function finishDurableJob(job: DurableJob, status: "succeeded" | "failed" 
   return updated.length === 1;
 }
 
-async function runJob(job: DurableJob, handler: DurableJobHandler): Promise<void> {
+async function runJob(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- must stay assignable to the DurableJobHandler contract used by all registered job implementations
+  job: DurableJob,
+  handler: DurableJobHandler,
+): Promise<void> {
   const operation = createOperationContext();
   let heartbeatFailures = 0;
   const heartbeatTimer = setInterval((): void => {

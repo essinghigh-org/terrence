@@ -347,7 +347,7 @@ function pendingAgentInspection(
   base: QueueInspection,
   position: number | null,
   requiredBinary: string,
-  poolInspection: PoolInspection,
+  poolInspection: DeepReadonly<PoolInspection>,
 ): QueueInspection {
   const phase = "plan" as const;
   const poolBase = { ...base, phase, requiredCapabilities: [requiredBinary], competingJobClass: "run", agentPool: poolInspection.pool, constraints: poolInspection.constraints };
@@ -412,7 +412,7 @@ function confirmedLockBlock(base: QueueInspection, workspace: WorkspaceRow): Que
   return { ...base, state: "waiting", reasonCode: "workspace-lock", reason: workspace.lockedReason === null || workspace.lockedReason === "" ? "The scheduled apply is waiting for the workspace lock to clear." : `The workspace is locked: ${workspace.lockedReason}`, phase: "apply", constraints: ["workspace must be unlocked"] };
 }
 
-function confirmedAgentApply(base: QueueInspection, requiredBinary: string, poolInspection: PoolInspection): QueueInspection {
+function confirmedAgentApply(base: QueueInspection, requiredBinary: string, poolInspection: DeepReadonly<PoolInspection>): QueueInspection {
   return {
     ...base,
     state: poolInspection.reasonCode === null ? "ready" : poolInspection.reasonCode === "agent-pool-scope" || poolInspection.reasonCode === "agent-pool-missing" ? "blocked" : "waiting",

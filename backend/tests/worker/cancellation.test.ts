@@ -129,7 +129,7 @@ test("cancel terminates the IaC subprocess and the run cannot publish success", 
       await new Promise(r => setTimeout(r, 10));
     }
 
-    await runPromise.catch(() => {});
+    await runPromise.catch(() => undefined);
     const final = await db.query.runs.findFirst({ where: eq(runs.id, "run"), columns: { status: true } });
     const applied = await exists(join(recordDir, "applied")).catch(() => false);
     process.stdout.write(JSON.stringify({ status: final?.status, applied, subprocessDead }) + "\\n");

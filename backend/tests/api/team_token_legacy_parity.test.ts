@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { and, eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
+import { toComparableString } from "../../src/lib/utils";
 import {
   apiTokens,
   organizationMemberships,
@@ -196,7 +197,7 @@ describe("team token legacy/plural separation (TFE parity)", () => {
     expect(getRes.status).toBe(200);
     const gotBody = (await getRes.json()) as { data: { id: string; attributes: Record<string, unknown> } };
     expect(gotBody.data.id).toBe(modernIds[1]!);
-    expect(String(gotBody.data.attributes["token"] ?? "")).toBe("");
+    expect(toComparableString(gotBody.data.attributes["token"] ?? "")).toBe("");
 
     // The legacy credential is NOT manageable via the generic route.
     // (Owner C: A and B have exhausted their 5-per-60s sensitive-limiter

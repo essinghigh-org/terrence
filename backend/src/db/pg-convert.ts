@@ -17,6 +17,7 @@
 // are reproduced exactly. Anything unexpected fails loudly instead of
 // silently producing a divergent schema.
 import { sql, type SQL } from "drizzle-orm";
+import type { DeepReadonly } from "../lib/types";
 import {
   bigint,
   boolean,
@@ -28,6 +29,7 @@ import {
   text as pgText,
   uniqueIndex as pgUniqueIndex,
 } from "drizzle-orm/pg-core";
+import { toComparableString } from "../lib/comparable";
 
 // drizzle-orm 0.45.2 ships a broken pg index builder: IndexBuilderOn.on()
 // snapshots each column via JSON.parse(JSON.stringify(column.defaultConfig)),
@@ -38,11 +40,11 @@ import {
 // (older, working) copy, so migration generation is unaffected. Patch once
 // at module load; this module is the only pg-schema construction path.
 {
-  const proto = Object.getPrototypeOf(pgIndex("__terrence_pg_index_patch__"));
+  const proto: unknown = Object.getPrototypeOf(pgIndex("__terrence_pg_index_patch__"));
   const originalOn = (proto as { on?: unknown }).on;
   if (typeof originalOn === "function") {
-    (proto as { on: (...columns: unknown[]) => unknown }).on = function (
-      ...columns: unknown[]
+    (proto as { on: (...columns: readonly unknown[]) => unknown }).on = function (
+      ...columns: readonly unknown[]
     ): unknown {
       for (const column of columns) {
         if (column !== null && typeof column === "object" && !("defaultConfig" in column)) {
@@ -53,7 +55,7 @@ import {
           }
         }
       }
-      return (originalOn as (...cols: unknown[]) => unknown).apply(this, columns);
+      return (originalOn as (...cols: readonly unknown[]) => unknown).apply(this, [...columns]);
     };
   }
 }
@@ -69,7 +71,7 @@ type AnyColumn = {
   [key: string]: unknown;
 };
 
-const columnTable = (column: AnyColumn): SqliteTable => {
+const columnTable = (column: DeepReadonly<AnyColumn>): SqliteTable => {
   if (column.table === null || typeof column.table !== "object") {
     throw new Error("pg-convert: column is missing its table metadata");
   }
@@ -97,7 +99,7 @@ type IndexConfig = {
   columns: readonly AnyColumn[];
   unique?: boolean;
   where?: SQL & { text: string };
-  type?: string;
+  type?: string | null;
 };
 
 type ResolvedFk = {
@@ -121,25 +123,25 @@ function pgColumnByDbName(table: unknown, dbName: string): unknown {
   return undefined;
 }
 
-const isIndexBuilder = (item: unknown): item is { config: IndexConfig } =>
-  item !== null &&
-  typeof item === "object" &&
-  "config" in item &&
-  (item as { config: IndexConfig }).config !== null &&
-  typeof (item as { config: IndexConfig }).config === "object" &&
-  "name" in (item as { config: IndexConfig }).config;
+const isIndexBuilder = (item: unknown): item is { config: IndexConfig } => {
+  if (item === null || typeof item !== "object" || !("config" in item)) return false;
+  const config = item.config;
+  return config !== null && typeof config === "object" && "name" in config;
+};
 
 // Partial-index WHERE clauses cannot be replayed generically: the sqlite
 // fragment references sqlite column objects (`is_default = 1`, where the
 // boolean column renders as integer 1). Each partial index gets an explicit
 // pg-core equivalent, keyed by index name. An unlisted partial index throws
 // at build time so the mirror can never silently diverge.
-const PARTIAL_INDEX_WHERE: Readonly<Record<string, (table: Record<string, unknown>) => SQL>> = {
+const PARTIAL_INDEX_WHERE: Readonly<Record<string, (table: Readonly<Record<string, unknown>>) => SQL>> = {
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- key is the index name by necessity (looked up by cfg.name)
   projects_org_default_idx: (table): SQL => sql`${table["isDefault"]} = true`,
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- key is the index name by necessity (looked up by cfg.name)
   organization_invitations_org_email_pending_idx: (table): SQL => sql`${table["status"]} = 'pending'`,
 };
 
-function tableName(table: SqliteTable): string {
+function tableName(table: DeepReadonly<SqliteTable>): string {
   const name = table[NAME];
   if (typeof name !== "string" || name === "") {
     throw new Error("pg-convert: table is missing its drizzle name metadata");
@@ -147,16 +149,16 @@ function tableName(table: SqliteTable): string {
   return name;
 }
 
-function columnName(column: AnyColumn): string {
+function columnName(column: DeepReadonly<AnyColumn>): string {
   const config = column["config"] as { name?: string };
-  const name = typeof config?.name === "string" ? config.name : column.name;
+  const name = typeof config.name === "string" ? config.name : column.name;
   if (typeof name !== "string" || name === "") {
     throw new Error("pg-convert: column is missing its name metadata");
   }
   return name;
 }
 
-function buildColumn(column: AnyColumn): unknown {
+function buildColumn(column: DeepReadonly<AnyColumn>): unknown {
   const config = column["config"] as {
     dataType?: string;
     mode?: string;
@@ -185,9 +187,11 @@ function buildColumn(column: AnyColumn): unknown {
     case "json":
       builder = jsonb(name);
       break;
+    case undefined:
+      throw new Error(`pg-convert: missing column dataType on "${name}"`);
     default:
       throw new Error(
-        `pg-convert: unsupported column dataType "${String(config.dataType)}" on "${name}"`,
+        `pg-convert: unsupported column dataType "${config.dataType}" on "${name}"`,
       );
   }
 
@@ -210,16 +214,16 @@ function buildColumn(column: AnyColumn): unknown {
   return builder;
 }
 
-type ExtraColumnContext = Readonly<{
+type ExtraColumnContext = DeepReadonly<{
   table: SqliteTable;
   pg: Record<string, unknown>;
-  tableColumns: Record<string, unknown>;
+  tableColumns: Readonly<Record<string, unknown>>;
   columnsByDbName: Record<string, unknown>;
 }>;
 
 // Indexes/PKs may reference the table's OWN columns (not yet published to
 // `pg` during construction) or another table's columns.
-function resolveExtraColumn(ctx: ExtraColumnContext, c: AnyColumn): unknown {
+function resolveExtraColumn(ctx: ExtraColumnContext, c: DeepReadonly<AnyColumn>): unknown {
   const name = columnName(c);
   if (columnTable(c) === ctx.table) {
     const local = ctx.columnsByDbName[name];
@@ -238,7 +242,7 @@ function resolveExtraColumn(ctx: ExtraColumnContext, c: AnyColumn): unknown {
   return column;
 }
 
-function resolvePartialIndexWhere(cfg: IndexConfig, tableColumns: Record<string, unknown>): SQL {
+function resolvePartialIndexWhere(cfg: DeepReadonly<IndexConfig>, tableColumns: Readonly<Record<string, unknown>>): SQL {
   const override = PARTIAL_INDEX_WHERE[cfg.name];
   if (override === undefined) {
     throw new Error(
@@ -248,9 +252,9 @@ function resolvePartialIndexWhere(cfg: IndexConfig, tableColumns: Record<string,
   return override(tableColumns);
 }
 
-function buildIndexItem(cfg: IndexConfig, tableColumns: Record<string, unknown>, resolve: (c: AnyColumn) => unknown): unknown {
+function buildIndexItem(cfg: DeepReadonly<IndexConfig>, tableColumns: Readonly<Record<string, unknown>>, resolve: (c: DeepReadonly<AnyColumn>) => unknown): unknown {
   if (cfg.type !== undefined && cfg.type !== null) {
-    throw new Error(`pg-convert: unsupported index type "${String(cfg.type)}" on "${cfg.name}"`);
+    throw new Error(`pg-convert: unsupported index type "${cfg.type}" on "${cfg.name}"`);
   }
   const columns = cfg.columns.map(resolve);
   const where = cfg.where !== undefined ? resolvePartialIndexWhere(cfg, tableColumns) : undefined;
@@ -267,7 +271,9 @@ type CompositeFkReference = {
     foreignTable: unknown;
     foreignColumns: readonly AnyColumn[];
   };
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Drizzle foreign-key metadata uses this property name
   _onDelete?: string;
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Drizzle foreign-key metadata uses this property name
   _onUpdate?: string;
 };
 
@@ -276,7 +282,7 @@ const isCompositeFkItem = (item: unknown): item is CompositeFkReference =>
   typeof item === "object" &&
   typeof (item as { reference?: unknown }).reference === "function";
 
-function buildCompositeFkItem(item: CompositeFkReference, ctx: ExtraColumnContext, resolve: (c: AnyColumn) => unknown): unknown {
+function buildCompositeFkItem(item: DeepReadonly<CompositeFkReference>, ctx: ExtraColumnContext, resolve: (c: DeepReadonly<AnyColumn>) => unknown): unknown {
   // Composite foreign key expressed through the table's extra-config
   // callback (foreignKey({ ... })). Inline column-level foreign keys are
   // consumed separately from table[FKS]; the composite form only appears
@@ -313,16 +319,16 @@ const isPrimaryKeyItem = (item: unknown): item is { columns: readonly AnyColumn[
   Array.isArray((item).columns);
 
 function buildExtraConfig(
-  table: SqliteTable,
-  pg: Record<string, unknown>,
-  tableColumns: Record<string, unknown>,
-  columnsByDbName: Record<string, unknown>,
+  table: DeepReadonly<SqliteTable>,
+  pg: Readonly<Record<string, unknown>>,
+  tableColumns: Readonly<Record<string, unknown>>,
+  columnsByDbName: Readonly<Record<string, unknown>>,
 ): unknown[] {
   const extra = table[EXTRA];
   if (typeof extra !== "function") return [];
 
   const ctx: ExtraColumnContext = { table, pg, tableColumns, columnsByDbName };
-  const resolve = (c: AnyColumn): unknown => resolveExtraColumn(ctx, c);
+  const resolve = (c: DeepReadonly<AnyColumn>): unknown => resolveExtraColumn(ctx, c);
   const items: unknown[] = [];
   for (const item of extra(table)) {
     if (isIndexBuilder(item)) {
@@ -334,14 +340,14 @@ function buildExtraConfig(
       items.push(pgPrimaryKey({ columns: item.columns.map(resolve) as never }));
     } else {
       throw new Error(
-        `pg-convert: unsupported extra-config item ${String((item as { constructor?: { name?: string } })?.constructor?.name)}`,
+        `pg-convert: unsupported extra-config item ${toComparableString((item as { constructor?: { name?: string } }).constructor?.name)}`,
       );
     }
   }
   return items;
 }
 
-function inventorySqliteTables(sqliteSchema: Record<string, unknown>): Map<string, SqliteTable> {
+function inventorySqliteTables(sqliteSchema: Readonly<Record<string, unknown>>): Map<string, SqliteTable> {
   // 1. Inventory sqlite tables.
   const sqliteTables = new Map<string, SqliteTable>();
   for (const [key, value] of Object.entries(sqliteSchema)) {
@@ -352,7 +358,7 @@ function inventorySqliteTables(sqliteSchema: Record<string, unknown>): Map<strin
   return sqliteTables;
 }
 
-function resolveTableFks(sqliteTables: Map<string, SqliteTable>): Map<string, readonly ResolvedFk[]> {
+function resolveTableFks(sqliteTables: Readonly<Pick<ReadonlyMap<string, DeepReadonly<SqliteTable>>, "get" | "keys" | typeof Symbol.iterator>>): Map<string, readonly ResolvedFk[]> {
   // 2. Resolve foreign keys up front (the metadata callbacks are deferred,
   // so reading them needs no construction order).
   const fksByTable = new Map<string, readonly ResolvedFk[]>();
@@ -384,7 +390,7 @@ function resolveTableFks(sqliteTables: Map<string, SqliteTable>): Map<string, re
   return fksByTable;
 }
 
-function orderTablesByDependency(sqliteTables: Map<string, SqliteTable>, fksByTable: Map<string, readonly ResolvedFk[]>): string[] {
+function orderTablesByDependency(sqliteTables: Readonly<Pick<ReadonlyMap<string, DeepReadonly<SqliteTable>>, "get" | "keys" | typeof Symbol.iterator>>, fksByTable: Readonly<Pick<ReadonlyMap<string, readonly DeepReadonly<ResolvedFk>[]>, "get">>): string[] {
   // 3. Topologically order tables so referenced tables exist before
   // referencing tables are constructed (pg-core resolves .references() at
   // table construction time).
@@ -400,7 +406,10 @@ function orderTablesByDependency(sqliteTables: Map<string, SqliteTable>, fksByTa
     }
     visiting.add(key);
     for (const fk of fksByTable.get(key) ?? []) {
-      const target = [...sqliteTables.keys()].find((k): boolean => tableName(sqliteTables.get(k)!) === fk.foreignTable);
+      const target = [...sqliteTables.keys()].find((k): boolean => {
+        const candidate = sqliteTables.get(k);
+        return candidate !== undefined && tableName(candidate) === fk.foreignTable;
+      });
       if (target !== undefined && target !== key) visit(target);
     }
     visiting.delete(key);
@@ -413,17 +422,18 @@ function orderTablesByDependency(sqliteTables: Map<string, SqliteTable>, fksByTa
 
 function attachSimpleFks(
   name: string,
-  fks: readonly ResolvedFk[],
-  columnsByDbName: Record<string, unknown>,
-  pg: Record<string, unknown>,
+  fks: readonly DeepReadonly<ResolvedFk>[],
+  columnsByDbName: Readonly<Record<string, unknown>>,
+  pg: Readonly<Record<string, unknown>>,
 ): void {
   // Column-level foreign keys (1:1 column mapping).
   const simpleFks = fks.filter((fk): boolean => fk.localColumns.length === 1 && fk.foreignColumns.length === 1);
   for (const fk of simpleFks) {
-    const localColumn = fk.localColumns[0]!;
+    const localColumn = fk.localColumns[0];
+    if (localColumn === undefined) throw new Error(`pg-convert: foreign key on "${name}" has no local column`);
     const column = columnsByDbName[localColumn] as {
-      references?: (ref: () => unknown, actions?: { onDelete?: string; onUpdate?: string }) => unknown;
-    };
+      references?: (ref: () => unknown, actions?: Readonly<{ onDelete?: string; onUpdate?: string }>) => unknown;
+    } | undefined;
     if (column === undefined || typeof column.references !== "function") {
       throw new Error(`pg-convert: foreign key on "${name}.${localColumn}" cannot be attached`);
     }
@@ -431,7 +441,8 @@ function attachSimpleFks(
     if (target === undefined) {
       throw new Error(`pg-convert: foreign key on "${name}" references unknown table "${fk.foreignTable}"`);
     }
-    const foreignColumn = fk.foreignColumns[0]!;
+    const foreignColumn = fk.foreignColumns[0];
+    if (foreignColumn === undefined) throw new Error(`pg-convert: foreign key on "${name}" has no foreign column`);
     const targetColumn = (target as Record<string, unknown>)[foreignColumn];
     if (targetColumn === undefined) {
       throw new Error(
@@ -447,9 +458,9 @@ function attachSimpleFks(
 
 function compositeFkBuilders(
   name: string,
-  compositeFks: readonly ResolvedFk[],
-  builtByDbName: Record<string, unknown>,
-  pg: Record<string, unknown>,
+  compositeFks: readonly DeepReadonly<ResolvedFk>[],
+  builtByDbName: Readonly<Record<string, unknown>>,
+  pg: Readonly<Record<string, unknown>>,
 ): unknown[] {
   const builders: unknown[] = [];
   for (const fk of compositeFks) {
@@ -488,12 +499,12 @@ function applyJsonbDriverFix(pgTableValue: unknown): void {
 
 function buildOnePgTable(
   key: string,
-  sqliteTables: Map<string, SqliteTable>,
-  fksByTable: Map<string, readonly ResolvedFk[]>,
-  pg: Record<string, unknown>,
-): void {
+  sqliteTables: Readonly<Pick<ReadonlyMap<string, DeepReadonly<SqliteTable>>, "get" | "keys" | typeof Symbol.iterator>>,
+  fksByTable: Readonly<Pick<ReadonlyMap<string, readonly DeepReadonly<ResolvedFk>[]>, "get">>,
+  pg: Readonly<Record<string, unknown>>,
+): Readonly<{ name: string; table: unknown }> {
   // 4. Build pg tables in dependency order.
-  const sqliteTable = sqliteTables.get(key)!;
+  const sqliteTable = sqliteTables.get(key);
   if (sqliteTable === undefined) {
     throw new Error(`pg-convert: table "${key}" vanished during ordering`);
   }
@@ -523,14 +534,17 @@ function buildOnePgTable(
   };
   const pgTableValue = pgTable(name, columns as never, buildExtra as never);
   applyJsonbDriverFix(pgTableValue);
-  pg[name] = pgTableValue;
+  return { name, table: pgTableValue };
 }
 
-export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<string, unknown> {
+export function buildPgSchema(sqliteSchema: Readonly<Record<string, unknown>>): Record<string, unknown> {
   const sqliteTables = inventorySqliteTables(sqliteSchema);
   const fksByTable = resolveTableFks(sqliteTables);
   const ordered = orderTablesByDependency(sqliteTables, fksByTable);
   const pg: Record<string, unknown> = {};
-  for (const key of ordered) buildOnePgTable(key, sqliteTables, fksByTable, pg);
+  for (const key of ordered) {
+    const built = buildOnePgTable(key, sqliteTables, fksByTable, pg);
+    pg[built.name] = built.table;
+  }
   return pg;
 }

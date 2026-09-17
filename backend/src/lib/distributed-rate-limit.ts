@@ -51,7 +51,7 @@ export function distributedFixedWindowContext(bucketPrefix: string): RateLimitCo
               THEN rate_limit_buckets.window_start ELSE ${windowStart} END
           RETURNING count
         `);
-        const count = Number(rows[0]?.count ?? 1);
+        const count = rows[0]?.count ?? 1;
         return { count, nextReset, start: windowStart };
       } catch {
         // DB unavailable: fail open (allow the request) rather than hard-failing
@@ -72,7 +72,9 @@ export function distributedFixedWindowContext(bucketPrefix: string): RateLimitCo
         }
       }
     },
-    async decrement(_key: string): Promise<void> {},
+    async decrement(_key: string): Promise<void> {
+      return undefined;
+    },
     async reset(key?: string): Promise<void> {
       if (!isPostgres) return;
       try {

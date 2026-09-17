@@ -28,14 +28,14 @@ export type OrganizationPermissions = Readonly<{
 }>;
 
 export function useOrganizationPermissions(orgName: string | undefined): OrganizationPermissions {
-  const [permissions, setPermissions] = useState<Readonly<Record<string, boolean>> | undefined>(() => {
+  const [permissions, setPermissions] = useState<Readonly<Record<string, boolean>> | undefined>((): Readonly<Record<string, boolean>> | undefined => {
     if (orgName !== undefined && orgName !== "") {
       const cached = orgPermissionsCache.get(orgName);
       if (cached !== undefined && cached.expires > Date.now()) return cached.permissions;
     }
     return undefined;
   });
-  const [loaded, setLoaded] = useState(() => {
+  const [loaded, setLoaded] = useState((): boolean => {
     if (orgName !== undefined && orgName !== "") {
       const cached = orgPermissionsCache.get(orgName);
       if (cached !== undefined && cached.expires > Date.now()) return true;
@@ -51,7 +51,7 @@ export function useOrganizationPermissions(orgName: string | undefined): Organiz
       setError(null);
       return undefined;
     }
-    const cached = orgName !== undefined && orgName !== "" ? orgPermissionsCache.get(orgName) : undefined;
+    const cached = orgName !== "" ? orgPermissionsCache.get(orgName) : undefined;
     if (cached !== undefined && cached.expires > Date.now()) {
       setPermissions(cached.permissions);
       setLoaded(true);
@@ -74,7 +74,7 @@ export function useOrganizationPermissions(orgName: string | undefined): Organiz
         data?: { attributes?: { permissions?: Record<string, boolean> } };
       }).data?.attributes;
       const perms = attributes?.permissions;
-      orgPermissionsCache.set(orgName ?? "", { permissions: perms, expires: Date.now() + ORG_CACHE_TTL_MS });
+      orgPermissionsCache.set(orgName, { permissions: perms, expires: Date.now() + ORG_CACHE_TTL_MS });
       setPermissions(perms);
       setLoaded(true);
     }).catch((caught: unknown): void => {

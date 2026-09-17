@@ -20,14 +20,14 @@ import { booleanSetting, integerSetting } from "./runtime-config";
 // limit (Bun.password.hash), independent of the configured rules. This module
 // is pure and framework-free so it can be unit-tested without a server.
 
-export type PasswordPolicyRules = {
+export type PasswordPolicyRules = Readonly<{
   minLength: number;
   requireUpper: boolean;
   requireLower: boolean;
   requireDigit: boolean;
   requireSymbol: boolean;
   disallowUsername: boolean;
-}
+}>
 
 export function loadPasswordPolicy(): PasswordPolicyRules {
   return {

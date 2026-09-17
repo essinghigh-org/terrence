@@ -898,7 +898,7 @@ async function matchingConfigurations(
 function runPageUrl(
   run: NotificationRunRow,
   workspace: NotificationWorkspaceRow,
-  organization: { name?: string | null } | undefined,
+  organization: Readonly<{ name?: string | null }> | undefined,
 ): string {
   const baseUrl = process.env["PUBLIC_URL"] ?? "http://localhost";
   return new URL(
@@ -912,8 +912,8 @@ async function postRunNotifications(
   input: Readonly<{
     run: NotificationRunRow;
     workspace: NotificationWorkspaceRow;
-    organization: { name: string | null } | undefined;
-    creator: { username: string | null } | undefined;
+    organization: Readonly<{ name: string | null }> | undefined;
+    creator: Readonly<{ username: string | null }> | undefined;
     runUrl: string;
     updatedAt: string;
     runStatus: string;

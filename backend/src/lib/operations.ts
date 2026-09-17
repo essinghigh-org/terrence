@@ -8,6 +8,7 @@ import { reportRunVcsStatus } from "./webhooks";
 import { storageDegradedReason } from "./storage-health";
 import { queueRunNotification } from "./notifications";
 import { log } from "./log";
+import type { DeepReadonly } from "./types";
 
 // Shared cancellation/deadline primitives are exported from the operations
 // surface so routes and workers classify stop causes consistently without
@@ -69,7 +70,7 @@ function windowMinutes(value: unknown): number | undefined {
   return hours * 60 + minutes;
 }
 
-function localDayAndMinutes(window: MaintenanceWindow, now: Date): { day: number; minutes: number } | undefined {
+function localDayAndMinutes(window: MaintenanceWindow, now: DeepReadonly<Date>): { day: number; minutes: number } | undefined {
   const timezone = typeof window.timezone === "string" && window.timezone !== "" ? window.timezone : "UTC";
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
@@ -91,7 +92,7 @@ function localDayAndMinutes(window: MaintenanceWindow, now: Date): { day: number
   }
 }
 
-export function inMaintenanceWindow(window: MaintenanceWindow, now: Date): boolean {
+export function inMaintenanceWindow(window: MaintenanceWindow, now: DeepReadonly<Date>): boolean {
   const days = windowDayNumbers(window);
   const start = windowMinutes(window["start-time"]);
   const end = windowMinutes(window["end-time"]);
@@ -115,7 +116,7 @@ export function isValidMaintenanceWindow(window: MaintenanceWindow): boolean {
 
 /** True when an apply must be blocked because the site has maintenance
  * windows configured and `now` is outside every one of them. */
-export function maintenanceWindowsBlockApply(settings: Settings, now: Date): boolean {
+export function maintenanceWindowsBlockApply(settings: Readonly<Settings>, now: DeepReadonly<Date>): boolean {
   if (settings["enabled"] !== true) return false;
   const windows = Array.isArray(settings["windows"]) ? settings["windows"] as MaintenanceWindow[] : [];
   if (windows.length === 0) return false;
@@ -144,7 +145,7 @@ export type MaintenanceSchedule = Readonly<{
  * minute-by-minute walk also makes DST gaps/folds deterministic because it
  * evaluates the same `Intl` conversion used by the gate.
  */
-export function nextMaintenanceWindowStart(settings: Settings, now = new Date()): Date | null {
+export function nextMaintenanceWindowStart(settings: Readonly<Settings>, now = new Date()): Date | null {
   if (settings["enabled"] !== true || !Array.isArray(settings["windows"])) return null;
   const windows = settings["windows"] as MaintenanceWindow[];
   if (windows.length === 0 || windows.every((window): boolean => !isValidMaintenanceWindow(window))) return null;
@@ -161,7 +162,7 @@ export function nextMaintenanceWindowStart(settings: Settings, now = new Date())
 }
 
 /** Return a safe operator-facing schedule snapshot for admin previews. */
-export function maintenanceSchedule(settings: Settings, now = new Date()): MaintenanceSchedule {
+export function maintenanceSchedule(settings: Readonly<Settings>, now = new Date()): MaintenanceSchedule {
   const windows = Array.isArray(settings["windows"]) ? settings["windows"] as MaintenanceWindow[] : [];
   const active = settings["enabled"] === true && windows.some((window): boolean => inMaintenanceWindow(window, now));
   const next = active ? now : nextMaintenanceWindowStart(settings, now);
@@ -174,7 +175,7 @@ export function maintenanceSchedule(settings: Settings, now = new Date()): Maint
 }
 
 /** True when the site requires external approval before applies (21.8). */
-export function approvalWebhookBlocksApply(settings: Settings): boolean {
+export function approvalWebhookBlocksApply(settings: Readonly<Settings>): boolean {
   return settings["enabled"] === true;
 }
 
@@ -184,7 +185,7 @@ export function approvalWebhookBlocksApply(settings: Settings): boolean {
  * `skipApprovalGate` is set by the approval webhook itself: the webhook IS
  * the approval, so it must not block on the gate it exists to satisfy. */
 export async function applyGateBlockReason(
-  now: Date,
+  now: DeepReadonly<Date>,
   skipApprovalGate = false,
 ): Promise<string | null> {
   const [approvalSettings, maintenanceSettings] = await Promise.all([

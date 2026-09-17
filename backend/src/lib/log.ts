@@ -1,6 +1,7 @@
 import { loggingSetting } from "./runtime-config";
 import { validateSettings } from "./settings-contract";
 import { formatSyslogMessage, resolveHostname, resolveSyslogFormat, type SyslogFormat, UDP_JSON_BODY_BUDGET } from "./syslog-format";
+import type { DeepReadonly } from "./types";
 import {
   closeSyslogTransports,
   parseSyslogTarget,
@@ -171,7 +172,7 @@ function redactSensitiveString(value: string): string {
     .replace(KNOWN_TOKEN_PATTERN, "[REDACTED TOKEN]");
 }
 
-function redactErrorLogValue(value: Error): unknown {
+function redactErrorLogValue(value: Readonly<Error>): unknown {
   try {
     return serializeLogError(value);
   } catch {
@@ -179,7 +180,7 @@ function redactErrorLogValue(value: Error): unknown {
   }
 }
 
-function redactDateLogValue(value: Date): unknown {
+function redactDateLogValue(value: Readonly<Date>): unknown {
   try {
     return value.toISOString();
   } catch {
@@ -187,7 +188,11 @@ function redactDateLogValue(value: Date): unknown {
   }
 }
 
-function redactLogObject(value: Record<string, unknown>, ancestors: WeakSet<object>): unknown {
+function redactLogObject(
+  value: Readonly<Record<string, unknown>>,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- recursion adds and removes objects from the shared cycle-detection set
+  ancestors: WeakSet<object>,
+): unknown {
   const output: Record<string, unknown> = {};
   for (const [childKey, childValue] of Object.entries(value)) {
     if (childKey === "toJSON") continue;
@@ -235,7 +240,12 @@ function safeErrorScalar(value: unknown, limit: number): SafeErrorScalar | undef
   return undefined;
 }
 
-function serializeNestedError(value: unknown, depth: number, active: Set<Error>): unknown {
+function serializeNestedError(
+  value: unknown,
+  depth: number,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- active tracks the in-progress error-cause chain via add/delete by design
+  active: Set<Error>,
+): unknown {
   if (value instanceof Error) {
     if (active.has(value)) return { name: value.name, message: "[Circular error cause]" };
     if (depth >= MAX_ERROR_CAUSE_DEPTH) {
@@ -249,7 +259,12 @@ function serializeNestedError(value: unknown, depth: number, active: Set<Error>)
   return safeErrorScalar(value, MAX_ERROR_DETAIL_STRING_LENGTH) ?? { name: "NonErrorThrown", message: "[Non-error cause omitted]" };
 }
 
-function serializeLogErrorInternal(error: Error, depth: number, active: Set<Error>): Readonly<Record<string, unknown>> {
+function serializeLogErrorInternal(
+  error: DeepReadonly<Error>,
+  depth: number,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- active tracks the in-progress error-cause chain via add by design
+  active: Set<Error>,
+): Readonly<Record<string, unknown>> {
   if (active.has(error)) return { name: error.name, message: "[Circular error cause]" };
   active.add(error);
   try {

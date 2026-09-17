@@ -53,7 +53,12 @@ function isLargeString(value: unknown): boolean {
   return typeof value === "string" && value.length > 16_384;
 }
 
-function isArrayTooLarge(value: readonly unknown[], keyCount: { count: number }, depth: number): boolean {
+function isArrayTooLarge(
+  value: readonly unknown[],
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- keyCount is a mutation accumulator shared across the recursion by design
+  keyCount: { count: number },
+  depth: number,
+): boolean {
   if (value.length > 1000) return true;
   keyCount.count += value.length;
   if (keyCount.count > MAX_AGENT_RESULT_KEYS) return true;
@@ -61,7 +66,12 @@ function isArrayTooLarge(value: readonly unknown[], keyCount: { count: number },
   return false;
 }
 
-function isObjectTooLarge(entries: readonly [string, unknown][], keyCount: { count: number }, depth: number): boolean {
+function isObjectTooLarge(
+  entries: readonly (readonly [string, unknown])[],
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- keyCount is a mutation accumulator shared across the recursion by design
+  keyCount: { count: number },
+  depth: number,
+): boolean {
   if (entries.length > 200) return true;
   keyCount.count += entries.length;
   if (keyCount.count > MAX_AGENT_RESULT_KEYS) return true;
@@ -73,7 +83,12 @@ function isObjectTooLarge(entries: readonly [string, unknown][], keyCount: { cou
   return false;
 }
 
-function isResultValueTooLarge(value: unknown, depth: number, keyCount: { count: number }): boolean {
+function isResultValueTooLarge(
+  value: unknown,
+  depth: number,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- keyCount is a mutation accumulator shared across the recursion by design
+  keyCount: { count: number },
+): boolean {
   if (depth > MAX_AGENT_RESULT_DEPTH) return true;
   if (isLargeString(value)) return true;
   if (typeof value !== "object" || value === null) return false;
@@ -275,7 +290,7 @@ async function getAgentPolicyEvaluation(
       orderBy: [asc(policySetParameters.key), asc(policySetParameters.id)],
     }),
   ]);
-  const policySetsWithPolicies: Array<AgentPolicyEvaluation["policySets"][number]> = [];
+  const policySetsWithPolicies: AgentPolicyEvaluation["policySets"][number][] = [];
   for (const policySet of effectiveSets) {
     const setPolicies = effectivePolicies
       .filter((policy): boolean => policy.policySetId === policySet.id)
@@ -685,7 +700,13 @@ function resolveAgentBinaries(agent: Agent): readonly string[] {
   return agent.iacBinaries !== null && agent.iacBinaries.length > 0 ? agent.iacBinaries : ["terraform"];
 }
 
-async function findCandidateJob(agent: Agent, acceptedPhases: readonly string[], agentBinaries: readonly string[], skippedIds: ReadonlySet<string>): Promise<AgentJobRow | undefined> {
+async function findCandidateJob(
+  agent: Agent,
+  acceptedPhases: readonly string[],
+  agentBinaries: readonly string[],
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Set has no rule-verifiable readonly form; skippedIds is only read here
+  skippedIds: ReadonlySet<string>,
+): Promise<AgentJobRow | undefined> {
   const compatiblePhases = acceptedPhases.filter((phase): boolean => agentSupportsPhase(agent, phase));
   if (compatiblePhases.length === 0) return undefined;
   return db.query.agentJobs.findFirst({
@@ -725,7 +746,12 @@ async function validateCandidateRun(candidate: AgentJobRow): Promise<{ run: Agen
 }
 
 
-async function tryLockWorkspaceForApply(candidate: AgentJobRow, run: AgentRunRow, skippedApplyJobIds: Set<string>): Promise<"locked" | "skipped" | "no-lock"> {
+async function tryLockWorkspaceForApply(
+  candidate: AgentJobRow,
+  run: AgentRunRow,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- skipped ids are accumulated into this set by design
+  skippedApplyJobIds: Set<string>,
+): Promise<"locked" | "skipped" | "no-lock"> {
   if (candidate.phase !== "apply") return "no-lock";
   const locked = await db.update(workspaces).set({ locked: true, lockedReason: `Run ${candidate.runId} is applying`, lockOwnerType: "agent-run", lockOwnerId: candidate.runId }).where(and(eq(workspaces.id, run.workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
   if (locked.length > 0) return "locked";
@@ -1366,7 +1392,7 @@ export async function completeAgentJob(
       })
     : undefined;
   const applyGateReason = claimedJob?.phase === "plan"
-    ? await import("./operations").then(({ applyGateBlockReason }): Promise<string | null> => applyGateBlockReason(new Date()))
+    ? await import("./operations").then(async ({ applyGateBlockReason }): Promise<string | null> => applyGateBlockReason(new Date()))
     : null;
   const outcome = await db.transaction(async (transaction): Promise<CompletionResult | undefined> =>
     completeAgentJobInTransaction(transaction as unknown as Database, agentId, jobId, fencingToken, completion, applyGateReason));

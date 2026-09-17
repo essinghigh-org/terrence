@@ -68,10 +68,10 @@ const warnings = reports.reduce(
   0,
 );
 console.log(
-  `lint budget: ${errors} errors / ${warnings} warnings (baseline ${baseline.errors} / ${baseline.warnings})`,
+  `lint budget: ${errors} errors / ${warnings} warnings (baseline ${localBaseline.errors} / ${localBaseline.warnings})`,
 );
 const expectedStatus = errors === 0 && warnings === 0 ? 0 : 1;
-if (errors > baseline.errors || warnings > baseline.warnings || result.status !== expectedStatus) {
+if (errors > localBaseline.errors || warnings > localBaseline.warnings || result.status !== expectedStatus) {
   console.error(
     "Lint debt increased; fix new findings or update the baseline with an intentional cleanup.",
   );

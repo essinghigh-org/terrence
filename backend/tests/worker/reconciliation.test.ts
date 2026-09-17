@@ -82,12 +82,12 @@ describe("startup reconciliation of interrupted local runs", () => {
   });
 
   afterAll(async () => {
-    await db.delete(logs).where(inArray(logs.runId, RUN_IDS)).catch((): void => {});
-    await db.delete(runTokens).where(eq(runTokens.id, `rtok-recon-${suffix}`)).catch((): void => {});
-    await db.delete(runs).where(inArray(runs.id, RUN_IDS)).catch((): void => {});
-    await db.delete(assessmentResults).where(inArray(assessmentResults.id, [RUNNING_ASSESSMENT_ID, PENDING_ASSESSMENT_ID])).catch((): void => {});
-    await db.delete(workspaces).where(inArray(workspaces.id, WORKSPACE_IDS)).catch((): void => {});
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => {});
+    await db.delete(logs).where(inArray(logs.runId, RUN_IDS)).catch((): void => undefined);
+    await db.delete(runTokens).where(eq(runTokens.id, `rtok-recon-${suffix}`)).catch((): void => undefined);
+    await db.delete(runs).where(inArray(runs.id, RUN_IDS)).catch((): void => undefined);
+    await db.delete(assessmentResults).where(inArray(assessmentResults.id, [RUNNING_ASSESSMENT_ID, PENDING_ASSESSMENT_ID])).catch((): void => undefined);
+    await db.delete(workspaces).where(inArray(workspaces.id, WORKSPACE_IDS)).catch((): void => undefined);
+    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
   });
 
   it("requeues pre-execution states, errors execution states, re-arms orphaned applies, and never touches agent-mode or resting runs", async () => {

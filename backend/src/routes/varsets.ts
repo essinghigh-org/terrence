@@ -162,7 +162,7 @@ async function checkVarsetParentProject(
   parentProjectId: string,
   global: boolean,
   set: SetObj,
-): Promise<unknown | null> {
+): Promise<unknown> {
   const parent = await db.query.projects.findFirst({ where: eq(projects.id, parentProjectId) });
   if (parent === undefined || parent.orgId !== orgId) {
     (set as { status: number }).status = 422;

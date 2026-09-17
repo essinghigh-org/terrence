@@ -40,7 +40,7 @@ function redactedSettingsResource(
   const safe = { ...values };
   for (const key of secretKeys) {
     const value = safe[key];
-    delete safe[key];
+    Reflect.deleteProperty(safe, key);
     safe[`${key}-set`] = value !== null && value !== undefined && value !== "";
   }
   return settingResource(id, safe);

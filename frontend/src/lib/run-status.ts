@@ -249,7 +249,8 @@ const PHASE_LABELS: Readonly<Record<PhaseState, string>> = {
 };
 
 export function formatPhaseState(state: string): string {
-  return PHASE_LABELS[state as PhaseState] ?? state.replace(/_/g, " ");
+  const label = (PHASE_LABELS as Readonly<Record<string, string | undefined>>)[state];
+  return label ?? state.replace(/_/g, " ");
 }
 
 function applyPhaseStatus(

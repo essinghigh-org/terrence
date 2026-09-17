@@ -4,6 +4,7 @@ import { hashAuthenticationToken } from "./token-service";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { systemApiTokens } from "../db/schema";
+import type { DeepReadonly } from "./types";
 
 export const SYSTEM_API_TOKEN_TTL_HOURS = 720;
 
@@ -31,7 +32,7 @@ export async function createSystemApiToken(
   return { token, record };
 }
 
-export function systemTokenResource(record: typeof systemApiTokens.$inferSelect): Record<string, unknown> {
+export function systemTokenResource(record: DeepReadonly<typeof systemApiTokens.$inferSelect>): Record<string, unknown> {
   return {
     id: record.id,
     type: "system-api-tokens",
@@ -47,6 +48,7 @@ export function systemTokenResource(record: typeof systemApiTokens.$inferSelect)
 
 export function systemAuthError(
   context: Readonly<{ systemToken?: unknown; token?: unknown; user?: unknown; orgId?: unknown; teamId?: unknown; run?: unknown }>,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Elysia set object is mutated to set the HTTP status by design
   set: { status?: number; headers: Record<string, string | number> },
 ): Record<string, unknown> | undefined {
   if (context.systemToken !== undefined && context.systemToken !== null) return undefined;
@@ -66,7 +68,11 @@ const RATE_WINDOW_CLEANUP_BATCH = 64;
 let rateWindowCleanupCursor: Iterator<[string, number]> | undefined;
 
 /** One request per second per System API token, matching the reference format's system limit. */
-export function systemRateLimited(tokenId: string, set: { status?: number; headers: Record<string, string | number> }): boolean {
+export function systemRateLimited(
+  tokenId: string,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Elysia set object is mutated to set the 429 status and Retry-After header by design
+  set: { status?: number; headers: Record<string, string | number> },
+): boolean {
   const now = Date.now();
   if (rateWindows.size > RATE_WINDOW_CLEANUP_THRESHOLD) {
     rateWindowCleanupCursor ??= rateWindows.entries();

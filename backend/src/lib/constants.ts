@@ -16,13 +16,21 @@ export const PROVIDER_MODES = ["tofu", "terraform"] as const;
 export const TOKEN_DESCRIPTION_MAX_LENGTH = 255;
 export type ProviderMode = (typeof PROVIDER_MODES)[number];
 
+/** Trimmed env text, treating unset/blank as absent so callers can fall through
+ * to the next source with ??. (Bare || would also skip blanks — spelled out
+ * here so the fallback is visible and deliberate.) */
+export function envText(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
 /** One deliberate compatibility target for every reference-format discovery header.
  * Kept dotted on purpose: the hashicorp/tfe provider treats Terrence as TFE
  * (no TFP-AppName) and gates versioned features on a dotted X-TFE-Version —
  * release-style values fail those gates (provider E2E proves it). */
 export const COMPATIBILITY_VERSION =
-  process.env["TERRENCE_COMPATIBILITY_VERSION"]?.trim() ||
-  process.env["TERRENCE_TFE_COMPATIBILITY_VERSION"]?.trim() ||
+  envText(process.env["TERRENCE_COMPATIBILITY_VERSION"]) ??
+  envText(process.env["TERRENCE_TFE_COMPATIBILITY_VERSION"]) ??
   "2.5.0";
 
 // The TFP-API-Version response header carries the Terraform provider API
@@ -31,7 +39,7 @@ export const COMPATIBILITY_VERSION =
 // The compatibility version above often holds a release-style value via env,
 // which would make TFP-API-Version unparseable and break version negotiation.
 // Keep the API version in its own constant, overridable independently.
-export const TFP_API_VERSION = process.env["TERRENCE_TFP_API_VERSION"]?.trim() || "2.6";
+export const TFP_API_VERSION = envText(process.env["TERRENCE_TFP_API_VERSION"]) ?? "2.6";
 /** One-line compatibility promise repeated in unsupported-endpoint errors
  * (issue #643) so provider users hitting an unknown path learn the scope
  * instead of guessing. Mirrors the README and compatibility doc wording. */

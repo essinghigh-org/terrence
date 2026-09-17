@@ -32,7 +32,7 @@ export function RelativeTime({
   className?: string;
   updateIntervalMs?: number;
 }>): React.JSX.Element {
-  const [now, setNow] = useState(() => new Date());
+  const [now, setNow] = useState((): Date => new Date());
 
   useEffect((): (() => void) | undefined => {
     if (updateIntervalMs <= 0) return undefined;

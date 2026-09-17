@@ -29,7 +29,11 @@ function boundedIdentityString(value: unknown): string | null {
   return typeof value === "string" && value.length <= 256 ? value : null;
 }
 
-function countStateResources(state: Record<string, unknown>, summary: StateSummary): void {
+function countStateResources(
+  state: Readonly<Record<string, unknown>>,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- accumulates resource counts into the caller-owned summary
+  summary: StateSummary,
+): void {
   const modules = new Set<string>();
   const providers = new Set<string>();
   for (const resource of Array.isArray(state["resources"]) ? state["resources"] : []) {
@@ -46,14 +50,14 @@ function countStateResources(state: Record<string, unknown>, summary: StateSumma
   summary.outputCount = record(state["outputs"]) ? Object.keys(state["outputs"]).length : 0;
 }
 
-function validSummaryCounts(value: Record<string, unknown>): boolean {
+function validSummaryCounts(value: Readonly<Record<string, unknown>>): boolean {
   for (const key of ["size", "resourceCount", "managedCount", "dataCount", "moduleCount", "providerCount", "outputCount"]) {
     if (!Number.isSafeInteger(value[key]) || Number(value[key]) < 0) return false;
   }
   return true;
 }
 
-function validSummaryIdentity(value: Record<string, unknown>): boolean {
+function validSummaryIdentity(value: Readonly<Record<string, unknown>>): boolean {
   if (typeof value["md5"] !== "string" || !/^[a-f0-9]{32}$/.test(value["md5"])) return false;
   for (const key of ["lineage", "terraformVersion"]) {
     if (value[key] !== null && (typeof value[key] !== "string" || (value[key]).length > 256)) return false;

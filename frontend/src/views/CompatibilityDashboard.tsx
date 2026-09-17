@@ -13,6 +13,7 @@ import { isNumber } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 
 type SurfaceEntry = Readonly<{ name: string; status: string }>;
+/* eslint-disable @typescript-eslint/naming-convention -- lifecycle contract wire format is snake_case */
 type LifecycleFixture = Readonly<{ id: string; label: string; resources?: string[]; required_behaviors?: string[] }>;
 type LifecycleContract = Readonly<{ version?: number; fixtures?: LifecycleFixture[] }>;
 
@@ -22,6 +23,7 @@ type ProviderSurface = Readonly<JsonObject & {
   "latest-available"?: string | null;
   lifecycle_contract?: LifecycleContract;
 }>;
+/* eslint-enable @typescript-eslint/naming-convention */
 
 const STATUS_STYLES = {
   covered: "border-success/30 bg-success/10 text-success",

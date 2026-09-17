@@ -7,6 +7,7 @@ export type LifecycleContract = Readonly<{
   fixtures: readonly LifecycleFixture[];
 }>;
 
+/* eslint-disable @typescript-eslint/naming-convention -- lifecycle contract wire format is snake_case */
 export type LifecycleFixture = Readonly<{
   id: string;
   label: string;
@@ -33,6 +34,7 @@ export type LifecycleEvidence = Readonly<{
   contract_version: number;
   fixtures: readonly LifecycleFixtureEvidence[];
 }>;
+/* eslint-enable @typescript-eslint/naming-convention */
 
 const VOLATILE_KEY = /^(?:id|lineage|serial|created(?:[-_]at|At)?|updated(?:[-_]at|At)?|(?:created|updated)[-_]?timestamp|timestamp)$/i;
 const ID_KEY = /(?:^|[-_])id$/i;

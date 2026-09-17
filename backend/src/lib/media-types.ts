@@ -127,6 +127,7 @@ function quality(parameters: Readonly<ReadonlyMap<string, Readonly<{ value: stri
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : 0;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parameters is already a ReadonlyMap; preserve its complete iterable contract
 function rangeSupportsJsonApi(parsed: ParsedMediaType): boolean {
   const withoutQuality = new Map(
     [...parsed.parameters.entries()].filter(([name]): boolean => name !== "q"),

@@ -1023,6 +1023,7 @@ type DiagnosticCheck = Readonly<{
 }>;
 
 type RepositoryProbe = Readonly<
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- GitHub REST field name
   { repo: Readonly<{ full_name: string }>; scopeCheck: null }
   | { repo: undefined; scopeCheck: DiagnosticCheck }
 >;
@@ -1038,6 +1039,7 @@ async function probeInstallationRepositories(
   let repositoryUrl = repositoryEndpoint(new URL(githubApiBase), "installation/repositories", {
     per_page: String(REPOSITORY_PAGE_SIZE),
   });
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- GitHub REST field name
   let repo: { full_name: string } | undefined;
   let sawRepository = false;
   for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
@@ -1051,6 +1053,7 @@ async function probeInstallationRepositories(
         scopeCheck: { id: "installation-access", label: "Installation repo access", ok: false, status: statusRes.status, detail: `Installation could not list repositories (HTTP ${statusRes.status}). Re-install the app and grant repository access.` },
       };
     }
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- GitHub REST field name
     const repoList = await statusRes.json() as { repositories?: { full_name?: unknown; archived?: unknown }[] };
     for (const candidate of repoList.repositories ?? []) {
       if (typeof candidate.full_name !== "string" || candidate.full_name === "") continue;

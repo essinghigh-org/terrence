@@ -1339,7 +1339,7 @@ export function PlanOutput({
   const degradedTimerRef = useRef<number | undefined>(undefined);
   // The latest effect's load, so the SSE handler always reloads the current
   // run even while the effect is mid-commit.
-  const loadRef = useRef<() => void>(() => {});
+  const loadRef = useRef<() => void>(() => undefined);
 
   useEffect((): (() => void) => {
     mountedRef.current = true;

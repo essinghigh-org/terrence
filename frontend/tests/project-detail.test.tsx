@@ -135,7 +135,7 @@ test("creates a project variable set from the project detail settings", async ()
   const form = view.getByRole("button", { name: "Create variable set" }).closest("form");
   expect(form).not.toBeNull();
   // SAFETY: closest("form") above resolved the form element for the dialog.
-  fireEvent.submit(form as HTMLFormElement);
+  fireEvent.submit(form!);
 
 await waitFor((): void => {
     expect(postedBody).toBeDefined();
@@ -193,7 +193,7 @@ test("saves a project default execution mode and agent pool", async () => {
   const form = view.getByRole("button", { name: "Save changes" }).closest("form");
   expect(form).not.toBeNull();
   // SAFETY: the form is present because the preceding role query found its submit button.
-  fireEvent.submit(form as HTMLFormElement);
+  fireEvent.submit(form!);
 
   await waitFor((): void => { expect(postedBody).toBeDefined(); });
   if (postedBody === undefined) throw new Error("Expected a serialized project PATCH body");
@@ -239,7 +239,7 @@ test("preserves an inherited project execution mode when saving other settings",
   const form = view.getByRole("button", { name: "Save changes" }).closest("form");
   expect(form).not.toBeNull();
   // SAFETY: the form is present because the preceding role query found its submit button.
-  fireEvent.submit(form as HTMLFormElement);
+  fireEvent.submit(form!);
 
   await waitFor((): void => { expect(postedBody).toBeDefined(); });
   if (postedBody === undefined) throw new Error("Expected a serialized project PATCH body");

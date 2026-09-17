@@ -175,7 +175,7 @@ describe("AvatarService.sweepCache (bounded cache GC)", (): void => {
 
   function tearDown(): void {
     for (const [name, prior] of Object.entries(savedEnv)) {
-      if (prior === undefined) delete process.env[name];
+      if (prior === undefined) Reflect.deleteProperty(process.env, name);
       else process.env[name] = prior;
     }
     rmSync(storageDir, { recursive: true, force: true });

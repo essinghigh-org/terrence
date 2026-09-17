@@ -7,14 +7,16 @@ import { eq, desc, count } from "drizzle-orm";
 import { pageRequest, pagination } from "../../lib/utils";
 import type { ParamCtx } from "./types";
 import { type VerItem, versionResource } from "./helpers";
-function fillVersionUpdates<T extends {
+type VersionUpdates = {
   version?: string | undefined;
   url?: string | null | undefined;
   sha?: string | null | undefined;
   deprecated?: boolean | null | undefined;
   isDefault?: boolean | null | undefined;
   enabled?: boolean | null | undefined;
-}>(attrs: Record<string, unknown>, updates: T): void {
+};
+
+function fillVersionUpdates(attrs: Record<string, unknown>, updates: VersionUpdates): void {
   if (typeof attrs["version"] === "string") updates.version = attrs["version"];
   if (attrs["url"] !== undefined) updates.url = typeof attrs["url"] === "string" ? attrs["url"] : null;
   if (attrs["sha"] !== undefined) updates.sha = typeof attrs["sha"] === "string" ? attrs["sha"] : null;

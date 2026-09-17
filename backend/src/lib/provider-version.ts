@@ -29,9 +29,11 @@ export async function fetchLatestTfeProviderVersion(): Promise<string | null> {
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return null;
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- GitHub API contract names this field tag_name
     const data = (await res.json()) as { tag_name?: unknown };
-    if (typeof data.tag_name !== "string") return null;
-    const version = data.tag_name.replace(/^v/, "");
+    const { tag_name: tagName } = data;
+    if (typeof tagName !== "string") return null;
+    const version = tagName.replace(/^v/, "");
     return /^\d+\.\d+\.\d+$/.test(version) ? version : null;
   } catch {
     return null;

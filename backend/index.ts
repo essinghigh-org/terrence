@@ -177,7 +177,7 @@ async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
     const drain = waitForWorkerDrain(drainGraceMs);
     const server = app.server;
     const systemServer = systemApiApp.server;
-    if (server !== null && server !== undefined) {
+    if (server !== null) {
       // Stop accepting new connections and wait for in-flight handlers so the
       // checkpoint below sees a quiesced database. Bound the wait: if the
       // graceful stop has not completed within the deadline, force-close.
@@ -194,7 +194,7 @@ async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
         await server.stop(true);
       }
     }
-    if (systemServer !== null && systemServer !== undefined) await systemServer.stop(true);
+    if (systemServer !== null) await systemServer.stop(true);
     // Wait for local Terraform/OpenTofu executions to finish so the
     // checkpoint cannot race a run writing its result. On timeout the
     // process exits anyway; startup reconciliation repairs the aftermath.

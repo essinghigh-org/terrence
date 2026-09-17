@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import type { DeepReadonly } from "./types";
 
 // Provider/model catalog for the AI plan explainer (kanban 21.2 UI upgrade).
 // Sources the provider dropdown + model picker from the models.dev static
@@ -143,7 +144,7 @@ export function parseModelCatalog(raw: string): CatalogProvider[] {
   return providers.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function isFresh(catalog: ModelCatalog, now: number): boolean {
+function isFresh(catalog: DeepReadonly<ModelCatalog>, now: number): boolean {
   return Number.isFinite(catalog.fetchedAt)
     && catalog.fetchedAt + MODEL_CATALOG_TTL_MS > now;
 }
@@ -179,7 +180,7 @@ export async function fetchModelCatalogRemote(): Promise<ModelCatalog | null> {
   }
 }
 
-async function persistCatalog(catalog: ModelCatalog): Promise<void> {
+async function persistCatalog(catalog: DeepReadonly<ModelCatalog>): Promise<void> {
   try {
     await mkdir(catalogDirectory, { recursive: true });
     await writeFile(catalogCacheFile, JSON.stringify(catalog), "utf8");
@@ -248,7 +249,7 @@ export async function getCatalogProviderModels(
 }
 
 /** Test hook: clear the in-memory cache (and optionally seed it). */
-export function _resetModelCatalogCache(catalog: ModelCatalog | null = null): void {
+export function resetModelCatalogCache(catalog: ModelCatalog | null = null): void {
   inMemoryCache = catalog;
 }
 

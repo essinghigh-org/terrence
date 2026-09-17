@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -392,9 +392,5 @@ describe("terraform login.v1 OAuth flow", () => {
     expect(callback.pathname).toBe("/login");
     expect(callback.searchParams.get("state")).toBe("st-12345");
     expect(callback.searchParams.get("code")).not.toBeNull();
-  });
-
-  afterAll(() => {
-    void userId;
   });
 });

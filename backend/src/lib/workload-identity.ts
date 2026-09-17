@@ -1,4 +1,5 @@
 import { newResourceId } from "./resource-id";
+import type { DeepReadonly } from "./types";
 import { createHash, createPublicKey, generateKeyPair, type KeyObject } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -88,7 +89,7 @@ export function workloadIdentityIssuer(): string {
   }
 }
 
-function publicJwk(publicKey: KeyObject): Record<string, unknown> {
+function publicJwk(publicKey: DeepReadonly<KeyObject>): Record<string, unknown> {
   const jwk = publicKey.export({ format: "jwk" }) as Record<string, unknown>;
   const encoded = `${String(jwk["kty"])}:${String(jwk["n"])}:${String(jwk["e"])}`;
   return {
@@ -108,7 +109,7 @@ async function generateKeyRow(): Promise<KeyRow> {
   });
   const jwk = publicJwk(pair.publicKey);
   const keyId = String(jwk["kid"]);
-  const privatePem = pair.privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+  const privatePem = pair.privateKey.export({ format: "pem", type: "pkcs8" });
   const now = Date.now();
   const row: typeof workloadIdentityKeys.$inferInsert = {
     id: newResourceId("wik"),
@@ -123,7 +124,9 @@ async function generateKeyRow(): Promise<KeyRow> {
   return row as KeyRow;
 }
 
-async function publishKey(row: KeyRow, _fencingToken: number, retireActive: boolean): Promise<KeyRow> {
+async function publishKey(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- row flows into the drizzle insert values by design
+  row: KeyRow, _fencingToken: number, retireActive: boolean): Promise<KeyRow> {
   // Lease is already held via acquireKeyLeadership's in-process tail +
   // DB fencingToken. The old pre-transaction lease check raced with
   // parallel test files sharing the same Postgres DB (each file gets its
@@ -219,7 +222,7 @@ async function createKeyIfMissing(): Promise<KeyRow> {
   try {
     const afterClaim = await currentActiveKey();
     if (afterClaim !== undefined) return afterClaim;
-    return publishKey(await generateKeyRow(), leadership.fencingToken, false);
+    return await publishKey(await generateKeyRow(), leadership.fencingToken, false);
   } finally {
     await leadership.release();
   }
@@ -231,14 +234,14 @@ export async function currentWorkloadIdentityKey(): Promise<KeyRow> {
   if (keyCreation !== null) return keyCreation;
   const pending = createKeyIfMissing();
   keyCreation = pending.finally((): void => { keyCreation = null; });
-  void keyCreation.catch((): void => {});
+  void keyCreation.catch((): void => undefined);
   return pending;
 }
 
 export async function rotateWorkloadIdentityKey(): Promise<KeyRow> {
   const leadership = await acquireKeyLeadership();
   try {
-    return publishKey(await generateKeyRow(), leadership.fencingToken, true);
+    return await publishKey(await generateKeyRow(), leadership.fencingToken, true);
   } finally {
     await leadership.release();
   }
@@ -248,7 +251,7 @@ export async function trimWorkloadIdentityKeys(): Promise<void> {
   const leadership = await acquireKeyLeadership();
   try {
     let current = await currentActiveKey();
-    if (current === undefined) current = await publishKey(await generateKeyRow(), leadership.fencingToken, false);
+    current ??= await publishKey(await generateKeyRow(), leadership.fencingToken, false);
     const liveTokens = await db.query.workloadIdentityTokens.findMany({
       where: gt(workloadIdentityTokens.expiresAt, Date.now()),
       columns: { keyId: true },

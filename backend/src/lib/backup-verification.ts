@@ -244,7 +244,7 @@ function invalidManifestFileEntry(file: unknown): boolean {
     || typeof item.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(item.sha256);
 }
 
-function assertStorageFileMetadata(storage: { fileCount?: unknown; totalBytes?: unknown; files: readonly unknown[] }): void {
+function assertStorageFileMetadata(storage: Readonly<{ fileCount?: unknown; totalBytes?: unknown; files: readonly unknown[] }>): void {
   if (!Number.isSafeInteger(storage.fileCount)
     || !Number.isSafeInteger(storage.totalBytes)
     || storage.files.some(invalidManifestFileEntry)) {
@@ -664,7 +664,7 @@ async function unpackArchiveSource(sourcePath: string): Promise<{ archivePath: s
   return { archivePath: sourcePath, temporaryRoot };
 }
 
-function explicitDatabasePath(source: BackupSourceOptions, sourcePath: string, sourceInfo: Stats): string | undefined {
+function explicitDatabasePath(source: BackupSourceOptions, sourcePath: string, sourceInfo: Readonly<Pick<Stats, "isFile">>): string | undefined {
   if (source.databasePath !== undefined) return source.databasePath;
   if (sourceInfo.isFile() && !sourceLooksLikeArchive(sourcePath) && extname(sourcePath).toLowerCase() !== ".json") return sourcePath;
   return undefined;

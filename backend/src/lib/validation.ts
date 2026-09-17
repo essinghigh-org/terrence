@@ -91,7 +91,7 @@ function persistedStringArray(
 function recordExtensions(
   record: Readonly<Record<string, unknown>>,
   declaredExtensions: unknown,
-  known: ReadonlySet<string>,
+  known: Readonly<Pick<ReadonlySet<string>, "has">>,
   context: PersistedContext,
 ): Record<string, unknown> {
   if (declaredExtensions !== undefined && !isRecordObject(declaredExtensions)) {
@@ -226,12 +226,14 @@ type JobPayloadReaders = Readonly<{
   optionalBoolean: (field: string) => boolean | undefined;
 }>;
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- writes validated fields into readers.known
 function parseExplorerCatalogPayload(readers: JobPayloadReaders): void {
   readers.known["orgId"] = readers.requiredString("orgId");
   const backfill = readers.optionalBoolean("backfill");
   if (backfill !== undefined) readers.known["backfill"] = backfill;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- writes validated fields into readers.known
 function parsePlanExplanationPayload(readers: JobPayloadReaders): void {
   readers.known["runId"] = readers.requiredString("runId");
   const explanationKind = readers.requiredString("kind");
@@ -241,6 +243,7 @@ function parsePlanExplanationPayload(readers: JobPayloadReaders): void {
   readers.known["kind"] = explanationKind;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- writes validated fields into readers.known
 function parseVcsWebhookPayload(readers: JobPayloadReaders): void {
   const provider = readers.requiredString("provider");
   if (provider !== "github" && provider !== "gitlab" && provider !== "bitbucket") {

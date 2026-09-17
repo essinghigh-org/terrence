@@ -9,7 +9,7 @@
  *   // or with --json out.json: suite writes a machine-readable record
  *   // so before/after runs can be diffed.
  */
-export type BenchFn = () => unknown | Promise<unknown>;
+export type BenchFn = () => unknown;
 
 type SuiteResult = Readonly<{
   name: string;
@@ -24,7 +24,6 @@ type SuiteResult = Readonly<{
 import { writeFileSync } from "node:fs";
 
 const results: SuiteResult[] = [];
-let suiteName = "";
 const DEFAULT_ITERATIONS = 40;
 const WARMUP_RUNS = 3;
 
@@ -33,7 +32,6 @@ export async function suite(
   fns: Readonly<Record<string, BenchFn>>,
   iterations: number = DEFAULT_ITERATIONS,
 ): Promise<void> {
-  suiteName = name;
   for (const [label, fn] of Object.entries(fns)) {
     // Warmup (also flushes lazy caches / JIT tiers). Async fns are awaited so
     // concurrent requests can never race each other inside the benchmark.

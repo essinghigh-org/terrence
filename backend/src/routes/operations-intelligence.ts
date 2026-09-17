@@ -1,3 +1,4 @@
+import { toComparableString } from "../lib/comparable";
 import { Elysia } from "elysia";
 import { and, asc, count, desc, eq, inArray, or } from "drizzle-orm";
 import { authPlugin } from "../auth";
@@ -288,7 +289,7 @@ async function searchResources(ctx: ParamCtx): Promise<unknown> {
     ...matchRunResults(runRows, cvById, workspaceById, needle),
     ...matchDocumentationResults(needle),
   ];
-  results.sort((a, b): number => `${String((a["type"] ?? ""))}:${String((a["id"] ?? ""))}`.localeCompare(`${String((b["type"] ?? ""))}:${String((b["id"] ?? ""))}`));
+  results.sort((a, b): number => `${toComparableString(a["type"])}:${toComparableString(a["id"])}`.localeCompare(`${toComparableString(b["type"])}:${toComparableString(b["id"])}`));
   const { number, size } = pageRequest(request);
   return { data: results.slice((number - 1) * size, number * size), ...pagination(request, number, size, results.length) };
 }
@@ -348,7 +349,7 @@ function byOccurredAt(a: Record<string, unknown>, b: Record<string, unknown>): n
   const bAttributes = b["attributes"];
   const aTime = aAttributes !== null && typeof aAttributes === "object" ? (aAttributes as Record<string, unknown>)["occurred-at"] : "";
   const bTime = bAttributes !== null && typeof bAttributes === "object" ? (bAttributes as Record<string, unknown>)["occurred-at"] : "";
-  return String(aTime ?? "").localeCompare(String(bTime ?? ""));
+  return toComparableString(aTime).localeCompare(toComparableString(bTime));
 }
 
 async function runTimeline({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> {
@@ -390,8 +391,8 @@ function resolveBlueprintReferenceIds(parameters: Record<string, unknown>, error
   for (const key of ["variable-set-ids", "policy-set-ids"] as const) {
     const value = parameters[key];
     if (value !== undefined) {
-      if (!Array.isArray(value) || value.some((item): boolean => typeof item !== "string" || item.trim() === "")) errors.push(`${key} must be an array of IDs`);
-      else referenceIds[key] = [...new Set(value.map((item): string => item.trim()))];
+      if (!Array.isArray(value) || value.some((item: unknown): boolean => typeof item !== "string" || item.trim() === "")) errors.push(`${key} must be an array of IDs`);
+      else referenceIds[key] = [...new Set(value.map((item: string): string => item.trim()))];
     }
   }
   return referenceIds;

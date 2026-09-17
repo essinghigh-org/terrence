@@ -247,13 +247,13 @@ test("separates phase logs and only renders backend-authorized run actions", asy
   expect(planSection).not.toBeNull();
   expect(applySection).not.toBeNull();
   // SAFETY: closest("details") above resolved the details elements for the headings.
-  expect((planSection as HTMLDetailsElement).open).toBeTrue();
+  expect((planSection!).open).toBeTrue();
   // SAFETY: closest("details") above resolved the details elements for the headings.
-  expect((applySection as HTMLDetailsElement).open).toBeFalse();
+  expect((applySection!).open).toBeFalse();
   // SAFETY: closest("details") above resolved the details elements for the headings.
-  const planLog = (planSection as HTMLDetailsElement).querySelector("pre");
+  const planLog = (planSection!).querySelector("pre");
   // SAFETY: closest("details") above resolved the details elements for the headings.
-  const applyLog = (applySection as HTMLDetailsElement).querySelector("pre");
+  const applyLog = (applySection!).querySelector("pre");
   expect(planLog?.textContent).toBe("PLAN_PHASE_ONLY\nPLAN_PHASE_SECOND");
   expect(applyLog?.textContent).toBe("APPLY_PHASE_ONLY\nAPPLY_PHASE_SECOND");
 // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
@@ -299,15 +299,15 @@ test("separates phase logs and only renders backend-authorized run actions", asy
   const activitySection = view.getByRole("heading", { name: "Activity" }).closest("section");
   const commentsSection = view.getByRole("heading", { name: "Comments" }).closest("section");
 // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
-  expect(within(activitySection as HTMLElement).getByText("Run confirmed")).toBeTruthy();
+  expect(within(activitySection!).getByText("Run confirmed")).toBeTruthy();
 // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
-  expect(within(activitySection as HTMLElement).getByText("Needs confirmation → Confirmed")).toBeTruthy();
+  expect(within(activitySection!).getByText("Needs confirmation → Confirmed")).toBeTruthy();
 // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
-  expect(within(activitySection as HTMLElement).getByText("essinghigh")).toBeTruthy();
+  expect(within(activitySection!).getByText("essinghigh")).toBeTruthy();
 // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
-  expect(within(commentsSection as HTMLElement).getByText("essinghigh")).toBeTruthy();
+  expect(within(commentsSection!).getByText("essinghigh")).toBeTruthy();
 // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
-  expect(within(commentsSection as HTMLElement).getByText("Approved for production")).toBeTruthy();
+  expect(within(commentsSection!).getByText("Approved for production")).toBeTruthy();
 
   fireEvent.click(view.getByRole("button", { name: "Apply changes" }));
   expect(view.getByRole("heading", { name: "Apply these changes?" })).toBeTruthy();
@@ -315,7 +315,7 @@ test("separates phase logs and only renders backend-authorized run actions", asy
 // Scoped to the confirmation step: the comments section form below carries a
 // matching label since the UI rework.
   const confirmSection = view.getByRole("heading", { name: "Apply these changes?" }).closest("section");
-  const actionComment = within(confirmSection as HTMLElement).getByLabelText(/^Comment/) as HTMLTextAreaElement;
+  const actionComment = within(confirmSection!).getByLabelText(/^Comment/) as HTMLTextAreaElement;
   changeInput(actionComment, "Approved after reviewing the dependency graph");
   expect(actionComment.value).toBe("Approved after reviewing the dependency graph");
   // The committal button does not share its name with the offer that opened
@@ -669,7 +669,7 @@ test("opens failed applies and presents their diagnostics", async () => {
   // technology hears "Apply Failed", not "ApplyFailed".
   const applyHeading = await view.findByRole("heading", { name: "Apply Failed" });
   // SAFETY: the heading lives inside a details element; closest() resolves it.
-  const applySection = applyHeading.closest("details") as HTMLDetailsElement;
+  const applySection = applyHeading.closest("details")!;
   // Apply errors surface through the same DiagnosticsBanner that warnings
   // use (severity="error"), so the structured error text is rendered by that
   // banner. The banner is the only place errors appear: the raw-log block is
@@ -679,7 +679,7 @@ test("opens failed applies and presents their diagnostics", async () => {
   // The DiagnosticsBanner is collapsible and starts closed; expand it so the
   // structured error is visible, then assert it is rendered inside the banner's
   // list (structured diagnostics) rather than leaking only through a raw log.
-  const diagnosticsSummary = within(applySection).getByText(/Diagnostics/).closest("summary") as HTMLElement;
+  const diagnosticsSummary = within(applySection).getByText(/Diagnostics/).closest("summary")!;
   fireEvent.click(diagnosticsSummary);
   const diagnosticList = within(applySection).getByRole("list");
   expect(within(diagnosticList).getByText(/resource name already exists/)).toBeTruthy();

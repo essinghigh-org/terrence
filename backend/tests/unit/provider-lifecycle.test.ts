@@ -45,7 +45,7 @@ describe("provider lifecycle contract", () => {
     const evidence: LifecycleEvidence = { contract_version: lifecycleContract.version, fixtures: [] };
     const gaps = lifecycleEvidenceGaps(lifecycleContract, evidence);
     expect(gaps).toContain("workspace-lifecycle: missing fixture evidence");
-    expect(() => assertLifecycleEvidence(lifecycleContract, evidence)).toThrow("Incomplete provider lifecycle evidence");
+    expect(() => { assertLifecycleEvidence(lifecycleContract, evidence); }).toThrow("Incomplete provider lifecycle evidence");
   });
 
   test("rejects a fixture that reports a passing status without its required behaviors", () => {

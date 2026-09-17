@@ -1670,8 +1670,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   .use(authPlugin)
   .get("/api/v2/state-versions", async ({ request, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const url = new URL(request.url);
-    const workspaceFilter = url.searchParams.get("filter[workspace][id]") || null;
-    const runFilter = url.searchParams.get("filter[run][id]") || null;
+    const workspaceFilterRaw = url.searchParams.get("filter[workspace][id]");
+    const runFilterRaw = url.searchParams.get("filter[run][id]");
+    const workspaceFilter = workspaceFilterRaw === null || workspaceFilterRaw === "" ? null : workspaceFilterRaw;
+    const runFilter = runFilterRaw === null || runFilterRaw === "" ? null : runFilterRaw;
     if ((user === null || user === undefined) && orgId === null && teamId === null) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };

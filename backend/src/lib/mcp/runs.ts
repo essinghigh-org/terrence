@@ -10,6 +10,7 @@ import { cancelAgentJobsForRun, insertAgentApplyJobTx } from "../agent-jobs";
 import { agentPoolAllowsWorkspace } from "../agent-pool-scope";
 import { queueRunNotification } from "../notifications";
 import { createRun } from "../../routes/runs";
+import type { DeepReadonly } from "../types";
 import { planStatusForRun } from "../response";
 import { readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../plan-json";
 import { READ_ONLY_TOOL, OPEN_WORLD_ADDITIVE_TOOL, OPEN_WORLD_DESTRUCTIVE_TOOL, DESTRUCTIVE_TOOL, toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
@@ -25,12 +26,13 @@ function runCreationAttributes(args: Readonly<Record<string, unknown>>): Record<
 }
 
 function requestedRunIncludes(args: Readonly<Record<string, unknown>>): Readonly<{ plan: boolean; workspace: boolean }> {
-  const names = String(args["include"] ?? "").split(",").map((part): string => part.trim()).filter((part): boolean => part !== "");
+  const include = args["include"];
+  const names = (typeof include === "string" ? include : Array.isArray(include) ? include.join(",") : "").split(",").map((part): string => part.trim()).filter((part): boolean => part !== "");
   return { plan: names.includes("plan"), workspace: names.includes("workspace") };
 }
 
-type AuthorizedRun = NonNullable<Awaited<ReturnType<typeof findAuthorizedRun>>>;
-type ApplyRun = Readonly<Pick<typeof runs.$inferSelect, "id" | "status" | "statusTimestamps">>;
+type AuthorizedRun = DeepReadonly<NonNullable<Awaited<ReturnType<typeof findAuthorizedRun>>>>;
+type ApplyRun = DeepReadonly<Pick<typeof runs.$inferSelect, "id" | "status" | "statusTimestamps">>;
 
 type AgentPoolSelection = Readonly<{ id: string | null; error: string | null }>;
 

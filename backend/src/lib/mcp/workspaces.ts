@@ -24,6 +24,7 @@ import { ensureDefaultProject } from "../../routes/projects";
 import { validVariableAttributes } from "../validation";
 import { variableValueForRead, variableValueForWrite } from "../variable-crypto";
 import { ADDITIVE_TOOL, READ_ONLY_TOOL, DESTRUCTIVE_TOOL, IDEMPOTENT_DESTRUCTIVE_TOOL, IDEMPOTENT_MUTATION_TOOL, toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
+import type { DeepReadonly } from "../types";
 import { cachedOrgByName } from "../cached-lookups";
 
 async function exactWorkspaceResult(
@@ -101,7 +102,7 @@ type WorkspaceVariableUpdate = Readonly<{
 }>;
 
 function resolvedVariableFlags(
-  variable: typeof workspaceVariables.$inferSelect,
+  variable: DeepReadonly<typeof workspaceVariables.$inferSelect>,
   args: Readonly<Record<string, unknown>>,
 ): { key: string; category: string; sensitive: boolean; hcl: boolean; description: string | null; suppliedValue: string | null } {
   const key = typeof args["key"] === "string" ? args["key"] : variable.key;
@@ -115,7 +116,7 @@ function resolvedVariableFlags(
 }
 
 async function storedVariableValue(
-  variable: typeof workspaceVariables.$inferSelect,
+  variable: Readonly<typeof workspaceVariables.$inferSelect>,
   sensitive: boolean,
   suppliedValue: string | null,
   effectiveValue: string,
@@ -129,7 +130,7 @@ async function storedVariableValue(
 }
 
 async function workspaceVariableUpdate(
-  variable: typeof workspaceVariables.$inferSelect,
+  variable: Readonly<typeof workspaceVariables.$inferSelect>,
   args: Readonly<Record<string, unknown>>,
 ): Promise<WorkspaceVariableUpdate | Readonly<{ error: string }>> {
   const { key, category, sensitive, hcl, description, suppliedValue } = resolvedVariableFlags(variable, args);

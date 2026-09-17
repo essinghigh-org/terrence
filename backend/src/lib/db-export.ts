@@ -20,6 +20,7 @@ import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createPgSource, createSqliteTarget, transferDatabase, verifyTransfer, type VerifyOptions } from "./db-transfer";
 import type { TransferSource } from "./db-transfer";
+import type { DeepReadonly } from "./types";
 import type { TransferReport, VerificationReport } from "./db-transfer";
 
 const storageDir = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
@@ -103,7 +104,7 @@ export function deleteExportFile(name: string, storage: string = storageDir): bo
 }
 
 export class DbExportError extends Error {
-  readonly code: string;
+  public readonly code: string;
   constructor(code: string, message: string) {
     super(message);
     this.name = "DbExportError";
@@ -155,7 +156,7 @@ function assertExportNotExists(storage: string, fileName: string): void {
   if (listExportFiles(storage).some((f) => f.name === fileName)) throw new DbExportError("exists", `An export file named "${fileName}" already exists; choose a different name`);
 }
 
-function formatFailedTables(verification: Readonly<VerificationReport>): string[] {
+function formatFailedTables(verification: DeepReadonly<VerificationReport>): string[] {
   return verification.tables.filter((table): boolean => !table.countMatch || table.uniqueChecks.some((check): boolean => !check.match) || !table.sampleHash.match)
     .map((table): string => {
       const uniques = table.uniqueChecks.filter((check): boolean => !check.match).map((check): string => `${check.index}(${check.source}/${check.target})`).join(", ");
