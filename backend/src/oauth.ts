@@ -218,10 +218,10 @@ async function approveForUser(authorization: Readonly<AuthorizationRequest>, use
 }
 
 function oauthError(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   set: { status?: number | string; headers: Record<string, string | number> },
   error: string,
 ): { error: string } {
-  // eslint-disable-line @typescript-eslint/prefer-readonly-parameter-types
   set.status = 400;
   set.headers["Cache-Control"] = "no-store";
   set.headers["Pragma"] = "no-cache";
@@ -236,8 +236,8 @@ function plainError(message: string, status = 400): Response {
 }
 
 export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   .get("/oauth/authorization", async ({ query, request }: OAuthQueryCtx): Promise<Response> => {
-    // eslint-disable-line @typescript-eslint/prefer-readonly-parameter-types
     const authorization = parseAuthorizationRequest(query);
     if (authorization === null) {
       return plainError("Invalid authorization request.");
@@ -280,8 +280,8 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       },
     });
   })
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   .get("/oauth/authorization/complete", async ({ query, request }: OAuthQueryCtx): Promise<Response> => {
-    // eslint-disable-line @typescript-eslint/prefer-readonly-parameter-types
     const oauthState = field(query, "oauth_state");
     const cookieState = readOauthStateCookie(request);
     if (oauthState === "" || cookieState === undefined || oauthState !== cookieState) {

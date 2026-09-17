@@ -24,10 +24,11 @@ function isStackResultArrayTooLarge(value: readonly unknown[], depth: number, ke
   return false;
 }
 
-// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- recursive validation intentionally shares a mutable counter
 function isStackResultObjectTooLarge(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- recursive validation intentionally shares a mutable counter
   value: Record<string, unknown>,
   depth: number,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- recursive validation intentionally shares a mutable counter
   keyCount: { count: number },
 ): boolean {
   const entries = Object.entries(value);

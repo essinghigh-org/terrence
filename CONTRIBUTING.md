@@ -23,10 +23,11 @@ ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
 
 - **TypeScript strict mode** is enforced. Run `bun run typecheck` from the repo root before committing (it typechecks backend and frontend).
 - **ESLint** handles linting for backend, frontend, and scripts. Run `bun run lint:budget`; the enforced budget is zero errors and zero warnings.
-- **Biome** handles formatting only; its linter and assists (including import organization) are disabled. Run `bun run format` to format supported files, or `bun run format:check` for a read-only repository check. Existing files have not been bulk-formatted, so this check is not yet a CI gate. For a focused change, use `bun run biome format --write path/to/file.ts` and `bun run biome format path/to/file.ts`. Style uses two spaces, double quotes, semicolons, LF endings, and a 120-column target.
+- **Biome** handles formatting only; its linter and assists (including import organization) are disabled. Run `bun run format` to format supported files, or `bun run format:check` for a read-only repository check. CI enforces this check across the repository. For a focused change, use `bun run biome format --write path/to/file.ts` and `bun run biome format path/to/file.ts`. Style uses two spaces, double quotes, semicolons, LF endings, and a 120-column target.
 - Generated migrations, generated assets, runtime data, and fixtures are excluded in `biome.json`. Markdown, YAML, and other unsupported languages are not formatted.
 - Use the Biome editor extension for formatting, but keep ESLint diagnostics enabled. Do not enable Biome lint fixes or import organization.
-- Keep bulk formatting separate from functional changes. The existing pre-commit hook still only handles migration generation; it does not run Biome or rewrite staged files.
+- Keep bulk formatting separate from functional changes. Formatting-only commits are listed in `.git-blame-ignore-revs`; use `git config blame.ignoreRevsFile .git-blame-ignore-revs` locally. Preserve those commits when merging, or update the ignore file to the resulting squash commit afterward.
+- The existing pre-commit hook still only handles migration generation; it does not run Biome or rewrite staged files.
 
 ### Testing
 

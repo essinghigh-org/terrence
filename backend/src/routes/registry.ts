@@ -1369,13 +1369,16 @@ function testVariableResource(variable: DeepReadonly<typeof testVariables.$infer
   };
 }
 
-// eslint-disable-next-line @typescript-eslint/naming-convention -- Elysia route params preserve API path names.
 type TestVarsParams = {
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Elysia route params preserve API path names.
   org_name?: string | undefined;
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Elysia route params preserve API path names.
   registry_name?: string | undefined;
   namespace?: string | undefined;
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Elysia route params preserve API path names.
   module_name?: string | undefined;
   provider?: string | undefined;
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Elysia route params preserve API path names.
   variable_id?: string | undefined;
 };
 

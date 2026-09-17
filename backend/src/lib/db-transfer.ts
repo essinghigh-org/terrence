@@ -776,8 +776,8 @@ export class PgTransferSource implements TransferSource {
   async #sourceColumns(name: string): Promise<ReadonlySet<string>> {
     const cached = this.#columns.get(name);
     if (cached !== undefined) return cached;
-    // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
     const pending = this.#connection
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
       .unsafe<{ column_name: string }>(
         `WITH resolved AS (
         SELECT n.nspname AS table_schema, c.relname AS table_name

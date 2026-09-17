@@ -443,10 +443,10 @@ function tryParseGenerated(rest: string, result: { checksSkipped: number }): boo
   return true;
 }
 
-// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function tryParseDefault(
   sql: string,
   pos: number,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
   result: { defaultExpr: string | null; defaultDropped: boolean },
 ): number | null {
   if (/^DEFAULT\b/i.exec(sql.slice(pos)) === null) return null;
@@ -460,10 +460,10 @@ function tryParseDefault(
   return exprEnd;
 }
 
-// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function tryParseReferences(
   sql: string,
   pos: number,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
   result: { references: ForeignKeyDef | null },
   columnName?: string,
 ): number | null {
@@ -503,10 +503,10 @@ function tryParseOnConflictStep(pos: number, rest: string): number | null {
   return pos + (/^ON\s+CONFLICT/i.exec(rest)?.[0].length ?? 0);
 }
 
-// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function parseConstraintTailStep(
   sql: string,
   pos: number,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
   result: {
     notNull: boolean;
     primaryKey: boolean;

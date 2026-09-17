@@ -621,8 +621,8 @@ export function ssoHtmlResponse(body: string, status = 200): Response {
   });
 }
 
-// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- primitive/header union has no mutable state
 export function appendSetCookies(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- primitive/header union has no mutable state
   response: Readonly<Response>,
   value: string | number | readonly string[] | undefined,
 ): void {

@@ -271,13 +271,13 @@ type WebhookBase = DeepReadonly<{
   sourceIdentity: VcsSourceIdentity;
 }>;
 
-// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- filesChanged is already ReadonlySet; preserve the complete set contract returned in WebhookDetails
 function buildGithubPushDetails(
   branchTag: Readonly<{ branch?: string; tag?: string }>,
   base: WebhookBase,
   commitMessage: string,
   commitSha: string,
   commitUrl: string,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- filesChanged is already ReadonlySet; preserve the complete set contract returned in WebhookDetails
   filesChanged: ReadonlySet<string>,
 ): WebhookDetails {
   return {

@@ -139,9 +139,9 @@ function releaseBudget(state: BudgetState): () => void {
   };
 }
 
-// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- AbortSignal is a platform cancellation handle.
 async function acquireDbQueryBudget(
   kind: DbQueryBudgetKind,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- AbortSignal is a platform cancellation handle.
   signal?: AbortSignal,
   waitMs = integerSetting("TERRENCE_DB_QUERY_BUDGET_WAIT_MS"),
 ): Promise<() => void> {

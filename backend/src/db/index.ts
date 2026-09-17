@@ -277,10 +277,10 @@ if (isPostgres) {
   // both drizzle and raw SQL on postgres.
   {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
-    // eslint-disable-next-line @typescript-eslint/promise-function-async -- mirrors Bun.SQL's non-async unsafe() signature; the cast below is the type boundary.
     pgClient.unsafe = ((
       queryText: string,
       values?: readonly unknown[] | Readonly<Record<string, unknown>>,
+      // eslint-disable-next-line @typescript-eslint/promise-function-async -- mirrors Bun.SQL's non-async unsafe() signature; the cast below is the type boundary.
     ): ReturnType<BunSQL["unsafe"]> => {
       const queryObj = originalUnsafe(queryText, values as never);
       return wrapPgQuery(queryObj, queryText);
@@ -288,10 +288,10 @@ if (isPostgres) {
   }
   if (envFlag("TERRENCE_QUERY_COUNT")) {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
-    // eslint-disable-next-line @typescript-eslint/promise-function-async -- mirrors Bun.SQL's non-async unsafe() signature; the cast below is the type boundary.
     pgClient.unsafe = ((
       queryText: string,
       values?: readonly unknown[] | Readonly<Record<string, unknown>>,
+      // eslint-disable-next-line @typescript-eslint/promise-function-async -- mirrors Bun.SQL's non-async unsafe() signature; the cast below is the type boundary.
     ): ReturnType<BunSQL["unsafe"]> => {
       queryCount += 1;
       if (queryLogEnabled) queryLog.push(queryText);
@@ -454,10 +454,10 @@ if (!isPostgres) {
     try {
       const bundledFolder = join(import.meta.dir, "../../drizzle");
       const entries = readBundledMigrationJournal(bundledFolder);
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
       const appliedRows = (
         client.query("SELECT hash, created_at FROM __drizzle_migrations").all() as {
           hash: string;
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
           created_at: number;
         }[]
       ).map((row): { readonly hash: string; readonly createdAt: number } => ({
@@ -475,12 +475,12 @@ if (!isPostgres) {
         ),
       );
       const columns = new Set(
-        // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
         (
           client
             .query(
               "SELECT m.name AS tbl_name, p.name AS name FROM sqlite_master AS m, pragma_table_info(m.name) AS p WHERE m.type = 'table'",
             )
+            // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
             .all() as { tbl_name: string; name: string }[]
         ).map((row): string => `${row.tbl_name}.${row.name}`),
       );
@@ -760,8 +760,8 @@ export async function databaseMetrics(): Promise<
   const pageSize = (client.query("PRAGMA page_size").get() as { page_size: number } | null)?.page_size ?? 4096;
   // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
   const pageCount = (client.query("PRAGMA page_count").get() as { page_count: number } | null)?.page_count ?? 0;
-  // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
   const journalMode =
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
     (client.query("PRAGMA journal_mode").get() as { journal_mode: string } | null)?.journal_mode ?? "unknown";
   const { sizeBytes, walSizeBytes } = sqliteFileSizes(dbPath);
   return {
@@ -785,8 +785,8 @@ function sqliteCacheSizeBytes(client: Readonly<Database>, pageSize: number): num
 
 /** SQLite freelist footprint in bytes (free pages not yet returned to the OS). */
 function sqliteFreelistBytes(client: Readonly<Database>, pageSize: number): number {
-  // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
   const freelist =
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
     (client.query("PRAGMA freelist_count").get() as { freelist_count: number } | null)?.freelist_count ?? 0;
   return freelist * pageSize;
 }
@@ -919,21 +919,26 @@ export async function applyPgMigrations(): Promise<void> {
     const stampedPg = await reconcileSparseMigrationJournal({
       bundledFolder: join(import.meta.dir, "../../drizzle/pg"),
       appliedRows: async (): Promise<readonly { readonly hash: string; readonly createdAt: number }[]> =>
-        // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
         (
-          await pg.unsafe<{ hash: string; created_at: string | number }[]>(
-            "SELECT hash, created_at FROM drizzle.__drizzle_migrations",
-          )
+          await pg.unsafe<
+            {
+              hash: string;
+              // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
+              created_at: string | number;
+            }[]
+          >("SELECT hash, created_at FROM drizzle.__drizzle_migrations")
         ).map(({ hash, created_at: createdAt }): { readonly hash: string; readonly createdAt: number } => ({
           hash,
           createdAt: Number(createdAt),
         })),
       existingTables: async (): Promise<readonly string[]> =>
         (
-          await pg.unsafe<{ table_name: string }[]>(
-            // eslint-disable-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()",
-          )
+          await pg.unsafe<
+            {
+              // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
+              table_name: string;
+            }[]
+          >("SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()")
         ).map(({ table_name: tableName }): string => tableName),
       existingIndexes: async (): Promise<readonly string[]> =>
         (
@@ -942,11 +947,15 @@ export async function applyPgMigrations(): Promise<void> {
           )
         ).map(({ indexname }): string => indexname),
       existingColumns: async (): Promise<readonly { readonly table: string; readonly column: string }[]> =>
-        // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
         (
-          await pg.unsafe<{ table_name: string; column_name: string }[]>(
-            "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema()",
-          )
+          await pg.unsafe<
+            {
+              // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
+              table_name: string;
+              // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
+              column_name: string;
+            }[]
+          >("SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema()")
         ).map(
           ({
             table_name: tableName,
